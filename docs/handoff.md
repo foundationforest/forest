@@ -115,7 +115,7 @@ The keys recipe as a library; the host image or fork; the fee-payer config patte
 
 ## Build order (one session each)
 
-Items 2 and 3 swapped on September 15, 2026: the `markets` repo session now comes after the keys session (logged in `docs/changes.md`).
+Items 2 and 3 swapped on September 15, 2026: the `markets` repo session now comes after the keys session (logged in `docs/changes.md`). Item 4, the registry feasibility check, was then taken before the `markets` repo session on September 15, 2026, because it is the only piece nobody has built on Solana and its answer can change the plan (logged in `docs/changes.md`). Its report is `registry/FEASIBILITY.md`.
 
 1. `shapes/`: the four lexicons, a validator, one example record of each.
 2. `keys/`: the recipe spec, the library, the seed file format, paper export, tests on Apple, Android, Windows.
