@@ -18,4 +18,6 @@ node bin/validate.js market examples/markets/online-tutors.json
 
 A market file has exactly eight keys: `name`, `roles`, `fields`, `silenceDays`, `arbiterAllowed`, `reviewEvidence`, `credentialIssuers`, `tokens`. Under `fields` it may add flat fields (string, integer, boolean, or an array of those) to `profile`, `post`, or `review`, in lexicon field syntax, and may mark its own fields required. It cannot add a shape, add to a credential, nest anything, or redefine a base field.
 
+Each entry in `tokens` is `{ symbol, mint, chain }`: posts and reviews name the token by symbol, and the market file is what pins that symbol to a mint, because a symbol alone can be faked by a lookalike token. `reviewEvidence` (`escrow` or `none`) is metadata for indexes, which weigh a review without that evidence near zero; it never makes a review invalid.
+
 Design choices made here without a decision behind them are logged in `docs/changes.md` as "chosen, not decided".

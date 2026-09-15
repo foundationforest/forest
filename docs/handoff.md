@@ -36,7 +36,7 @@ Three rungs of one ladder. There are no accounts anywhere.
 
 | Layer | What | Source | Runs on |
 |---|---|---|---|
-| Keys recipe | Passkey secret (WebAuthn PRF) to seed, seed to per-profile keys, wallet and DID. Seed file format for extra passkeys (seed encrypted under each passkey's secret, stored under a random label). Paper export format. The passkey belongs to forest.foundation; products are listed in `/.well-known/webauthn` (related origins), Cabin first | Ours: a spec and a small library from existing parts | User's device |
+| Keys recipe | Passkey secret (WebAuthn PRF) to seed, seed to per-profile keys, wallet and DID. Seed file format for extra passkeys (seed encrypted under each passkey's secret, stored under a label derived from that passkey's secret, carrying no identity). Paper export format. The passkey belongs to forest.foundation; products are listed in `/.well-known/webauthn` (related origins), Cabin first | Ours: a spec and a small library from existing parts | User's device |
 | Folders | One per profile: profile, posts, reviews, credentials, photos, all signed on device | AT Protocol lexicons and libraries, unchanged | A host |
 | Host | Stores folders, serves the live feed, never holds a signing key, accepts client-signed commits. Candidate: Vow (a keyless PDS, experimental). Else the smallest fork of a standard PDS's write path | Configured or forked, decided after evaluation | Products (Railway) |
 | Directory | Public cards: name, current key, current host | did:plc, run independently; we keep a replica | Theirs |
@@ -47,7 +47,7 @@ Three rungs of one ladder. There are no accounts anywhere.
 | Escrow | Sealed program per version: one shape, an amount of a plain SPL token held between two keys; released by approval, silence, split, or optional arbiter | Ours | Solana |
 | Face check | Once. Passive liveness plus dedupe. Foundation runs it as the first issuer and owns the account holding the list; Didit holds the faces. New issuers register themselves | Didit | Theirs |
 | Issuer flow | Face check result to identity commitment to list insert | Ours, small | Foundation (Railway) |
-| Names | `handle.forest.foundation` serves the profile page and resolves to the DID. Badged profiles only; one per human (see Names) | Ours, small | Foundation |
+| Names | Every badged profile gets a random handle free, like `k7m2q.forest.foundation`; it is the profile page and the AT Protocol handle. Chosen names are optional, one per profile, paid yearly (amount a treasury dial) | Ours, small | Foundation |
 | Badge and pay link | On forest.foundation, so they outlive any product. Pay link is a Solana Pay URL to the escrow's deposit address | Ours, in the index | Foundation |
 
 ## Foundation versus product
@@ -115,9 +115,11 @@ The keys recipe as a library; the host image or fork; the fee-payer config patte
 
 ## Build order (one session each)
 
+Items 2 and 3 swapped on September 15, 2026: the `markets` repo session now comes after the keys session (logged in `docs/changes.md`).
+
 1. `shapes/`: the four lexicons, a validator, one example record of each.
-2. `markets` repo: the template, its validator, the directory file, the online-tutors example.
-3. `keys/`: the recipe spec, the library, the seed file format, paper export, tests on Apple, Android, Windows.
+2. `keys/`: the recipe spec, the library, the seed file format, paper export, tests on Apple, Android, Windows.
+3. `markets` repo: the template, its validator, the directory file, the online-tutors example.
 4. `registry/` feasibility check, report only: Semaphore's circuit and setup files as is; tree hashing match; two proofs plus the numbered code inside one transaction's compute budget; storage cost per badge, plain versus compressed.
 5. `host/` evaluation, report only: Vow as is, or the smallest fork.
 6. `registry/` v1 on devnet.
@@ -136,7 +138,7 @@ The foundation entity (a UK company limited by guarantee; forms before the first
 
 ## Open
 
-Which three markets. Whether the 25 cents funds anything given free numbers. Per-mode timeouts as market defaults. Whether one stablecoin holds for EU users. Which ramps accept a prefilled link with no partner account. Whether a moved passkey keeps its PRF secret (the design assumes not). Whether the registry should also emit an attestation other Solana apps can read (parked). Whether Crossmint or Onramper accepts a sole proprietor for production. Whether Crossmint's bank rails cover the first sellers' countries.
+Which three markets. Whether the 25 cents funds anything given free numbers. Default silence days per market. Whether one stablecoin holds for EU users. Which ramps accept a prefilled link with no partner account. Whether a moved passkey keeps its PRF secret (the design assumes not). Whether the registry should also emit an attestation other Solana apps can read (parked). Whether Crossmint or Onramper accepts a sole proprietor for production. Whether Crossmint's bank rails cover the first sellers' countries.
 
 ## Don't resurrect
 

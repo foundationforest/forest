@@ -27,7 +27,7 @@
           },
           "escrow": {
             "type": "string",
-            "description": "Escrow pointer: the escrow account's address, base58. A market's review evidence rule may require it.",
+            "description": "Escrow pointer: the escrow account's address, base58. Optional everywhere; a market's review evidence rule tells indexes to weigh a review without it near zero.",
             "minLength": 32,
             "maxLength": 44
           },
