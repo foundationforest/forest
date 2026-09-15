@@ -1,0 +1,22 @@
+{
+  "name": "registry-scratch",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Scratch scripts for the registry feasibility check. Not a library, not a program.",
+  "scripts": {
+    "fetch": "node fetch-artifacts.mjs",
+    "test": "node identity.mjs && node tree.mjs && node prove.mjs 20 && node txsize.mjs"
+  },
+  "dependencies": {
+    "@semaphore-protocol/core": "4.14.3",
+    "@zk-kit/lean-imt": "2.2.5",
+    "@zk-kit/eddsa-poseidon": "1.1.0",
+    "@zk-kit/baby-jubjub": "1.0.3",
+    "@noble/hashes": "1.8.0",
+    "poseidon-lite": "0.3.0",
+    "snarkjs": "0.7.5",
+    "ethers": "6.13.4",
+    "@solana/web3.js": "1.99.0"
+  }
+}
