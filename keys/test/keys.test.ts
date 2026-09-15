@@ -3,8 +3,11 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { hkdf as nobleHkdf } from '@noble/hashes/hkdf.js'
 import { sha256 as nobleSha256 } from '@noble/hashes/sha2.js'
+import { blake512 } from '@noble/hashes/blake1.js'
 import { hex } from '@scure/base'
 import { assureValidCreationOp, createOp, validateOperationLog } from '@did-plc/lib'
+import { Base8, mulPointEscalar, subOrder } from '@zk-kit/baby-jubjub'
+import { poseidon2 } from 'poseidon-lite/poseidon2'
 import {
   INFO,
   PRF_INPUT,
@@ -14,6 +17,8 @@ import {
   exportWords,
   genesisOperation,
   hkdf,
+  humanIdentity,
+  identitySecret,
   importWords,
   profileKeys,
   seedFileLabel,
@@ -49,7 +54,7 @@ test('a different PRF output gives a different seed', async () => {
 })
 
 test('HKDF agrees with an independent implementation', async () => {
-  for (const info of [INFO.seed, INFO.control(0), INFO.signing(1), INFO.wallet(7), INFO.seedFileKey, INFO.seedFileLabel]) {
+  for (const info of [INFO.seed, INFO.control(0), INFO.signing(1), INFO.wallet(7), INFO.seedFileKey, INFO.seedFileLabel, INFO.identity]) {
     const ours = await hkdf(prf, info, 32)
     const theirs = nobleHkdf(nobleSha256, prf, undefined, utf8(info), 32)
     assert.equal(hex.encode(ours), hex.encode(theirs), info)
@@ -117,6 +122,66 @@ test('keys are not exportable', async () => {
   const keys = await profileKeys(await seedFromPrf(prf), 0)
   await assert.rejects(keys.control.export(), /not exportable/i)
   await assert.rejects(keys.signing.export(), /not exportable/i)
+})
+
+// The identity, one per person
+
+test('the identity secret is the pinned one, is one HKDF output, and carries no profile index', async () => {
+  const seed = await seedFromPrf(prf)
+  const secret = await identitySecret(seed)
+  assert.equal(INFO.identity, 'forest.foundation/identity/v1')
+  assert.equal(hex.encode(secret), vectors.identity.secret)
+  assert.equal(hex.encode(await hkdf(seed, INFO.identity, 32)), vectors.identity.secret)
+  assert.equal(secret.length, 32)
+})
+
+test('the identity and its commitment are the pinned ones, and the same seed gives them again', async () => {
+  const seed = await seedFromPrf(prf)
+  for (let round = 0; round < 2; round++) {
+    const { identity, commitment } = await humanIdentity(seed)
+    assert.equal(commitment.toString(), vectors.identity.commitment)
+    assert.equal(identity.commitment.toString(), vectors.identity.commitment)
+    assert.equal(identity.secretScalar.toString(), vectors.identity.secretScalar)
+    assert.deepEqual(identity.publicKey.map(String), vectors.identity.publicKey)
+  }
+})
+
+test("the commitment is what Semaphore says it is, recomputed step by step", async () => {
+  // Session 3's report: BLAKE-512 of the 32 bytes, first 32, pruned, read
+  // little-endian, shifted right 3, mod the subgroup order; times the base
+  // point on Baby Jubjub; the commitment is Poseidon(2) of the two
+  // coordinates. Done here without the Semaphore wrapper, so a change in its
+  // derivation would show up as a failing test rather than silently.
+  const secret = await identitySecret(await seedFromPrf(prf))
+  const h = blake512(secret).slice(0, 32)
+  h[0] &= 0xf8
+  h[31] &= 0x7f
+  h[31] |= 0x40
+  let scalar = 0n
+  for (let i = 31; i >= 0; i--) scalar = (scalar << 8n) | BigInt(h[i])
+  scalar = (scalar >> 3n) % subOrder
+  const publicKey = mulPointEscalar(Base8, scalar)
+  assert.equal(scalar.toString(), vectors.identity.secretScalar)
+  assert.deepEqual(publicKey.map(String), vectors.identity.publicKey)
+  assert.equal(poseidon2(publicKey).toString(), vectors.identity.commitment)
+})
+
+test('one identity per seed, not per profile, and unrelated to every profile key', async () => {
+  const seed = await seedFromPrf(prf)
+  const secret = await identitySecret(seed)
+  for (const n of [0, 1]) {
+    for (const info of [INFO.control(n), INFO.signing(n), INFO.wallet(n)]) {
+      assert.notEqual(hex.encode(await hkdf(seed, info, 32)), hex.encode(secret))
+    }
+  }
+  const other = await humanIdentity(await seedFromPrf(otherPrf))
+  assert.notEqual(other.commitment.toString(), vectors.identity.commitment)
+})
+
+test('the seed must be 32 bytes', async () => {
+  const seed = await seedFromPrf(prf)
+  await assert.rejects(identitySecret(seed.subarray(0, 16)), /seed must be 32 bytes/)
+  await assert.rejects(humanIdentity(new Uint8Array(33)), /seed must be 32 bytes/)
 })
 
 // The name

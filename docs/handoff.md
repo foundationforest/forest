@@ -22,7 +22,7 @@ Why now: four capabilities became cheap in about three years, all needed: unique
 
 ## The shape
 
-A passkey unlocks a seed on the device. The seed derives, per profile, a control key, a signing key, a Solana wallet, and a permanent name (a DID). Each profile has a folder of signed records on a host that stores but never signs. A carrier (the AT Protocol relay) passes records to indexes; indexes rank and serve pages any AI reads. A registry on Solana gives one verified human one badge per market without revealing who. An escrow on Solana holds money between strangers. A foundation name service gives badged profiles a readable name under forest.foundation. Products are thin apps on top; the first is Cabin.
+A passkey unlocks a seed on the device. The seed derives, per profile, a control key, a signing key, a Solana wallet, and a permanent name (a DID). Each profile has a folder of signed records on a host that stores but never signs. A carrier (the AT Protocol relay) passes records to indexes; indexes rank and serve pages any AI reads. A registry on Solana gives one verified human one badge per market without revealing who. An escrow on Solana holds money between strangers. A foundation name service gives badged profiles a readable name under forest.foundation. Products are thin apps on top; the first is Soil.
 
 ## Keys, profiles, badges
 
@@ -36,14 +36,14 @@ Three rungs of one ladder. There are no accounts anywhere.
 
 | Layer | What | Source | Runs on |
 |---|---|---|---|
-| Keys recipe | Passkey secret (WebAuthn PRF) to seed, seed to per-profile keys, wallet and DID. Seed file format for extra passkeys (seed encrypted under each passkey's secret, stored under a label derived from that passkey's secret, carrying no identity). Paper export format. The passkey belongs to forest.foundation; products are listed in `/.well-known/webauthn` (related origins), Cabin first | Ours: a spec and a small library from existing parts | User's device |
+| Keys recipe | Passkey secret (WebAuthn PRF) to seed, seed to per-profile keys, wallet and DID, and one identity secret per person for the registry. Seed file format for extra passkeys (seed encrypted under each passkey's secret, stored under a label derived from that passkey's secret, carrying no identity). Paper export format. The passkey belongs to forest.foundation; products are listed in `/.well-known/webauthn` (related origins), Soil first | Ours: a spec and a small library from existing parts | User's device |
 | Folders | One per profile: profile, posts, reviews, credentials, photos, all signed on device | AT Protocol lexicons and libraries, unchanged | A host |
-| Host | Stores folders, serves the live feed, never holds a signing key, accepts client-signed commits. Candidate: Vow (a keyless PDS, experimental). Else the smallest fork of a standard PDS's write path | Configured or forked, decided after evaluation | Products (Railway) |
+| Host | Stores folders, serves the live feed, never holds a signing key, accepts client-signed commits. Candidate: Vow (a keyless PDS, experimental). Else the smallest fork of a standard PDS's write path | Configured or forked, decided after evaluation | Soil (Railway, plain SQLite files) |
 | Directory | Public cards: name, current key, current host | did:plc, run independently; we keep a replica | Theirs |
 | Carrier | Subscribes to hosts, verifies signatures, carries registered profiles and Forest record types only | AT Protocol relay, configured | Foundation (Railway) |
 | Index | Reads the carrier, scores, serves category pages, profile pages, a machine endpoint. Open algorithm. Signs scores with a ZK-friendly signature (EdDSA over Poseidon) alongside the normal one | Ours | Supabase and Vercel, at forest.foundation |
-| Registry | Sealed program: list of verified humans, one code per (human, market), one numbered code per human, free dials, the 25-cent rule | Ours; Semaphore circuit unchanged, groth16-solana verifier, Poseidon syscall | Solana |
-| Fee payer, registrations | Sponsors any registration that carries a valid proof, rate-limited. No vouchers, no tokens, no custom code | Kora, configured | Foundation (Railway) |
+| Registry | Sealed program: a set of list fingerprints, one code per (human, market), the 25-cent rule, a rent sweep instruction | Ours; Semaphore circuit unchanged, groth16-solana verifier, Poseidon syscall | Solana |
+| Fee payer, registrations | Sponsors registrations whose market is in the directory and whose proof checks out, rate-limited. No vouchers, no tokens, no custom code | Kora, configured | Foundation (Railway) |
 | Escrow | Sealed program per version: one shape, an amount of a plain SPL token held between two keys; released by approval, silence, split, or optional arbiter | Ours | Solana |
 | Face check | Once. Passive liveness plus dedupe. Foundation runs it as the first issuer and owns the account holding the list; Didit holds the faces. New issuers register themselves | Didit | Theirs |
 | Issuer flow | Face check result to identity commitment to list insert | Ours, small | Foundation (Railway) |
@@ -54,7 +54,7 @@ Three rungs of one ladder. There are no accounts anywhere.
 
 Rule: a piece that only works if everyone shares one is a public good and goes in the foundation; anything someone needs to compete with us is in the foundation; money flows and interfaces are products. Code open in the foundation; operations paid in products.
 
-| Foundation (open) | Cabin (first app, replaceable) |
+| Foundation (open) | Soil (first app, replaceable) |
 |---|---|
 | Record shapes, market template, markets directory | The app page: unlock, profiles, posts, reviews, signing, escrow buttons, AI permissions |
 | Keys recipe, seed file format, paper export | Hosting an instance of the host; seed-file store |
@@ -62,19 +62,23 @@ Rule: a piece that only works if everyone shares one is a public good and goes i
 | Badge and pay link on forest.foundation | Ramp: exchange instructions and a prefilled ramp page in v0; Crossmint (self-serve on staging now; production when they accept us, sole proprietor first) or Onramper |
 | | The door: an MCP server that holds no keys and forwards signing to the app |
 
-Repos: `foundationforest/forest` (all foundation code, Apache 2.0) and `foundationforest/markets` (files, CC0). The product org holds `cabin`. Names: Forest at forest.foundation; Cabin at its own domain.
+Repos: `foundationforest/forest` (all foundation code, Apache 2.0) and `foundationforest/markets` (files, CC0). The product org holds `soil`. Names: Forest at forest.foundation; Soil at soil.host (not bought yet).
 
 ## Registry (the detail that matters)
 
-- **List.** Each verified human adds one identity commitment (made on their device) to a Merkle tree the issuer key can insert into. Hashing must match Semaphore's circuit exactly (Poseidon; the syscall exists on Solana).
-- **Proof.** Semaphore's current circuit, unchanged, with its public trusted-setup files. We write only the Solana side: verifier glue (groth16-solana), the tree, the codes, the rules. No new circuit in v1.
-- **Registration.** One transaction carries: the market name, the profile's DID, a market code (proof with scope = market name), and a numbered human code (proof with scope = "badge-k"). The program checks both proofs, that neither code is used, and that "badge-(k-1)" exists (or k = 1). Then it records everything. The number k is public; identity is not.
-- **Free dials.** Numbers 1 through N are free; N and an end date are settings the treasury key can change. N = 5 now. After that the program takes 0.25 in an accepted dollar token from the profile's wallet in the same transaction. The amount is sealed.
+- **List.** Each verified human adds one identity commitment (made on their device) to a Merkle tree the issuer key can insert into. Hashing must match Semaphore's circuit exactly (Poseidon; the syscall exists on Solana). Tree depth 32. The program holds a set of list fingerprints, not one, so more lists can be opened later without a new program; it starts with a single list. When a second list opens, new joiners are assigned randomly across all open lists, so which list a person is in never tells you when they joined. Not sharded on day one, because the anonymity set is the size of your own list and splitting early shrinks it when it is smallest.
+- **Proof.** Semaphore's circuit unchanged, with the artifacts from the public July 2024 ceremony and the matching library version pinned. Not the later artifacts: their phase two has no published transcript, and the verification key is sealed forever. The same circuit and ceremony are what World ID uses at millions of users. We write only the Solana side: verifier glue (groth16-solana; negating the first proof point is the one conversion), the tree, the used codes, the rules.
+- **Registration.** One transaction carries: the market name, the profile's DID, one proof whose scope is the market name, and 0.25 in an accepted dollar token. One rule, always: 25 cents. There are no free slots, no numbered codes and no vouchers in the program.
+- **Scopes are hashed.** The scope is a fixed-size hash of a namespaced market name, so any length of name works. The program recomputes the hash from the name in the instruction and compares it to the proof's scope, or a proof for one market would count for another. The program accepts any scope; only names in the `markets` directory count in indexes and badges. Whether a scope is a market ("online-tutors") or a market and role ("online-tutors:seller") is a directory file decision, changeable at any time, not a program decision.
 - **Accepted tokens.** USDC always (sealed, so registration can never be halted). Others added by the treasury key, restricted to dollar stablecoins pegged one to one.
-- **Scopes are generic.** Standard category names live in the `markets` directory; the program accepts any scope, and only directory names count in indexes and badges.
-- **Sponsor.** The foundation's Kora sponsors any registration transaction; the proof is the anti-spam; Kora's rate limits handle junk. Cost per registration is the network fee plus storage.
+- **Free registrations live outside the program.** The foundation's sponsor pays the 25 cents under its own policy, which can change forever without touching the sealed program. The policy must only sponsor registrations whose market is in the directory, or a bad actor registers endlessly in invented markets and drains it. With a small directory the ceiling is one badge per market per human, so v0 needs no extra proof, only that check and a rate limit. Later, when the directory is large, the sponsor can require a proof of "fewer than N badges across the directory", which is the same walk as the completeness proof below.
+- **Rent sweep.** Solana is lowering the rent deposit in steps. Accounts may hold less once a step lands, but only an instruction in the owning program can move the excess out. A sealed program without one locks that money forever. The program must have a sweep instruction from day one, sending only the excess above the current rent-exempt minimum to the treasury, never touching anything else.
+- **Transaction shape.** Compressed proof points, standard transaction format, no address lookup tables. A registration is about 1,040 bytes of the 1,232 limit and 16% of the compute limit.
+- **Recent fingerprints.** The program remembers the last 128 list fingerprints and accepts a proof against any of them, so a proof made just before someone else joins still lands. Safe because nobody is ever removed.
+- **No removals.** Once a human is in the list they cannot be taken out. If a duplicate ever passes the face check, v1 cannot undo it.
+- **Sponsor.** The foundation's Kora sponsors the network fee for any registration whose proof checks out, rate-limited.
 - **Sealed per version.** The upgrade key is removed after deploy. A v2 is a new program; migrating the list costs, so v1 must be right. First sellers use v1 on devnet before mainnet.
-- **Later, same data.** A v1 circuit proves "exactly N badges whose scores sum past T" without naming any. Non-inclusion of "badge-(N+1)" is what makes "none hidden" provable. Design the storage so codes sit in a Merkle tree that can be proven against (Light's compressed accounts, or a plain tree).
+- **Later, same data.** A v1 circuit proves "I hold badges in exactly these markets, and their scores sum past T", walking every market in the directory so nothing can be hidden: claiming no badge where your code already exists would be a false statement. This needs the used codes to sit in a structure that can prove a code is absent, not only present. See `docs/decisions/used-code-storage.md`.
 
 ## Escrow
 
@@ -91,7 +95,7 @@ One shape. An amount of a plain SPL token held between two keys, buyer and selle
 ## Reputation
 
 - Two scores per profile, never blended: uniqueness (which issuers vouched) and trust (open algorithm over reviews given and received, weighted by the reviewer's own trust). Everyone starts at zero; a badge means real and accountable, not good.
-- Per human, three tiers: public linking (a signed record in each profile pointing at the others; the user's choice), private disclosure to one buyer (the seller's app signs "these profiles are mine" with each profile key, encrypts it to the buyer's key, and shows that "badge-(N+1)" doesn't exist; the buyer checks the chain; disclosing to a buyer is disclosing), and a v1 ZK aggregate.
+- Per human, three tiers: public linking (a signed record in each profile pointing at the others; the user's choice), private disclosure to one buyer (the seller's app signs "these profiles are mine" with each profile key, encrypts it to the buyer's key, and shows, for every other market in the directory, either the badge or that no code of theirs exists there; the buyer checks the chain; disclosing to a buyer is disclosing), and a v1 ZK aggregate.
 - The index signs every score with a ZK-friendly signature from day one so the v1 circuit never needs an expensive signature check.
 
 ## Record shapes and markets
@@ -109,9 +113,9 @@ A market file adds: standard name, roles, extra fields, default silence days, wh
 - Any app or host claims names through the same open endpoint; the UI is theirs. Profiles without a foundation handle are still reachable by DID on forest.foundation.
 - Built after the index, since the index serves the page.
 
-## What Cabin needs from the foundation
+## What Soil needs from the foundation
 
-The keys recipe as a library; the host image or fork; the fee-payer config pattern; the record shapes and validator; the registry client (build a proof on the device, submit through the foundation's fee payer); the escrow client; the names endpoint. Cabin adds only its page, its host instance, its seed-file store, its fee payer, ramp links, and the door.
+The keys recipe as a library; the host image or fork; the fee-payer config pattern; the record shapes and validator; the registry client (build a proof on the device, submit through the foundation's fee payer); the escrow client; the names endpoint. Soil adds only its page, its host instance, its seed-file store, its fee payer, ramp links, and the door.
 
 ## Build order (one session each)
 
@@ -128,7 +132,7 @@ Items 2 and 3 swapped on September 15, 2026: the `markets` repo session now come
 9. `index/` with badge and pay link.
 10. `names/`.
 
-Meeting points, in order: issuer flow (face check to registry entry); carrier and index with badge and link; escrow with the silence rule; names; the door (in Cabin).
+Meeting points, in order: issuer flow (face check to registry entry); carrier and index with badge and link; escrow with the silence rule; names; the door (in Soil).
 
 Done when one stranger, with their own USDC, completes verify, register, post, get found, get paid, get reviewed, alone.
 
@@ -138,8 +142,8 @@ The foundation entity (a UK company limited by guarantee; forms before the first
 
 ## Open
 
-Which three markets. Whether the 25 cents funds anything given free numbers. Default silence days per market. Whether one stablecoin holds for EU users. Which ramps accept a prefilled link with no partner account. Whether a moved passkey keeps its PRF secret (the design assumes not). Whether the registry should also emit an attestation other Solana apps can read (parked). Whether Crossmint or Onramper accepts a sole proprietor for production. Whether Crossmint's bank rails cover the first sellers' countries.
+Which three markets. Default silence days per market. Whether one stablecoin holds for EU users. Which ramps accept a prefilled link with no partner account. Whether a moved passkey keeps its PRF secret (the design assumes not). Whether the registry should also emit an attestation other Solana apps can read (parked). Whether Crossmint or Onramper accepts a sole proprietor for production. Whether Crossmint's bank rails cover the first sellers' countries. Whether the Semaphore team publishes a transcript for the later artifacts. Whether scopes are per market or per market and role, decided when the first real markets are written. When a second list is opened.
 
 ## Don't resurrect
 
-Chain posts; a Forest-written folder standard; the chain debate; issuer-assisted recovery in v0; a Forest-invented name system (names are AT Protocol handles under the foundation domain); ten free tokens; vouchers and blind tokens for registration; custom code inside Kora; Mercury; Bridge; Stripe Atlas; Ramp Network direct; Transak in v0; a UK Ltd in v0; Meld; the registry as a service for other apps; recurring foundation revenue; manifesto-first; three long pages as the product; Semaphore contracts deployed unchanged; the face check as a product-side service; the cross-profile proof as v0; a per-human score that links profiles without the user choosing; user accounts anywhere; address logs; Commerce Kit; Private Channels; Mexico as a default for anything; escrow modes (fixed, per unit, capped; one shape only); a per-human handle market; one handle per human; wallet infrastructure providers (Turnkey, Privy, Crossmint wallets) for keys.
+Chain posts; a Forest-written folder standard; the chain debate; issuer-assisted recovery in v0; a Forest-invented name system (names are AT Protocol handles under the foundation domain); ten free tokens; vouchers and blind tokens for registration; custom code inside Kora; Mercury; Bridge; Stripe Atlas; Ramp Network direct; Transak in v0; a UK Ltd in v0; Meld; the registry as a service for other apps; recurring foundation revenue; manifesto-first; three long pages as the product; Semaphore contracts deployed unchanged; the face check as a product-side service; the cross-profile proof as v0; a per-human score that links profiles without the user choosing; user accounts anywhere; address logs; Commerce Kit; Private Channels; Mexico as a default for anything; escrow modes (fixed, per unit, capped; one shape only); a per-human handle market; one handle per human; wallet infrastructure providers (Turnkey, Privy, Crossmint wallets) for keys; numbered per-human codes (they would have put the same code in two registrations and publicly linked a human's profiles); free-slot codes inside the program; splitting the list on day one; Turso, Hetzner or any other host for v0 (Railway and plain SQLite files first, Hetzner when the host serves real photos); depth 20.

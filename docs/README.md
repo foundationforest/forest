@@ -1,1 +1,1 @@
-Repo memory: the handoff (the plan and the reason behind every choice) and the changes log appended at the end of every session.
+Repo memory: the handoff (the plan and the reason behind every choice), the changes log appended at the end of every session, and `decisions/`, one report per sealed choice that needed its own comparison before Carlos decided it.
