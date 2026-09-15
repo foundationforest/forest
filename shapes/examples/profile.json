@@ -1,0 +1,14 @@
+{
+  "$type": "foundation.forest.profile",
+  "name": "Ana Ribeiro",
+  "photo": {
+    "$type": "blob",
+    "ref": { "$link": "bafkreicx54kjfbjopw56j2bwh7zphoa5ejyyx7e6wazjsfr3u2q33d65he" },
+    "mimeType": "image/jpeg",
+    "size": 20
+  },
+  "contact": "Message me here first; video calls after a first reply.",
+  "about": "Portuguese and Spanish tutor. Ten years teaching adults online.",
+  "wallet": "BAEB3sckdvwUWzxAuvAzEMT8TM8NWUf7pXL9PZvtFaKG",
+  "createdAt": "2026-09-14T10:00:00Z"
+}

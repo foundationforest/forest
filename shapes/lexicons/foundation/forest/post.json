@@ -1,0 +1,88 @@
+{
+  "lexicon": 1,
+  "id": "foundation.forest.post",
+  "defs": {
+    "main": {
+      "type": "record",
+      "description": "An offer or a request in one market.",
+      "key": "tid",
+      "record": {
+        "type": "object",
+        "required": ["direction", "market", "role", "description", "price", "remote", "createdAt"],
+        "properties": {
+          "direction": {
+            "type": "string",
+            "description": "Offering something, or asking for it.",
+            "enum": ["offer", "request"]
+          },
+          "market": {
+            "type": "string",
+            "description": "Standard market name from the markets directory.",
+            "maxLength": 64
+          },
+          "role": {
+            "type": "string",
+            "description": "The poster's role, one of the market file's roles.",
+            "maxLength": 64
+          },
+          "description": {
+            "type": "string",
+            "maxGraphemes": 3000,
+            "maxLength": 30000
+          },
+          "price": {
+            "type": "ref",
+            "ref": "#price"
+          },
+          "availability": {
+            "type": "string",
+            "description": "When, in the poster's words.",
+            "maxGraphemes": 500,
+            "maxLength": 5000
+          },
+          "remote": {
+            "type": "boolean",
+            "description": "True when the work happens online."
+          },
+          "location": {
+            "type": "string",
+            "description": "Where, when not remote.",
+            "maxGraphemes": 128,
+            "maxLength": 1280
+          },
+          "expires": {
+            "type": "string",
+            "description": "Optional. After this the post is stale.",
+            "format": "datetime"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "datetime"
+          }
+        }
+      }
+    },
+    "price": {
+      "type": "object",
+      "description": "The price block. Per hour, per day, per job: the app multiplies before funding, one escrow per payment.",
+      "required": ["amount", "token", "per"],
+      "properties": {
+        "amount": {
+          "type": "string",
+          "description": "Amount in whole units of the token, as decimal text: \"25\", \"12.50\".",
+          "maxLength": 32
+        },
+        "token": {
+          "type": "string",
+          "description": "Token symbol as listed in the market file's accepted tokens.",
+          "maxLength": 16
+        },
+        "per": {
+          "type": "string",
+          "description": "What one amount buys.",
+          "enum": ["hour", "day", "job"]
+        }
+      }
+    }
+  }
+}

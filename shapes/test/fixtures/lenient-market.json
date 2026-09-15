@@ -1,0 +1,10 @@
+{
+  "name": "online-tutors",
+  "roles": ["tutor", "student"],
+  "fields": {},
+  "silenceDays": 7,
+  "arbiterAllowed": false,
+  "reviewEvidence": "photo",
+  "credentialIssuers": [],
+  "tokens": [{ "symbol": "USDC", "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" }]
+}

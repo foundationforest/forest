@@ -44,7 +44,7 @@ Three rungs of one ladder. There are no accounts anywhere.
 | Index | Reads the carrier, scores, serves category pages, profile pages, a machine endpoint. Open algorithm. Signs scores with a ZK-friendly signature (EdDSA over Poseidon) alongside the normal one | Ours | Supabase and Vercel, at forest.foundation |
 | Registry | Sealed program: list of verified humans, one code per (human, market), one numbered code per human, free dials, the 25-cent rule | Ours; Semaphore circuit unchanged, groth16-solana verifier, Poseidon syscall | Solana |
 | Fee payer, registrations | Sponsors any registration that carries a valid proof, rate-limited. No vouchers, no tokens, no custom code | Kora, configured | Foundation (Railway) |
-| Escrow | Sealed program per version: holds a plain SPL token between two keys; releases on approval, timeout, agreed split, or optional arbiter | Ours | Solana |
+| Escrow | Sealed program per version: one shape, an amount of a plain SPL token held between two keys; released by approval, silence, split, or optional arbiter | Ours | Solana |
 | Face check | Once. Passive liveness plus dedupe. Foundation runs it as the first issuer and owns the account holding the list; Didit holds the faces. New issuers register themselves | Didit | Theirs |
 | Issuer flow | Face check result to identity commitment to list insert | Ours, small | Foundation (Railway) |
 | Names | `handle.forest.foundation` serves the profile page and resolves to the DID. Badged profiles only; one per human (see Names) | Ours, small | Foundation |
@@ -59,7 +59,7 @@ Rule: a piece that only works if everyone shares one is a public good and goes i
 | Record shapes, market template, markets directory | The app page: unlock, profiles, posts, reviews, signing, escrow buttons, AI permissions |
 | Keys recipe, seed file format, paper export | Hosting an instance of the host; seed-file store |
 | Registry, escrow, host software, carrier, index, ranking, registration fee payer, names, issuer | Fee payer for everything else (fund, release, send) |
-| Badge and pay link on forest.foundation | Ramp link-out (exchange instructions and a prefilled ramp page in v0; Onramper when an entity exists) |
+| Badge and pay link on forest.foundation | Ramp: exchange instructions and a prefilled ramp page in v0; Crossmint (self-serve on staging now; production when they accept us, sole proprietor first) or Onramper |
 | | The door: an MCP server that holds no keys and forwards signing to the app |
 
 Repos: `foundationforest/forest` (all foundation code, Apache 2.0) and `foundationforest/markets` (files, CC0). The product org holds `cabin`. Names: Forest at forest.foundation; Cabin at its own domain.
@@ -71,16 +71,19 @@ Repos: `foundationforest/forest` (all foundation code, Apache 2.0) and `foundati
 - **Registration.** One transaction carries: the market name, the profile's DID, a market code (proof with scope = market name), and a numbered human code (proof with scope = "badge-k"). The program checks both proofs, that neither code is used, and that "badge-(k-1)" exists (or k = 1). Then it records everything. The number k is public; identity is not.
 - **Free dials.** Numbers 1 through N are free; N and an end date are settings the treasury key can change. N = 5 now. After that the program takes 0.25 in an accepted dollar token from the profile's wallet in the same transaction. The amount is sealed.
 - **Accepted tokens.** USDC always (sealed, so registration can never be halted). Others added by the treasury key, restricted to dollar stablecoins pegged one to one.
-- **Scopes are generic.** "handle" is a market like any other (see Names). Standard category names live in the `markets` directory; the program accepts any scope, and only directory names count in indexes and badges.
+- **Scopes are generic.** Standard category names live in the `markets` directory; the program accepts any scope, and only directory names count in indexes and badges.
 - **Sponsor.** The foundation's Kora sponsors any registration transaction; the proof is the anti-spam; Kora's rate limits handle junk. Cost per registration is the network fee plus storage.
 - **Sealed per version.** The upgrade key is removed after deploy. A v2 is a new program; migrating the list costs, so v1 must be right. First sellers use v1 on devnet before mainnet.
 - **Later, same data.** A v1 circuit proves "exactly N badges whose scores sum past T" without naming any. Non-inclusion of "badge-(N+1)" is what makes "none hidden" provable. Design the storage so codes sit in a Merkle tree that can be proven against (Light's compressed accounts, or a plain tree).
 
 ## Escrow
 
-- Parties are Solana keys. A profile's wallet is a key; a Phantom wallet is a key. The program never knows about DIDs.
-- Each escrow has its own deposit address, fundable by a plain transfer from anywhere. The program checks "balance at least the amount," never "exactly." The refund address is set at creation to the buyer's key.
-- Modes: fixed, per unit, capped. Silence rule: release to the seller after N days; if the buyer objects, locked until both agree; an unresolved lock marks both. Optional arbiter per market file.
+One shape. An amount of a plain SPL token held between two keys, buyer and seller, released by rule.
+
+- Parties are Solana keys. A profile's wallet is a key; any wallet is a key. The program never knows about DIDs.
+- Each escrow has its own deposit address, fundable by a plain transfer from anywhere. The program checks "balance at least the amount," never "exactly." The refund address is the buyer's key, fixed at creation.
+- Release: the buyer approves (all to the seller, or an agreed split with the rest back to the buyer); or silence (release to the seller after N days); or objection (locked until both agree; an unresolved lock marks both); or an optional arbiter key named at creation.
+- Per hour, per day, per job: the app multiplies before funding. One escrow per payment. The program has no modes.
 - v1 accepts classic SPL Token mints only (no Token-2022 extensions). Because a transfer fee, a permanent delegate, or a transfer hook changes what "hold X, release X" means, and a sealed program can't be patched.
 - Sealed per version. New deals use the newest version; old deals finish on theirs.
 - Moving money between profiles links them on chain. Options for users: one main wallet (default, linked), fund a profile directly from an exchange, or a third-party shielded pool by link-out. Forest never builds or embeds one.
@@ -95,14 +98,15 @@ Repos: `foundationforest/forest` (all foundation code, Apache 2.0) and `foundati
 
 Four shapes, shared by every market: profile (name, photo, contact, what I do, declared wallet), post (direction, market, role, description, price block, availability, location or remote, optional expiry), review (about whom, rating, text, escrow pointer), credential (a W3C verifiable credential, issuer DID, one copy per profile). Nobody issues credentials yet; the shape exists so nothing changes when they arrive.
 
-A market file adds: standard name, roles, extra fields, allowed escrow settings and default timeouts, review evidence rule, accepted credential issuers, accepted tokens. Market files add fields, never new shapes. First example: online tutors (per-unit escrow). Three real markets are still open; candidates are online services. Category pages publish at a density threshold.
+A market file adds: standard name, roles, extra fields, default silence days, whether an arbiter is allowed, review evidence rule, accepted credential issuers, accepted tokens. Market files add fields, never new shapes. First example: online tutors (priced per hour; one escrow per session). Three real markets are still open; candidates are online services. Category pages publish at a density threshold.
 
 ## Names
 
-- `carlos.forest.foundation` is the profile page and the AT Protocol handle (it resolves to the DID through `/.well-known/atproto-did`).
-- Only badged profiles. One per human: "handle" is a market in the directory; a registration in it lets that DID claim one name. First come, first served. The foundation never judges disputes.
-- Price is a treasury dial, $1 or zero. Any app or host claims names through the same open endpoint; the UI is theirs.
-- Profiles without a name are reachable by DID on forest.foundation.
+- A handle is a readable alias for one profile's DID: a domain name that resolves to the DID (`/.well-known/atproto-did`) while the DID points back. One profile, one active handle; the user can move it to any domain; the DID never changes.
+- Every badged profile gets a random handle free, like `k7m2q.forest.foundation`. It is the profile page and the share link. Random names link nothing.
+- A chosen name is optional, one per profile, priced like a domain: yearly, amount a treasury dial. Choosing the same word on two profiles links them; the user's choice, said in the copy.
+- Badged profiles only. First come, first served. The foundation never judges disputes.
+- Any app or host claims names through the same open endpoint; the UI is theirs. Profiles without a foundation handle are still reachable by DID on forest.foundation.
 - Built after the index, since the index serves the page.
 
 ## What Cabin needs from the foundation
@@ -132,8 +136,8 @@ The foundation entity (a UK company limited by guarantee; forms before the first
 
 ## Open
 
-Which three markets. Whether the 25 cents funds anything given free numbers. Per-mode timeouts as market defaults. Whether one stablecoin holds for EU users. Which ramps accept a prefilled link with no partner account. Whether a moved passkey keeps its PRF secret (the design assumes not). Whether the registry should also emit an attestation other Solana apps can read (parked).
+Which three markets. Whether the 25 cents funds anything given free numbers. Per-mode timeouts as market defaults. Whether one stablecoin holds for EU users. Which ramps accept a prefilled link with no partner account. Whether a moved passkey keeps its PRF secret (the design assumes not). Whether the registry should also emit an attestation other Solana apps can read (parked). Whether Crossmint or Onramper accepts a sole proprietor for production. Whether Crossmint's bank rails cover the first sellers' countries.
 
 ## Don't resurrect
 
-Chain posts; a Forest-written folder standard; the chain debate; issuer-assisted recovery in v0; a Forest-invented name system (names are AT Protocol handles under the foundation domain); ten free tokens; vouchers and blind tokens for registration; custom code inside Kora; Mercury; Bridge; Stripe Atlas; Ramp Network direct; Transak in v0; a UK Ltd in v0; Meld; the registry as a service for other apps; recurring foundation revenue; manifesto-first; three long pages as the product; Semaphore contracts deployed unchanged; the face check as a product-side service; the cross-profile proof as v0; a per-human score that links profiles without the user choosing; user accounts anywhere; address logs; Commerce Kit; Private Channels; Mexico as a default for anything.
+Chain posts; a Forest-written folder standard; the chain debate; issuer-assisted recovery in v0; a Forest-invented name system (names are AT Protocol handles under the foundation domain); ten free tokens; vouchers and blind tokens for registration; custom code inside Kora; Mercury; Bridge; Stripe Atlas; Ramp Network direct; Transak in v0; a UK Ltd in v0; Meld; the registry as a service for other apps; recurring foundation revenue; manifesto-first; three long pages as the product; Semaphore contracts deployed unchanged; the face check as a product-side service; the cross-profile proof as v0; a per-human score that links profiles without the user choosing; user accounts anywhere; address logs; Commerce Kit; Private Channels; Mexico as a default for anything; escrow modes (fixed, per unit, capped; one shape only); a per-human handle market; one handle per human; wallet infrastructure providers (Turnkey, Privy, Crossmint wallets) for keys.
