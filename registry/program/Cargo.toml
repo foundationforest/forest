@@ -1,0 +1,32 @@
+[package]
+name = "forest-registry"
+version = "0.1.0"
+edition = "2021"
+description = "The Forest registry: one verified human, one badge per market, on Solana. Sealed per version."
+license = "Apache-2.0"
+publish = false
+exclude = ["tests-litesvm"]
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "forest_registry"
+
+[features]
+default = []
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+
+[dependencies]
+anchor-lang = "1.2.0"
+anchor-spl = { version = "1.2.0", default-features = false, features = ["token"] }
+bytemuck = { version = "1", features = ["derive", "min_const_generics"] }
+groth16-solana = "0.2.0"
+solana-poseidon = { version = "3.1.14", features = ["agave-unstable-api"] }
+solana-keccak-hasher = "3.1.0"
+
+[lints.rust.unexpected_cfgs]
+level = "warn"
+check-cfg = ['cfg(target_os, values("solana"))']
