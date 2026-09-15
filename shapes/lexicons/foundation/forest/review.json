@@ -1,0 +1,42 @@
+{
+  "lexicon": 1,
+  "id": "foundation.forest.review",
+  "defs": {
+    "main": {
+      "type": "record",
+      "description": "A review of another profile, kept in the reviewer's own folder.",
+      "key": "tid",
+      "record": {
+        "type": "object",
+        "required": ["subject", "rating", "text", "createdAt"],
+        "properties": {
+          "subject": {
+            "type": "string",
+            "description": "The reviewed profile's DID.",
+            "format": "did"
+          },
+          "rating": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5
+          },
+          "text": {
+            "type": "string",
+            "maxGraphemes": 3000,
+            "maxLength": 30000
+          },
+          "escrow": {
+            "type": "string",
+            "description": "Escrow pointer: the escrow account's address, base58. A market's review evidence rule may require it.",
+            "minLength": 32,
+            "maxLength": 44
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "datetime"
+          }
+        }
+      }
+    }
+  }
+}

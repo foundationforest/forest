@@ -1,0 +1,51 @@
+{
+  "lexicon": 1,
+  "id": "foundation.forest.profile",
+  "defs": {
+    "main": {
+      "type": "record",
+      "description": "A profile: the public card of one folder. One per folder, keyed 'self'.",
+      "key": "literal:self",
+      "record": {
+        "type": "object",
+        "required": ["name", "createdAt"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Display name.",
+            "maxGraphemes": 64,
+            "maxLength": 640
+          },
+          "photo": {
+            "type": "blob",
+            "description": "Profile photo.",
+            "accept": ["image/png", "image/jpeg"],
+            "maxSize": 1000000
+          },
+          "contact": {
+            "type": "string",
+            "description": "How to reach this profile, in the owner's words.",
+            "maxGraphemes": 256,
+            "maxLength": 2560
+          },
+          "about": {
+            "type": "string",
+            "description": "What I do.",
+            "maxGraphemes": 1000,
+            "maxLength": 10000
+          },
+          "wallet": {
+            "type": "string",
+            "description": "Declared wallet: the Solana public key this profile is paid at, base58.",
+            "minLength": 32,
+            "maxLength": 44
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "datetime"
+          }
+        }
+      }
+    }
+  }
+}

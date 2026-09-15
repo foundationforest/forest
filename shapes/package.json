@@ -1,0 +1,18 @@
+{
+  "name": "@forest/shapes",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Forest record shapes: four AT Protocol lexicons, a validator, example records, and an example market file.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "forest-validate": "./bin/validate.js"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "@atproto/lexicon": "0.7.14",
+    "@atproto/syntax": "0.7.6"
+  }
+}

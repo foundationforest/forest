@@ -1,0 +1,14 @@
+{
+  "$type": "foundation.forest.post",
+  "direction": "offer",
+  "market": "online-tutors",
+  "role": "tutor",
+  "description": "Conversation-first Portuguese lessons for adults, A1 to B2. One-hour sessions over video; homework optional.",
+  "price": { "amount": "25", "token": "USDC", "per": "hour" },
+  "availability": "Weekday evenings, Lisbon time.",
+  "remote": true,
+  "expires": "2026-12-31T23:59:59Z",
+  "createdAt": "2026-09-14T10:05:00Z",
+  "subjects": ["portuguese", "spanish"],
+  "languages": ["pt", "es", "en"]
+}
