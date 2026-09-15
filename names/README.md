@@ -1,1 +1,1 @@
-Will hold the names service: handle.forest.foundation serves the profile page and resolves to the DID, badged profiles only, one per human.
+Will hold the names service: every badged profile gets a random handle free, like `k7m2q.forest.foundation`, which is the profile page and the AT Protocol handle; chosen names are optional, one per profile, paid yearly (amount a treasury dial).

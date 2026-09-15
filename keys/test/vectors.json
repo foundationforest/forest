@@ -1,0 +1,31 @@
+{
+  "about": "Fixed test vectors for the keys recipe, version v1. Generated once by this implementation and pinned; the genesis operations were checked against @did-plc/lib's createOp, assureValidCreationOp and validateOperationLog. Bytes are hex. Changing any value here is a recipe change.",
+  "prf": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "seed": "3d9afcf6df255ce134686fc4f26d6cca0a57f82480f7b34d37e682546aaa72b0",
+  "handle": "handle.example",
+  "pds": "https://host.example",
+  "profiles": [
+    {
+      "index": 0,
+      "control": "did:key:zQ3shiXa9ZrDjkpc6ibdBKxQ2zWYvAmt13BLwVeFibcsPKndG",
+      "signing": "did:key:zQ3shoPgTCd5CfzjVLNTmtKeK1LTPAy5btRgYKWB1QJkAKvPr",
+      "wallet": "Azh4zBXfQsXLKrrD6YanN7VZhpNyQot7vVdtB2r41UWx",
+      "did": "did:plc:wece24yzukt4pj6hqvmb2fn4",
+      "sig": "IsjIQ3cKOULc1e9L_xJQlKdhyYNKTunlg1TZqmfrF4VSiBH2-azpTuzNs1qucZi3QX0-LA2F7exnWfPH6Tuvlg"
+    },
+    {
+      "index": 1,
+      "control": "did:key:zQ3shNmx6iwL76TGFFnJFM5C5pUH5ULWxHMeMdPVu9Lvc8So8",
+      "signing": "did:key:zQ3shf7hri4AxUbKUMyQcAkfh8H1k622My8RX6uT3UJ98xSpT",
+      "wallet": "79Lhh1j5NiJqZNz6qrynxCVvJJnKApCrLLjBCov8a1oj",
+      "did": "did:plc:jhlp4q2nzhrz5timu2qxe4ln",
+      "sig": "ep8u7a_VyFB8bcSWt8xyoTZuqwHZmfQKjP5BKxUfIg4lx3Lm-gO5bRNT1LT1LbCFyp0OmpeQpPag_-1tdizQMw"
+    }
+  ],
+  "words": "diesel subject diet salad fiction identify spider assume shaft nature forest neglect pistol winter must bus rebuild have whale again effort festival skull bicycle",
+  "seedFile": {
+    "prf": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+    "label": "is5KJzsnEvZhq1udS4XEVUro3G7LkXun9agAQ_3RoxI",
+    "ciphertext": "OF75iwQ_amjVoQJ6yRXzMjMeXZOp9Ps4QP1M0_6A-BTx713358B_oJ48Ll4Upk7MF_ignn1laCz9Jk-1"
+  }
+}

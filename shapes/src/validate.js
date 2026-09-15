@@ -39,8 +39,15 @@ export const MARKET_KEYS = [
   'tokens',
 ]
 
-/** What a review must carry in this market. */
+/**
+ * The market's review evidence rule. Metadata for indexes, which weigh a
+ * review without that evidence near zero. Never a validation rule: a review
+ * is valid with or without it.
+ */
 export const REVIEW_EVIDENCE = ['escrow', 'none']
+
+/** Chains a market file may pin a token's mint on. */
+export const CHAINS = ['solana']
 
 // A market field is flat data. Anything structured would be a new shape.
 const EXTRA_FIELD_TYPES = ['string', 'integer', 'boolean', 'array']
@@ -82,7 +89,8 @@ export function loadLexiconDocs() {
  * Check one record. Returns { ok, shape, errors }.
  * With a market file, the record is checked against the shape plus that
  * market's extra fields, and against the market's own rules (name, roles,
- * accepted tokens, review evidence).
+ * accepted tokens). The review evidence rule is not checked: it weighs,
+ * it never rejects.
  */
 export function validateRecord(record, { market } = {}) {
   if (!isPlainObject(record)) return fail(undefined, ['record must be a JSON object'])
@@ -161,11 +169,11 @@ export function validateMarket(market) {
   }
 
   if (!Array.isArray(market.tokens) || market.tokens.length === 0) {
-    errors.push('tokens must be a non-empty array of { symbol, mint }')
+    errors.push('tokens must be a non-empty array of { symbol, mint, chain }')
   } else {
     for (const token of market.tokens) {
-      if (!isPlainObject(token) || Object.keys(token).sort().join(',') !== 'mint,symbol') {
-        errors.push('tokens: each entry has exactly "symbol" and "mint"')
+      if (!isPlainObject(token) || Object.keys(token).sort().join(',') !== 'chain,mint,symbol') {
+        errors.push('tokens: each entry has exactly "symbol", "mint", and "chain"; the market file is what pins a symbol to a mint')
         continue
       }
       if (typeof token.symbol !== 'string' || !TOKEN_SYMBOL.test(token.symbol)) {
@@ -173,6 +181,9 @@ export function validateMarket(market) {
       }
       if (typeof token.mint !== 'string' || !BASE58_KEY.test(token.mint)) {
         errors.push(`tokens: mint for ${JSON.stringify(token.symbol)} must be a base58 public key`)
+      }
+      if (!CHAINS.includes(token.chain)) {
+        errors.push(`tokens: chain for ${JSON.stringify(token.symbol)} must be one of (${CHAINS.join('|')})`)
       }
     }
     const symbols = market.tokens.map((t) => t?.symbol)
@@ -277,7 +288,8 @@ function checkFields(fields) {
   return errors
 }
 
-// Cross-checks a record against the market file it is meant for.
+// Cross-checks a record against the market file it is meant for. A review is
+// never checked against reviewEvidence: that rule weighs, it never rejects.
 function marketRules(shape, record, market) {
   const errors = []
   if (shape === 'post') {
@@ -291,9 +303,6 @@ function marketRules(shape, record, market) {
     if (!symbols.includes(record.price?.token)) {
       errors.push(`Record/price/token must be one of (${symbols.join('|')}), got ${JSON.stringify(record.price?.token)}`)
     }
-  }
-  if (shape === 'review' && market.reviewEvidence === 'escrow' && record.escrow === undefined) {
-    errors.push(`Record/escrow is required: market "${market.name}" needs an escrow behind every review`)
   }
   return errors
 }

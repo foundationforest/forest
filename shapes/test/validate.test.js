@@ -156,7 +156,7 @@ test('market scalars are checked', () => {
   m.arbiterAllowed = 'no'
   m.reviewEvidence = 'photo'
   m.credentialIssuers = ['bob']
-  m.tokens = [{ symbol: 'usdc', mint: 'x' }]
+  m.tokens = [{ symbol: 'usdc', mint: 'x', chain: 'ethereum' }]
   const result = validateMarket(m)
   assertRejected(result, /silenceDays must be a whole number of days, at least 1/)
   assertRejected(result, /arbiterAllowed must be true or false/)
@@ -164,6 +164,13 @@ test('market scalars are checked', () => {
   assertRejected(result, /"bob" is not a DID/)
   assertRejected(result, /symbol "usdc" must be/)
   assertRejected(result, /mint for "usdc" must be a base58 public key/)
+  assertRejected(result, /chain for "usdc" must be one of \(solana\)/)
+})
+
+test('a token entry is symbol, mint, and chain, nothing less', () => {
+  const m = market()
+  m.tokens = [{ symbol: 'USDC', mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v' }]
+  assertRejected(validateMarket(m), /each entry has exactly "symbol", "mint", and "chain"/)
 })
 
 // Records against their lexicon plus a market file
@@ -194,13 +201,15 @@ test("a post must carry the market's required extra field, typed as the market s
   assertRejected(validateRecord(again, { market: market() }), /languages\/0 must be a well-formed BCP 47/)
 })
 
-test('review evidence: the market decides whether a review needs an escrow behind it', () => {
+test('review evidence weighs, never rejects: a review without an escrow is valid in an escrow market', () => {
   const review = example('review')
   delete review.escrow
-  assertRejected(validateRecord(review, { market: market() }), /escrow is required/)
+  const strict = market()
+  assert.equal(strict.reviewEvidence, 'escrow')
+  assert.deepEqual(validateRecord(review, { market: strict }), { ok: true, shape: 'review', errors: [] })
   const lenient = market()
   lenient.reviewEvidence = 'none'
-  assert.equal(validateRecord(review, { market: lenient }).ok, true)
+  assert.deepEqual(validateRecord(review, { market: lenient }), { ok: true, shape: 'review', errors: [] })
 })
 
 test('a broken market file fails the record, and says so', () => {

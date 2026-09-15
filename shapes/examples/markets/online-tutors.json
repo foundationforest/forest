@@ -26,6 +26,6 @@
   "reviewEvidence": "escrow",
   "credentialIssuers": [],
   "tokens": [
-    { "symbol": "USDC", "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" }
+    { "symbol": "USDC", "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", "chain": "solana" }
   ]
 }

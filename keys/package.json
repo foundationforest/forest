@@ -1,0 +1,30 @@
+{
+  "name": "@forest/keys",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Forest keys recipe: passkey secret to seed, seed to per-profile keys, wallet and DID, the seed file for extra passkeys, and paper export.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "test": "node --test test/*.test.ts",
+    "check": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json",
+    "build:page": "esbuild src/index.ts --bundle --format=esm --platform=browser --outfile=test-page/dist/forest-keys.js"
+  },
+  "dependencies": {
+    "@atproto/crypto": "0.5.5",
+    "@ipld/dag-cbor": "10.0.2",
+    "@noble/curves": "2.4.0",
+    "@scure/base": "2.4.0",
+    "@scure/bip39": "2.4.0"
+  },
+  "devDependencies": {
+    "@did-plc/lib": "0.0.4",
+    "@noble/hashes": "2.4.0",
+    "@types/node": "22.20.2",
+    "esbuild": "0.28.2",
+    "typescript": "5.9.3"
+  }
+}
