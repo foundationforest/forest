@@ -4,6 +4,7 @@
 export { VERSION, PRF_INPUT, PRF_INPUT_TEXT, INFO, PRF_LENGTH, SEED_LENGTH, hkdf } from './hkdf.ts'
 export { seedFromPrf } from './seed.ts'
 export { profileKeys, type ProfileKeys, type Wallet } from './profile.ts'
+export { identitySecret, humanIdentity, IDENTITY_SECRET_LENGTH, type HumanIdentity } from './identity.ts'
 export {
   genesisOperation,
   didGenesis,

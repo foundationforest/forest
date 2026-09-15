@@ -1,5 +1,5 @@
 {
-  "about": "Fixed test vectors for the keys recipe, version v1. Generated once by this implementation and pinned; the genesis operations were checked against @did-plc/lib's createOp, assureValidCreationOp and validateOperationLog. Bytes are hex. Changing any value here is a recipe change.",
+  "about": "Fixed test vectors for the keys recipe, version v1. Generated once by this implementation and pinned; the genesis operations were checked against @did-plc/lib's createOp, assureValidCreationOp and validateOperationLog, and the identity against @semaphore-protocol/identity and a by-hand recomputation. Bytes are hex; field elements are decimal. Changing any value here is a recipe change.",
   "prf": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
   "seed": "3d9afcf6df255ce134686fc4f26d6cca0a57f82480f7b34d37e682546aaa72b0",
   "handle": "handle.example",
@@ -22,6 +22,16 @@
       "sig": "ep8u7a_VyFB8bcSWt8xyoTZuqwHZmfQKjP5BKxUfIg4lx3Lm-gO5bRNT1LT1LbCFyp0OmpeQpPag_-1tdizQMw"
     }
   ],
+  "identity": {
+    "note": "One per seed, not per profile. The secret is HKDF from the seed with info forest.foundation/identity/v1; the rest is Semaphore's own derivation from those bytes.",
+    "secret": "54684ed3bd15671b1a07bd8ed840a049c60ce847afd7d8da73b4f71cc6884d85",
+    "secretScalar": "2637071886574317557357748745269659878450060864322449153662462920291629818323",
+    "publicKey": [
+      "12833172845353551264950838312363281669817922016952954163704025052554025680832",
+      "10200531290526369356393060646766724663488770654401564689854272195253183371685"
+    ],
+    "commitment": "14568690134484466610252976219100933485694269593799802854234702390895629808185"
+  },
   "words": "diesel subject diet salad fiction identify spider assume shaft nature forest neglect pistol winter must bus rebuild have whale again effort festival skull bicycle",
   "seedFile": {
     "prf": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",

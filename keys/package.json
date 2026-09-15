@@ -18,13 +18,16 @@
     "@ipld/dag-cbor": "10.0.2",
     "@noble/curves": "2.4.0",
     "@scure/base": "2.4.0",
-    "@scure/bip39": "2.4.0"
+    "@scure/bip39": "2.4.0",
+    "@semaphore-protocol/identity": "4.12.1"
   },
   "devDependencies": {
     "@did-plc/lib": "0.0.4",
     "@noble/hashes": "2.4.0",
     "@types/node": "22.20.2",
+    "@zk-kit/baby-jubjub": "1.0.3",
     "esbuild": "0.28.2",
+    "poseidon-lite": "0.3.0",
     "typescript": "5.9.3"
   }
 }

@@ -20,6 +20,8 @@ export const INFO = {
   wallet: (n: number) => `forest.foundation/profile/${n}/wallet/${VERSION}`,
   seedFileKey: `forest.foundation/seed-file/key/${VERSION}`,
   seedFileLabel: `forest.foundation/seed-file/label/${VERSION}`,
+  // No profile index: the registry's identity is per human, not per profile.
+  identity: `forest.foundation/identity/${VERSION}`,
 } as const
 
 /** A passkey's PRF output is 32 bytes. */
