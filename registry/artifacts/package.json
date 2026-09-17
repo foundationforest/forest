@@ -1,0 +1,14 @@
+{
+  "name": "forest-registry-artifacts",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Fetches, checks and converts the pinned Semaphore ceremony artifacts.",
+  "scripts": {
+    "fetch": "node fetch.mjs",
+    "vk": "node parse_vk_to_rust.cjs semaphore-32.json ../program/src"
+  },
+  "dependencies": {
+    "ffjavascript": "0.3.1"
+  }
+}

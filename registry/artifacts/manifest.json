@@ -1,0 +1,27 @@
+{
+  "note": "The Semaphore setup files the registry is sealed against. Nothing here may change: the verification key is baked into the program, and a different proving key produces proofs it will not accept.",
+  "ceremony": "Semaphore V4 Ceremony, PSE's p0tion, over 400 participants, finished July 13, 2024",
+  "version": "4.0.0",
+  "depth": 32,
+  "library": "@semaphore-protocol/* 4.12.1, the last line whose circuit matches these files",
+  "baseUrl": "https://snark-artifacts.pse.dev/semaphore/4.0.0/",
+  "files": {
+    "semaphore-32.zkey": {
+      "bytes": 5841577,
+      "sha256": "0654f6692b026a0e98972db610a7084136ee6303a1960944e866205942d051c7",
+      "what": "the proving key. Only used to make a proof, on a device. Not committed: 5.8 MB."
+    },
+    "semaphore-32.wasm": {
+      "bytes": 1850862,
+      "sha256": "f5c50ff3847c1b93e3439098719739e34136f505d1899b620d1641339d67ee7a",
+      "what": "the witness generator. Only used to make a proof, on a device. Not committed: 1.8 MB."
+    }
+  },
+  "committed": {
+    "semaphore-32.json": {
+      "bytes": 3741,
+      "sha256": "9b3ab0a193f448714db224bd22540bf4e98f0e6418aa347b0a8cdfbc246ad588",
+      "what": "the verification key. Converted to ../program/src/verifying_key.rs and sealed into the program."
+    }
+  }
+}
