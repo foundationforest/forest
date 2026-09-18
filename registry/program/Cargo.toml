@@ -13,6 +13,8 @@ name = "forest_registry"
 
 [features]
 default = []
+# Bakes devnet's USDC mint in as `mints[0]` instead of mainnet's. Nothing else differs.
+devnet = []
 cpi = ["no-entrypoint"]
 no-entrypoint = []
 no-idl = []

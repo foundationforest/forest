@@ -24,9 +24,30 @@ use solana_transaction::Transaction;
 pub const PROGRAM_ID: Address = solana_address::address!("FoRPzGfMyWjK8uLjMoZfae2yevnviyCsGsHM7AwBwK8B");
 pub const TOKEN_PROGRAM: Address = solana_address::address!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 
-pub const REGISTRATION_FEE: u64 = 250_000;
+/// The placeholder treasury the program starts with, and the public seed it is derived from so
+/// these tests can sign for it. Replaced with the charter's address before the first deploy.
+pub const TREASURY_SEED: [u8; 32] = *b"REPLACE-BEFORE-DEPLOY-treasury-0";
+pub const TREASURY: Address = solana_address::address!("F35kGoXPCdZLdanwTGuShYXxAkmkpHP9LWgV7dNvKU5s");
+/// Mainnet's USDC, the one address `init` accepts as the first mint. These tests run against the
+/// default build; a `--features devnet` build names devnet's instead.
+pub const USDC_MINT: Address = solana_address::address!("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
+
+/// 0.25 in a mint's own base units: 25 × 10^(decimals − 2). Written a second time here, by hand.
+pub fn registration_fee(decimals: u8) -> Option<u64> {
+    if decimals < 2 {
+        return None;
+    }
+    25u64.checked_mul(10u64.checked_pow(u32::from(decimals - 2))?)
+}
+
+pub fn treasury_keypair() -> Keypair {
+    let kp = Keypair::new_from_array(TREASURY_SEED);
+    assert_eq!(kp.pubkey(), TREASURY, "the placeholder seed must derive the program's constant");
+    kp
+}
+
 pub const ROOT_HISTORY: usize = 128;
-pub const CONFIG_LEN: usize = 8 + 583;
+pub const CONFIG_LEN: usize = 8 + 566;
 pub const LIST_LEN: usize = 8 + 5456;
 pub const CODE_TREE_LEN: usize = 8 + 1104;
 pub const USED_CODE_LEN: usize = 8 + 1;
@@ -218,9 +239,9 @@ pub fn register_ix(args: &RegisterArgs, accounts: &RegisterAccounts) -> Instruct
     }
 }
 
-pub fn init_ix(payer: Address, treasury_key: Address, treasury: Address, usdc: Address) -> Instruction {
-    let mut data = discriminator("global", "init").to_vec();
-    data.extend_from_slice(treasury.as_ref());
+/// `init` takes no argument and no treasury signer: the mint account it names is the one at the
+/// program's constant, and the treasury it writes is the program's constant.
+pub fn init_ix(payer: Address, usdc: Address) -> Instruction {
     Instruction {
         program_id: PROGRAM_ID,
         accounts: vec![
@@ -228,29 +249,41 @@ pub fn init_ix(payer: Address, treasury_key: Address, treasury: Address, usdc: A
             AccountMeta::new(list_address(0), false),
             AccountMeta::new(code_tree_address(), false),
             AccountMeta::new(payer, true),
-            AccountMeta::new_readonly(treasury_key, true),
             AccountMeta::new_readonly(usdc, false),
             AccountMeta::new_readonly(solana_system_interface::program::ID, false),
+        ],
+        data: discriminator("global", "init").to_vec(),
+    }
+}
+
+pub fn set_treasury_ix(treasury: Address, new_treasury: Address) -> Instruction {
+    let mut data = discriminator("global", "set_treasury").to_vec();
+    data.extend_from_slice(new_treasury.as_ref());
+    Instruction {
+        program_id: PROGRAM_ID,
+        accounts: vec![
+            AccountMeta::new(config_address(), false),
+            AccountMeta::new_readonly(treasury, true),
         ],
         data,
     }
 }
 
-pub fn open_list_ix(payer: Address, treasury_key: Address, new_index: u32) -> Instruction {
+pub fn open_list_ix(payer: Address, treasury: Address, new_index: u32) -> Instruction {
     Instruction {
         program_id: PROGRAM_ID,
         accounts: vec![
             AccountMeta::new(config_address(), false),
             AccountMeta::new(list_address(new_index), false),
             AccountMeta::new(payer, true),
-            AccountMeta::new_readonly(treasury_key, true),
+            AccountMeta::new_readonly(treasury, true),
             AccountMeta::new_readonly(solana_system_interface::program::ID, false),
         ],
         data: discriminator("global", "open_list").to_vec(),
     }
 }
 
-pub fn issuer_ix(name: &str, treasury_key: Address, list_index: u32, issuer: Address) -> Instruction {
+pub fn issuer_ix(name: &str, treasury: Address, list_index: u32, issuer: Address) -> Instruction {
     let mut data = discriminator("global", name).to_vec();
     data.extend_from_slice(&list_index.to_le_bytes());
     data.extend_from_slice(issuer.as_ref());
@@ -259,7 +292,7 @@ pub fn issuer_ix(name: &str, treasury_key: Address, list_index: u32, issuer: Add
         accounts: vec![
             AccountMeta::new_readonly(config_address(), false),
             AccountMeta::new(list_address(list_index), false),
-            AccountMeta::new_readonly(treasury_key, true),
+            AccountMeta::new_readonly(treasury, true),
         ],
         data,
     }
@@ -279,12 +312,12 @@ pub fn insert_identity_ix(issuer: Address, list_index: u32, commitment: [u8; 32]
     }
 }
 
-pub fn add_token_ix(treasury_key: Address, mint: Address) -> Instruction {
+pub fn add_token_ix(treasury: Address, mint: Address) -> Instruction {
     Instruction {
         program_id: PROGRAM_ID,
         accounts: vec![
             AccountMeta::new(config_address(), false),
-            AccountMeta::new_readonly(treasury_key, true),
+            AccountMeta::new_readonly(treasury, true),
             AccountMeta::new_readonly(mint, false),
         ],
         data: discriminator("global", "add_token").to_vec(),
@@ -345,21 +378,21 @@ pub fn sweep_rent_ix(target: &SweepTarget, treasury: Address) -> Instruction {
 
 pub struct ConfigView {
     pub treasury: Address,
-    pub treasury_key: Address,
     pub mints: Vec<Address>,
-    pub token_decimals: u8,
+    /// One per accepted mint, at the same index.
+    pub decimals: Vec<u8>,
     pub list_count: u32,
 }
 
+/// treasury 0..32, mints 32..544, decimals 544..560, mint_count 560, list_count 561..565, bump 565.
 pub fn read_config(data: &[u8]) -> ConfigView {
     let b = &data[8..];
-    let mint_count = b[576] as usize;
+    let mint_count = b[560] as usize;
     ConfigView {
         treasury: Address::try_from(&b[0..32]).unwrap(),
-        treasury_key: Address::try_from(&b[32..64]).unwrap(),
-        mints: (0..mint_count).map(|i| Address::try_from(&b[64 + i * 32..96 + i * 32]).unwrap()).collect(),
-        token_decimals: b[577],
-        list_count: u32::from_le_bytes(b[578..582].try_into().unwrap()),
+        mints: (0..mint_count).map(|i| Address::try_from(&b[32 + i * 32..64 + i * 32]).unwrap()).collect(),
+        decimals: b[544..544 + mint_count].to_vec(),
+        list_count: u32::from_le_bytes(b[561..565].try_into().unwrap()),
     }
 }
 
@@ -470,12 +503,14 @@ fn base64_decode(s: &str) -> Result<Vec<u8>, ()> {
 pub struct Harness {
     pub svm: LiteSVM,
     pub payer: Keypair,
+    /// The treasury: the placeholder the program starts with, held here so tests can sign for it.
+    /// Where the fee and swept rent go, and the key that turns every dial.
     pub treasury_key: Keypair,
-    /// Where the fee and swept rent go. A keypair, so a test can also make it sign.
-    pub treasury_wallet: Keypair,
     pub treasury: Address,
     pub issuer: Keypair,
+    /// The mint at the program's `USDC_MINT` constant.
     pub usdc: Address,
+    /// A token account for it, owned by the treasury.
     pub treasury_tokens: Address,
 }
 
@@ -524,30 +559,29 @@ impl Harness {
         svm.add_program(PROGRAM_ID, &bytes).unwrap();
 
         let payer = Keypair::new();
-        let treasury_key = Keypair::new();
+        let treasury_key = treasury_keypair();
+        let treasury = treasury_key.pubkey();
         let issuer = Keypair::new();
-        let treasury_wallet = Keypair::new();
-        let treasury = treasury_wallet.pubkey();
         svm.airdrop(&payer.pubkey(), 100_000_000_000).unwrap();
         svm.airdrop(&treasury, 1_000_000).unwrap();
 
-        let usdc = Address::new_unique();
+        // A six-decimal mint planted at USDC's address, the only one `init` accepts.
+        let usdc = USDC_MINT;
         svm.set_account(usdc, spl_mint_account(6)).unwrap();
         let treasury_tokens = Address::new_unique();
         svm.set_account(treasury_tokens, spl_token_account(&usdc, &treasury, 0)).unwrap();
 
-        Harness { svm, payer, treasury_key, treasury_wallet, treasury, issuer, usdc, treasury_tokens }
+        Harness { svm, payer, treasury_key, treasury, issuer, usdc, treasury_tokens }
     }
 
     /// A registry with one list, one issuer, USDC accepted, and the treasury ready to be paid.
+    /// `init` is sent by the payer alone: nothing about the treasury is in the instruction.
     pub fn new() -> Self {
         let mut h = Harness::bare();
         let payer_key = h.payer.pubkey();
-        let tk = h.treasury_key.pubkey();
-        let treasury = h.treasury;
+        let tk = h.treasury;
         let usdc = h.usdc;
-        h.send(&[init_ix(payer_key, tk, treasury, usdc)], &[Harness::PAYER, Harness::TREASURY])
-            .expect("init");
+        h.send(&[init_ix(payer_key, usdc)], &[Harness::PAYER]).expect("init");
         h.send(&[issuer_ix("add_issuer", tk, 0, h.issuer.pubkey())], &[Harness::PAYER, Harness::TREASURY])
             .expect("add_issuer");
         h
@@ -621,9 +655,16 @@ impl Harness {
         read_code_tree(&self.account(&code_tree_address()).data)
     }
 
-    /// The treasury's own key, so a test can make it sign.
+    /// The treasury's own key, so a test can make it sign outside `send`.
     pub fn treasury_signer(&self) -> Keypair {
-        self.treasury_wallet.insecure_clone()
+        self.treasury_key.insecure_clone()
+    }
+
+    /// A token account for `mint`, owned by whoever `owner` is, holding nothing.
+    pub fn token_account_for(&mut self, mint: Address, owner: Address) -> Address {
+        let tokens = Address::new_unique();
+        self.svm.set_account(tokens, spl_token_account(&mint, &owner, 0)).unwrap();
+        tokens
     }
 
     /// A wallet holding `amount` of `mint`, ready to pay.

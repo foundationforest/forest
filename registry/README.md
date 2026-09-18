@@ -10,8 +10,8 @@ A registration is one transaction. It carries the market name, the profile's DID
 proof with its points compressed, the list root the proof was made against, and the code. The
 program derives the scope and the message itself, verifies the proof against a verification key
 baked in from the July 2024 ceremony, creates one account whose address is a hash of the code,
-appends that code to a running tree, and moves 0.25 of an accepted dollar token to the treasury.
-Any failure reverts all of it.
+appends that code to a running tree, and moves 0.25 of an accepted dollar token, in that token's own
+decimals, to the treasury. Any failure reverts all of it.
 
 | | |
 |---|---|
@@ -26,7 +26,8 @@ Any failure reverts all of it.
 
 ```
 cd registry/artifacts && npm install && npm run fetch     # the proving key, hash-checked
-cd registry/program   && cargo build-sbf                  # needs Solana CLI 4.2.2 or later
+cd registry/program   && cargo build-sbf                  # needs Solana CLI 4.2.2 or later; mainnet USDC
+cd registry/program   && cargo build-sbf --features devnet   # the same program naming devnet's USDC
 cd registry/program/tests-litesvm && cargo test -- --nocapture
 cd registry/client    && npm install && npm test          # no chain needed
 cd registry/client    && npm run test:validator           # starts solana-test-validator itself
@@ -43,7 +44,7 @@ Measured this session, one proof, compressed points, on the program in `program/
 | | |
 |---|---|
 | Transaction on the wire | **829 bytes** of the 1,232 limit, 67% (legacy, with a compute-budget instruction; the client's v0 form is 831) |
-| Compute units | **132,302** of the 1,400,000 limit, **9.5%** (132,296 on a local validator) |
+| Compute units | **133,072** of the 1,400,000 limit, **9.5%** (session 5 measured 132,302 before the fee was looked up per mint) |
 | Instruction data | 257 bytes, 10 accounts |
 | Proof on this machine | about 0.8 to 1.5 seconds in Node at depth 32 |
 
@@ -58,7 +59,7 @@ ends at (SOL at $100.24):
 | used code | 9 | $0.0698 | $0.0096 | one per badge, forever |
 | identity list | 5,464 | $2.85 | $0.39 | one per list |
 | code tree | 1,112 | $0.63 | $0.087 | one, ever |
-| config | 591 | $0.37 | $0.050 | one, ever |
+| config | 574 | $0.36 | $0.049 | one, ever |
 
 The transaction's fee payer pays the code account's rent. Rent is never returned, because a code
 account must never close: closing it would make the code reusable.
@@ -83,27 +84,37 @@ These cannot change after v1 deploys. A change breaks every existing proof, code
 - **The account layouts, the seed strings and the instruction bytes.** Clients and indexes read
   them forever. They are written out twice on purpose, in `client/src/program.ts` and in
   `program/tests-litesvm/src/lib.rs`, so a drift on either side fails a test.
-- **The rules.** 0.25, always. USDC accepted from `init` and never removable. The decimals every
-  accepted mint must carry. The order of checks in `register`. One entry per registration, in the
-  transaction log and in no account.
+- **The rules.** 0.25, always, in the mint's own decimals: `25 × 10^(decimals − 2)` base units,
+  from the decimals read off the mint when it was accepted. USDC, at the one address the program
+  names, accepted from `init` and never removable. The order of checks in `register`. One entry
+  per registration, in the transaction log and in no account.
+- **What `init` writes.** The treasury is a program constant and the first mint is a program
+  constant; `init` takes no argument and no treasury signer, so whoever sends it, once, writes the
+  same bytes. A deploy race has nothing to win.
 - **The identity derivation on the device.** Semaphore's own BLAKE-512, pruning and shift, from
   the 32 bytes `keys/`'s `identitySecret(seed)` returns. Not in the program, but a change makes
   every existing commitment unreachable.
 
 ## What is a dial
 
-The treasury key can turn these. Nothing else can.
+The treasury can turn these. Nothing else can.
 
-- Which mints are accepted beyond USDC (`add_token`). Only mints that are classic SPL Token mints
-  with exactly the decimals the config fixes. Nothing removes a mint.
+- Which mints are accepted beyond USDC (`add_token`). Only classic SPL Token mints whose decimals
+  let 0.25 be a whole number of base units (two to nineteen). The mint's decimals are read then
+  and stored next to it; `register` charges 25 cents in those units. Nothing removes a mint.
 - Which issuer keys may insert into which list (`add_issuer`, `remove_issuer`). Removing an issuer
   never removes an identity: nobody is ever taken out of a list.
 - How many identity lists are open (`open_list`).
+- Who the treasury is (`set_treasury`). The current treasury signs, and everything moves at once:
+  where the 0.25 lands, where swept rent goes, and who signs the dials. That is how the treasury
+  moves to a multisig later. There is no second step and no undo: a wrong address freezes every
+  dial and sends every fee to nobody, forever. After a handover the old key signs nothing, is paid
+  nothing, and is swept nothing.
 
 Two things are deliberately nobody's dial. `sweep_rent` takes no key at all, because there is no
 key behind a program-derived address, the only possible destination is the sealed treasury, and the
 foundation must not be a liveness dependency for its own money. And there is no pause, no upgrade
-and no way for anyone, treasury key included, to undo, override or take back a registration.
+and no way for anyone, treasury included, to undo, override or take back a registration.
 
 ## The upgrade authority, and how it is removed
 
@@ -124,9 +135,18 @@ solana program show <PROGRAM_ID>        # "Authority: none"
 v2 is a new program at a new address with a fresh list. That is the point: a registry that one key
 could rewrite is not a registry anyone should stake a name on.
 
-One operational note that belongs next to the deploy, not in the program: whoever calls `init`
-first becomes the treasury key, forever. Deploy and initialise in the same breath, from the same
-machine.
+Two constants must be right before that command, because nothing can change them after it:
+
+- `TREASURY` in `program/src/lib.rs` is a **placeholder**, derived from the public seed
+  `REPLACE-BEFORE-DEPLOY-treasury-0` so the tests can sign for it. Anyone with this repo can sign
+  for it too. Replace it with the charter's treasury address before the first deploy; a program
+  deployed with the placeholder has no treasury. The same constant is repeated by hand in
+  `program/tests-litesvm/src/lib.rs` and `client/src/program.ts`, and a client test fails if the
+  three disagree.
+- `USDC_MINT` is mainnet's USDC by default and devnet's under `--features devnet`.
+
+With both baked in, `init` can be sent by anyone after the deploy, and it does not matter who:
+it writes the constants and nothing else, and a second `init` fails.
 
 `FEASIBILITY.md` says the same thing about the alternatives: compressed accounts would have put the
 registry's storage inside four programs that share one plain-key upgrade authority, which is not
@@ -157,8 +177,14 @@ ships, and each is logged in `docs/changes.md`.
    is a hash of a namespaced market name; doing the same for the message removes a second length
    cap from a sealed program at the cost of one keccak.
 2. **"A dollar stablecoin" is enforced as far as a program can enforce it**: a classic SPL Token
-   mint, initialized, with exactly the decimals the config fixes (six, from `init`). No program can
-   know what a mint is worth. The rest is the treasury key's judgement.
+   mint, initialized, with decimals in which 0.25 is a whole number of base units. No program can
+   know what a mint is worth. The rest is the treasury's judgement. The decimals are not a sealed
+   constant (session 6 undid that): they are read off each mint at `add_token` and stored next to
+   it, so a future dollar token with eight decimals is charged 25,000,000 base units and USDC
+   250,000, both 0.25. The mint is not read again at `register`: a classic SPL Token mint has no
+   instruction that changes its decimals and none that closes it, so the byte recorded at
+   `add_token` is the byte the mint holds, and re-reading would cost every registration one more
+   account for a change the token program cannot make.
 3. **The fee payer pays the rent**, not the 0.25. That is the Kora path and it keeps the fee one
    number forever.
 4. **`sweep_rent` also covers the config and the code tree**, not only code accounts and lists.
@@ -174,6 +200,11 @@ ships, and each is logged in `docs/changes.md`.
 9. **Anchor 1.2**, built with `cargo build-sbf` rather than the Anchor CLI, and no IDL. The client
    and the Rust tests both write the bytes by hand, which is the check that matters for a format
    that can never change.
+10. **One treasury, not two.** Session 5 kept a fee destination and a signing key as separate
+    fields. A handover to a multisig has to move both or it moves nothing, so session 6 merged
+    them: one `treasury` field, one constant, one `set_treasury`. A multisig's vault address is
+    one key that both owns token accounts and signs, so nothing is lost. If a cold destination
+    separate from the dial key is wanted back, that is a one-field change before deploy.
 
 ## What this does not do
 
