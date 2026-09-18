@@ -19,30 +19,37 @@ pub const MAX_MINTS: usize = 16;
 /// The registry's one settings account. There is exactly one, at the `config` address.
 #[account]
 pub struct Config {
-    /// Where the 0.25 lands, and where swept rent goes. A wallet, not a token account: the
-    /// destination token account in `register` must be owned by this key.
+    /// The treasury: where the 0.25 lands, where swept rent goes, and the key that signs
+    /// `open_list`, `add_issuer`, `remove_issuer`, `add_token` and `set_treasury`. Written from
+    /// `crate::TREASURY` at `init`, moved by `set_treasury`, and touched by nothing else. It can
+    /// never override or undo a registration. A wallet, not a token account: the destination
+    /// token account in `register` must be owned by this key.
     pub treasury: Pubkey,
-    /// The key that signs `open_list`, `add_issuer`, `remove_issuer` and `add_token`.
-    /// It can never override or undo a registration.
-    pub treasury_key: Pubkey,
-    /// Accepted mints. `mints[0]` is USDC, written at `init` and never removed: nothing in this
-    /// program removes a mint at all, so registration can never be halted by taking one away.
+    /// Accepted mints. `mints[0]` is USDC, written at `init` from `crate::USDC_MINT` and never
+    /// removed: nothing in this program removes a mint at all, so registration can never be
+    /// halted by taking one away.
     pub mints: [Pubkey; MAX_MINTS],
+    /// Each accepted mint's decimals, read off the mint account when it was accepted, at the
+    /// same index as the mint. The 25-cent rule is `crate::registration_fee(decimals[i])` of
+    /// `mints[i]`: 0.25 × 10^decimals, in that mint's own units.
+    pub decimals: [u8; MAX_MINTS],
     pub mint_count: u8,
-    /// The pattern `add_token` holds every new mint to: exactly this many decimals. Written once
-    /// at `init` from `crate::TOKEN_DECIMALS`; no instruction changes it. With the decimals fixed,
-    /// the 25-cent rule is one constant (`crate::REGISTRATION_FEE`) and never needs a conversion.
-    pub token_decimals: u8,
     /// How many identity lists have been opened. The next one gets this index.
     pub list_count: u32,
     pub bump: u8,
 }
 
 impl Config {
-    pub const LEN: usize = 32 + 32 + 32 * MAX_MINTS + 1 + 1 + 4 + 1;
+    pub const LEN: usize = 32 + 32 * MAX_MINTS + MAX_MINTS + 1 + 4 + 1;
 
     pub fn accepts(&self, mint: &Pubkey) -> bool {
-        self.mints[..self.mint_count as usize].contains(mint)
+        self.decimals_of(mint).is_some()
+    }
+
+    /// The decimals recorded for an accepted mint, or `None` if the mint is not accepted.
+    pub fn decimals_of(&self, mint: &Pubkey) -> Option<u8> {
+        let n = self.mint_count as usize;
+        self.mints[..n].iter().position(|m| m == mint).map(|i| self.decimals[i])
     }
 }
 

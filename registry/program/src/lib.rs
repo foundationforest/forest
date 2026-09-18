@@ -26,12 +26,36 @@ use tree::{FRONTIER_LEN, MAX_DEPTH};
 
 declare_id!("FoRPzGfMyWjK8uLjMoZfae2yevnviyCsGsHM7AwBwK8B");
 
-/// 0.25, always, in the base units of an accepted mint. The mints all carry the same decimals,
-/// which is why this is one constant and never a conversion.
-pub const REGISTRATION_FEE: u64 = 250_000;
-/// The decimals every accepted mint must have. Written into the config at `init`; no instruction
-/// changes it. USDC and every dollar stablecoin worth accepting carry six.
-pub const TOKEN_DECIMALS: u8 = 6;
+/// The treasury the registry starts with: where the 0.25 and swept rent land, and the key that
+/// signs every dial. `init` writes this constant and nothing else, whoever calls it, so a deploy
+/// race has nothing to win. `set_treasury`, signed by the current treasury, moves it later.
+///
+/// PLACEHOLDER. Replace with the charter's treasury address before the first deploy. This key is
+/// derived from the public seed `REPLACE-BEFORE-DEPLOY-treasury-0` so the tests can sign for it,
+/// which means anyone with this repo can sign for it. A program deployed with it has no treasury.
+pub const TREASURY: Pubkey = pubkey!("F35kGoXPCdZLdanwTGuShYXxAkmkpHP9LWgV7dNvKU5s");
+
+/// USDC. `mints[0]` forever. A constant rather than an argument to `init`, for the same reason
+/// the treasury is: whoever calls `init` first must not get to choose what "USDC" means.
+/// Mainnet by default; `--features devnet` builds the program for devnet's USDC.
+#[cfg(not(feature = "devnet"))]
+pub const USDC_MINT: Pubkey = pubkey!("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
+#[cfg(feature = "devnet")]
+pub const USDC_MINT: Pubkey = pubkey!("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU");
+
+/// 0.25 in the base units of a mint with these decimals: 25 × 10^(decimals − 2). One rule,
+/// 25 cents, always, in whatever units the mint counts in. `None` when 0.25 is not a whole
+/// number of base units (fewer than two decimals) or would not fit in a u64 (more than nineteen),
+/// which is what `init` and `add_token` refuse.
+pub const fn registration_fee(decimals: u8) -> Option<u64> {
+    if decimals < 2 {
+        return None;
+    }
+    match 10u64.checked_pow((decimals - 2) as u32) {
+        Some(scale) => 25u64.checked_mul(scale),
+        None => None,
+    }
+}
 
 /// The longest market name and DID a registration can carry. Both are hashed, so neither is a
 /// limit on what a scope can be; they only bound the instruction and the log.
@@ -65,22 +89,23 @@ pub mod forest_registry {
     use super::*;
 
     /// Create the registry: the config, the first identity list, and the tree of used codes.
-    /// The treasury key signs, and becomes the key that signs every later settings change.
-    pub fn init(ctx: Context<Init>, treasury: Pubkey) -> Result<()> {
+    ///
+    /// Anyone may call it, once, and it writes the same bytes whoever does: the treasury is
+    /// `TREASURY`, the first mint is `USDC_MINT`, and nothing in the instruction chooses either.
+    /// A second call fails because the config account already exists.
+    pub fn init(ctx: Context<Init>) -> Result<()> {
         // The first mint is held to the same rule as every later one, so there is no mint in the
-        // config that `add_token` would have refused.
-        require!(
-            ctx.accounts.usdc_mint.decimals == TOKEN_DECIMALS,
-            RegistryError::WrongDecimals
-        );
-        let usdc_mint = ctx.accounts.usdc_mint.key();
+        // config that `add_token` would have refused. Its decimals are read off the mint, not
+        // assumed.
+        let decimals = ctx.accounts.usdc_mint.decimals;
+        require!(registration_fee(decimals).is_some(), RegistryError::WrongDecimals);
         let config = &mut ctx.accounts.config;
-        config.treasury = treasury;
-        config.treasury_key = ctx.accounts.treasury_key.key();
+        config.treasury = TREASURY;
         config.mints = [Pubkey::default(); MAX_MINTS];
-        config.mints[0] = usdc_mint;
+        config.decimals = [0u8; MAX_MINTS];
+        config.mints[0] = USDC_MINT;
+        config.decimals[0] = decimals;
         config.mint_count = 1;
-        config.token_decimals = TOKEN_DECIMALS;
         config.list_count = 1;
         config.bump = ctx.bumps.config;
 
@@ -91,15 +116,27 @@ pub mod forest_registry {
         let mut code_tree = ctx.accounts.code_tree.load_init()?;
         code_tree.bump = ctx.bumps.code_tree;
 
-        emit!(RegistryOpened {
-            treasury,
-            treasury_key: config.treasury_key,
-            usdc_mint,
-        });
+        emit!(RegistryOpened { treasury: TREASURY, usdc_mint: USDC_MINT, decimals });
         Ok(())
     }
 
-    /// Open another identity list. The treasury key signs.
+    /// Hand the treasury to another key. The current treasury signs.
+    ///
+    /// Everything moves at once: where the 0.25 lands, where swept rent goes, and who signs the
+    /// dials. That is what lets the treasury move to a multisig later. There is no second step
+    /// and no undo: a wrong address freezes every dial and sends every fee to nobody, forever.
+    /// Checking that the new key can sign is the sender's job, before this is sent.
+    pub fn set_treasury(ctx: Context<SetTreasury>, new_treasury: Pubkey) -> Result<()> {
+        require_keys_neq!(new_treasury, Pubkey::default(), RegistryError::TreasuryEmpty);
+        let config = &mut ctx.accounts.config;
+        let from = config.treasury;
+        require_keys_neq!(new_treasury, from, RegistryError::TreasuryUnchanged);
+        config.treasury = new_treasury;
+        emit!(TreasuryChanged { from, to: new_treasury });
+        Ok(())
+    }
+
+    /// Open another identity list. The treasury signs.
     ///
     /// Lists exist so the design can grow without a new program. New joiners are assigned across
     /// the open lists by the issuer, not by this program: which list a person is in must never
@@ -116,7 +153,7 @@ pub mod forest_registry {
         Ok(())
     }
 
-    /// Let a key insert into one list. The treasury key signs.
+    /// Let a key insert into one list. The treasury signs.
     pub fn add_issuer(ctx: Context<ListAdmin>, _list_index: u32, issuer: Pubkey) -> Result<()> {
         let mut list = ctx.accounts.list.load_mut()?;
         require!(!list.is_issuer(&issuer), RegistryError::IssuerAlreadyAdded);
@@ -128,7 +165,7 @@ pub mod forest_registry {
         Ok(())
     }
 
-    /// Stop a key from inserting into one list. The treasury key signs.
+    /// Stop a key from inserting into one list. The treasury signs.
     ///
     /// Removing an issuer never removes an identity. Nobody is ever taken out of a list.
     pub fn remove_issuer(ctx: Context<ListAdmin>, _list_index: u32, issuer: Pubkey) -> Result<()> {
@@ -238,7 +275,17 @@ pub mod forest_registry {
             RegistryError::FeeGoesNowhere
         );
         require!(ctx.accounts.treasury_tokens.mint == mint, RegistryError::MintMismatch);
-        require!(ctx.accounts.config.accepts(&mint), RegistryError::MintNotAccepted);
+        // 0.25 in this mint's own base units, from the decimals read off the mint when it was
+        // accepted. The mint account is not read again here: a classic SPL Token mint has no
+        // instruction that changes its decimals and none that closes it, so the byte recorded at
+        // `add_token` is the byte the mint holds now, and re-reading would cost every
+        // registration an account for a change the token program cannot make.
+        let decimals = ctx
+            .accounts
+            .config
+            .decimals_of(&mint)
+            .ok_or(error!(RegistryError::MintNotAccepted))?;
+        let fee = registration_fee(decimals).ok_or(error!(RegistryError::WrongDecimals))?;
         token::transfer(
             CpiContext::new(
                 ctx.accounts.token_program.key(),
@@ -248,7 +295,7 @@ pub mod forest_registry {
                     authority: ctx.accounts.profile_wallet.to_account_info(),
                 },
             ),
-            REGISTRATION_FEE,
+            fee,
         )?;
 
         emit!(Registered {
@@ -260,27 +307,30 @@ pub mod forest_registry {
         Ok(())
     }
 
-    /// Accept one more mint. The treasury key signs.
+    /// Accept one more mint. The treasury signs.
     ///
     /// What a program can check is checked: the mint is a classic SPL Token mint (the account's
     /// owner is the token program, which `anchor_spl::token::Mint` enforces), it is initialized,
-    /// and it carries exactly the decimals the config fixes, so 0.25 never silently means
-    /// something else. Whether a mint really is a dollar stablecoin is a judgement no program can
-    /// make; it is the treasury key's, and this is the pattern that bounds it.
+    /// and its decimals let 0.25 be a whole number of base units. The decimals are read off the
+    /// mint here and stored next to it, so `register` charges 25 cents in that mint's own units
+    /// and no mint is ever locked out for counting differently from USDC. Whether a mint really
+    /// is a dollar stablecoin is a judgement no program can make; it is the treasury's, and this
+    /// is the pattern that bounds it.
     ///
     /// Nothing removes a mint, so `mints[0]`, USDC, is there forever and registration can never
     /// be halted by taking a token away.
     pub fn add_token(ctx: Context<AddToken>) -> Result<()> {
         let mint = ctx.accounts.mint.key();
         let decimals = ctx.accounts.mint.decimals;
+        require!(registration_fee(decimals).is_some(), RegistryError::WrongDecimals);
         let config = &mut ctx.accounts.config;
-        require!(decimals == config.token_decimals, RegistryError::WrongDecimals);
         require!(!config.accepts(&mint), RegistryError::MintAlreadyAccepted);
         let n = config.mint_count as usize;
         require!(n < MAX_MINTS, RegistryError::TooManyMints);
         config.mints[n] = mint;
+        config.decimals[n] = decimals;
         config.mint_count = (n + 1) as u8;
-        emit!(TokenAccepted { mint });
+        emit!(TokenAccepted { mint, decimals });
         Ok(())
     }
 
@@ -388,17 +438,26 @@ pub struct Init<'info> {
     pub list: AccountLoader<'info, IdentityList>,
     #[account(init, payer = payer, space = 8 + CodeTree::LEN, seeds = [CODE_TREE_SEED], bump)]
     pub code_tree: AccountLoader<'info, CodeTree>,
+    /// Whoever pays the rent. Not the treasury, and nothing about them is written anywhere.
     #[account(mut)]
     pub payer: Signer<'info>,
-    pub treasury_key: Signer<'info>,
-    /// USDC. `mints[0]` forever: nothing in this program removes a mint.
+    /// USDC, at the one address the program names. `mints[0]` forever: nothing in this program
+    /// removes a mint.
+    #[account(address = USDC_MINT)]
     pub usdc_mint: Account<'info, Mint>,
     pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
+pub struct SetTreasury<'info> {
+    #[account(mut, seeds = [CONFIG_SEED], bump = config.bump, has_one = treasury)]
+    pub config: Account<'info, Config>,
+    pub treasury: Signer<'info>,
+}
+
+#[derive(Accounts)]
 pub struct OpenList<'info> {
-    #[account(mut, seeds = [CONFIG_SEED], bump = config.bump, has_one = treasury_key)]
+    #[account(mut, seeds = [CONFIG_SEED], bump = config.bump, has_one = treasury)]
     pub config: Account<'info, Config>,
     #[account(
         init,
@@ -410,18 +469,18 @@ pub struct OpenList<'info> {
     pub list: AccountLoader<'info, IdentityList>,
     #[account(mut)]
     pub payer: Signer<'info>,
-    pub treasury_key: Signer<'info>,
+    pub treasury: Signer<'info>,
     pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
 #[instruction(list_index: u32)]
 pub struct ListAdmin<'info> {
-    #[account(seeds = [CONFIG_SEED], bump = config.bump, has_one = treasury_key)]
+    #[account(seeds = [CONFIG_SEED], bump = config.bump, has_one = treasury)]
     pub config: Account<'info, Config>,
     #[account(mut, seeds = [LIST_SEED, &list_index.to_le_bytes()], bump)]
     pub list: AccountLoader<'info, IdentityList>,
-    pub treasury_key: Signer<'info>,
+    pub treasury: Signer<'info>,
 }
 
 #[derive(Accounts)]
@@ -465,9 +524,9 @@ pub struct Register<'info> {
 
 #[derive(Accounts)]
 pub struct AddToken<'info> {
-    #[account(mut, seeds = [CONFIG_SEED], bump = config.bump, has_one = treasury_key)]
+    #[account(mut, seeds = [CONFIG_SEED], bump = config.bump, has_one = treasury)]
     pub config: Account<'info, Config>,
-    pub treasury_key: Signer<'info>,
+    pub treasury: Signer<'info>,
     pub mint: Account<'info, Mint>,
 }
 
@@ -487,8 +546,14 @@ pub struct SweepRent<'info> {
 #[event]
 pub struct RegistryOpened {
     pub treasury: Pubkey,
-    pub treasury_key: Pubkey,
     pub usdc_mint: Pubkey,
+    pub decimals: u8,
+}
+
+#[event]
+pub struct TreasuryChanged {
+    pub from: Pubkey,
+    pub to: Pubkey,
 }
 
 #[event]
@@ -524,6 +589,7 @@ pub struct Registered {
 #[event]
 pub struct TokenAccepted {
     pub mint: Pubkey,
+    pub decimals: u8,
 }
 
 #[event]
@@ -537,7 +603,15 @@ pub struct RentSwept {
 const _: () = {
     assert!(IdentityList::LEN == 5456);
     assert!(CodeTree::LEN == 1104);
-    assert!(Config::LEN == 583);
+    assert!(Config::LEN == 566);
+    // The rule, written out at the two decimals that exist today and the edges it refuses.
+    assert!(matches!(registration_fee(6), Some(250_000)));
+    assert!(matches!(registration_fee(8), Some(25_000_000)));
+    assert!(matches!(registration_fee(2), Some(25)));
+    assert!(matches!(registration_fee(19), Some(2_500_000_000_000_000_000)));
+    assert!(registration_fee(1).is_none());
+    assert!(registration_fee(0).is_none());
+    assert!(registration_fee(20).is_none());
     assert!(UsedCode::LEN == 1);
     assert!(FRONTIER_LEN == MAX_DEPTH + 1);
 };

@@ -10,12 +10,17 @@ import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 
 import { Identity } from '@semaphore-protocol/identity'
-import { PublicKey } from '@solana/web3.js'
+import { Keypair, PublicKey } from '@solana/web3.js'
 
 import {
   BN254_R,
   MESSAGE_NS,
   SCOPE_NS,
+  TREASURY,
+  TREASURY_PLACEHOLDER_SEED,
+  USDC_MINT,
+  USDC_MINT_DEVNET,
+  registrationFee,
   codeBytesFor,
   codeFor,
   commitmentOf,
@@ -42,6 +47,24 @@ test('the namespaces are the ones the program hashes with', () => {
   const lib = readFileSync(join(here, '../../program/src/lib.rs'), 'utf8')
   assert.ok(lib.includes(`b"${SCOPE_NS}"`), 'the scope namespace must match the program')
   assert.ok(lib.includes(`b"${MESSAGE_NS}"`), 'the message namespace must match the program')
+})
+
+test('the treasury and USDC constants are the ones the program bakes in', () => {
+  const lib = readFileSync(join(here, '../../program/src/lib.rs'), 'utf8')
+  assert.ok(lib.includes(`pubkey!("${TREASURY.toBase58()}")`), 'the treasury must match the program')
+  assert.ok(lib.includes(`pubkey!("${USDC_MINT.toBase58()}")`), 'mainnet USDC must match the program')
+  assert.ok(lib.includes(`pubkey!("${USDC_MINT_DEVNET.toBase58()}")`), 'devnet USDC must match the program')
+  // The placeholder is derived from a public seed so tests can sign for it. That is also why it
+  // must be replaced before the first deploy: anyone can.
+  assert.equal(Keypair.fromSeed(TREASURY_PLACEHOLDER_SEED).publicKey.toBase58(), TREASURY.toBase58())
+})
+
+test('0.25 is 25 × 10^(decimals − 2) in whatever units a mint counts in', () => {
+  assert.equal(registrationFee(6), 250_000n)
+  assert.equal(registrationFee(8), 25_000_000n)
+  assert.equal(registrationFee(2), 25n)
+  assert.equal(registrationFee(19), 2_500_000_000_000_000_000n)
+  for (const bad of [0, 1, 20, 255, 6.5]) assert.throws(() => registrationFee(bad), RangeError, `${bad}`)
 })
 
 test('the scope and the message are what the accepted proofs carry', () => {
@@ -110,6 +133,7 @@ test("Anchor's discriminators are what the program answers to", () => {
   // same names, so a rename fails on both sides at once.
   const pinned: Record<string, string> = {
     'global:init': 'dc3bcfec6cfa2f64',
+    'global:set_treasury': '3961c45fc3ce6a88',
     'global:open_list': '4f185028f28430d6',
     'global:add_issuer': 'fc6103dd41a2b120',
     'global:remove_issuer': '004b58e1049fa777',
