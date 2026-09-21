@@ -28,7 +28,8 @@ declare_id!("FoRPzGfMyWjK8uLjMoZfae2yevnviyCsGsHM7AwBwK8B");
 
 /// The treasury the registry starts with: where the 0.25 and swept rent land, and the key that
 /// signs every dial. `init` writes this constant and nothing else, whoever calls it, so a deploy
-/// race has nothing to win. `set_treasury`, signed by the current treasury, moves it later.
+/// race has nothing to win. `propose_treasury` then `accept_treasury` move it later, in two
+/// steps, so it can never move to a key nobody holds.
 ///
 /// PLACEHOLDER. Replace with the charter's treasury address before the first deploy. This key is
 /// derived from the public seed `REPLACE-BEFORE-DEPLOY-treasury-0` so the tests can sign for it,
@@ -108,6 +109,7 @@ pub mod forest_registry {
         config.mint_count = 1;
         config.list_count = 1;
         config.bump = ctx.bumps.config;
+        config.pending_treasury = Pubkey::default();
 
         let mut list = ctx.accounts.list.load_init()?;
         list.index = 0;
@@ -120,19 +122,49 @@ pub mod forest_registry {
         Ok(())
     }
 
-    /// Hand the treasury to another key. The current treasury signs.
+    /// Propose handing the treasury to another key. The current treasury signs. Step one of two.
     ///
-    /// Everything moves at once: where the 0.25 lands, where swept rent goes, and who signs the
-    /// dials. That is what lets the treasury move to a multisig later. There is no second step
-    /// and no undo: a wrong address freezes every dial and sends every fee to nobody, forever.
-    /// Checking that the new key can sign is the sender's job, before this is sent.
-    pub fn set_treasury(ctx: Context<SetTreasury>, new_treasury: Pubkey) -> Result<()> {
-        require_keys_neq!(new_treasury, Pubkey::default(), RegistryError::TreasuryEmpty);
+    /// Nothing moves here: the key is only recorded as pending. The 0.25 still lands with the
+    /// current treasury, swept rent still goes to it, and it still signs every dial, this one
+    /// included, until the pending key signs `accept_treasury`. A later proposal overwrites the
+    /// pending key; proposing `None` clears it. The zero key and the current key are refused.
+    ///
+    /// Two steps because a one-step handover has no undo: a typo in the new address would have
+    /// frozen every dial and sent every fee to nobody, forever. Now a key that nobody holds can
+    /// be proposed but never accepted, and the treasury stays where it was.
+    pub fn propose_treasury(
+        ctx: Context<ProposeTreasury>,
+        new_treasury: Option<Pubkey>,
+    ) -> Result<()> {
         let config = &mut ctx.accounts.config;
+        let proposed = match new_treasury {
+            Some(key) => {
+                require_keys_neq!(key, Pubkey::default(), RegistryError::TreasuryEmpty);
+                require_keys_neq!(key, config.treasury, RegistryError::TreasuryUnchanged);
+                key
+            }
+            None => Pubkey::default(),
+        };
+        config.pending_treasury = proposed;
+        emit!(TreasuryProposed { treasury: config.treasury, proposed });
+        Ok(())
+    }
+
+    /// Accept a proposed handover. The pending key signs. Step two of two.
+    ///
+    /// Only now does everything move at once: where the 0.25 lands, where swept rent goes, and
+    /// who signs the dials. That is what lets the treasury move to a multisig later: the
+    /// multisig's vault signs this, which is the proof it can sign at all. After it, the old key
+    /// signs nothing, is paid nothing, and is swept nothing, and the pending slot is empty.
+    pub fn accept_treasury(ctx: Context<AcceptTreasury>) -> Result<()> {
+        let config = &mut ctx.accounts.config;
+        let to = config.pending_treasury;
+        require_keys_neq!(to, Pubkey::default(), RegistryError::NoPendingTreasury);
+        require_keys_eq!(to, ctx.accounts.pending.key(), RegistryError::NotThePendingTreasury);
         let from = config.treasury;
-        require_keys_neq!(new_treasury, from, RegistryError::TreasuryUnchanged);
-        config.treasury = new_treasury;
-        emit!(TreasuryChanged { from, to: new_treasury });
+        config.treasury = to;
+        config.pending_treasury = Pubkey::default();
+        emit!(TreasuryChanged { from, to });
         Ok(())
     }
 
@@ -449,10 +481,25 @@ pub struct Init<'info> {
 }
 
 #[derive(Accounts)]
-pub struct SetTreasury<'info> {
+pub struct ProposeTreasury<'info> {
     #[account(mut, seeds = [CONFIG_SEED], bump = config.bump, has_one = treasury)]
     pub config: Account<'info, Config>,
     pub treasury: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct AcceptTreasury<'info> {
+    #[account(
+        mut,
+        seeds = [CONFIG_SEED],
+        bump = config.bump,
+        constraint = config.pending_treasury != Pubkey::default() @ RegistryError::NoPendingTreasury,
+        constraint = config.pending_treasury == pending.key() @ RegistryError::NotThePendingTreasury,
+    )]
+    pub config: Account<'info, Config>,
+    /// The key the current treasury proposed. It signs, which is the whole point: a key that
+    /// cannot sign cannot become the treasury.
+    pub pending: Signer<'info>,
 }
 
 #[derive(Accounts)]
@@ -550,6 +597,14 @@ pub struct RegistryOpened {
     pub decimals: u8,
 }
 
+/// A handover proposed, or cleared (`proposed` is the zero key then).
+#[event]
+pub struct TreasuryProposed {
+    pub treasury: Pubkey,
+    pub proposed: Pubkey,
+}
+
+/// A handover accepted: only now has the treasury moved.
 #[event]
 pub struct TreasuryChanged {
     pub from: Pubkey,
@@ -603,7 +658,7 @@ pub struct RentSwept {
 const _: () = {
     assert!(IdentityList::LEN == 5456);
     assert!(CodeTree::LEN == 1104);
-    assert!(Config::LEN == 566);
+    assert!(Config::LEN == 598);
     // The rule, written out at the two decimals that exist today and the edges it refuses.
     assert!(matches!(registration_fee(6), Some(250_000)));
     assert!(matches!(registration_fee(8), Some(25_000_000)));

@@ -20,9 +20,10 @@ export const PROGRAM_ID = new PublicKey('FoRPzGfMyWjK8uLjMoZfae2yevnviyCsGsHM7Aw
 export const TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA')
 
 /**
- * The treasury the program starts with. `init` writes this constant whoever calls it, and
- * `set_treasury` moves it later. PLACEHOLDER: derived from the public seed below so tests can
- * sign for it; replaced with the charter's treasury address before the first deploy.
+ * The treasury the program starts with. `init` writes this constant whoever calls it;
+ * `propose_treasury` then `accept_treasury` move it later, in two steps. PLACEHOLDER: derived
+ * from the public seed below so tests can sign for it; replaced with the charter's treasury
+ * address before the first deploy.
  */
 export const TREASURY_PLACEHOLDER_SEED = new TextEncoder().encode('REPLACE-BEFORE-DEPLOY-treasury-0')
 export const TREASURY = new PublicKey('F35kGoXPCdZLdanwTGuShYXxAkmkpHP9LWgV7dNvKU5s')
@@ -134,17 +135,38 @@ export function initIx(args: {
   })
 }
 
-/** The current treasury signs; everything the treasury is moves to `newTreasury`. No undo. */
-export function setTreasuryIx(args: {
+/**
+ * Step one of a handover: the current treasury signs and `newTreasury` is recorded as pending.
+ * Nothing moves until that key signs `acceptTreasuryIx`. `null` clears a pending proposal. Borsh
+ * writes an `Option<Pubkey>` as one tag byte, `0x00` for none or `0x01` followed by the key.
+ */
+export function proposeTreasuryIx(args: {
   treasury: PublicKey
-  newTreasury: PublicKey
+  newTreasury: PublicKey | null
+  programId?: PublicKey
+}): TransactionInstruction {
+  const programId = args.programId ?? PROGRAM_ID
+  const option =
+    args.newTreasury === null
+      ? new Uint8Array([0])
+      : concat([new Uint8Array([1]), args.newTreasury.toBytes()])
+  return new TransactionInstruction({
+    programId,
+    keys: [rw(configAddress(programId)), ro(args.treasury, true)],
+    data: concat([discriminator('global', 'propose_treasury'), option]),
+  })
+}
+
+/** Step two: the pending key signs, and only then does everything the treasury is move to it. */
+export function acceptTreasuryIx(args: {
+  pending: PublicKey
   programId?: PublicKey
 }): TransactionInstruction {
   const programId = args.programId ?? PROGRAM_ID
   return new TransactionInstruction({
     programId,
-    keys: [rw(configAddress(programId)), ro(args.treasury, true)],
-    data: concat([discriminator('global', 'set_treasury'), args.newTreasury.toBytes()]),
+    keys: [rw(configAddress(programId)), ro(args.pending, true)],
+    data: concat([discriminator('global', 'accept_treasury')]),
   })
 }
 
@@ -327,20 +349,27 @@ export type ConfigAccount = {
   decimals: number[]
   listCount: number
   bump: number
+  /** The key a handover has been proposed to, or `null` when nothing is pending. */
+  pendingTreasury: PublicKey | null
 }
 
-/** treasury 0..32, mints 32..544, decimals 544..560, mint_count 560, list_count 561..565, bump 565. */
+/**
+ * treasury 0..32, mints 32..544, decimals 544..560, mint_count 560, list_count 561..565, bump 565,
+ * pending_treasury 566..598.
+ */
 export function decodeConfig(data: Uint8Array): ConfigAccount {
   const b = data.subarray(8)
   const mintCount = b[560]
   const mints: PublicKey[] = []
   for (let i = 0; i < mintCount; i++) mints.push(new PublicKey(b.subarray(32 + i * 32, 64 + i * 32)))
+  const pending = new PublicKey(b.subarray(566, 598))
   return {
     treasury: new PublicKey(b.subarray(0, 32)),
     mints,
     decimals: Array.from(b.subarray(544, 544 + mintCount)),
     listCount: readU32le(b, 561),
     bump: b[565],
+    pendingTreasury: pending.equals(PublicKey.default) ? null : pending,
   }
 }
 

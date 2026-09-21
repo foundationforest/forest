@@ -24,8 +24,11 @@ import {
   codeBytesFor,
   codeFor,
   commitmentOf,
+  acceptTreasuryIx,
+  decodeConfig,
   decodeRegisteredEvents,
   discriminator,
+  proposeTreasuryIx,
   fromBytes32,
   isFieldElement,
   messageOf,
@@ -133,7 +136,8 @@ test("Anchor's discriminators are what the program answers to", () => {
   // same names, so a rename fails on both sides at once.
   const pinned: Record<string, string> = {
     'global:init': 'dc3bcfec6cfa2f64',
-    'global:set_treasury': '3961c45fc3ce6a88',
+    'global:propose_treasury': 'ebf0de226a4289ec',
+    'global:accept_treasury': 'c491518bb10dc52b',
     'global:open_list': '4f185028f28430d6',
     'global:add_issuer': 'fc6103dd41a2b120',
     'global:remove_issuer': '004b58e1049fa777',
@@ -148,6 +152,43 @@ test("Anchor's discriminators are what the program answers to", () => {
     const [namespace, what] = name.split(':')
     assert.equal(hex(discriminator(namespace, what)), want, name)
   }
+})
+
+test('a handover is two instructions, and the pending slot decodes back out of the config', () => {
+  const treasury = PublicKey.unique()
+  const next = PublicKey.unique()
+  // Propose: discriminator, then borsh's Option<Pubkey>: 0x01 and the key, or 0x00 alone.
+  const propose = proposeTreasuryIx({ treasury, newTreasury: next })
+  assert.equal(propose.data.length, 8 + 1 + 32)
+  assert.equal(propose.data[8], 1)
+  assert.deepEqual(new Uint8Array(propose.data.subarray(9)), next.toBytes())
+  assert.ok(propose.keys[1].isSigner && propose.keys[1].pubkey.equals(treasury), 'the current treasury signs')
+  const clear = proposeTreasuryIx({ treasury, newTreasury: null })
+  assert.equal(clear.data.length, 9)
+  assert.equal(clear.data[8], 0)
+  // Accept: the pending key signs, and nothing else travels.
+  const accept = acceptTreasuryIx({ pending: next })
+  assert.equal(accept.data.length, 8)
+  assert.ok(accept.keys[1].isSigner && accept.keys[1].pubkey.equals(next), 'the pending key signs')
+
+  // A config with one mint, one list, and a pending key at 566..598, laid out by hand.
+  const b = new Uint8Array(8 + 598)
+  b.set(treasury.toBytes(), 8)
+  b.set(USDC_MINT.toBytes(), 8 + 32)
+  b[8 + 544] = 6
+  b[8 + 560] = 1
+  b[8 + 561] = 1
+  b[8 + 565] = 255
+  b.set(next.toBytes(), 8 + 566)
+  const config = decodeConfig(b)
+  assert.equal(config.treasury.toBase58(), treasury.toBase58())
+  assert.deepEqual(config.mints.map((m) => m.toBase58()), [USDC_MINT.toBase58()])
+  assert.deepEqual(config.decimals, [6])
+  assert.equal(config.listCount, 1)
+  assert.equal(config.bump, 255)
+  assert.equal(config.pendingTreasury?.toBase58(), next.toBase58())
+  b.fill(0, 8 + 566)
+  assert.equal(decodeConfig(b).pendingTreasury, null, 'the zero key means nothing is pending')
 })
 
 test('a registration instruction is the bytes the program reads', () => {

@@ -42,6 +42,10 @@ pub enum RegistryError {
     TreasuryEmpty,
     #[msg("the new treasury is the current one")]
     TreasuryUnchanged,
+    #[msg("no treasury handover has been proposed")]
+    NoPendingTreasury,
+    #[msg("only the proposed treasury key can accept the handover")]
+    NotThePendingTreasury,
     #[msg("the list index does not match the list account")]
     WrongList,
     #[msg("the account passed is not the registry account the target names")]

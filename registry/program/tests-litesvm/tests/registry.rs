@@ -7,6 +7,7 @@ use forest_registry_tests::*;
 use groth16_solana::decompression::{decompress_g1, decompress_g2};
 use solana_address::Address;
 use solana_compute_budget_interface::ComputeBudgetInstruction;
+use solana_instruction::Instruction;
 use solana_keypair::Keypair;
 use solana_message::Message;
 use solana_signer::Signer;
@@ -291,12 +292,17 @@ fn only_the_treasury_changes_settings() {
         ("add_issuer", issuer_ix("add_issuer", stranger.pubkey(), 0, stranger.pubkey())),
         ("remove_issuer", issuer_ix("remove_issuer", stranger.pubkey(), 0, issuer)),
         ("add_token", add_token_ix(stranger.pubkey(), h.usdc)),
-        ("set_treasury", set_treasury_ix(stranger.pubkey(), stranger.pubkey())),
+        ("propose_treasury", propose_treasury_ix(stranger.pubkey(), Some(stranger.pubkey()))),
     ] {
         let err = h.send_signed(&[ix], &[&stranger]).expect_err("must be rejected");
         assert!(err.contains("ConstraintHasOne") || err.contains("has one"), "{what}: {err}");
     }
-    assert_eq!(h.config().treasury, TREASURY, "and the treasury is still the constant");
+    // Nor accept a handover nobody proposed.
+    let err = h.send_signed(&[accept_treasury_ix(stranger.pubkey())], &[&stranger]).expect_err("must be rejected");
+    assert!(err.contains("no treasury handover"), "accept_treasury: {err}");
+    let config = h.config();
+    assert_eq!(config.treasury, TREASURY, "and the treasury is still the constant");
+    assert_eq!(config.pending_treasury, Address::default(), "and nothing is pending");
     println!("a stranger cannot open a list, add or remove an issuer, add a token, or take the treasury");
 }
 
@@ -707,6 +713,7 @@ fn init_runs_once_and_writes_only_the_constants() {
     let config = h.config();
     assert_eq!(config.treasury, TREASURY);
     assert_ne!(config.treasury, stranger.pubkey());
+    assert_eq!(config.pending_treasury, Address::default(), "no handover is pending at init");
     assert_eq!(config.mints, vec![USDC_MINT]);
 
     // And the stranger can turn no dial.
@@ -723,52 +730,100 @@ fn init_runs_once_and_writes_only_the_constants() {
     println!("init by a stranger writes the constants; a second init: {}", err.lines().next().unwrap());
 }
 
+/// Every dial, tried from one key: the ones that must pass `has_one = treasury`.
+fn dials(h: &Harness, key: Address) -> Vec<(&'static str, Instruction)> {
+    let payer = h.payer.pubkey();
+    let issuer = h.issuer.pubkey();
+    let next_list = h.config().list_count;
+    vec![
+        ("open_list", open_list_ix(payer, key, next_list)),
+        ("add_issuer", issuer_ix("add_issuer", key, 0, key)),
+        ("remove_issuer", issuer_ix("remove_issuer", key, 0, issuer)),
+        ("add_token", add_token_ix(key, h.usdc)),
+        ("propose_treasury", propose_treasury_ix(key, Some(key))),
+    ]
+}
+
+fn assert_no_dial(h: &mut Harness, key: &Keypair, who: &str) {
+    for (what, ix) in dials(h, key.pubkey()) {
+        let err = h.send_signed(&[ix], &[key]).expect_err("must be rejected");
+        assert!(err.contains("ConstraintHasOne") || err.contains("has one"), "{who} {what}: {err}");
+    }
+}
+
 #[test]
-fn the_treasury_moves_and_the_old_key_can_do_nothing() {
+fn a_handover_is_proposed_then_accepted_and_only_then_does_anything_move() {
     let (mut h, f) = ready();
     let old = h.treasury;
     let old_key = h.treasury_signer();
     let payer = h.payer.pubkey();
-    let issuer = h.issuer.pubkey();
     let usdc = h.usdc;
 
-    // Not to the zero key, and not to itself.
+    // Not the zero key, and not the current key.
     let err = h
-        .send(&[set_treasury_ix(old, Address::default())], &[Harness::PAYER, Harness::TREASURY])
+        .send(&[propose_treasury_ix(old, Some(Address::default()))], &[Harness::PAYER, Harness::TREASURY])
         .expect_err("must be rejected");
     assert!(err.contains("zero key"), "{err}");
     let err = h
-        .send(&[set_treasury_ix(old, old)], &[Harness::PAYER, Harness::TREASURY])
+        .send(&[propose_treasury_ix(old, Some(old))], &[Harness::PAYER, Harness::TREASURY])
         .expect_err("must be rejected");
     assert!(err.contains("is the current one"), "{err}");
+    assert_eq!(h.config().pending_treasury, Address::default());
 
-    // The handover. A plain key here; a multisig's vault address works the same way.
+    // Step one. A plain key here; a multisig's vault address works the same way.
     let multisig = Keypair::new();
     h.svm.airdrop(&multisig.pubkey(), 1_000_000).unwrap();
-    h.send(&[set_treasury_ix(old, multisig.pubkey())], &[Harness::PAYER, Harness::TREASURY]).expect("set_treasury");
-    assert_eq!(h.config().treasury, multisig.pubkey());
+    h.send(&[propose_treasury_ix(old, Some(multisig.pubkey()))], &[Harness::PAYER, Harness::TREASURY])
+        .expect("propose_treasury");
+    let config = h.config();
+    assert_eq!(config.treasury, old, "nothing has moved");
+    assert_eq!(config.pending_treasury, multisig.pubkey(), "the proposal is recorded");
 
-    // The old key can turn no dial, including handing the treasury back to itself.
-    for (what, ix) in [
-        ("open_list", open_list_ix(payer, old, 1)),
-        ("add_issuer", issuer_ix("add_issuer", old, 0, old)),
-        ("remove_issuer", issuer_ix("remove_issuer", old, 0, issuer)),
-        ("add_token", add_token_ix(old, usdc)),
-        ("set_treasury", set_treasury_ix(old, old)),
-    ] {
-        let err = h.send_signed(&[ix], &[&old_key]).expect_err("must be rejected");
-        assert!(err.contains("ConstraintHasOne") || err.contains("has one"), "{what}: {err}");
-    }
-
-    // Nor be paid: a token account the old key owns is refused as the fee's destination, and
-    // one the new treasury owns is where the quarter goes.
+    // Between the two steps the old key keeps every power: it turns the dials, is paid, and is
+    // swept. The pending key can do nothing yet.
+    h.send(&[add_token_ix(old, usdc)], &[Harness::PAYER, Harness::TREASURY])
+        .expect_err("USDC is already accepted: past has_one, refused on the merits");
+    h.send(&[open_list_ix(payer, old, 1)], &[Harness::PAYER, Harness::TREASURY]).expect("the old key still opens a list");
     let p = f.proof("alice-tutors");
     let (wallet, tokens) = h.wallet_with(usdc, 1_000_000);
-    let err = register(&mut h, p, TUTORS, 0, &wallet, tokens).expect_err("must be rejected");
+    register(&mut h, p, TUTORS, 0, &wallet, tokens).expect("paid to the old treasury while a proposal is pending");
+    assert_eq!(token_amount(&h.account(&h.treasury_tokens).data), QUARTER_USDC);
+    h.svm.set_sysvar(&rent_at(RENT_FINAL));
+    let target = SweepTarget::Code(p.code_bytes());
+    h.send(&[sweep_rent_ix(&target, old)], &[Harness::PAYER]).expect("swept to the old treasury while a proposal is pending");
+    assert_no_dial(&mut h, &multisig, "the pending key, before accepting,");
+
+    // Only the pending key can accept: not a stranger, not the old treasury.
+    let stranger = Keypair::new();
+    h.svm.airdrop(&stranger.pubkey(), 1_000_000).unwrap();
+    let err = h.send_signed(&[accept_treasury_ix(stranger.pubkey())], &[&stranger]).expect_err("must be rejected");
+    assert!(err.contains("only the proposed treasury key"), "{err}");
+    let err = h.send_signed(&[accept_treasury_ix(old)], &[&old_key]).expect_err("must be rejected");
+    assert!(err.contains("only the proposed treasury key"), "{err}");
+    assert_eq!(h.config().treasury, old, "still nothing has moved");
+
+    // Step two.
+    h.send_signed(&[accept_treasury_ix(multisig.pubkey())], &[&multisig]).expect("accept_treasury");
+    let config = h.config();
+    assert_eq!(config.treasury, multisig.pubkey());
+    assert_eq!(config.pending_treasury, Address::default(), "the slot is cleared");
+
+    // Now the old key can turn no dial, including proposing a handover back to itself.
+    assert_no_dial(&mut h, &old_key, "the old key, after acceptance,");
+    let err = h.send_signed(&[accept_treasury_ix(old)], &[&old_key]).expect_err("must be rejected");
+    assert!(err.contains("no treasury handover"), "{err}");
+
+    // Nor be paid: a token account the old key owns is refused as the fee's destination, and
+    // one the new treasury owns is where the quarter goes. (The rent rate goes back up first, so
+    // this badge's account has something above the final minimum for the sweep below.)
+    h.svm.set_sysvar(&rent_at(RENT_TODAY));
+    let p = f.proof("alice-cleaning");
+    let (wallet, tokens) = h.wallet_with(usdc, 1_000_000);
+    let err = register(&mut h, p, CLEANING, 0, &wallet, tokens).expect_err("must be rejected");
     assert!(err.contains("ConstraintTokenOwner") || err.contains("token owner"), "{err}");
     assert_eq!(token_amount(&h.account(&tokens).data), 1_000_000, "nothing moved");
     h.treasury_tokens = h.token_account_for(usdc, multisig.pubkey());
-    register(&mut h, p, TUTORS, 0, &wallet, tokens).expect("paid to the new treasury");
+    register(&mut h, p, CLEANING, 0, &wallet, tokens).expect("paid to the new treasury");
     assert_eq!(token_amount(&h.account(&h.treasury_tokens).data), QUARTER_USDC);
 
     // Nor receive swept rent: the sweep's destination is whatever the config says now.
@@ -778,11 +833,47 @@ fn the_treasury_moves_and_the_old_key_can_do_nothing() {
     assert!(err.contains("ConstraintAddress") || err.contains("address"), "{err}");
     h.send(&[sweep_rent_ix(&target, multisig.pubkey())], &[Harness::PAYER]).expect("swept to the new treasury");
 
-    // The new treasury holds every dial, the handover included.
-    let err = h.send_signed(&[add_token_ix(multisig.pubkey(), usdc)], &[&multisig]).expect_err("USDC is already accepted");
-    assert!(err.contains("already accepts"), "past has_one, refused on the merits: {err}");
-    h.send_signed(&[open_list_ix(payer, multisig.pubkey(), 1)], &[&multisig]).expect("the new treasury opens a list");
-    h.send_signed(&[set_treasury_ix(multisig.pubkey(), old)], &[&multisig]).expect("and can hand over again");
+    // The new treasury holds every dial, the handover included, and can hand back the same way.
+    h.send_signed(&[open_list_ix(payer, multisig.pubkey(), 2)], &[&multisig]).expect("the new treasury opens a list");
+    h.send_signed(&[propose_treasury_ix(multisig.pubkey(), Some(old))], &[&multisig]).expect("and proposes again");
+    h.send_signed(&[accept_treasury_ix(old)], &[&old_key]).expect("and the old key accepts");
     assert_eq!(h.config().treasury, old);
-    println!("treasury handed over: the old key signs nothing, is paid nothing, and is swept nothing");
+    println!("treasury handed over in two steps: nothing moved until the new key signed, then everything did");
+}
+
+#[test]
+fn a_second_proposal_overwrites_the_first_and_proposing_nothing_clears_it() {
+    let (mut h, _f) = ready();
+    let old = h.treasury;
+    let first = Keypair::new();
+    let second = Keypair::new();
+    h.svm.airdrop(&first.pubkey(), 1_000_000).unwrap();
+    h.svm.airdrop(&second.pubkey(), 1_000_000).unwrap();
+
+    h.send(&[propose_treasury_ix(old, Some(first.pubkey()))], &[Harness::PAYER, Harness::TREASURY]).expect("first");
+    h.send(&[propose_treasury_ix(old, Some(second.pubkey()))], &[Harness::PAYER, Harness::TREASURY]).expect("second");
+    assert_eq!(h.config().pending_treasury, second.pubkey(), "the second proposal replaced the first");
+
+    // The first key can no longer accept; the second can.
+    let err = h.send_signed(&[accept_treasury_ix(first.pubkey())], &[&first]).expect_err("must be rejected");
+    assert!(err.contains("only the proposed treasury key"), "{err}");
+    assert_eq!(h.config().treasury, old);
+
+    // A proposal of nothing clears the slot, and then nobody can accept.
+    h.send(&[propose_treasury_ix(old, None)], &[Harness::PAYER, Harness::TREASURY]).expect("clear");
+    assert_eq!(h.config().pending_treasury, Address::default());
+    let err = h.send_signed(&[accept_treasury_ix(second.pubkey())], &[&second]).expect_err("must be rejected");
+    assert!(err.contains("no treasury handover"), "{err}");
+    assert_eq!(h.config().treasury, old, "the treasury never moved");
+
+    // A typo, in other words a key nobody holds, can be proposed and simply never accepted.
+    let nobody = Address::new_unique();
+    h.send(&[propose_treasury_ix(old, Some(nobody))], &[Harness::PAYER, Harness::TREASURY]).expect("propose a typo");
+    assert_eq!(h.config().pending_treasury, nobody);
+    h.send(&[open_list_ix(h.payer.pubkey(), old, 1)], &[Harness::PAYER, Harness::TREASURY])
+        .expect("and the treasury still turns every dial");
+    h.send(&[propose_treasury_ix(old, Some(second.pubkey()))], &[Harness::PAYER, Harness::TREASURY]).expect("and corrects it");
+    h.send_signed(&[accept_treasury_ix(second.pubkey())], &[&second]).expect("accepted by the corrected key");
+    assert_eq!(h.config().treasury, second.pubkey());
+    println!("a second proposal overwrites the first; proposing nothing clears it; a typo is recoverable");
 }

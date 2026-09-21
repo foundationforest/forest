@@ -1,5 +1,7 @@
 # The host: Vow as is, a fork, or a minimal host
 
+Decided after this report, in session 7: the recommendation below was taken, and `host/` holds the fork of the reference PDS's write path. The report is kept as written; see `docs/changes.md`.
+
 Session 6, September 2026. Report only. No host code was written, nothing was run against a relay,
 and nothing here is decided. Every claim about a codebase cites a file and line in that codebase as
 cloned on September 17, 2026, so it can be checked.

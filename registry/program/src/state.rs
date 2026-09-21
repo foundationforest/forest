@@ -20,10 +20,11 @@ pub const MAX_MINTS: usize = 16;
 #[account]
 pub struct Config {
     /// The treasury: where the 0.25 lands, where swept rent goes, and the key that signs
-    /// `open_list`, `add_issuer`, `remove_issuer`, `add_token` and `set_treasury`. Written from
-    /// `crate::TREASURY` at `init`, moved by `set_treasury`, and touched by nothing else. It can
-    /// never override or undo a registration. A wallet, not a token account: the destination
-    /// token account in `register` must be owned by this key.
+    /// `open_list`, `add_issuer`, `remove_issuer`, `add_token` and `propose_treasury`. Written
+    /// from `crate::TREASURY` at `init`, moved only by `accept_treasury` (signed by the key it
+    /// moves to), and touched by nothing else. It can never override or undo a registration. A
+    /// wallet, not a token account: the destination token account in `register` must be owned by
+    /// this key.
     pub treasury: Pubkey,
     /// Accepted mints. `mints[0]` is USDC, written at `init` from `crate::USDC_MINT` and never
     /// removed: nothing in this program removes a mint at all, so registration can never be
@@ -37,10 +38,15 @@ pub struct Config {
     /// How many identity lists have been opened. The next one gets this index.
     pub list_count: u32,
     pub bump: u8,
+    /// The key the treasury has proposed to hand over to, or zero when nothing is pending.
+    /// Written by `propose_treasury`, consumed and cleared by `accept_treasury`. Until the pending
+    /// key signs `accept_treasury`, nothing about the treasury has moved. Appended after `bump`
+    /// so the offsets of every field before it are the ones session 5 and 6 pinned.
+    pub pending_treasury: Pubkey,
 }
 
 impl Config {
-    pub const LEN: usize = 32 + 32 * MAX_MINTS + MAX_MINTS + 1 + 4 + 1;
+    pub const LEN: usize = 32 + 32 * MAX_MINTS + MAX_MINTS + 1 + 4 + 1 + 32;
 
     pub fn accepts(&self, mint: &Pubkey) -> bool {
         self.decimals_of(mint).is_some()
