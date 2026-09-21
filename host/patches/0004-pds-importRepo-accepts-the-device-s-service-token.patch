@@ -1,0 +1,30 @@
+From 2e81209b0cad9e364ea80a4258ab0281f95f5837 Mon Sep 17 00:00:00 2001
+From: forest <forest@localhost>
+Date: Mon, 21 Sep 2026 17:44:05 +0000
+Subject: [PATCH 4/5] pds: importRepo accepts the device's service token
+
+A folder whose commits are signed on the device has no password and so
+no session; moving it to this host needs importRepo to take the same
+credential prepareCommit and submitCommit take.
+---
+ packages/pds/src/api/com/atproto/repo/importRepo.ts | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/packages/pds/src/api/com/atproto/repo/importRepo.ts b/packages/pds/src/api/com/atproto/repo/importRepo.ts
+index 8d4cae5..7c87fb3 100644
+--- a/packages/pds/src/api/com/atproto/repo/importRepo.ts
++++ b/packages/pds/src/api/com/atproto/repo/importRepo.ts
+@@ -18,7 +18,9 @@ export default function (server: Server, ctx: AppContext) {
+     opts: {
+       blobLimit: ctx.cfg.service.maxImportSize,
+     },
+-    auth: ctx.authVerifier.authorization({
++    // Also the device's own service token, so a folder whose commits are signed on the device
++    // can be moved here without a session: it has no password to make one with.
++    auth: ctx.authVerifier.authorizationOrUserServiceAuth({
+       checkTakedown: true,
+       scopes: ACCESS_FULL,
+       authorize: (permissions) => {
+-- 
+2.43.0
+

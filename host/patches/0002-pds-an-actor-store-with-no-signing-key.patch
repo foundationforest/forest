@@ -1,0 +1,128 @@
+From 79d79ecd4ac0f4c69885ba0edf9376e41eb80f0e Mon Sep 17 00:00:00 2001
+From: forest <forest@localhost>
+Date: Mon, 21 Sep 2026 17:36:41 +0000
+Subject: [PATCH 2/5] pds: an actor store with no signing key
+
+create() writes a key file only when given a keypair. transact() and
+writeNoTransaction() load the key if the file exists and otherwise pass
+a keypair that refuses to sign, so every server-side signing path fails
+with NoSigningKey for an account whose commits are signed on the device,
+instead of a missing-file error or a commit signed by the wrong key.
+---
+ packages/pds/src/actor-store/actor-store.ts | 61 +++++++++++++++++++--
+ 1 file changed, 55 insertions(+), 6 deletions(-)
+
+diff --git a/packages/pds/src/actor-store/actor-store.ts b/packages/pds/src/actor-store/actor-store.ts
+index 11d4f9b..de49c6e 100644
+--- a/packages/pds/src/actor-store/actor-store.ts
++++ b/packages/pds/src/actor-store/actor-store.ts
+@@ -40,11 +40,28 @@ export class ActorStore {
+   }
+ 
+   async keypair(did: string): Promise<Keypair> {
++    const keypair = await this.keypairIfExists(did)
++    if (!keypair) throw new NoSigningKeyError(did)
++    return keypair
++  }
++
++  /**
++   * The account's signing key, or `undefined` when this host holds none for it. A folder whose
++   * commits are signed on the device has no key file at all: the host stores and serves, and
++   * never signs. Every path that would sign for such an account gets a keypair whose `sign`
++   * refuses, so nothing signs by accident and nothing fails silently.
++   */
++  async keypairIfExists(did: string): Promise<Keypair | undefined> {
+     const { keyLocation } = await this.getLocation(did)
+-    const privKey = await fs.readFile(keyLocation)
++    const privKey = await readIfExists(keyLocation)
++    if (!privKey) return undefined
+     return crypto.Secp256k1Keypair.import(privKey)
+   }
+ 
++  private async keypairOrRefusing(did: string): Promise<Keypair> {
++    return (await this.keypairIfExists(did)) ?? new RefusingKeypair(did)
++  }
++
+   async openDb(did: string): Promise<ActorDb> {
+     const { dbLocation } = await this.getLocation(did)
+     const exists = await fileExists(dbLocation)
+@@ -84,7 +101,7 @@ export class ActorStore {
+     did: DidString,
+     fn: (fn: ActorStoreTransactor) => T | PromiseLike<T>,
+   ) {
+-    const keypair = await this.keypair(did)
++    const keypair = await this.keypairOrRefusing(did)
+     const db = await this.openDb(did)
+     try {
+       return await db.transaction((dbTxn) => {
+@@ -99,7 +116,7 @@ export class ActorStore {
+     did: DidString,
+     fn: (fn: ActorStoreWriter) => T | PromiseLike<T>,
+   ) {
+-    const keypair = await this.keypair(did)
++    const keypair = await this.keypairOrRefusing(did)
+     const db = await this.openDb(did)
+     try {
+       return await fn(new ActorStoreWriter(did, db, keypair, this.resources))
+@@ -108,7 +125,12 @@ export class ActorStore {
+     }
+   }
+ 
+-  async create(did: string, keypair: ExportableKeypair) {
++  /**
++   * Create the store for an account. With a keypair, the key is written next to the database
++   * as upstream does. Without one, no key file is ever written: the account's commits are
++   * signed on the device, and the host has nothing to hold.
++   */
++  async create(did: string, keypair?: ExportableKeypair) {
+     const { directory, dbLocation, keyLocation } = await this.getLocation(did)
+     // ensure subdir exists
+     await mkdir(directory, { recursive: true })
+@@ -116,8 +138,10 @@ export class ActorStore {
+     if (exists) {
+       throw new InvalidRequestError('Repo already exists', 'AlreadyExists')
+     }
+-    const privKey = await keypair.export()
+-    await fs.writeFile(keyLocation, privKey)
++    if (keypair) {
++      const privKey = await keypair.export()
++      await fs.writeFile(keyLocation, privKey)
++    }
+ 
+     const db: ActorDb = getDb(dbLocation, this.cfg.disableWalAutoCheckpoint)
+     try {
+@@ -196,6 +220,31 @@ export class ActorStore {
+   }
+ }
+ 
++export class NoSigningKeyError extends InvalidRequestError {
++  constructor(did: string) {
++    super(
++      `This host holds no signing key for ${did}: its commits are signed on the device`,
++      'NoSigningKey',
++    )
++  }
++}
++
++/**
++ * Stands in for the key of an account whose commits are signed on the device. It cannot sign
++ * and says so, which turns every server-side signing path into a clear refusal for such an
++ * account instead of a missing-file error or, worse, a commit signed by the wrong key.
++ */
++class RefusingKeypair implements Keypair {
++  jwtAlg = 'ES256K'
++  constructor(private readonly forDid: string) {}
++  did(): string {
++    throw new NoSigningKeyError(this.forDid)
++  }
++  async sign(): Promise<Uint8Array> {
++    throw new NoSigningKeyError(this.forDid)
++  }
++}
++
+ const loadKey = async (loc: string): Promise<ExportableKeypair | undefined> => {
+   const privKey = await readIfExists(loc)
+   if (!privKey) return undefined
+-- 
+2.43.0
+

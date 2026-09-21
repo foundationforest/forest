@@ -146,3 +146,4 @@ vite.config.ts.timestamp-*
 host/upstream/
 host/data/
 host/*.log
+host/pds.env
