@@ -1,0 +1,25 @@
+{
+  "name": "@forest/escrow-client",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Builds every Forest escrow instruction, computes the clock start and each deadline from a market file's defaults, produces the deposit address and its pay link, and decodes the escrow account and its events.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "test": "node --test test/client.test.ts",
+    "test:validator": "node --test test/validator.test.ts",
+    "check": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "@noble/hashes": "2.4.0",
+    "@solana/web3.js": "1.99.0"
+  },
+  "devDependencies": {
+    "@solana/spl-token": "0.4.9",
+    "@types/node": "22.20.2",
+    "typescript": "5.9.3"
+  }
+}

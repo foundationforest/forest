@@ -1,0 +1,28 @@
+[package]
+name = "forest-escrow"
+version = "0.1.0"
+edition = "2021"
+description = "The Forest escrow: an amount of a classic SPL token held between two keys, released by signatures and time. Sealed per version."
+license = "Apache-2.0"
+publish = false
+exclude = ["tests-litesvm"]
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "forest_escrow"
+
+[features]
+default = []
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+
+[dependencies]
+anchor-lang = { version = "1.2.0", features = ["init-if-needed"] }
+anchor-spl = { version = "1.2.0", default-features = false, features = ["token", "associated_token"] }
+
+[lints.rust.unexpected_cfgs]
+level = "warn"
+check-cfg = ['cfg(target_os, values("solana"))']
