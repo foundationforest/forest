@@ -44,7 +44,7 @@ Measured this session, one proof, compressed points, on the program in `program/
 | | |
 |---|---|
 | Transaction on the wire | **829 bytes** of the 1,232 limit, 67% (legacy, with a compute-budget instruction; the client's v0 form is 831) |
-| Compute units | **133,072** of the 1,400,000 limit, **9.5%** (session 5 measured 132,302 before the fee was looked up per mint) |
+| Compute units | **133,188** of the 1,400,000 limit, **9.5%** (session 5 measured 132,302 before the fee was looked up per mint; session 6, 133,072 before the config grew a pending-treasury slot) |
 | Instruction data | 257 bytes, 10 accounts |
 | Proof on this machine | about 0.8 to 1.5 seconds in Node at depth 32 |
 
@@ -59,7 +59,7 @@ ends at (SOL at $100.24):
 | used code | 9 | $0.0698 | $0.0096 | one per badge, forever |
 | identity list | 5,464 | $2.85 | $0.39 | one per list |
 | code tree | 1,112 | $0.63 | $0.087 | one, ever |
-| config | 574 | $0.36 | $0.049 | one, ever |
+| config | 606 | $0.37 | $0.051 | one, ever |
 
 The transaction's fee payer pays the code account's rent. Rent is never returned, because a code
 account must never close: closing it would make the code reusable.
@@ -90,7 +90,7 @@ These cannot change after v1 deploys. A change breaks every existing proof, code
   per registration, in the transaction log and in no account.
 - **What `init` writes.** The treasury is a program constant and the first mint is a program
   constant; `init` takes no argument and no treasury signer, so whoever sends it, once, writes the
-  same bytes. A deploy race has nothing to win.
+  same bytes, with an empty pending-treasury slot. A deploy race has nothing to win.
 - **The identity derivation on the device.** Semaphore's own BLAKE-512, pruning and shift, from
   the 32 bytes `keys/`'s `identitySecret(seed)` returns. Not in the program, but a change makes
   every existing commitment unreachable.
@@ -105,11 +105,17 @@ The treasury can turn these. Nothing else can.
 - Which issuer keys may insert into which list (`add_issuer`, `remove_issuer`). Removing an issuer
   never removes an identity: nobody is ever taken out of a list.
 - How many identity lists are open (`open_list`).
-- Who the treasury is (`set_treasury`). The current treasury signs, and everything moves at once:
+- Who the treasury is, in two steps (`propose_treasury`, then `accept_treasury`). The current
+  treasury proposes a key, and nothing moves: it still signs every dial, is still paid the 0.25
+  and still receives swept rent. A later proposal overwrites the pending key, and proposing
+  nothing clears it. When the pending key signs `accept_treasury`, everything moves at once:
   where the 0.25 lands, where swept rent goes, and who signs the dials. That is how the treasury
-  moves to a multisig later. There is no second step and no undo: a wrong address freezes every
-  dial and sends every fee to nobody, forever. After a handover the old key signs nothing, is paid
-  nothing, and is swept nothing.
+  moves to a multisig later, and the multisig's own signature on the second step is the proof it
+  can sign at all. After that the old key signs nothing, is paid nothing, and is swept nothing.
+  Two steps because a one-step handover has no undo: a typo in the new address would have frozen
+  every dial and sent every fee to nobody, forever. Now a key nobody holds can be proposed but
+  never accepted, and the treasury stays where it was. The zero key and the current key are
+  refused as proposals.
 
 Two things are deliberately nobody's dial. `sweep_rent` takes no key at all, because there is no
 key behind a program-derived address, the only possible destination is the sealed treasury, and the
@@ -202,9 +208,14 @@ ships, and each is logged in `docs/changes.md`.
    that can never change.
 10. **One treasury, not two.** Session 5 kept a fee destination and a signing key as separate
     fields. A handover to a multisig has to move both or it moves nothing, so session 6 merged
-    them: one `treasury` field, one constant, one `set_treasury`. A multisig's vault address is
-    one key that both owns token accounts and signs, so nothing is lost. If a cold destination
-    separate from the dial key is wanted back, that is a one-field change before deploy.
+    them: one `treasury` field, one constant, one handover. A multisig's vault address is one
+    key that both owns token accounts and signs, so nothing is lost. Session 7 closed this as
+    decided: the two stay one field, because a multisig holds both.
+11. **The pending slot is appended, and a proposal is an `Option`.** `pending_treasury` sits
+    after `bump` in the config so every offset the two hand-written decoders pinned in sessions
+    5 and 6 stays where it was. `propose_treasury` takes `Option<Pubkey>`: `None` clears a
+    pending proposal, so clearing needs no third instruction, and the zero key stays an error
+    rather than a meaning.
 
 ## What this does not do
 

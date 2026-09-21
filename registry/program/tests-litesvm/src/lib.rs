@@ -47,7 +47,7 @@ pub fn treasury_keypair() -> Keypair {
 }
 
 pub const ROOT_HISTORY: usize = 128;
-pub const CONFIG_LEN: usize = 8 + 566;
+pub const CONFIG_LEN: usize = 8 + 598;
 pub const LIST_LEN: usize = 8 + 5456;
 pub const CODE_TREE_LEN: usize = 8 + 1104;
 pub const USED_CODE_LEN: usize = 8 + 1;
@@ -256,9 +256,17 @@ pub fn init_ix(payer: Address, usdc: Address) -> Instruction {
     }
 }
 
-pub fn set_treasury_ix(treasury: Address, new_treasury: Address) -> Instruction {
-    let mut data = discriminator("global", "set_treasury").to_vec();
-    data.extend_from_slice(new_treasury.as_ref());
+/// Step one of a handover: the current treasury signs. `None` clears a pending proposal. Borsh
+/// writes an `Option<Pubkey>` as one tag byte, `0x00` for none or `0x01` followed by the key.
+pub fn propose_treasury_ix(treasury: Address, new_treasury: Option<Address>) -> Instruction {
+    let mut data = discriminator("global", "propose_treasury").to_vec();
+    match new_treasury {
+        Some(key) => {
+            data.push(1);
+            data.extend_from_slice(key.as_ref());
+        }
+        None => data.push(0),
+    }
     Instruction {
         program_id: PROGRAM_ID,
         accounts: vec![
@@ -266,6 +274,18 @@ pub fn set_treasury_ix(treasury: Address, new_treasury: Address) -> Instruction 
             AccountMeta::new_readonly(treasury, true),
         ],
         data,
+    }
+}
+
+/// Step two: the pending key signs, and only then does the treasury move.
+pub fn accept_treasury_ix(pending: Address) -> Instruction {
+    Instruction {
+        program_id: PROGRAM_ID,
+        accounts: vec![
+            AccountMeta::new(config_address(), false),
+            AccountMeta::new_readonly(pending, true),
+        ],
+        data: discriminator("global", "accept_treasury").to_vec(),
     }
 }
 
@@ -382,9 +402,12 @@ pub struct ConfigView {
     /// One per accepted mint, at the same index.
     pub decimals: Vec<u8>,
     pub list_count: u32,
+    /// The proposed treasury, or the zero key when no handover is pending.
+    pub pending_treasury: Address,
 }
 
-/// treasury 0..32, mints 32..544, decimals 544..560, mint_count 560, list_count 561..565, bump 565.
+/// treasury 0..32, mints 32..544, decimals 544..560, mint_count 560, list_count 561..565, bump 565,
+/// pending_treasury 566..598.
 pub fn read_config(data: &[u8]) -> ConfigView {
     let b = &data[8..];
     let mint_count = b[560] as usize;
@@ -393,6 +416,7 @@ pub fn read_config(data: &[u8]) -> ConfigView {
         mints: (0..mint_count).map(|i| Address::try_from(&b[32 + i * 32..64 + i * 32]).unwrap()).collect(),
         decimals: b[544..544 + mint_count].to_vec(),
         list_count: u32::from_le_bytes(b[561..565].try_into().unwrap()),
+        pending_treasury: Address::try_from(&b[566..598]).unwrap(),
     }
 }
 

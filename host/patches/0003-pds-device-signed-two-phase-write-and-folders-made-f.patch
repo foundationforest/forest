@@ -1,0 +1,1108 @@
+From 68280c2e2d874a0085feb83797cda54acbea6aef Mon Sep 17 00:00:00 2001
+From: forest <forest@localhost>
+Date: Mon, 21 Sep 2026 17:44:05 +0000
+Subject: [PATCH 3/5] pds: device-signed two-phase write, and folders made from
+ a device-made DID
+
+Two procedures under foundation.forest.host, both authenticated by a
+service token the device signs with the folder's own key:
+
+prepareCommit applies the writes to the folder's tree without storing
+anything and returns the unsigned commit bytes, the rev, the head it
+builds on, and the writes with record keys filled in.
+
+submitCommit rebuilds the same commit from the same writes and rev,
+checks the signature against the DID document's signing key, checks it
+builds on the current head (swapCommit as in applyWrites; the rev must
+be newer than the head's, which is what refuses a replay), and stores
+it. Nothing is kept between the two phases.
+
+When the DID has no folder on this host, the commit is the genesis and
+submitting it creates the folder: the DID document must point at this
+host and name a handle; no email, password, session, or key file.
+
+The transactor's pre-commit checks are shared between the server-signed
+path (unchanged in behaviour) and the device-signed one.
+---
+ .../foundation/forest/host/prepareCommit.json | 118 +++++++
+ .../foundation/forest/host/submitCommit.json  |  92 ++++++
+ .../pds/src/actor-store/repo/transactor.ts    | 174 +++++++++-
+ .../src/api/foundation/forest/host/index.ts   |   9 +
+ .../foundation/forest/host/prepareCommit.ts   |  78 +++++
+ .../foundation/forest/host/submitCommit.ts    | 128 ++++++++
+ .../src/api/foundation/forest/host/util.ts    | 309 ++++++++++++++++++
+ packages/pds/src/api/foundation/index.ts      |   7 +
+ packages/pds/src/api/index.ts                 |   2 +
+ packages/pds/src/repo/types.ts                |  26 ++
+ 10 files changed, 935 insertions(+), 8 deletions(-)
+ create mode 100644 lexicons/foundation/forest/host/prepareCommit.json
+ create mode 100644 lexicons/foundation/forest/host/submitCommit.json
+ create mode 100644 packages/pds/src/api/foundation/forest/host/index.ts
+ create mode 100644 packages/pds/src/api/foundation/forest/host/prepareCommit.ts
+ create mode 100644 packages/pds/src/api/foundation/forest/host/submitCommit.ts
+ create mode 100644 packages/pds/src/api/foundation/forest/host/util.ts
+ create mode 100644 packages/pds/src/api/foundation/index.ts
+
+diff --git a/lexicons/foundation/forest/host/prepareCommit.json b/lexicons/foundation/forest/host/prepareCommit.json
+new file mode 100644
+index 0000000..c8da208
+--- /dev/null
++++ b/lexicons/foundation/forest/host/prepareCommit.json
+@@ -0,0 +1,118 @@
++{
++  "lexicon": 1,
++  "id": "foundation.forest.host.prepareCommit",
++  "defs": {
++    "main": {
++      "type": "procedure",
++      "description": "Phase one of a device-signed write. The host applies the writes to the folder's tree without storing anything and returns the unsigned commit for the device to sign. The folder is the DID that signed the request's service token. When that DID has no folder on this host yet, the commit returned is the folder's genesis, and submitting it creates the folder. Implemented by a Forest host.",
++      "input": {
++        "encoding": "application/json",
++        "schema": {
++          "type": "object",
++          "required": ["writes"],
++          "properties": {
++            "validate": {
++              "type": "boolean",
++              "description": "As in com.atproto.repo.applyWrites: 'false' skips Lexicon validation, 'true' requires it, unset validates known Lexicons only."
++            },
++            "writes": {
++              "type": "array",
++              "items": {
++                "type": "union",
++                "refs": [
++                  "com.atproto.repo.applyWrites#create",
++                  "com.atproto.repo.applyWrites#update",
++                  "com.atproto.repo.applyWrites#delete"
++                ],
++                "closed": true
++              }
++            },
++            "swapCommit": {
++              "type": "string",
++              "format": "cid",
++              "description": "If provided, fails unless the folder's current commit CID matches this value."
++            }
++          }
++        }
++      },
++      "output": {
++        "encoding": "application/json",
++        "schema": {
++          "type": "object",
++          "required": ["did", "genesis", "rev", "data", "unsignedCommit", "writes", "results"],
++          "properties": {
++            "did": { "type": "string", "format": "did" },
++            "genesis": {
++              "type": "boolean",
++              "description": "True when this would be the folder's first commit. Submitting it creates the folder on this host."
++            },
++            "rev": {
++              "type": "string",
++              "format": "tid",
++              "description": "The commit's revision. Send it back unchanged to submitCommit."
++            },
++            "prev": {
++              "type": "string",
++              "format": "cid",
++              "description": "The current head commit this one builds on. Absent for a genesis. Send it as swapCommit to submitCommit so a moved head is refused before anything else."
++            },
++            "since": {
++              "type": "string",
++              "format": "tid",
++              "description": "The current head's revision. Absent for a genesis."
++            },
++            "data": {
++              "type": "string",
++              "format": "cid",
++              "description": "The root of the folder's tree once these writes are applied."
++            },
++            "unsignedCommit": {
++              "type": "bytes",
++              "description": "The DAG-CBOR bytes of the unsigned commit: {did, version: 3, rev, prev: null, data}. Sign exactly these bytes with the folder's signing key; the signature is what submitCommit takes.",
++              "maxLength": 10000
++            },
++            "writes": {
++              "type": "array",
++              "description": "The writes as the host understood them, with every record key filled in. Send exactly these to submitCommit.",
++              "items": {
++                "type": "union",
++                "refs": [
++                  "com.atproto.repo.applyWrites#create",
++                  "com.atproto.repo.applyWrites#update",
++                  "com.atproto.repo.applyWrites#delete"
++                ],
++                "closed": true
++              }
++            },
++            "results": {
++              "type": "array",
++              "items": {
++                "type": "union",
++                "refs": [
++                  "com.atproto.repo.applyWrites#createResult",
++                  "com.atproto.repo.applyWrites#updateResult",
++                  "com.atproto.repo.applyWrites#deleteResult"
++                ],
++                "closed": true
++              }
++            }
++          }
++        }
++      },
++      "errors": [
++        {
++          "name": "InvalidSwap",
++          "description": "The swapCommit did not match the folder's current commit."
++        },
++        {
++          "name": "IncompatibleDidDoc",
++          "description": "No folder can be made here for this DID: its document does not point its atproto_pds service at this host, names no handle, or names no signing key."
++        },
++        {
++          "name": "HandleTaken",
++          "description": "The handle the DID document names already belongs to another folder on this host."
++        }
++      ]
++    }
++  }
++}
+diff --git a/lexicons/foundation/forest/host/submitCommit.json b/lexicons/foundation/forest/host/submitCommit.json
+new file mode 100644
+index 0000000..07aefdd
+--- /dev/null
++++ b/lexicons/foundation/forest/host/submitCommit.json
+@@ -0,0 +1,92 @@
++{
++  "lexicon": 1,
++  "id": "foundation.forest.host.submitCommit",
++  "defs": {
++    "main": {
++      "type": "procedure",
++      "description": "Phase two of a device-signed write. The host rebuilds the commit prepareCommit described, from the same writes and the same rev, checks the signature against the signing key in the DID document, checks the commit builds on the current head, and stores it. Nothing is kept between the two phases. When the DID has no folder on this host yet, this is the genesis commit and the folder is created around it: no email, no password, no session, and no key file, ever. Implemented by a Forest host.",
++      "input": {
++        "encoding": "application/json",
++        "schema": {
++          "type": "object",
++          "required": ["writes", "rev", "sig"],
++          "properties": {
++            "validate": { "type": "boolean" },
++            "writes": {
++              "type": "array",
++              "description": "The writes prepareCommit returned, record keys included.",
++              "items": {
++                "type": "union",
++                "refs": [
++                  "com.atproto.repo.applyWrites#create",
++                  "com.atproto.repo.applyWrites#update",
++                  "com.atproto.repo.applyWrites#delete"
++                ],
++                "closed": true
++              }
++            },
++            "swapCommit": {
++              "type": "string",
++              "format": "cid",
++              "description": "The prev prepareCommit returned. If provided, fails with InvalidSwap unless it is still the folder's current commit. Omit for a genesis."
++            },
++            "rev": {
++              "type": "string",
++              "format": "tid",
++              "description": "The rev prepareCommit returned. Must be newer than the current head's, which is what makes a replay fail."
++            },
++            "sig": {
++              "type": "bytes",
++              "description": "The folder's signing key's signature over the unsignedCommit bytes prepareCommit returned.",
++              "maxLength": 256
++            }
++          }
++        }
++      },
++      "output": {
++        "encoding": "application/json",
++        "schema": {
++          "type": "object",
++          "required": ["commit", "results"],
++          "properties": {
++            "commit": { "type": "ref", "ref": "com.atproto.repo.defs#commitMeta" },
++            "results": {
++              "type": "array",
++              "items": {
++                "type": "union",
++                "refs": [
++                  "com.atproto.repo.applyWrites#createResult",
++                  "com.atproto.repo.applyWrites#updateResult",
++                  "com.atproto.repo.applyWrites#deleteResult"
++                ],
++                "closed": true
++              }
++            }
++          }
++        }
++      },
++      "errors": [
++        {
++          "name": "InvalidSwap",
++          "description": "The swapCommit did not match the folder's current commit: the head moved. Prepare again."
++        },
++        {
++          "name": "InvalidRev",
++          "description": "The rev is not a TID newer than the current head's. A commit already stored, replayed, fails here."
++        },
++        {
++          "name": "InvalidSignature",
++          "description": "The signature does not verify, against the DID document's current signing key, over the commit the host rebuilt. Either another key signed, or the head moved and the rebuilt commit is not the one that was signed: prepare again."
++        },
++        {
++          "name": "IncompatibleDidDoc",
++          "description": "No folder can be made here for this DID: its document does not point its atproto_pds service at this host, names no handle, or names no signing key."
++        },
++        {
++          "name": "HandleTaken",
++          "description": "The handle the DID document names already belongs to another folder on this host."
++        }
++      ]
++    }
++  }
++}
+diff --git a/packages/pds/src/actor-store/repo/transactor.ts b/packages/pds/src/actor-store/repo/transactor.ts
+index 5fa9ee1..1ef7adc 100644
+--- a/packages/pds/src/actor-store/repo/transactor.ts
++++ b/packages/pds/src/actor-store/repo/transactor.ts
+@@ -1,17 +1,24 @@
++import { TID } from '@atproto/common'
+ import type * as crypto from '@atproto/crypto'
+ import type { DidString } from '@atproto/lex'
+ import { type Cid, parseCid } from '@atproto/lex-data'
+ import {
+   type BlobStore,
++  type Commit,
++  type CommitData,
+   Repo,
++  type UnsignedCommitData,
+   WriteOpAction,
+   formatDataKey,
++  verifyCommitSig,
+ } from '@atproto/repo'
+ import type { AtUri } from '@atproto/syntax'
+ import { InvalidRequestError } from '@atproto/xrpc-server'
+ import type { BackgroundQueue } from '../../background.js'
+ import { createWriteToOp, writeToOp } from '../../repo/index.js'
+ import {
++  BadCommitRevError,
++  BadCommitSignatureError,
+   BadCommitSwapError,
+   BadRecordSwapError,
+   type CommitDataWithOps,
+@@ -19,6 +26,55 @@ import {
+   type PreparedCreate,
+   type PreparedWrite,
+ } from '../../repo/types.js'
++
++/** A commit up to its signature, with the ops a sequencer event needs. */
++export type UnsignedCommitWithOps = UnsignedCommitData & {
++  ops: CommitOp[]
++  prevData: Cid | null
++}
++
++/** What `prepareCommitOps` works out before the repo library formats a commit. */
++type PreparedCommitOps = {
++  repo: Repo
++  prevData: Cid
++  commitOps: CommitOp[]
++  newRecordCids: Cid[]
++  delAndUpdateUris: AtUri[]
++}
++
++const initOps = (writes: PreparedCreate[]): CommitOp[] =>
++  writes.map((w) => ({
++    action: 'create' as const,
++    path: formatDataKey(w.uri.collection, w.uri.rkey),
++    cid: w.cid,
++  }))
++
++/** The rev a device signed for must be a TID, and newer than the head it builds on. */
++const assertRevNewerThan = (rev: string, headRev: string | null) => {
++  if (!TID.is(rev)) {
++    throw new BadCommitRevError(rev, null)
++  }
++  if (headRev !== null && !TID.fromStr(rev).newerThan(TID.fromStr(headRev))) {
++    throw new BadCommitRevError(rev, headRev)
++  }
++}
++
++/**
++ * The device's signature over the unsigned commit's bytes, checked against the signing key the
++ * DID document names. The host never signs: this is the only way a commit gets a signature here.
++ */
++const signedByDevice = async (
++  unsigned: UnsignedCommitData,
++  sig: Uint8Array,
++  didKey: string,
++): Promise<Commit> => {
++  const commit: Commit = { ...unsigned.unsigned, sig }
++  const valid = await verifyCommitSig(commit, didKey).catch(() => false)
++  if (!valid) {
++    throw new BadCommitSignatureError()
++  }
++  return commit
++}
+ import { BlobTransactor } from '../blob/transactor.js'
+ import type { ActorDb } from '../db/index.js'
+ import { RecordTransactor } from '../record/transactor.js'
+@@ -65,14 +121,41 @@ export class RepoTransactor extends RepoReader {
+     await this.indexWrites(writes, commit.rev)
+     await this.blob.processWriteBlobs(commit.rev, writes)
+ 
+-    const ops = writes.map((w) => ({
+-      action: 'create' as const,
+-      path: formatDataKey(w.uri.collection, w.uri.rkey),
+-      cid: w.cid,
+-    }))
+     return {
+       ...commit,
+-      ops,
++      ops: initOps(writes),
++      prevData: null,
++    }
++  }
++
++  /**
++   * Create the repo from a genesis commit the device signed. The commit is rebuilt here from
++   * the same writes and rev the device was shown, so the signature covers exactly what is
++   * stored. The host holds no key for this repo, before or after.
++   */
++  async createRepoFromDeviceSigned(
++    writes: PreparedCreate[],
++    rev: string,
++    sig: Uint8Array,
++    didKey: string,
++  ): Promise<CommitDataWithOps> {
++    this.db.assertTransaction()
++    assertRevNewerThan(rev, null)
++    const unsigned = await Repo.formatUnsignedInitCommit(
++      this.storage,
++      this.did,
++      writes.map(createWriteToOp),
++      rev,
++    )
++    const signed = await signedByDevice(unsigned, sig, didKey)
++    const commit = await Repo.finalizeCommit(unsigned, signed)
++    await this.storage.applyCommit(commit, true)
++    await this.indexWrites(writes, commit.rev)
++    await this.blob.processWriteBlobs(commit.rev, writes)
++
++    return {
++      ...commit,
++      ops: initOps(writes),
+       prevData: null,
+     }
+   }
+@@ -106,6 +189,76 @@ export class RepoTransactor extends RepoReader {
+     writes: PreparedWrite[],
+     swapCommit?: Cid,
+   ): Promise<CommitDataWithOps> {
++    const prepared = await this.prepareCommitOps(writes, swapCommit)
++    const writeOps = writes.map(writeToOp)
++    const commit = await prepared.repo.formatCommit(writeOps, this.signingKey)
++    return this.finishCommit(commit, prepared)
++  }
++
++  /**
++   * Phase one of a device-signed write: the same checks as `formatCommit`, then the commit up
++   * to but not including its signature. Nothing is stored. The device signs the unsigned bytes
++   * and sends the signature to `processDeviceSignedWrites` with the same writes and rev.
++   */
++  async formatUnsignedCommit(
++    writes: PreparedWrite[],
++    swapCommit?: Cid,
++  ): Promise<UnsignedCommitWithOps> {
++    const prepared = await this.prepareCommitOps(writes, swapCommit)
++    const unsigned = await prepared.repo.formatUnsignedCommit(
++      writes.map(writeToOp),
++    )
++    return { ...unsigned, ops: prepared.commitOps, prevData: prepared.prevData }
++  }
++
++  /**
++   * Phase two of a device-signed write. The commit is rebuilt from the writes and the rev the
++   * device was shown, the signature is checked against the DID document's key over those exact
++   * bytes, and only then is anything stored. Checks run in this order: swap commit against the
++   * head, rev newer than the head (a replay fails here), signature, size.
++   */
++  async processDeviceSignedWrites(
++    writes: PreparedWrite[],
++    swapCommit: Cid | undefined,
++    rev: string,
++    sig: Uint8Array,
++    didKey: string,
++  ): Promise<CommitDataWithOps> {
++    this.db.assertTransaction()
++    if (writes.length > 200) {
++      throw new InvalidRequestError('Too many writes. Max: 200')
++    }
++
++    const prepared = await this.prepareCommitOps(writes, swapCommit)
++    assertRevNewerThan(rev, prepared.repo.commit.rev)
++    const unsigned = await prepared.repo.formatUnsignedCommit(
++      writes.map(writeToOp),
++      rev,
++    )
++    const signed = await signedByDevice(unsigned, sig, didKey)
++    const commitData = await Repo.finalizeCommit(unsigned, signed)
++    const commit = await this.finishCommit(commitData, prepared)
++    // Do not allow commits > 2MB
++    if (commit.relevantBlocks.byteSize > 2000000) {
++      throw new InvalidRequestError('Too many writes. Max event size: 2MB')
++    }
++
++    await this.storage.applyCommit(commit)
++    await this.indexWrites(writes, commit.rev)
++    await this.blob.processWriteBlobs(commit.rev, writes)
++
++    return commit
++  }
++
++  /**
++   * Everything `formatCommit` works out before the repo library formats the commit: the swap
++   * commit check, the per-record swap checks, the commit ops, and the repo loaded at its head.
++   * Shared by the server-signed and the device-signed paths so both apply the same rules.
++   */
++  private async prepareCommitOps(
++    writes: PreparedWrite[],
++    swapCommit?: Cid,
++  ): Promise<PreparedCommitOps> {
+     // this is not in a txn, so this won't actually hold the lock,
+     // we just check if it is currently held by another txn
+     const currRoot = await this.storage.getRootDetailed()
+@@ -163,9 +316,14 @@ export class RepoTransactor extends RepoReader {
+ 
+     const repo = await Repo.load(this.storage, currRoot.cid)
+     const prevData = repo.commit.data
+-    const writeOps = writes.map(writeToOp)
+-    const commit = await repo.formatCommit(writeOps, this.signingKey)
++    return { repo, prevData, commitOps, newRecordCids, delAndUpdateUris }
++  }
+ 
++  /** What `formatCommit` does after the repo library has formatted the commit. */
++  private async finishCommit(
++    commit: CommitData,
++    { prevData, commitOps, newRecordCids, delAndUpdateUris }: PreparedCommitOps,
++  ): Promise<CommitDataWithOps> {
+     // find blocks that would be deleted but are referenced by another record
+     const dupeRecordCids = await this.getDuplicateRecordCids(
+       commit.removedCids.toList(),
+diff --git a/packages/pds/src/api/foundation/forest/host/index.ts b/packages/pds/src/api/foundation/forest/host/index.ts
+new file mode 100644
+index 0000000..ef68275
+--- /dev/null
++++ b/packages/pds/src/api/foundation/forest/host/index.ts
+@@ -0,0 +1,9 @@
++import type { Server } from '@atproto/xrpc-server'
++import type { AppContext } from '../../../../context.js'
++import prepareCommit from './prepareCommit.js'
++import submitCommit from './submitCommit.js'
++
++export default function (server: Server, ctx: AppContext) {
++  prepareCommit(server, ctx)
++  submitCommit(server, ctx)
++}
+diff --git a/packages/pds/src/api/foundation/forest/host/prepareCommit.ts b/packages/pds/src/api/foundation/forest/host/prepareCommit.ts
+new file mode 100644
+index 0000000..21dba53
+--- /dev/null
++++ b/packages/pds/src/api/foundation/forest/host/prepareCommit.ts
+@@ -0,0 +1,78 @@
++import { isDidString } from '@atproto/lex'
++import { encode } from '@atproto/lex-cbor'
++import { parseCid } from '@atproto/lex-data'
++import { InvalidRequestError, type Server } from '@atproto/xrpc-server'
++import type { UnsignedCommitWithOps } from '../../../../actor-store/repo/transactor.js'
++import type { AppContext } from '../../../../context.js'
++import { foundation } from '../../../../lexicons/index.js'
++import {
++  asRequestError,
++  assertFolderCanBeMadeHere,
++  ensureCreates,
++  prepareWrites,
++  unsignedGenesis,
++  writeToResult,
++  writeWithKey,
++} from './util.js'
++
++export default function (server: Server, ctx: AppContext) {
++  server.add(foundation.forest.host.prepareCommit, {
++    // The device's own signature over a service token: issuer the folder's DID, audience this
++    // host, method this one. Verified against the DID document's signing key. No session.
++    auth: ctx.authVerifier.userServiceAuth,
++    opts: {
++      jsonLimit: 1_000_000,
++    },
++    handler: async ({ input, auth }) => {
++      const did = auth.credentials.did
++      if (!isDidString(did)) {
++        throw new InvalidRequestError('Not a DID', 'InvalidRequest')
++      }
++      const { writes, validate, swapCommit } = input.body
++
++      const genesis = !(await ctx.actorStore.exists(did))
++      const prepared = await prepareWrites(did, writes, validate, {
++        requireRkey: false,
++      })
++
++      let unsigned: UnsignedCommitWithOps
++      if (genesis) {
++        if (swapCommit) {
++          throw new InvalidRequestError(
++            'A genesis commit builds on nothing: omit swapCommit',
++            'InvalidSwap',
++          )
++        }
++        await assertFolderCanBeMadeHere(ctx, did)
++        unsigned = await unsignedGenesis(did, ensureCreates(prepared))
++      } else {
++        await ctx.authVerifier.findAccount(did, {
++          checkDeactivated: true,
++          checkTakedown: true,
++        })
++        const swapCommitCid = swapCommit ? parseCid(swapCommit) : undefined
++        unsigned = await ctx.actorStore
++          .transact(did, (actorTxn) =>
++            actorTxn.repo.formatUnsignedCommit(prepared, swapCommitCid),
++          )
++          .catch(asRequestError)
++      }
++
++      return {
++        encoding: 'application/json' as const,
++        body: {
++          did,
++          genesis,
++          rev: unsigned.rev,
++          prev: unsigned.prev?.toString(),
++          since: unsigned.since ?? undefined,
++          data: unsigned.unsigned.data.toString(),
++          // Exactly what `signCommit` would have signed, and what `verifyCommitSig` checks.
++          unsignedCommit: encode(unsigned.unsigned),
++          writes: prepared.map(writeWithKey),
++          results: prepared.map(writeToResult),
++        },
++      }
++    },
++  })
++}
+diff --git a/packages/pds/src/api/foundation/forest/host/submitCommit.ts b/packages/pds/src/api/foundation/forest/host/submitCommit.ts
+new file mode 100644
+index 0000000..eb76ef5
+--- /dev/null
++++ b/packages/pds/src/api/foundation/forest/host/submitCommit.ts
+@@ -0,0 +1,128 @@
++import { isDidString } from '@atproto/lex'
++import { parseCid } from '@atproto/lex-data'
++import { InvalidRequestError, type Server } from '@atproto/xrpc-server'
++import type { AppContext } from '../../../../context.js'
++import { com, foundation } from '../../../../lexicons/index.js'
++import { dbLogger } from '../../../../logger.js'
++import type { CommitDataWithOps } from '../../../../repo/index.js'
++import {
++  asRequestError,
++  assertFolderCanBeMadeHere,
++  createFolder,
++  ensureCreates,
++  prepareWrites,
++  withDeviceKey,
++  writeToResult,
++} from './util.js'
++
++const ratelimitPoints = ({
++  input,
++}: {
++  input: foundation.forest.host.submitCommit.$Input
++}) => {
++  let points = 0
++  for (const op of input.body.writes) {
++    if (com.atproto.repo.applyWrites.create.$isTypeOf(op)) {
++      points += 3
++    } else if (com.atproto.repo.applyWrites.update.$isTypeOf(op)) {
++      points += 2
++    } else {
++      points += 1
++    }
++  }
++  return points
++}
++
++export default function (server: Server, ctx: AppContext) {
++  server.add(foundation.forest.host.submitCommit, {
++    auth: ctx.authVerifier.userServiceAuth,
++    rateLimit: [
++      {
++        name: 'repo-write-hour',
++        calcKey: ({ auth }) => auth.credentials.did,
++        calcPoints: ratelimitPoints,
++      },
++      {
++        name: 'repo-write-day',
++        calcKey: ({ auth }) => auth.credentials.did,
++        calcPoints: ratelimitPoints,
++      },
++    ],
++    opts: {
++      jsonLimit: 1_000_000,
++    },
++    handler: async ({ input, auth }) => {
++      const did = auth.credentials.did
++      if (!isDidString(did)) {
++        throw new InvalidRequestError('Not a DID', 'InvalidRequest')
++      }
++      const { writes, validate, swapCommit, rev, sig } = input.body
++
++      const prepared = await prepareWrites(did, writes, validate, {
++        requireRkey: true,
++      })
++
++      const genesis = !(await ctx.actorStore.exists(did))
++      let commit: CommitDataWithOps
++      if (genesis) {
++        if (swapCommit) {
++          throw new InvalidRequestError(
++            'A genesis commit builds on nothing: omit swapCommit',
++            'InvalidSwap',
++          )
++        }
++        // The signing key comes from the document read fresh here, so a folder is only ever
++        // made for the key the directory names right now.
++        const { handle, signingKey } = await assertFolderCanBeMadeHere(ctx, did)
++        commit = await createFolder(
++          ctx,
++          did,
++          handle,
++          ensureCreates(prepared),
++          rev,
++          sig,
++          signingKey,
++        ).catch(asRequestError)
++      } else {
++        await ctx.authVerifier.findAccount(did, {
++          checkDeactivated: true,
++          checkTakedown: true,
++        })
++        const swapCommitCid = swapCommit ? parseCid(swapCommit) : undefined
++        commit = await withDeviceKey(ctx, did, (didKey) =>
++          ctx.actorStore.transact(did, async (actorTxn) => {
++            const commit = await actorTxn.repo.processDeviceSignedWrites(
++              prepared,
++              swapCommitCid,
++              rev,
++              sig,
++              didKey,
++            )
++            await ctx.sequencer.sequenceCommit(did, commit)
++            return commit
++          }),
++        ).catch(asRequestError)
++
++        await ctx.accountManager
++          .updateRepoRoot(did, commit.cid, commit.rev)
++          .catch((err) => {
++            dbLogger.error(
++              { err, did, cid: commit.cid, rev: commit.rev },
++              'failed to update account root',
++            )
++          })
++      }
++
++      return {
++        encoding: 'application/json' as const,
++        body: {
++          commit: {
++            cid: commit.cid.toString(),
++            rev: commit.rev,
++          },
++          results: prepared.map(writeToResult),
++        },
++      }
++    },
++  })
++}
+diff --git a/packages/pds/src/api/foundation/forest/host/util.ts b/packages/pds/src/api/foundation/forest/host/util.ts
+new file mode 100644
+index 0000000..49789f5
+--- /dev/null
++++ b/packages/pds/src/api/foundation/forest/host/util.ts
+@@ -0,0 +1,309 @@
++// The device-signed write path, shared by prepareCommit and submitCommit.
++//
++// A Forest folder is a repo whose every commit is signed on its owner's device. The host holds
++// no key for it: it prepares commits, checks signatures against the DID document, stores, and
++// serves. Both endpoints are authenticated by a service token the device signs with the same
++// key (`userServiceAuth`), never by a password or a session.
++
++import { ensureAtpDocument } from '@atproto/identity'
++import type { DidString, HandleString } from '@atproto/lex'
++import { MemoryBlockstore, Repo, WriteOpAction, formatDataKey } from '@atproto/repo'
++import { InvalidRequestError } from '@atproto/xrpc-server'
++import type { UnsignedCommitWithOps } from '../../../../actor-store/repo/transactor.js'
++import type { AppContext } from '../../../../context.js'
++import { com, foundation } from '../../../../lexicons/index.js'
++import {
++  BadCommitRevError,
++  BadCommitSignatureError,
++  BadCommitSwapError,
++  type CommitDataWithOps,
++  InvalidRecordError,
++  type PreparedCreate,
++  type PreparedWrite,
++  createWriteToOp,
++  prepareCreate,
++  prepareDelete,
++  prepareUpdate,
++} from '../../../../repo/index.js'
++
++export type WriteInput =
++  foundation.forest.host.prepareCommit.$InputBody['writes'][number]
++
++export const MAX_WRITES = 200
++
++/**
++ * The writes as `PreparedWrite`s, exactly as `com.atproto.repo.applyWrites` prepares them. At
++ * submit time every create must carry the record key prepare assigned, or the rebuilt commit
++ * would not be the one the device signed.
++ */
++export const prepareWrites = async (
++  did: DidString,
++  writes: WriteInput[],
++  validate: boolean | undefined,
++  { requireRkey }: { requireRkey: boolean },
++): Promise<PreparedWrite[]> => {
++  if (writes.length > MAX_WRITES) {
++    throw new InvalidRequestError(`Too many writes. Max: ${MAX_WRITES}`)
++  }
++  try {
++    return await Promise.all(
++      writes.map(async (write, i) => {
++        if (com.atproto.repo.applyWrites.create.$isTypeOf(write)) {
++          if (requireRkey && !write.rkey) {
++            throw new InvalidRequestError(
++              `writes[${i}]: a create must carry the rkey prepareCommit assigned`,
++            )
++          }
++          return prepareCreate({
++            did,
++            collection: write.collection,
++            record: write.value,
++            rkey: write.rkey,
++            validate,
++            validationPath: ['writes', i, 'value'],
++          })
++        } else if (com.atproto.repo.applyWrites.update.$isTypeOf(write)) {
++          return prepareUpdate({
++            did,
++            collection: write.collection,
++            record: write.value,
++            rkey: write.rkey,
++            validate,
++            validationPath: ['writes', i, 'value'],
++          })
++        } else if (com.atproto.repo.applyWrites.delete.$isTypeOf(write)) {
++          return prepareDelete({
++            did,
++            collection: write.collection,
++            rkey: write.rkey,
++          })
++        } else {
++          throw new InvalidRequestError(
++            `Action not supported: ${write['$type']}`,
++          )
++        }
++      }),
++    )
++  } catch (err) {
++    if (err instanceof InvalidRecordError) {
++      throw new InvalidRequestError(err.message)
++    }
++    throw err
++  }
++}
++
++/** A genesis commit can only create records: there is nothing yet to update or delete. */
++export const ensureCreates = (writes: PreparedWrite[]): PreparedCreate[] => {
++  return writes.map((write) => {
++    if (write.action !== WriteOpAction.Create) {
++      throw new InvalidRequestError(
++        'A genesis commit can only create records: nothing exists yet to update or delete',
++      )
++    }
++    return write
++  })
++}
++
++/** The write as the host understood it, record key included, for the device to send back. */
++export const writeWithKey = (write: PreparedWrite): WriteInput => {
++  switch (write.action) {
++    case WriteOpAction.Create:
++      return com.atproto.repo.applyWrites.create.$build({
++        collection: write.uri.collectionSafe,
++        rkey: write.uri.rkeySafe,
++        value: write.record,
++      })
++    case WriteOpAction.Update:
++      return com.atproto.repo.applyWrites.update.$build({
++        collection: write.uri.collectionSafe,
++        rkey: write.uri.rkeySafe,
++        value: write.record,
++      })
++    case WriteOpAction.Delete:
++      return com.atproto.repo.applyWrites.delete.$build({
++        collection: write.uri.collectionSafe,
++        rkey: write.uri.rkeySafe,
++      })
++    default:
++      throw new Error(`Unrecognized action: ${write}`)
++  }
++}
++
++export const writeToResult = (write: PreparedWrite) => {
++  switch (write.action) {
++    case WriteOpAction.Create:
++      return com.atproto.repo.applyWrites.createResult.$build({
++        cid: write.cid.toString(),
++        uri: write.uri.toString(),
++        validationStatus: write.validationStatus,
++      })
++    case WriteOpAction.Update:
++      return com.atproto.repo.applyWrites.updateResult.$build({
++        cid: write.cid.toString(),
++        uri: write.uri.toString(),
++        validationStatus: write.validationStatus,
++      })
++    case WriteOpAction.Delete:
++      return com.atproto.repo.applyWrites.deleteResult.$build({})
++    default:
++      throw new Error(`Unrecognized action: ${write}`)
++  }
++}
++
++/**
++ * The genesis commit of a folder that does not exist yet, computed in memory: an empty tree
++ * plus the initial creates. Nothing about the folder exists on this host until the device has
++ * signed this and `createFolder` has run.
++ */
++export const unsignedGenesis = async (
++  did: DidString,
++  writes: PreparedCreate[],
++): Promise<UnsignedCommitWithOps> => {
++  const unsigned = await Repo.formatUnsignedInitCommit(
++    new MemoryBlockstore(),
++    did,
++    writes.map(createWriteToOp),
++  )
++  return {
++    ...unsigned,
++    ops: writes.map((w) => ({
++      action: 'create' as const,
++      path: formatDataKey(w.uri.collection, w.uri.rkey),
++      cid: w.cid,
++    })),
++    prevData: null,
++  }
++}
++
++/**
++ * Whether a folder for this DID may be made on this host: the DID document, read fresh from
++ * the directory, must point its `atproto_pds` service at this host and name a signing key and a
++ * handle; no account for the DID may exist here; the handle must be valid by this host's own
++ * rules and free. Returns the handle and the signing key the document names.
++ */
++export const assertFolderCanBeMadeHere = async (
++  ctx: AppContext,
++  did: DidString,
++): Promise<{ handle: HandleString; signingKey: string }> => {
++  const doc = await ctx.idResolver.did.resolve(did, true)
++  if (!doc) {
++    throw new InvalidRequestError(
++      `Could not resolve DID document for ${did}`,
++      'IncompatibleDidDoc',
++    )
++  }
++  let data
++  try {
++    data = ensureAtpDocument(doc)
++  } catch {
++    throw new InvalidRequestError(
++      'DID document must name a signing key, a handle and a host',
++      'IncompatibleDidDoc',
++    )
++  }
++  if (data.pds !== ctx.cfg.service.publicUrl) {
++    throw new InvalidRequestError(
++      `DID document points its atproto_pds service at ${data.pds}, not at this host (${ctx.cfg.service.publicUrl})`,
++      'IncompatibleDidDoc',
++    )
++  }
++  const existing = await ctx.accountManager.getAccount(did, {
++    includeDeactivated: true,
++    includeTakenDown: true,
++  })
++  if (existing) {
++    throw new InvalidRequestError(
++      `An account for ${did} already exists on this host`,
++      'AlreadyExists',
++    )
++  }
++  const handle = await ctx.accountManager.normalizeAndValidateHandle(
++    data.handle,
++    { did },
++  )
++  if (await ctx.accountManager.getAccount(handle)) {
++    throw new InvalidRequestError(
++      `Handle already taken: ${handle}`,
++      'HandleTaken',
++    )
++  }
++  return { handle, signingKey: data.signingKey }
++}
++
++/**
++ * Create the folder around a genesis commit the device signed: the actor store with no key
++ * file, the repo, the account row (no email, no password, no session), and the sequencer's
++ * account-creation events. Rolled back in reverse if any step fails, as upstream's
++ * createAccount does.
++ */
++export const createFolder = async (
++  ctx: AppContext,
++  did: DidString,
++  handle: HandleString,
++  writes: PreparedCreate[],
++  rev: string,
++  sig: Uint8Array,
++  didKey: string,
++): Promise<CommitDataWithOps> => {
++  await ctx.actorStore.create(did)
++  try {
++    const commit = await ctx.actorStore.transact(did, (actorTxn) =>
++      actorTxn.repo.createRepoFromDeviceSigned(writes, rev, sig, didKey),
++    )
++    await ctx.accountManager.createAccount({
++      did,
++      handle,
++      repoCid: commit.cid,
++      repoRev: commit.rev,
++      deactivated: false,
++    })
++    try {
++      await ctx.sequencer.sequenceAccountCreation(did, handle, commit)
++    } catch (err) {
++      await ctx.accountManager.deleteAccount(did)
++      throw err
++    }
++    return commit
++  } catch (err) {
++    await ctx.actorStore.destroy(did)
++    throw err
++  }
++}
++
++/**
++ * Run a device-signed step with the DID document's current signing key. If the signature
++ * fails against the cached key, the document is read again from the directory once, in case
++ * the device rotated its key, and the step is retried with the fresh key if it changed.
++ */
++export const withDeviceKey = async <T>(
++  ctx: AppContext,
++  did: DidString,
++  attempt: (didKey: string) => Promise<T>,
++): Promise<T> => {
++  const key = await ctx.idResolver.did.resolveAtprotoKey(did)
++  try {
++    return await attempt(key)
++  } catch (err) {
++    if (err instanceof BadCommitSignatureError) {
++      const fresh = await ctx.idResolver.did.resolveAtprotoKey(did, true)
++      if (fresh !== key) {
++        return attempt(fresh)
++      }
++    }
++    throw err
++  }
++}
++
++/** The transactor's refusals, as the errors the lexicons name. */
++export const asRequestError = (err: unknown): never => {
++  if (err instanceof BadCommitSwapError) {
++    throw new InvalidRequestError(err.message, 'InvalidSwap')
++  }
++  if (err instanceof BadCommitRevError) {
++    throw new InvalidRequestError(err.message, 'InvalidRev')
++  }
++  if (err instanceof BadCommitSignatureError) {
++    throw new InvalidRequestError(err.message, 'InvalidSignature')
++  }
++  throw err
++}
+diff --git a/packages/pds/src/api/foundation/index.ts b/packages/pds/src/api/foundation/index.ts
+new file mode 100644
+index 0000000..813368f
+--- /dev/null
++++ b/packages/pds/src/api/foundation/index.ts
+@@ -0,0 +1,7 @@
++import type { Server } from '@atproto/xrpc-server'
++import type { AppContext } from '../../context.js'
++import forestHost from './forest/host/index.js'
++
++export default function (server: Server, ctx: AppContext) {
++  forestHost(server, ctx)
++}
+diff --git a/packages/pds/src/api/index.ts b/packages/pds/src/api/index.ts
+index 1d2ad08..0d5afc7 100644
+--- a/packages/pds/src/api/index.ts
++++ b/packages/pds/src/api/index.ts
+@@ -2,9 +2,11 @@ import type { Server } from '@atproto/xrpc-server'
+ import type { AppContext } from '../context.js'
+ import appBsky from './app/bsky/index.js'
+ import comAtproto from './com/atproto/index.js'
++import foundation from './foundation/index.js'
+ 
+ export default function (server: Server, ctx: AppContext) {
+   comAtproto(server, ctx)
+   appBsky(server, ctx)
++  foundation(server, ctx)
+   return server
+ }
+diff --git a/packages/pds/src/repo/types.ts b/packages/pds/src/repo/types.ts
+index 71ff87e..9ce555b 100644
+--- a/packages/pds/src/repo/types.ts
++++ b/packages/pds/src/repo/types.ts
+@@ -63,3 +63,29 @@ export class BadRecordSwapError extends Error {
+     super(`Record was at ${cid?.toString() ?? 'null'}`)
+   }
+ }
++
++/** A device-signed commit whose rev is not a TID newer than the current head's. */
++export class BadCommitRevError extends Error {
++  constructor(
++    public rev: string,
++    public headRev: string | null,
++  ) {
++    super(
++      headRev === null
++        ? `Rev ${rev} is not a valid TID`
++        : `Rev ${rev} is not newer than the current head's rev ${headRev}`,
++    )
++  }
++}
++
++/**
++ * A device-signed commit whose signature does not verify, against the DID document's signing
++ * key, over the commit the host rebuilt from the writes and rev it was given.
++ */
++export class BadCommitSignatureError extends Error {
++  constructor() {
++    super(
++      'Signature does not verify over the rebuilt commit: either another key signed it, or the head moved since it was prepared',
++    )
++  }
++}
+-- 
+2.43.0
+

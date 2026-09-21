@@ -1,0 +1,47 @@
+From 73c9f4849bcae9fe8e5307a7c6cbc4706b0144c2 Mon Sep 17 00:00:00 2001
+From: forest <forest@localhost>
+Date: Mon, 21 Sep 2026 17:44:05 +0000
+Subject: [PATCH 5/5] pds: no address logs
+
+The request serializer drops the socket's remote address and port and
+every header that carries a client address before a request is logged.
+Nothing else about logging changes.
+---
+ packages/pds/src/logger.ts | 20 +++++++++++++++++++-
+ 1 file changed, 19 insertions(+), 1 deletion(-)
+
+diff --git a/packages/pds/src/logger.ts b/packages/pds/src/logger.ts
+index e726c75..61de78a 100644
+--- a/packages/pds/src/logger.ts
++++ b/packages/pds/src/logger.ts
+@@ -52,8 +52,26 @@ function accountSerializer(account: { did: string }) {
+   return { did: account.did }
+ }
+ 
++/**
++ * Headers that carry a client's network address. Dropped before a request is logged, along
++ * with the socket's own address: this host keeps no address logs.
++ */
++const ADDRESS_HEADERS = [
++  'x-forwarded-for',
++  'x-real-ip',
++  'forwarded',
++  'cf-connecting-ip',
++  'true-client-ip',
++  'x-client-ip',
++  'fly-client-ip',
++]
++
+ function reqSerializer(req: IncomingMessage) {
+-  const serialized = stdSerializers.req(req)
++  const { remoteAddress: _address, remotePort: _port, ...serialized } =
++    stdSerializers.req(req)
+   const headers = obfuscateHeaders(serialized.headers)
++  for (const name of ADDRESS_HEADERS) {
++    delete headers[name]
++  }
+   return { ...serialized, headers }
+ }
+-- 
+2.43.0
+

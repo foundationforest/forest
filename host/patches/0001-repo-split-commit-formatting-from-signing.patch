@@ -1,0 +1,224 @@
+From 8a91530e5c93221b5510b191d779d65848b95bd3 Mon Sep 17 00:00:00 2001
+From: forest <forest@localhost>
+Date: Mon, 21 Sep 2026 17:36:12 +0000
+Subject: [PATCH 1/5] repo: split commit formatting from signing
+
+formatUnsignedCommit and formatUnsignedInitCommit return everything a
+commit is before its signature; finalizeCommit attaches a signed commit
+and adds its block. formatCommit and formatInitCommit are the same two
+steps with a local keypair in between, so nothing upstream changes
+shape or bytes. A key that is not on this machine can now sign the same
+bytes and the repo rebuilds the commit around the signature.
+---
+ packages/repo/src/repo.ts  | 108 ++++++++++++++++++++++++++-----------
+ packages/repo/src/types.ts |  16 ++++++
+ 2 files changed, 94 insertions(+), 30 deletions(-)
+
+diff --git a/packages/repo/src/repo.ts b/packages/repo/src/repo.ts
+index 9f90923..0ff3590 100644
+--- a/packages/repo/src/repo.ts
++++ b/packages/repo/src/repo.ts
+@@ -14,6 +14,7 @@ import {
+   type CommitData,
+   type RecordCreateOp,
+   type RecordWriteOp,
++  type UnsignedCommitData,
+   WriteOpAction,
+   def,
+ } from './types.js'
+@@ -34,13 +35,17 @@ export class Repo extends ReadableRepo {
+     this.storage = params.storage
+   }
+ 
+-  static async formatInitCommit(
++  /**
++   * The genesis commit of a new repo, up to but not including the signature. Deterministic for
++   * the same writes and `rev`, so a signer elsewhere can be handed `unsigned` and the result
++   * recomputed here when the signature comes back.
++   */
++  static async formatUnsignedInitCommit(
+     storage: RepoStorage,
+     did: string,
+-    keypair: crypto.Keypair,
+     initialWrites: RecordCreateOp[] = [],
+     revOverride?: string,
+-  ): Promise<CommitData> {
++  ): Promise<UnsignedCommitData> {
+     const newBlocks = new BlockMap()
+ 
+     let data = await MST.create(storage)
+@@ -54,19 +59,14 @@ export class Repo extends ReadableRepo {
+     newBlocks.addMap(diff.newMstBlocks)
+ 
+     const rev = revOverride ?? TID.nextStr()
+-    const commit = await util.signCommit(
+-      {
++    return {
++      unsigned: {
+         did,
+         version: 3,
+         rev,
+         prev: null, // added for backwards compatibility with v2
+         data: dataCid,
+       },
+-      keypair,
+-    )
+-    const commitCid = await newBlocks.add(commit)
+-    return {
+-      cid: commitCid,
+       rev,
+       since: null,
+       prev: null,
+@@ -76,6 +76,54 @@ export class Repo extends ReadableRepo {
+     }
+   }
+ 
++  static async formatInitCommit(
++    storage: RepoStorage,
++    did: string,
++    keypair: crypto.Keypair,
++    initialWrites: RecordCreateOp[] = [],
++    revOverride?: string,
++  ): Promise<CommitData> {
++    const unsigned = await Repo.formatUnsignedInitCommit(
++      storage,
++      did,
++      initialWrites,
++      revOverride,
++    )
++    const commit = await util.signCommit(unsigned.unsigned, keypair)
++    return Repo.finalizeCommit(unsigned, commit)
++  }
++
++  /**
++   * Attach a signed commit to what `formatUnsignedCommit` or `formatUnsignedInitCommit`
++   * produced: encode it, add its block, and name the previous commit's block as removed when
++   * there was one. The signature itself is not checked here; `verifyCommitSig` is for that.
++   */
++  static async finalizeCommit(
++    unsigned: UnsignedCommitData,
++    commit: Commit,
++  ): Promise<CommitData> {
++    const commitBytes = encode(commit)
++    const commitCid = await cidForCbor(commitBytes)
++
++    if (unsigned.prev === null || !commitCid.equals(unsigned.prev)) {
++      unsigned.newBlocks.set(commitCid, commitBytes)
++      unsigned.relevantBlocks.set(commitCid, commitBytes)
++      if (unsigned.prev !== null) {
++        unsigned.removedCids.add(unsigned.prev)
++      }
++    }
++
++    return {
++      cid: commitCid,
++      rev: unsigned.rev,
++      since: unsigned.since,
++      prev: unsigned.prev,
++      newBlocks: unsigned.newBlocks,
++      relevantBlocks: unsigned.relevantBlocks,
++      removedCids: unsigned.removedCids,
++    }
++  }
++
+   static async createFromCommit(
+     storage: RepoStorage,
+     commit: CommitData,
+@@ -115,10 +163,15 @@ export class Repo extends ReadableRepo {
+     })
+   }
+ 
+-  async formatCommit(
++  /**
++   * The next commit, up to but not including the signature. Deterministic for the same repo
++   * state, writes and `rev`: the same inputs give the same `unsigned` bytes, which is what lets a
++   * signer elsewhere sign them and this repo rebuild the commit around the signature later.
++   */
++  async formatUnsignedCommit(
+     toWrite: RecordWriteOp | RecordWriteOp[],
+-    keypair: crypto.Keypair,
+-  ): Promise<CommitData> {
++    revOverride?: string,
++  ): Promise<UnsignedCommitData> {
+     const writes = Array.isArray(toWrite) ? toWrite : [toWrite]
+     const leaves = new BlockMap()
+ 
+@@ -158,29 +211,15 @@ export class Repo extends ReadableRepo {
+     newBlocks.addMap(addedLeaves.blocks)
+     relevantBlocks.addMap(addedLeaves.blocks)
+ 
+-    const rev = TID.nextStr(this.commit.rev)
+-    const commit = await util.signCommit(
+-      {
++    const rev = revOverride ?? TID.nextStr(this.commit.rev)
++    return {
++      unsigned: {
+         did: this.did,
+         version: 3,
+         rev,
+         prev: null, // added for backwards compatibility with v2
+         data: dataCid,
+       },
+-      keypair,
+-    )
+-
+-    const commitBytes = encode(commit)
+-    const commitCid = await cidForCbor(commitBytes)
+-
+-    if (!commitCid.equals(this.cid)) {
+-      newBlocks.set(commitCid, commitBytes)
+-      relevantBlocks.set(commitCid, commitBytes)
+-      removedCids.add(this.cid)
+-    }
+-
+-    return {
+-      cid: commitCid,
+       rev,
+       since: this.commit.rev,
+       prev: this.cid,
+@@ -190,6 +229,15 @@ export class Repo extends ReadableRepo {
+     }
+   }
+ 
++  async formatCommit(
++    toWrite: RecordWriteOp | RecordWriteOp[],
++    keypair: crypto.Keypair,
++  ): Promise<CommitData> {
++    const unsigned = await this.formatUnsignedCommit(toWrite)
++    const commit = await util.signCommit(unsigned.unsigned, keypair)
++    return Repo.finalizeCommit(unsigned, commit)
++  }
++
+   async applyCommit(commitData: CommitData): Promise<Repo> {
+     await this.storage.applyCommit(commitData)
+     return Repo.load(this.storage, commitData.cid)
+diff --git a/packages/repo/src/types.ts b/packages/repo/src/types.ts
+index 203ebb5..b4999a2 100644
+--- a/packages/repo/src/types.ts
++++ b/packages/repo/src/types.ts
+@@ -176,6 +176,22 @@ export type CommitData = {
+   removedCids: CidSet
+ }
+ 
++/**
++ * Everything a commit is before it is signed: the unsigned commit object whose DAG-CBOR bytes
++ * are what gets signed, plus the blocks the commit brings. `Repo.finalizeCommit` turns this and
++ * a signature into a `CommitData`. Kept apart from signing so a key that is not on this machine
++ * can sign the same bytes.
++ */
++export type UnsignedCommitData = {
++  unsigned: UnsignedCommit
++  rev: string
++  since: string | null
++  prev: Cid | null
++  newBlocks: BlockMap
++  relevantBlocks: BlockMap
++  removedCids: CidSet
++}
++
+ export type RepoUpdate = CommitData & {
+   ops: RecordWriteOp[]
+ }
+-- 
+2.43.0
+

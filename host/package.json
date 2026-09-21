@@ -1,0 +1,14 @@
+{
+  "name": "@forest/host",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The Forest host: Bluesky's reference PDS at a pinned commit, with its write path forked to accept commits signed on the device and to hold no signing key for any folder.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "build": "./build.sh",
+    "start": "./run.sh",
+    "test": "./test.sh",
+    "test:forest": "node --test test/*.test.ts"
+  }
+}
