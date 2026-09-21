@@ -12,7 +12,7 @@
 
 import assert from 'node:assert/strict'
 import { spawn, type ChildProcess } from 'node:child_process'
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { after, before, test } from 'node:test'
@@ -24,7 +24,6 @@ import {
   MINT_SIZE,
   TOKEN_PROGRAM_ID,
   createInitializeAccount3Instruction,
-  createInitializeMint2Instruction,
   createMintToInstruction,
   getAccount,
 } from '@solana/spl-token'
@@ -39,7 +38,8 @@ import {
 
 import {
   PROGRAM_ID,
-  REGISTRATION_FEE,
+  TREASURY_PLACEHOLDER_SEED,
+  USDC_MINT,
   addIssuerIx,
   buildRegistration,
   codeFor,
@@ -54,6 +54,7 @@ import {
   initIx,
   insertIdentityIx,
   listAddress,
+  registrationFee,
   usedCodeAddress,
 } from '../src/index.ts'
 
@@ -66,6 +67,36 @@ const artifacts = {
 const RPC = 'http://127.0.0.1:8899'
 const MARKET = 'online-tutors'
 const DID = 'did:plc:wece24yzukt4pj6hqvmb2fn4'
+/** 0.25 at USDC's six decimals. */
+const QUARTER_USDC = registrationFee(6)
+
+// The fee payer; Kora in production. Made before the validator starts, because the validator is
+// handed a USDC-shaped mint at the program's constant address whose mint authority is this key.
+const payer = Keypair.generate()
+
+/**
+ * A classic SPL Token mint account in the validator's `--account` JSON form, planted at
+ * USDC's address: six decimals, initialized, mint authority `payer`, no freeze authority.
+ */
+function usdcAccountJson(): string {
+  const data = Buffer.alloc(MINT_SIZE)
+  data.writeUInt32LE(1, 0) // mint_authority: Some
+  payer.publicKey.toBuffer().copy(data, 4)
+  data.writeBigUInt64LE(0n, 36) // supply
+  data[44] = 6 // decimals
+  data[45] = 1 // is_initialized
+  return JSON.stringify({
+    pubkey: USDC_MINT.toBase58(),
+    account: {
+      lamports: 1_461_600,
+      data: [data.toString('base64'), 'base64'],
+      owner: TOKEN_PROGRAM_ID.toBase58(),
+      executable: false,
+      rentEpoch: 0,
+      space: MINT_SIZE,
+    },
+  })
+}
 
 function missing(): string | null {
   if (!existsSync(soPath)) return `no program at ${soPath}; run \`cargo build-sbf\` in registry/program`
@@ -75,6 +106,7 @@ function missing(): string | null {
 
 let validator: ChildProcess | undefined
 let ledger: string | undefined
+let accounts: string | undefined
 let connection: Connection
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -107,9 +139,24 @@ before(
   async () => {
     if (missing()) return
     ledger = mkdtempSync(join(tmpdir(), 'forest-registry-ledger-'))
+    // Not inside the ledger directory: `--reset` empties that before `--account` files are read.
+    accounts = mkdtempSync(join(tmpdir(), 'forest-registry-accounts-'))
+    const usdcJson = join(accounts, 'usdc.json')
+    writeFileSync(usdcJson, usdcAccountJson())
     validator = spawn(
       'solana-test-validator',
-      ['--reset', '--quiet', '--ledger', ledger, '--bpf-program', PROGRAM_ID.toBase58(), soPath],
+      [
+        '--reset',
+        '--quiet',
+        '--ledger',
+        ledger,
+        '--bpf-program',
+        PROGRAM_ID.toBase58(),
+        soPath,
+        '--account',
+        USDC_MINT.toBase58(),
+        usdcJson,
+      ],
       { stdio: 'ignore' },
     )
     validator.on('error', () => {
@@ -132,6 +179,7 @@ before(
 after(() => {
   validator?.kill('SIGKILL')
   if (ledger) rmSync(ledger, { recursive: true, force: true })
+  if (accounts) rmSync(accounts, { recursive: true, force: true })
 })
 
 test('a registration goes through a real validator', { timeout: 300_000 }, async (t) => {
@@ -139,20 +187,19 @@ test('a registration goes through a real validator', { timeout: 300_000 }, async
   if (why) return t.skip(why)
   if (!validator) return t.skip('solana-test-validator did not start (is it on the PATH?)')
 
-  const payer = Keypair.generate() // the fee payer; Kora in production
-  const treasuryKey = Keypair.generate()
-  const treasury = Keypair.generate()
+  // The treasury is the program's placeholder constant, which this seed signs for.
+  const treasury = Keypair.fromSeed(TREASURY_PLACEHOLDER_SEED)
   const issuer = Keypair.generate()
   const profileWallet = Keypair.generate()
 
   const airdrop = await connection.requestAirdrop(payer.publicKey, 100 * LAMPORTS_PER_SOL)
   await confirm(airdrop)
 
-  // A dollar stablecoin with six decimals, and the two accounts the fee moves between.
-  const usdc = Keypair.generate()
+  // The mint at USDC's address was planted when the validator started. The two accounts the fee
+  // moves between are made here.
+  const usdc = USDC_MINT
   const treasuryTokens = Keypair.generate()
   const profileTokens = Keypair.generate()
-  const mintRent = await connection.getMinimumBalanceForRentExemption(MINT_SIZE)
   const accountRent = await connection.getMinimumBalanceForRentExemption(ACCOUNT_SIZE)
   const newAccount = (key: PublicKey, space: number, lamports: number) =>
     SystemProgram.createAccount({
@@ -164,41 +211,26 @@ test('a registration goes through a real validator', { timeout: 300_000 }, async
     })
   await send(
     [
-      newAccount(usdc.publicKey, MINT_SIZE, mintRent),
-      createInitializeMint2Instruction(usdc.publicKey, 6, payer.publicKey, null),
       newAccount(treasuryTokens.publicKey, ACCOUNT_SIZE, accountRent),
-      createInitializeAccount3Instruction(treasuryTokens.publicKey, usdc.publicKey, treasury.publicKey),
+      createInitializeAccount3Instruction(treasuryTokens.publicKey, usdc, treasury.publicKey),
       newAccount(profileTokens.publicKey, ACCOUNT_SIZE, accountRent),
-      createInitializeAccount3Instruction(profileTokens.publicKey, usdc.publicKey, profileWallet.publicKey),
-      createMintToInstruction(usdc.publicKey, profileTokens.publicKey, payer.publicKey, 1_000_000),
+      createInitializeAccount3Instruction(profileTokens.publicKey, usdc, profileWallet.publicKey),
+      createMintToInstruction(usdc, profileTokens.publicKey, payer.publicKey, 1_000_000),
     ],
-    [payer, usdc, treasuryTokens, profileTokens],
+    [payer, treasuryTokens, profileTokens],
   )
 
+  // init carries nothing that chooses anything, and only the payer signs it.
+  await send([initIx({ payer: payer.publicKey })], [payer])
   await send(
-    [
-      initIx({
-        payer: payer.publicKey,
-        treasuryKey: treasuryKey.publicKey,
-        treasury: treasury.publicKey,
-        usdcMint: usdc.publicKey,
-      }),
-    ],
-    [payer, treasuryKey],
-  )
-  await send(
-    [addIssuerIx({ treasuryKey: treasuryKey.publicKey, listIndex: 0, issuer: issuer.publicKey })],
-    [payer, treasuryKey],
+    [addIssuerIx({ treasury: treasury.publicKey, listIndex: 0, issuer: issuer.publicKey })],
+    [payer, treasury],
   )
 
   const config = decodeConfig(new Uint8Array((await connection.getAccountInfo(configAddress()))!.data))
   assert.equal(config.treasury.toBase58(), treasury.publicKey.toBase58())
-  assert.equal(config.treasuryKey.toBase58(), treasuryKey.publicKey.toBase58())
-  assert.equal(config.tokenDecimals, 6)
-  assert.deepEqual(
-    config.mints.map((m) => m.toBase58()),
-    [usdc.publicKey.toBase58()],
-  )
+  assert.deepEqual(config.mints.map((m) => m.toBase58()), [usdc.toBase58()])
+  assert.deepEqual(config.decimals, [6], "USDC's decimals, read off the mint at init")
   assert.equal(config.listCount, 1)
 
   // The issuer inserts the list, commitments only. Alice's secret is the one keys/ pins.
@@ -280,8 +312,8 @@ test('a registration goes through a real validator', { timeout: 300_000 }, async
   const tree = decodeCodeTree(new Uint8Array((await connection.getAccountInfo(codeTreeAddress()))!.data))
   assert.equal(tree.count, 1n)
 
-  assert.equal((await getAccount(connection, treasuryTokens.publicKey)).amount, REGISTRATION_FEE)
-  assert.equal((await getAccount(connection, profileTokens.publicKey)).amount, 1_000_000n - REGISTRATION_FEE)
+  assert.equal((await getAccount(connection, treasuryTokens.publicKey)).amount, QUARTER_USDC)
+  assert.equal((await getAccount(connection, profileTokens.publicKey)).amount, 1_000_000n - QUARTER_USDC)
 
   // The same badge a second time cannot be bought.
   const again = await build()
@@ -297,6 +329,6 @@ test('a registration goes through a real validator', { timeout: 300_000 }, async
     /already in use|custom program error|failed/i,
     'one badge per market per human',
   )
-  assert.equal((await getAccount(connection, treasuryTokens.publicKey)).amount, REGISTRATION_FEE)
+  assert.equal((await getAccount(connection, treasuryTokens.publicKey)).amount, QUARTER_USDC)
   console.log('the same badge a second time: refused, and the treasury still holds exactly one fee')
 })

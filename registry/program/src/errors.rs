@@ -36,8 +36,12 @@ pub enum RegistryError {
     MintMismatch,
     #[msg("the fee would move from an account to itself")]
     FeeGoesNowhere,
-    #[msg("an accepted mint must have exactly the decimals the config fixes")]
+    #[msg("0.25 of this mint is not a whole number of base units that fits: it needs 2 to 19 decimals")]
     WrongDecimals,
+    #[msg("the treasury cannot be the zero key")]
+    TreasuryEmpty,
+    #[msg("the new treasury is the current one")]
+    TreasuryUnchanged,
     #[msg("the list index does not match the list account")]
     WrongList,
     #[msg("the account passed is not the registry account the target names")]

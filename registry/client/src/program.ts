@@ -19,9 +19,27 @@ import type { CompressedProof } from './compress.ts'
 export const PROGRAM_ID = new PublicKey('FoRPzGfMyWjK8uLjMoZfae2yevnviyCsGsHM7AwBwK8B')
 export const TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA')
 
-/** 0.25 in base units, at the six decimals every accepted mint must carry. */
-export const REGISTRATION_FEE = 250_000n
-export const TOKEN_DECIMALS = 6
+/**
+ * The treasury the program starts with. `init` writes this constant whoever calls it, and
+ * `set_treasury` moves it later. PLACEHOLDER: derived from the public seed below so tests can
+ * sign for it; replaced with the charter's treasury address before the first deploy.
+ */
+export const TREASURY_PLACEHOLDER_SEED = new TextEncoder().encode('REPLACE-BEFORE-DEPLOY-treasury-0')
+export const TREASURY = new PublicKey('F35kGoXPCdZLdanwTGuShYXxAkmkpHP9LWgV7dNvKU5s')
+/** USDC, `mints[0]` forever. The program names the mainnet address; a devnet build names the other. */
+export const USDC_MINT = new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v')
+export const USDC_MINT_DEVNET = new PublicKey('4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU')
+
+/**
+ * 0.25 in a mint's own base units: 25 × 10^(decimals − 2). One rule, 25 cents, always. The
+ * program refuses a mint outside 2..=19 decimals, where 0.25 is not a whole number that fits.
+ */
+export function registrationFee(decimals: number): bigint {
+  if (!Number.isInteger(decimals) || decimals < 2 || decimals > 19) {
+    throw new RangeError(`0.25 is not a whole number of base units at ${decimals} decimals`)
+  }
+  return 25n * 10n ** BigInt(decimals - 2)
+}
 /** The circuit's depth, sealed with the verification key. */
 export const MAX_DEPTH = 32
 /** How many recent roots a list keeps. */
@@ -92,11 +110,13 @@ export function usedCodeAddress(code: bigint | Uint8Array, programId: PublicKey 
 const ro = (pubkey: PublicKey, isSigner = false): AccountMeta => ({ pubkey, isSigner, isWritable: false })
 const rw = (pubkey: PublicKey, isSigner = false): AccountMeta => ({ pubkey, isSigner, isWritable: true })
 
+/**
+ * `init` carries nothing that chooses anything: no treasury argument, no treasury signer. The
+ * mint account is the one at the program's constant (`usdcMint` only exists for a devnet build).
+ */
 export function initIx(args: {
   payer: PublicKey
-  treasuryKey: PublicKey
-  treasury: PublicKey
-  usdcMint: PublicKey
+  usdcMint?: PublicKey
   programId?: PublicKey
 }): TransactionInstruction {
   const programId = args.programId ?? PROGRAM_ID
@@ -107,17 +127,30 @@ export function initIx(args: {
       rw(listAddress(0, programId)),
       rw(codeTreeAddress(programId)),
       rw(args.payer, true),
-      ro(args.treasuryKey, true),
-      ro(args.usdcMint),
+      ro(args.usdcMint ?? USDC_MINT),
       ro(SystemProgram.programId),
     ],
-    data: concat([discriminator('global', 'init'), args.treasury.toBytes()]),
+    data: concat([discriminator('global', 'init')]),
+  })
+}
+
+/** The current treasury signs; everything the treasury is moves to `newTreasury`. No undo. */
+export function setTreasuryIx(args: {
+  treasury: PublicKey
+  newTreasury: PublicKey
+  programId?: PublicKey
+}): TransactionInstruction {
+  const programId = args.programId ?? PROGRAM_ID
+  return new TransactionInstruction({
+    programId,
+    keys: [rw(configAddress(programId)), ro(args.treasury, true)],
+    data: concat([discriminator('global', 'set_treasury'), args.newTreasury.toBytes()]),
   })
 }
 
 export function openListIx(args: {
   payer: PublicKey
-  treasuryKey: PublicKey
+  treasury: PublicKey
   newIndex: number
   programId?: PublicKey
 }): TransactionInstruction {
@@ -128,7 +161,7 @@ export function openListIx(args: {
       rw(configAddress(programId)),
       rw(listAddress(args.newIndex, programId)),
       rw(args.payer, true),
-      ro(args.treasuryKey, true),
+      ro(args.treasury, true),
       ro(SystemProgram.programId),
     ],
     data: concat([discriminator('global', 'open_list')]),
@@ -137,7 +170,7 @@ export function openListIx(args: {
 
 function issuerIx(
   name: 'add_issuer' | 'remove_issuer',
-  args: { treasuryKey: PublicKey; listIndex: number; issuer: PublicKey; programId?: PublicKey },
+  args: { treasury: PublicKey; listIndex: number; issuer: PublicKey; programId?: PublicKey },
 ): TransactionInstruction {
   const programId = args.programId ?? PROGRAM_ID
   return new TransactionInstruction({
@@ -145,7 +178,7 @@ function issuerIx(
     keys: [
       ro(configAddress(programId)),
       rw(listAddress(args.listIndex, programId)),
-      ro(args.treasuryKey, true),
+      ro(args.treasury, true),
     ],
     data: concat([discriminator('global', name), u32le(args.listIndex), args.issuer.toBytes()]),
   })
@@ -175,14 +208,14 @@ export function insertIdentityIx(args: {
 }
 
 export function addTokenIx(args: {
-  treasuryKey: PublicKey
+  treasury: PublicKey
   mint: PublicKey
   programId?: PublicKey
 }): TransactionInstruction {
   const programId = args.programId ?? PROGRAM_ID
   return new TransactionInstruction({
     programId,
-    keys: [rw(configAddress(programId)), ro(args.treasuryKey, true), ro(args.mint)],
+    keys: [rw(configAddress(programId)), ro(args.treasury, true), ro(args.mint)],
     data: concat([discriminator('global', 'add_token')]),
   })
 }
@@ -289,25 +322,25 @@ export function registerIx(args: {
 
 export type ConfigAccount = {
   treasury: PublicKey
-  treasuryKey: PublicKey
   mints: PublicKey[]
-  tokenDecimals: number
+  /** One per accepted mint, at the same index: the decimals read off the mint when it was accepted. */
+  decimals: number[]
   listCount: number
   bump: number
 }
 
+/** treasury 0..32, mints 32..544, decimals 544..560, mint_count 560, list_count 561..565, bump 565. */
 export function decodeConfig(data: Uint8Array): ConfigAccount {
   const b = data.subarray(8)
-  const mintCount = b[576]
+  const mintCount = b[560]
   const mints: PublicKey[] = []
-  for (let i = 0; i < mintCount; i++) mints.push(new PublicKey(b.subarray(64 + i * 32, 96 + i * 32)))
+  for (let i = 0; i < mintCount; i++) mints.push(new PublicKey(b.subarray(32 + i * 32, 64 + i * 32)))
   return {
     treasury: new PublicKey(b.subarray(0, 32)),
-    treasuryKey: new PublicKey(b.subarray(32, 64)),
     mints,
-    tokenDecimals: b[577],
-    listCount: readU32le(b, 578),
-    bump: b[582],
+    decimals: Array.from(b.subarray(544, 544 + mintCount)),
+    listCount: readU32le(b, 561),
+    bump: b[565],
   }
 }
 

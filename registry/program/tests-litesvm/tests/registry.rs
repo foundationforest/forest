@@ -15,6 +15,9 @@ use solana_transaction::Transaction;
 const TUTORS: &str = "online-tutors";
 const CLEANING: &str = "house-cleaning";
 
+/// 0.25 at USDC's six decimals. The rule is `registration_fee`; this is what it comes to.
+const QUARTER_USDC: u64 = 250_000;
+
 /// A registry with list 0 filled and Alice's and Bob's wallets funded.
 fn ready() -> (Harness, Fixtures) {
     let f = Fixtures::load();
@@ -89,7 +92,7 @@ fn two_humans_register_in_two_markets_each() {
         assert_eq!(account.data[..8], discriminator("account", "UsedCode"));
 
         // The wallet paid exactly 0.25 and nothing more.
-        assert_eq!(token_amount(&h.account(&tokens).data), 1_000_000 - REGISTRATION_FEE);
+        assert_eq!(token_amount(&h.account(&tokens).data), 1_000_000 - QUARTER_USDC);
         codes.push(p.code_bytes());
     }
 
@@ -104,8 +107,8 @@ fn two_humans_register_in_two_markets_each() {
     assert_eq!(tree.root, lean_imt_root(&codes), "the code tree must match a full rebuild");
 
     // The treasury has four quarters.
-    assert_eq!(token_amount(&h.account(&h.treasury_tokens).data), 4 * REGISTRATION_FEE);
-    println!("four registrations: treasury holds {} base units", 4 * REGISTRATION_FEE);
+    assert_eq!(token_amount(&h.account(&h.treasury_tokens).data), 4 * QUARTER_USDC);
+    println!("four registrations: treasury holds {} base units", 4 * QUARTER_USDC);
 }
 
 #[test]
@@ -245,7 +248,7 @@ fn too_little_paid_writes_nothing() {
     let p = f.proof("alice-tutors");
     // The fee is not a number the caller chooses: the program moves 0.25 or the whole thing
     // reverts. A wallet one base unit short is the only way to pay too little.
-    let (wallet, tokens) = h.wallet_with(h.usdc, REGISTRATION_FEE - 1);
+    let (wallet, tokens) = h.wallet_with(h.usdc, QUARTER_USDC - 1);
     let err = register(&mut h, p, TUTORS, 0, &wallet, tokens).expect_err("must be rejected");
     assert!(err.contains("insufficient funds"), "{err}");
     assert!(h.svm.get_account(&used_code_address(&p.code_bytes())).is_none(), "no code account");
@@ -277,33 +280,39 @@ fn an_unauthorised_key_cannot_insert() {
 }
 
 #[test]
-fn only_the_treasury_key_changes_settings() {
+fn only_the_treasury_changes_settings() {
     let (mut h, _f) = ready();
     let stranger = Keypair::new();
     let payer = h.payer.pubkey();
+    let issuer = h.issuer.pubkey();
 
     for (what, ix) in [
         ("open_list", open_list_ix(payer, stranger.pubkey(), 1)),
         ("add_issuer", issuer_ix("add_issuer", stranger.pubkey(), 0, stranger.pubkey())),
+        ("remove_issuer", issuer_ix("remove_issuer", stranger.pubkey(), 0, issuer)),
         ("add_token", add_token_ix(stranger.pubkey(), h.usdc)),
+        ("set_treasury", set_treasury_ix(stranger.pubkey(), stranger.pubkey())),
     ] {
         let err = h.send_signed(&[ix], &[&stranger]).expect_err("must be rejected");
         assert!(err.contains("ConstraintHasOne") || err.contains("has one"), "{what}: {err}");
     }
-    println!("a stranger cannot open a list, add an issuer or add a token");
+    assert_eq!(h.config().treasury, TREASURY, "and the treasury is still the constant");
+    println!("a stranger cannot open a list, add or remove an issuer, add a token, or take the treasury");
 }
 
 #[test]
-fn add_token_takes_only_the_shape_the_config_fixes() {
+fn add_token_reads_the_mints_decimals_and_refuses_what_cannot_hold_a_quarter() {
     let (mut h, _f) = ready();
-    let tk = h.treasury_key.pubkey();
-    assert_eq!(h.config().token_decimals, 6);
+    let tk = h.treasury;
+    assert_eq!(h.config().decimals, vec![6], "USDC's decimals were read off the mint at init");
 
-    // Nine decimals would make 250,000 base units mean 0.00025, not 0.25.
-    let nine = Address::new_unique();
-    h.svm.set_account(nine, spl_mint_account(9)).unwrap();
-    let err = h.send(&[add_token_ix(tk, nine)], &[Harness::PAYER, Harness::TREASURY]).expect_err("must be rejected");
-    assert!(err.contains("exactly the decimals"), "{err}");
+    // One decimal cannot express 0.25 as a whole number of base units; twenty overflows a u64.
+    for decimals in [0u8, 1, 20, 255] {
+        let mint = Address::new_unique();
+        h.svm.set_account(mint, spl_mint_account(decimals)).unwrap();
+        let err = h.send(&[add_token_ix(tk, mint)], &[Harness::PAYER, Harness::TREASURY]).expect_err("must be rejected");
+        assert!(err.contains("2 to 19 decimals"), "{decimals}: {err}");
+    }
 
     // Not an SPL Token mint at all.
     let impostor = Address::new_unique();
@@ -322,19 +331,118 @@ fn add_token_takes_only_the_shape_the_config_fixes() {
     let err = h.send(&[add_token_ix(tk, impostor)], &[Harness::PAYER, Harness::TREASURY]).expect_err("must be rejected");
     assert!(err.contains("AccountOwnedByWrongProgram"), "{err}");
 
-    // A second dollar stablecoin with the right shape is accepted, and USDC stays first.
+    // Two more dollar tokens, one counting in six decimals and one in eight, are both accepted,
+    // each with its own decimals recorded next to it, and USDC stays first.
     let usdt = Address::new_unique();
     h.svm.set_account(usdt, spl_mint_account(6)).unwrap();
+    let eight = Address::new_unique();
+    h.svm.set_account(eight, spl_mint_account(8)).unwrap();
     h.send(&[add_token_ix(tk, usdt)], &[Harness::PAYER, Harness::TREASURY]).expect("add_token");
+    h.send(&[add_token_ix(tk, eight)], &[Harness::PAYER, Harness::TREASURY]).expect("add_token");
     let config = h.config();
-    assert_eq!(config.mints.len(), 2);
-    assert_eq!(config.mints[0], h.usdc, "USDC is mints[0] forever; nothing removes a mint");
-    assert_eq!(config.mints[1], usdt);
+    assert_eq!(config.mints, vec![h.usdc, usdt, eight], "USDC is mints[0] forever; nothing removes a mint");
+    assert_eq!(config.decimals, vec![6, 6, 8]);
 
     // And the same one twice is refused.
     let err = h.send(&[add_token_ix(tk, usdt)], &[Harness::PAYER, Harness::TREASURY]).expect_err("must be rejected");
     assert!(err.contains("already accepts"), "{err}");
-    println!("add_token: wrong decimals, wrong owner and a repeat all refused");
+    println!("add_token: decimals outside 2..=19, wrong owner and a repeat all refused; six and eight both recorded");
+}
+
+#[test]
+fn a_six_and_an_eight_decimal_mint_both_pay_exactly_25_cents_in_their_own_units() {
+    let (mut h, f) = ready();
+    let tk = h.treasury;
+    let treasury = h.treasury;
+
+    // A dollar token that counts in eight decimals, accepted by the treasury.
+    let eight = Address::new_unique();
+    h.svm.set_account(eight, spl_mint_account(8)).unwrap();
+    h.send(&[add_token_ix(tk, eight)], &[Harness::PAYER, Harness::TREASURY]).expect("add_token");
+    let treasury_eight = h.token_account_for(eight, treasury);
+
+    // Alice pays in USDC: 250,000 base units.
+    let alice = f.proof("alice-tutors");
+    let (w6, t6) = h.wallet_with(h.usdc, 1_000_000);
+    register(&mut h, alice, TUTORS, 0, &w6, t6).expect("six decimals");
+    assert_eq!(registration_fee(6), Some(QUARTER_USDC));
+    assert_eq!(token_amount(&h.account(&t6).data), 1_000_000 - QUARTER_USDC);
+    assert_eq!(token_amount(&h.account(&h.treasury_tokens).data), QUARTER_USDC);
+
+    // Bob pays in the eight-decimal token: 25,000,000 base units, which is the same 0.25.
+    let bob = f.proof("bob-tutors");
+    let (w8, t8) = h.wallet_with(eight, 100_000_000);
+    let accounts = RegisterAccounts {
+        payer: h.payer.pubkey(),
+        profile_wallet: w8.pubkey(),
+        profile_tokens: t8,
+        treasury_tokens: treasury_eight,
+    };
+    let args = RegisterArgs {
+        market: TUTORS,
+        did: &bob.did,
+        list_index: 0,
+        root: bob.root_bytes(),
+        code: bob.code_bytes(),
+        proof_a: bob.a_bytes(),
+        proof_b: bob.b_bytes(),
+        proof_c: bob.c_bytes(),
+    };
+    h.send_signed(&[register_ix(&args, &accounts)], &[&w8]).expect("eight decimals");
+    assert_eq!(registration_fee(8), Some(25_000_000));
+    assert_eq!(token_amount(&h.account(&t8).data), 100_000_000 - 25_000_000);
+    assert_eq!(token_amount(&h.account(&treasury_eight).data), 25_000_000);
+
+    // A wallet holding 249,999 of the six-decimal kind, or 24,999,999 of the eight, is one base
+    // unit short of a quarter in its own units, and pays nothing.
+    let alice_cleaning = f.proof("alice-cleaning");
+    let (short8, short8_tokens) = h.wallet_with(eight, 25_000_000 - 1);
+    let accounts = RegisterAccounts {
+        payer: h.payer.pubkey(),
+        profile_wallet: short8.pubkey(),
+        profile_tokens: short8_tokens,
+        treasury_tokens: treasury_eight,
+    };
+    let args = RegisterArgs {
+        market: CLEANING,
+        did: &alice_cleaning.did,
+        list_index: 0,
+        root: alice_cleaning.root_bytes(),
+        code: alice_cleaning.code_bytes(),
+        proof_a: alice_cleaning.a_bytes(),
+        proof_b: alice_cleaning.b_bytes(),
+        proof_c: alice_cleaning.c_bytes(),
+    };
+    let err = h.send_signed(&[register_ix(&args, &accounts)], &[&short8]).expect_err("one unit short");
+    assert!(err.contains("insufficient funds"), "{err}");
+    assert_eq!(token_amount(&h.account(&short8_tokens).data), 25_000_000 - 1, "nothing taken");
+
+    // What the program does not do: read the mint again at `register`. A classic SPL Token mint
+    // has no instruction that changes its decimals and none that closes it, so the byte recorded
+    // at `add_token` is the byte the mint holds, forever. LiteSVM can rewrite it directly, which
+    // no transaction can; the fee is still the recorded 0.25.
+    h.svm.set_account(eight, spl_mint_account(2)).unwrap();
+    let (w8b, t8b) = h.wallet_with(eight, 100_000_000);
+    let accounts = RegisterAccounts {
+        payer: h.payer.pubkey(),
+        profile_wallet: w8b.pubkey(),
+        profile_tokens: t8b,
+        treasury_tokens: treasury_eight,
+    };
+    let bob_cleaning = f.proof("bob-cleaning");
+    let args = RegisterArgs {
+        market: CLEANING,
+        did: &bob_cleaning.did,
+        list_index: 0,
+        root: bob_cleaning.root_bytes(),
+        code: bob_cleaning.code_bytes(),
+        proof_a: bob_cleaning.a_bytes(),
+        proof_b: bob_cleaning.b_bytes(),
+        proof_c: bob_cleaning.c_bytes(),
+    };
+    h.send_signed(&[register_ix(&args, &accounts)], &[&w8b]).expect("register");
+    assert_eq!(token_amount(&h.account(&t8b).data), 100_000_000 - 25_000_000);
+    println!("six decimals: 250,000 base units; eight decimals: 25,000,000 base units; both 0.25");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -553,23 +661,128 @@ fn the_treasury_cannot_register_for_free() {
 #[test]
 fn init_holds_the_first_mint_to_the_same_rule_as_every_later_one() {
     let mut h = Harness::bare();
-    let nine = Address::new_unique();
-    h.svm.set_account(nine, spl_mint_account(9)).unwrap();
-    let (payer, tk, treasury) = (h.payer.pubkey(), h.treasury_key.pubkey(), h.treasury);
-
-    let err = h
-        .send(&[init_ix(payer, tk, treasury, nine)], &[Harness::PAYER, Harness::TREASURY])
-        .expect_err("must be rejected");
-    assert!(err.contains("exactly the decimals"), "{err}");
-
+    let payer = h.payer.pubkey();
     let usdc = h.usdc;
-    h.send(&[init_ix(payer, tk, treasury, usdc)], &[Harness::PAYER, Harness::TREASURY]).expect("init");
+
+    // The mint must be the one at the program's constant. Any other address is refused before
+    // anything is read from it.
+    let other = Address::new_unique();
+    h.svm.set_account(other, spl_mint_account(6)).unwrap();
+    let err = h.send(&[init_ix(payer, other)], &[Harness::PAYER]).expect_err("must be rejected");
+    assert!(err.contains("ConstraintAddress") || err.contains("address"), "{err}");
+
+    // If the account at that address could not hold a quarter, init would refuse it too, the way
+    // add_token refuses every later mint. (USDC has six; this rewrites the planted account.)
+    h.svm.set_account(usdc, spl_mint_account(1)).unwrap();
+    let err = h.send(&[init_ix(payer, usdc)], &[Harness::PAYER]).expect_err("must be rejected");
+    assert!(err.contains("2 to 19 decimals"), "{err}");
+
+    h.svm.set_account(usdc, spl_mint_account(6)).unwrap();
+    h.send(&[init_ix(payer, usdc)], &[Harness::PAYER]).expect("init");
     let config = h.config();
-    assert_eq!(config.mints, vec![usdc]);
-    assert_eq!(config.treasury, treasury);
-    assert_eq!(config.treasury_key, tk);
+    assert_eq!(config.mints, vec![USDC_MINT]);
+    assert_eq!(config.decimals, vec![6]);
+    assert_eq!(config.treasury, TREASURY);
     assert_eq!(config.list_count, 1, "the first list is opened at init");
     assert_eq!(h.list(0).leaf_count, 0);
     assert_eq!(h.code_tree().count, 0);
-    println!("init: a mint add_token would refuse is refused here too");
+    println!("init: the wrong mint address, and a mint add_token would refuse, both refused");
+}
+
+#[test]
+fn init_runs_once_and_writes_only_the_constants() {
+    let mut h = Harness::bare();
+    let usdc = h.usdc;
+
+    // A stranger gets there first. They pay the rent and get nothing for it: the treasury is the
+    // program's constant, not theirs, and there is no argument or signer through which they could
+    // have named anything else.
+    let stranger = Keypair::new();
+    h.svm.airdrop(&stranger.pubkey(), 1_000_000_000).unwrap();
+    let ix = init_ix(stranger.pubkey(), usdc);
+    h.svm.expire_blockhash();
+    let msg = Message::new(&[ix], Some(&stranger.pubkey()));
+    let tx = Transaction::new(&[&stranger], msg, h.svm.latest_blockhash());
+    h.send_tx(tx).expect("anyone may init");
+    let config = h.config();
+    assert_eq!(config.treasury, TREASURY);
+    assert_ne!(config.treasury, stranger.pubkey());
+    assert_eq!(config.mints, vec![USDC_MINT]);
+
+    // And the stranger can turn no dial.
+    let err = h
+        .send_signed(&[add_token_ix(stranger.pubkey(), usdc)], &[&stranger])
+        .expect_err("must be rejected");
+    assert!(err.contains("ConstraintHasOne") || err.contains("has one"), "{err}");
+
+    // A second init, from anyone, fails: the config account already exists.
+    let payer = h.payer.pubkey();
+    let err = h.send(&[init_ix(payer, usdc)], &[Harness::PAYER]).expect_err("must be rejected");
+    assert!(err.contains("already in use"), "{err}");
+    assert_eq!(h.config().treasury, TREASURY, "and nothing changed");
+    println!("init by a stranger writes the constants; a second init: {}", err.lines().next().unwrap());
+}
+
+#[test]
+fn the_treasury_moves_and_the_old_key_can_do_nothing() {
+    let (mut h, f) = ready();
+    let old = h.treasury;
+    let old_key = h.treasury_signer();
+    let payer = h.payer.pubkey();
+    let issuer = h.issuer.pubkey();
+    let usdc = h.usdc;
+
+    // Not to the zero key, and not to itself.
+    let err = h
+        .send(&[set_treasury_ix(old, Address::default())], &[Harness::PAYER, Harness::TREASURY])
+        .expect_err("must be rejected");
+    assert!(err.contains("zero key"), "{err}");
+    let err = h
+        .send(&[set_treasury_ix(old, old)], &[Harness::PAYER, Harness::TREASURY])
+        .expect_err("must be rejected");
+    assert!(err.contains("is the current one"), "{err}");
+
+    // The handover. A plain key here; a multisig's vault address works the same way.
+    let multisig = Keypair::new();
+    h.svm.airdrop(&multisig.pubkey(), 1_000_000).unwrap();
+    h.send(&[set_treasury_ix(old, multisig.pubkey())], &[Harness::PAYER, Harness::TREASURY]).expect("set_treasury");
+    assert_eq!(h.config().treasury, multisig.pubkey());
+
+    // The old key can turn no dial, including handing the treasury back to itself.
+    for (what, ix) in [
+        ("open_list", open_list_ix(payer, old, 1)),
+        ("add_issuer", issuer_ix("add_issuer", old, 0, old)),
+        ("remove_issuer", issuer_ix("remove_issuer", old, 0, issuer)),
+        ("add_token", add_token_ix(old, usdc)),
+        ("set_treasury", set_treasury_ix(old, old)),
+    ] {
+        let err = h.send_signed(&[ix], &[&old_key]).expect_err("must be rejected");
+        assert!(err.contains("ConstraintHasOne") || err.contains("has one"), "{what}: {err}");
+    }
+
+    // Nor be paid: a token account the old key owns is refused as the fee's destination, and
+    // one the new treasury owns is where the quarter goes.
+    let p = f.proof("alice-tutors");
+    let (wallet, tokens) = h.wallet_with(usdc, 1_000_000);
+    let err = register(&mut h, p, TUTORS, 0, &wallet, tokens).expect_err("must be rejected");
+    assert!(err.contains("ConstraintTokenOwner") || err.contains("token owner"), "{err}");
+    assert_eq!(token_amount(&h.account(&tokens).data), 1_000_000, "nothing moved");
+    h.treasury_tokens = h.token_account_for(usdc, multisig.pubkey());
+    register(&mut h, p, TUTORS, 0, &wallet, tokens).expect("paid to the new treasury");
+    assert_eq!(token_amount(&h.account(&h.treasury_tokens).data), QUARTER_USDC);
+
+    // Nor receive swept rent: the sweep's destination is whatever the config says now.
+    h.svm.set_sysvar(&rent_at(RENT_FINAL));
+    let target = SweepTarget::Code(p.code_bytes());
+    let err = h.send(&[sweep_rent_ix(&target, old)], &[Harness::PAYER]).expect_err("must be rejected");
+    assert!(err.contains("ConstraintAddress") || err.contains("address"), "{err}");
+    h.send(&[sweep_rent_ix(&target, multisig.pubkey())], &[Harness::PAYER]).expect("swept to the new treasury");
+
+    // The new treasury holds every dial, the handover included.
+    let err = h.send_signed(&[add_token_ix(multisig.pubkey(), usdc)], &[&multisig]).expect_err("USDC is already accepted");
+    assert!(err.contains("already accepts"), "past has_one, refused on the merits: {err}");
+    h.send_signed(&[open_list_ix(payer, multisig.pubkey(), 1)], &[&multisig]).expect("the new treasury opens a list");
+    h.send_signed(&[set_treasury_ix(multisig.pubkey(), old)], &[&multisig]).expect("and can hand over again");
+    assert_eq!(h.config().treasury, old);
+    println!("treasury handed over: the old key signs nothing, is paid nothing, and is swept nothing");
 }
