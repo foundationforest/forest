@@ -401,6 +401,43 @@ test('events decode from the log, in order', () => {
   assert.throws(() => decodeEvent(new Uint8Array([...closed, 0])), /trailing/)
 })
 
+test('an event only counts when the escrow program itself wrote it', () => {
+  // Any program can write a `Program data:` line with an escrow event's exact bytes: a receipt
+  // for a deal that never happened, at any address. The runtime's own invoke and success lines
+  // say which program wrote each line, and no program can forge those.
+  const escrow = escrowAddress(buyer, 7n)
+  const closed = Buffer.alloc(8 + 32 + 1 + 8 * 4 + 32 + 8)
+  Buffer.from('321f579b87dcc3ef', 'hex').copy(closed, 0)
+  escrow.toBuffer().copy(closed, 8)
+  closed[40] = 0 // Approved
+  closed.writeBigUInt64LE(10_000_000_000n, 41)
+  closed.writeBigUInt64LE(10_000_000_000n, 49)
+  closed.writeBigUInt64LE(10_000_000_000n, 57)
+  payer.toBuffer().copy(closed, 73)
+  const line = `Program data: ${closed.toString('base64')}`
+  const forger = 'Forger1111111111111111111111111111111111111'
+  const token = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA'
+  const id = PROGRAM_ID.toBase58()
+
+  // Written by another program, alone or around a real escrow instruction.
+  assert.deepEqual(decodeEvents([`Program ${forger} invoke [1]`, line, `Program ${forger} success`]), [])
+  assert.deepEqual(
+    decodeEvents([`Program ${id} invoke [1]`, `Program ${id} success`, `Program ${forger} invoke [1]`, line, `Program ${forger} success`]),
+    [],
+  )
+  // Written by a program the escrow called, while the escrow waits.
+  assert.deepEqual(decodeEvents([`Program ${id} invoke [1]`, `Program ${token} invoke [2]`, line, `Program ${token} success`, `Program ${id} success`]), [])
+  // A line with no program open at all.
+  assert.deepEqual(decodeEvents([line]), [])
+  // The escrow's own, after its call into the token program returned, counts; so does the
+  // escrow's own when another program called it.
+  assert.equal(decodeEvents([`Program ${id} invoke [1]`, `Program ${token} invoke [2]`, `Program ${token} success`, line, `Program ${id} success`]).length, 1)
+  assert.equal(decodeEvents([`Program ${forger} invoke [1]`, `Program ${id} invoke [2]`, line, `Program ${id} success`, `Program ${forger} success`]).length, 1)
+  // Another deployment of the same code, at another address, is another program.
+  assert.equal(decodeEvents([`Program ${id} invoke [1]`, line, `Program ${id} success`], PROGRAM_ID).length, 1)
+  assert.deepEqual(decodeEvents([`Program ${id} invoke [1]`, line, `Program ${id} success`], new PublicKey(token)), [])
+})
+
 test('terms come from the market file\'s defaults and the parties\' choices', () => {
   const market: MarketDefaults = {
     silenceDays: 7,
@@ -436,6 +473,30 @@ test('terms come from the market file\'s defaults and the parties\' choices', ()
   assert.ok(noSteps.id >= 0n)
   assert.deepEqual(stepFromMarket({ hours: 1.5, refundPercent: 12.5 }), { offset: 5_400n, refundBps: 1_250 })
   assert.throws(() => stepFromMarket({ hours: 1, refundPercent: 101 }), /0 to 100/)
+})
+
+test('finding: termsFor builds terms the program accepts but no buyer meant', () => {
+  // Adversarial review 1. Each of these passes termsFor and validateTerms, and create accepts it.
+  // Pinned so a change that refuses or warns shows up here.
+  const market: MarketDefaults = {
+    silenceDays: 7,
+    arbiterAllowed: true,
+    cancellationSteps: [{ hours: 240, refundPercent: 100 }],
+    tokens: [{ symbol: 'USDC', mint: mint.toBase58(), chain: 'solana' }],
+  }
+  // A number is read as unix seconds, so `Date.now()` (milliseconds) puts the service time some
+  // 55,000 years out: silence never comes, and the buyer can cancel for a full refund until then.
+  const ms = termsFor(market, { seller, amount: 1n, mint, serviceTime: 1_800_000_000_000 })
+  assert.equal(ms.serviceTime, 1_800_000_000_000n)
+  validateTerms(ms, buyer)
+  // A market whose refund step outlasts its silence: from day seven both the seller's release and
+  // the buyer's full cancellation are valid, and whichever lands first wins.
+  const race = termsFor(market, { seller, amount: 1n, mint })
+  assert.ok(race.steps[0].offset > BigInt(race.silenceDays) * 86_400n)
+  validateTerms(race, buyer)
+  // A service time already past: funding that arrives after silence releases in the same second.
+  const past = termsFor(market, { seller, amount: 1n, mint, serviceTime: new Date(0 + 1000) })
+  validateTerms(past, buyer)
 })
 
 test('the clock start, silence and each deadline, as the program will read them', () => {
@@ -497,7 +558,11 @@ test('payouts: the seller\'s share rounds down, the buyer gets the rest and the 
   assert.throws(() => share(1n, 10_001), RangeError)
   assert.deepEqual(payout(1_000_000n, 1_500_000n, 7_000), { toSeller: 700_000n, toBuyer: 800_000n })
   assert.deepEqual(payout(1_000_000n, 1_000_000n, 10_000), { toSeller: 1_000_000n, toBuyer: 0n })
-  assert.deepEqual(cancelPayout(1_000_001n, 1_000_002n, 5_000), { toSeller: 500_001n, toBuyer: 500_001n })
+  // A cancellation's remainder is the seller's share, and it rounds down like every other: the
+  // buyer gets at least the step's percent.
+  assert.deepEqual(cancelPayout(1_000_001n, 1_000_002n, 5_000), { toSeller: 500_000n, toBuyer: 500_002n })
+  assert.deepEqual(cancelPayout(3n, 3n, 5_000), { toSeller: 1n, toBuyer: 2n })
+  assert.deepEqual(cancelPayout(1n, 1n, 9_999), { toSeller: 0n, toBuyer: 1n })
   assert.deepEqual(cancelPayout(1_000_000n, 1_000_000n, 10_000), { toSeller: 0n, toBuyer: 1_000_000n })
   assert.throws(() => payout(2n, 1n, 10_000), /NotFunded/)
   assert.throws(() => cancelPayout(2n, 1n, 10_000), /NotFunded/)

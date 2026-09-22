@@ -1,0 +1,599 @@
+//! Adversarial review 1: the registry's invariants, as a property test under LiteSVM.
+//!
+//! This is the registry half of the fuzzing in `docs/decisions/adversarial-review-1.md`. The
+//! escrow runs under Trident (`escrow/program/trident-tests`); the registry cannot, because
+//! Trident 0.12's runtime builds its feature set with every feature off and offers no way to turn
+//! one on, so the `sol_poseidon` and `alt_bn128` syscalls this program needs are never registered
+//! and its first hash fails as "unsupported BPF instruction" (`registry/program/trident-tests`
+//! keeps the attempt). LiteSVM registers them, so the same model and the same invariants run here,
+//! with real signatures and a seeded random generator instead of Trident's.
+//!
+//! Random flows: register (the five real proofs, sometimes corrupted), insert, propose and accept
+//! a treasury, add a token, add and remove issuers, open a list, send lamports to a registry
+//! account, sweep, and move the rent rate between the three rates the sweep exists for. The model
+//! says whether each must land; after each, the invariants:
+//!   R1 a code is never recorded twice, and the code tree's count and root are those of the codes
+//!      accepted, in order;
+//!   R2 no key that has held the treasury ever loses a lamport or a token unit; it gains exactly
+//!      the fee on a registration and exactly the excess on a sweep;
+//!   R3 each list's identity count only grows, and its root is the LeanIMT root of its leaves;
+//!   R4 each list's ring holds exactly its last 128 roots;
+//!   R5 the program accepts exactly what the rules allow and refuses everything else.
+//!
+//! `cargo test --release --test invariants -- --nocapture`; `FOREST_FUZZ_ITERATIONS`,
+//! `FOREST_FUZZ_FLOWS` and `FOREST_FUZZ_SEED` size and replay a run.
+
+use std::collections::{BTreeMap, HashMap, HashSet};
+
+use forest_registry_tests::*;
+use num_bigint::BigUint;
+use solana_account::Account;
+use solana_address::Address;
+use solana_instruction::{AccountMeta, Instruction};
+use solana_keypair::Keypair;
+use solana_message::Message;
+use solana_signer::Signer;
+use solana_transaction::Transaction;
+
+const BN254_R: &str = "21888242871839275222246405745257275088548364400416422360885981858940010000001";
+const TOKEN_2022: Address = solana_address::address!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
+const SYSTEM: Address = solana_system_interface::program::ID;
+const PEOPLE: usize = 5;
+const TREASURIES: usize = 3;
+const START: u64 = 4_000_000_000_000_000_000;
+
+struct Rng(u64);
+impl Rng {
+    fn next(&mut self) -> u64 {
+        // xorshift64*
+        self.0 ^= self.0 >> 12;
+        self.0 ^= self.0 << 25;
+        self.0 ^= self.0 >> 27;
+        self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    }
+    fn below(&mut self, n: usize) -> usize {
+        (self.next() % n as u64) as usize
+    }
+    fn coin(&mut self) -> bool {
+        self.next() & 1 == 1
+    }
+}
+
+fn plus_r(a: &[u8; 32]) -> [u8; 32] {
+    let b = (BigUint::from_bytes_be(a) + BN254_R.parse::<BigUint>().unwrap()).to_bytes_be();
+    let mut out = [0u8; 32];
+    out[32 - b.len()..].copy_from_slice(&b);
+    out
+}
+
+fn is_field(x: &[u8; 32]) -> bool {
+    BigUint::from_bytes_be(x) < BN254_R.parse::<BigUint>().unwrap()
+}
+
+struct World {
+    h: Harness,
+    rng: Rng,
+    proofs: Vec<(u32, String, String, [u8; 32], [u8; 32], [u8; 32], [u8; 64], [u8; 32])>,
+    people: Vec<Keypair>,
+    treasuries: Vec<Keypair>,
+    treasury: Address,
+    pending: Address,
+    mints: Vec<(Address, u8)>,
+    tokens: HashMap<(Address, Address), Address>,
+    leaves: Vec<Vec<[u8; 32]>>,
+    rings: Vec<Vec<[u8; 32]>>,
+    issuers: Vec<Vec<Address>>,
+    codes: Vec<[u8; 32]>,
+    used: HashSet<[u8; 32]>,
+    watch: HashMap<Address, Vec<u64>>,
+    extra_mints: Vec<Address>,
+    rate: u64,
+    last_error: String,
+    counts: BTreeMap<String, (u64, u64)>,
+    errors: BTreeMap<String, u64>,
+}
+
+impl World {
+    fn new(seed: u64) -> Self {
+        let f = Fixtures::load();
+        let h = Harness::new(); // init, and the harness issuer added to list 0 by the treasury
+        let issuer = h.issuer.insecure_clone();
+        let mut people = vec![issuer];
+        people.extend((1..PEOPLE).map(|_| Keypair::new()));
+        let treasuries = vec![h.treasury_signer(), Keypair::new(), Keypair::new()];
+        let proofs = f
+            .proofs
+            .iter()
+            .map(|p| (p.list_index, p.market.clone(), p.did.clone(), p.root_bytes(), p.code_bytes(), p.a_bytes(), p.b_bytes(), p.c_bytes()))
+            .collect();
+        let mut w = World {
+            h,
+            rng: Rng(seed | 1),
+            proofs,
+            people,
+            treasuries,
+            treasury: TREASURY,
+            pending: Address::default(),
+            mints: vec![(USDC_MINT, 6)],
+            tokens: HashMap::new(),
+            leaves: vec![vec![]],
+            rings: vec![vec![]],
+            issuers: vec![],
+            codes: vec![],
+            used: HashSet::new(),
+            watch: HashMap::new(),
+            extra_mints: vec![],
+            rate: RENT_HIGH,
+            last_error: String::new(),
+            counts: BTreeMap::new(),
+            errors: BTreeMap::new(),
+        };
+        w.h.svm.set_sysvar(&rent_at(RENT_HIGH));
+        for p in &w.people {
+            w.h.svm.airdrop(&p.pubkey(), 1_000_000_000_000).unwrap();
+        }
+        w.issuers.push(vec![w.people[0].pubkey()]);
+        w.give_token_accounts(USDC_MINT);
+        // List 1, as the fixtures expect, then both lists' real leaves.
+        let payer = w.h.payer.pubkey();
+        assert!(w.send(&[open_list_ix(payer, TREASURY, 1)], "open_list"));
+        w.leaves.push(vec![]);
+        w.rings.push(vec![]);
+        let issuer = w.people[0].pubkey();
+        assert!(w.send(&[issuer_ix("add_issuer", TREASURY, 1, issuer)], "add_issuer"));
+        w.issuers.push(vec![issuer]);
+        for fl in &f.lists {
+            for leaf in &fl.leaves {
+                w.do_insert(fl.index, issuer, dec_to_be32(leaf), true);
+            }
+        }
+        for t in &w.treasuries {
+            w.watch.insert(t.pubkey(), vec![]);
+        }
+        w.check_treasuries();
+        w
+    }
+
+    // -- sending, with real signatures -----------------------------------------------------------
+
+    fn key(&self, a: &Address) -> &Keypair {
+        if *a == self.h.payer.pubkey() {
+            return &self.h.payer;
+        }
+        self.people.iter().chain(self.treasuries.iter()).find(|k| k.pubkey() == *a).unwrap_or_else(|| panic!("no key for {a}"))
+    }
+
+    fn send(&mut self, ixs: &[Instruction], name: &str) -> bool {
+        self.h.svm.expire_blockhash();
+        let msg = Message::new(ixs, Some(&self.h.payer.pubkey()));
+        let n = msg.header.num_required_signatures as usize;
+        let signers: Vec<&Keypair> = msg.account_keys[..n].iter().map(|a| self.key(a)).collect();
+        let tx = Transaction::new(&signers, msg.clone(), self.h.svm.latest_blockhash());
+        let out = self.h.send_tx(tx);
+        let c = self.counts.entry(name.to_string()).or_default();
+        match &out {
+            Ok(_) => c.0 += 1,
+            Err(e) => {
+                c.1 += 1;
+                self.last_error = e.clone();
+                let code = e
+                    .split("Error Code: ")
+                    .nth(1)
+                    .map(|s| s.split('.').next().unwrap_or("").to_string())
+                    .or_else(|| e.lines().next().map(|l| l.chars().take(60).collect()))
+                    .unwrap_or_default();
+                *self.errors.entry(format!("{name}: {code}")).or_default() += 1;
+            }
+        }
+        out.is_ok()
+    }
+
+    fn a_person(&mut self) -> Address {
+        let k = self.rng.below(PEOPLE);
+        self.people[k].pubkey()
+    }
+    fn a_treasury(&mut self) -> Address {
+        let k = self.rng.below(TREASURIES);
+        self.treasuries[k].pubkey()
+    }
+    fn any_key(&mut self) -> Address {
+        if self.rng.coin() {
+            self.a_person()
+        } else {
+            self.a_treasury()
+        }
+    }
+
+    fn give_token_accounts(&mut self, mint: Address) {
+        let owners: Vec<(Address, bool)> = self
+            .people
+            .iter()
+            .map(|k| (k.pubkey(), false))
+            .chain(self.treasuries.iter().map(|k| (k.pubkey(), true)))
+            .collect();
+        for (owner, is_treasury) in owners {
+            let t = Address::new_unique();
+            self.h.svm.set_account(t, spl_token_account(&mint, &owner, if is_treasury { 0 } else { START })).unwrap();
+            self.tokens.insert((mint, owner), t);
+        }
+    }
+
+    fn lamports(&self, a: &Address) -> u64 {
+        self.h.svm.get_account(a).map(|x| x.lamports).unwrap_or(0)
+    }
+    fn balance(&self, a: &Address) -> u64 {
+        self.h.svm.get_account(a).map(|x| if x.data.len() >= 72 { token_amount(&x.data) } else { 0 }).unwrap_or(0)
+    }
+
+    // -- flows ------------------------------------------------------------------------------------
+
+    fn register(&mut self) {
+        let k = self.rng.below(self.proofs.len());
+        let (p_list, p_market, p_did, p_root, p_code, p_a, p_b, p_c) = self.proofs[k].clone();
+        let (mut market, mut did, mut list, mut root, mut code, mut a, mut b, mut c) =
+            (p_market.clone(), p_did.clone(), p_list, p_root, p_code, p_a, p_b, p_c);
+        match self.rng.below(20) {
+            0 => a[self.rng.below(32)] ^= 1 << self.rng.below(8),
+            1 => b[self.rng.below(64)] ^= 1 << self.rng.below(8),
+            2 => c[self.rng.below(32)] ^= 1 << self.rng.below(8),
+            3 => {
+                let j = self.rng.below(self.proofs.len());
+                did = self.proofs[j].2.clone() + if self.rng.coin() { "x" } else { "" };
+            }
+            4 => market = if self.rng.coin() { market.to_uppercase() } else { format!("{market} ") },
+            5 => list = 1 - list.min(1),
+            6 => root = if self.rng.coin() { plus_r(&root) } else { [self.rng.below(250) as u8 + 1; 32] },
+            7 => {
+                let j = self.rng.below(self.proofs.len());
+                code = if self.rng.coin() { plus_r(&code) } else { self.proofs[j].4 };
+            }
+            _ => {}
+        }
+        let corrupted = (market.clone(), did.clone(), list, root, code, a, b, c) != (p_market, p_did, p_list, p_root, p_code, p_a, p_b, p_c);
+
+        let payer = self.a_person();
+        let wallet = self.a_person();
+        let mint = if self.rng.below(4) == 0 && !self.extra_mints.is_empty() {
+            let j = self.rng.below(self.extra_mints.len());
+            self.extra_mints[j]
+        } else {
+            USDC_MINT
+        };
+        let decimals = self.mints.iter().find(|(m, _)| *m == mint).map(|(_, d)| *d);
+        let fee = decimals.and_then(registration_fee).unwrap_or(u64::MAX);
+        let profile_tokens = self.tokens[&(mint, wallet)];
+        let fee_to = match self.rng.below(20) {
+            0 => self.a_person(),
+            1 => self.a_treasury(),
+            _ => self.treasury,
+        };
+        let treasury_tokens = self.tokens[&(mint, fee_to)];
+        let balance = self.balance(&profile_tokens);
+        let root_ok = (list as usize) < self.rings.len() && self.rings[list as usize].contains(&root);
+        let valid = !corrupted && !self.used.contains(&code) && root_ok && decimals.is_some() && fee_to == self.treasury && balance >= fee;
+
+        let accounts = RegisterAccounts { payer, profile_wallet: wallet, profile_tokens, treasury_tokens };
+        let args = RegisterArgs { market: &market, did: &did, list_index: list, root, code, proof_a: a, proof_b: b, proof_c: c };
+        let ix = register_ix(&args, &accounts);
+        let t_before = self.balance(&treasury_tokens);
+        let ok = self.send(&[ix], "register");
+        assert_eq!(ok, valid, "R5 register: model {valid}, program {ok} (corrupted {corrupted}, root {root_ok})");
+        if !ok {
+            return;
+        }
+        assert_eq!(self.balance(&profile_tokens), balance - fee, "the wallet paid exactly the fee");
+        assert_eq!(self.balance(&treasury_tokens), t_before + fee, "R2 the treasury got exactly the fee");
+        self.used.insert(code);
+        self.codes.push(code);
+        let tree = self.h.code_tree();
+        assert_eq!(tree.count, self.codes.len() as u64, "R1 code tree count");
+        assert_eq!(tree.root, lean_imt_root(&self.codes), "R1 code tree root");
+    }
+
+    fn insert(&mut self) {
+        let list = self.rng.below(self.leaves.len() + 1) as u32;
+        let signer = if self.rng.below(10) < 7 { self.people[0].pubkey() } else { self.any_key() };
+        let commitment = match self.rng.below(30) {
+            0 => [0u8; 32],
+            1 => plus_r(&[0u8; 32]),
+            2 => [0xffu8; 32],
+            3 => self.leaves[0][0],
+            _ => {
+                let mut x = [0u8; 32];
+                for byte in x.iter_mut().skip(1) {
+                    *byte = self.rng.below(256) as u8;
+                }
+                x
+            }
+        };
+        let valid = (list as usize) < self.leaves.len()
+            && self.issuers[list as usize].contains(&signer)
+            && commitment != [0u8; 32]
+            && is_field(&commitment);
+        self.do_insert(list, signer, commitment, valid);
+    }
+
+    fn do_insert(&mut self, list: u32, signer: Address, commitment: [u8; 32], valid: bool) {
+        let before = self.leaves.get(list as usize).map(|l| l.len()).unwrap_or(0);
+        let ok = self.send(&[insert_identity_ix(signer, list, commitment)], "insert_identity");
+        assert_eq!(ok, valid, "R5 insert_identity: model {valid}, program {ok}");
+        if !ok {
+            return;
+        }
+        let l = list as usize;
+        self.leaves[l].push(commitment);
+        let view = self.h.list(list);
+        assert_eq!(view.leaf_count, before as u64 + 1, "R3 the identity count grew by one");
+        assert_eq!(view.root, lean_imt_root(&self.leaves[l]), "R3 the root is the LeanIMT root of the leaves");
+        self.rings[l].push(view.root);
+        if self.rings[l].len() > ROOT_HISTORY {
+            self.rings[l].remove(0);
+        }
+        let n = self.leaves[l].len();
+        for (k, r) in self.rings[l].iter().enumerate() {
+            let count_after = n - self.rings[l].len() + k + 1;
+            assert_eq!(&view.roots[(count_after - 1) % ROOT_HISTORY], r, "R4 ring slot");
+        }
+        assert_eq!(view.roots.iter().filter(|r| **r != [0u8; 32]).count(), self.rings[l].len(), "R4 nothing else in the ring");
+    }
+
+    fn propose(&mut self) {
+        let signer = match self.rng.below(4) {
+            0 | 1 => self.treasury,
+            2 => self.a_treasury(),
+            _ => self.any_key(),
+        };
+        let proposed = match self.rng.below(10) {
+            0 => None,
+            1 => Some(Address::default()),
+            2 => Some(self.treasury),
+            _ => Some(self.a_treasury()),
+        };
+        let valid = signer == self.treasury && proposed.map_or(true, |k| k != Address::default() && k != self.treasury);
+        let ok = self.send(&[propose_treasury_ix(signer, proposed)], "propose_treasury");
+        assert_eq!(ok, valid, "R5 propose_treasury: model {valid}, program {ok}");
+        if ok {
+            self.pending = proposed.unwrap_or_default();
+        }
+        self.check_config();
+    }
+
+    fn accept(&mut self) {
+        let signer = if self.rng.coin() && self.pending != Address::default() { self.pending } else { self.any_key() };
+        let valid = self.pending != Address::default() && signer == self.pending;
+        let ok = self.send(&[accept_treasury_ix(signer)], "accept_treasury");
+        assert_eq!(ok, valid, "R5 accept_treasury: model {valid}, program {ok}");
+        if ok {
+            self.treasury = signer;
+            self.pending = Address::default();
+        }
+        self.check_config();
+    }
+
+    fn add_token(&mut self) {
+        let signer = if self.rng.below(10) < 7 { self.treasury } else { self.any_key() };
+        let (mint, decimals, classic) = match self.rng.below(10) {
+            0 => (USDC_MINT, 6, true),
+            1 if !self.extra_mints.is_empty() => {
+                let j = self.rng.below(self.extra_mints.len());
+                let m = self.extra_mints[j];
+                (m, self.mints.iter().find(|(x, _)| *x == m).unwrap().1, true)
+            }
+            2 => {
+                let m = Address::new_unique();
+                let mut acct = spl_mint_account(6);
+                acct.owner = TOKEN_2022;
+                self.h.svm.set_account(m, acct).unwrap();
+                (m, 6, false)
+            }
+            _ => {
+                let m = Address::new_unique();
+                let d = if self.rng.below(4) == 0 { self.rng.below(22) as u8 } else { [2u8, 6, 8, 9, 18, 19][self.rng.below(6)] };
+                self.h.svm.set_account(m, spl_mint_account(d)).unwrap();
+                (m, d, true)
+            }
+        };
+        let valid = signer == self.treasury
+            && classic
+            && registration_fee(decimals).is_some()
+            && !self.mints.iter().any(|(m, _)| *m == mint)
+            && self.mints.len() < 16;
+        let ok = self.send(&[add_token_ix(signer, mint)], "add_token");
+        assert_eq!(ok, valid, "R5 add_token: model {valid}, program {ok} (decimals {decimals}, classic {classic})");
+        if ok {
+            self.mints.push((mint, decimals));
+            self.extra_mints.push(mint);
+            self.give_token_accounts(mint);
+        }
+        self.check_config();
+    }
+
+    fn issuers(&mut self) {
+        let add = self.rng.coin();
+        let list = self.rng.below(self.leaves.len() + 1) as u32;
+        let signer = if self.rng.below(10) < 7 { self.treasury } else { self.any_key() };
+        let key = if self.rng.coin() { self.a_person() } else { Address::new_unique() };
+        let exists = (list as usize) < self.leaves.len();
+        let valid = signer == self.treasury
+            && exists
+            && if add {
+                !self.issuers[list as usize].contains(&key) && self.issuers[list as usize].len() < 8
+            } else {
+                self.issuers[list as usize].contains(&key)
+            };
+        let name = if add { "add_issuer" } else { "remove_issuer" };
+        let ok = self.send(&[issuer_ix(name, signer, list, key)], name);
+        assert_eq!(ok, valid, "R5 {name}: model {valid}, program {ok}");
+        if ok {
+            let l = &mut self.issuers[list as usize];
+            if add {
+                l.push(key);
+            } else {
+                l.retain(|k| *k != key);
+            }
+        }
+    }
+
+    fn open_list(&mut self) {
+        if self.leaves.len() >= 6 {
+            return;
+        }
+        let signer = if self.rng.below(10) < 7 { self.treasury } else { self.any_key() };
+        let valid = signer == self.treasury;
+        let n = self.leaves.len() as u32;
+        let payer = self.h.payer.pubkey();
+        let ok = self.send(&[open_list_ix(payer, signer, n)], "open_list");
+        assert_eq!(ok, valid, "R5 open_list: model {valid}, program {ok}");
+        if ok {
+            self.leaves.push(vec![]);
+            self.rings.push(vec![]);
+            self.issuers.push(vec![]);
+        }
+    }
+
+    /// The rent rate moves between the three the sweep was written for, either way.
+    fn rent_moves(&mut self) {
+        self.rate = [RENT_HIGH, RENT_TODAY, RENT_FINAL][self.rng.below(3)];
+        self.h.svm.set_sysvar(&rent_at(self.rate));
+    }
+
+    /// Someone may send lamports to a registry account; then anyone sweeps one.
+    fn sweep(&mut self) {
+        let (target, exists) = match self.rng.below(4) {
+            0 => (SweepTarget::Config, true),
+            1 => (SweepTarget::CodeTree, true),
+            2 => {
+                let i = self.rng.below(self.leaves.len() + 1) as u32;
+                (SweepTarget::List(i), (i as usize) < self.leaves.len())
+            }
+            _ => {
+                let code = if !self.codes.is_empty() && self.rng.coin() {
+                    self.codes[self.rng.below(self.codes.len())]
+                } else {
+                    self.proofs[self.rng.below(self.proofs.len())].4
+                };
+                let exists = self.used.contains(&code);
+                (SweepTarget::Code(code), exists)
+            }
+        };
+        let address = target.address();
+        if self.rng.coin() {
+            let from = self.a_person();
+            let amount = 1 + self.rng.next() % 10_000_000;
+            let mut data = 2u32.to_le_bytes().to_vec();
+            data.extend_from_slice(&amount.to_le_bytes());
+            let ix = Instruction { program_id: SYSTEM, accounts: vec![AccountMeta::new(from, true), AccountMeta::new(address, false)], data };
+            self.send(&[ix], "donate"); // lands unless the runtime's rent rules refuse it; either way the chain is the truth
+        }
+        let to = if self.rng.below(10) == 0 { self.any_key() } else { self.treasury };
+        let (lamports, len) = self.h.svm.get_account(&address).map(|x| (x.lamports, x.data.len())).unwrap_or((0, 0));
+        let excess = if exists { lamports.saturating_sub(rent_minimum(self.rate, len)) } else { 0 };
+        // The runtime, not the program: an account a transaction credits must end rent exempt, so
+        // a treasury key holding no SOL takes a sweep only if the excess alone covers its own rent.
+        let t_len = self.h.svm.get_account(&self.treasury).map(|x| x.data.len()).unwrap_or(0);
+        let treasury_after = self.lamports(&self.treasury) + excess;
+        let valid = to == self.treasury && exists && excess > 0 && treasury_after >= rent_minimum(self.rate, t_len);
+        let t_before = self.lamports(&self.treasury);
+        let ok = self.send(&[sweep_rent_ix(&target, to)], "sweep_rent");
+        assert_eq!(ok, valid, "R5 sweep_rent: model {valid}, program {ok} (exists {exists}, excess {excess}, rate {}, target {address}, len {len}, lamports {lamports})\n{}", self.rate, self.last_error);
+        if ok {
+            assert_eq!(self.lamports(&address), rent_minimum(self.rate, len), "R2 exactly the minimum stays");
+            assert_eq!(self.lamports(&self.treasury), t_before + excess, "R2 exactly the excess to the treasury");
+        }
+    }
+
+    // -- invariants -----------------------------------------------------------------------------
+
+    fn check_config(&self) {
+        let c = self.h.config();
+        assert_eq!(c.treasury, self.treasury, "the treasury is who the model says");
+        assert_eq!(c.pending_treasury, self.pending, "the pending key is who the model says");
+        assert_eq!(c.mints.len(), self.mints.len(), "the accepted mints");
+    }
+
+    fn check_treasuries(&mut self) {
+        for t in self.treasuries.iter().map(|k| k.pubkey()).collect::<Vec<_>>() {
+            let mut now = vec![self.lamports(&t)];
+            for (m, _) in &self.mints {
+                if let Some(acct) = self.tokens.get(&(*m, t)) {
+                    now.push(self.balance(acct));
+                }
+            }
+            let before = self.watch.get(&t).cloned().unwrap_or_default();
+            for (k, b) in before.iter().enumerate() {
+                assert!(now[k] >= *b, "R2 a treasury balance went down: {t} slot {k}: {b} -> {}", now[k]);
+            }
+            self.watch.insert(t, now);
+        }
+    }
+
+    fn check_everything(&mut self) {
+        self.check_treasuries();
+        self.check_config();
+        for (i, leaves) in self.leaves.iter().enumerate() {
+            assert_eq!(self.h.list(i as u32).leaf_count, leaves.len() as u64, "R3 leaf count");
+        }
+        for code in &self.codes {
+            let a: Account = self.h.svm.get_account(&used_code_address(code)).expect("R1 every code's account stays");
+            assert_eq!(a.owner, PROGRAM_ID);
+        }
+        assert_eq!(self.codes.len(), self.used.len(), "R1 no code twice");
+        assert_eq!(self.h.code_tree().count, self.codes.len() as u64, "R1 code tree count");
+    }
+
+    fn step(&mut self) {
+        match self.rng.below(9) {
+            0 | 1 => self.register(),
+            2 => self.insert(),
+            3 => self.propose(),
+            4 => self.accept(),
+            5 => self.add_token(),
+            6 => self.issuers(),
+            7 => {
+                if self.rng.coin() {
+                    self.open_list()
+                } else {
+                    self.rent_moves()
+                }
+            }
+            _ => self.sweep(),
+        }
+        self.check_everything();
+    }
+}
+
+#[test]
+fn registry_invariants_hold_under_random_flows() {
+    let iterations: u64 = std::env::var("FOREST_FUZZ_ITERATIONS").ok().and_then(|v| v.parse().ok()).unwrap_or(3);
+    let flows: u64 = std::env::var("FOREST_FUZZ_FLOWS").ok().and_then(|v| v.parse().ok()).unwrap_or(40);
+    let seed: u64 = std::env::var("FOREST_FUZZ_SEED").ok().and_then(|v| v.parse().ok()).unwrap_or_else(|| {
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos() as u64
+    });
+    println!("seed {seed}: {iterations} iterations of {flows} flows");
+    let started = std::time::Instant::now();
+    let mut counts: BTreeMap<String, (u64, u64)> = BTreeMap::new();
+    let mut errors: BTreeMap<String, u64> = BTreeMap::new();
+    for i in 0..iterations {
+        let mut w = World::new(seed.wrapping_add(i.wrapping_mul(0x9E37_79B9_7F4A_7C15)));
+        for _ in 0..flows {
+            w.step();
+        }
+        for (k, (a, r)) in &w.counts {
+            let c = counts.entry(k.clone()).or_default();
+            c.0 += a;
+            c.1 += r;
+        }
+        for (k, n) in &w.errors {
+            *errors.entry(k.clone()).or_default() += n;
+        }
+    }
+    println!("{:<20} {:>9} {:>9}", "instruction", "accepted", "refused");
+    for (k, (a, r)) in &counts {
+        println!("{k:<20} {a:>9} {r:>9}");
+    }
+    println!("refusals by reason:");
+    for (k, n) in &errors {
+        println!("  {n:>7}  {k}");
+    }
+    println!("{} flows in {:.1} s, every invariant held", iterations * flows, started.elapsed().as_secs_f64());
+}

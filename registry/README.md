@@ -16,7 +16,8 @@ decimals, to the treasury. Any failure reverts all of it.
 | | |
 |---|---|
 | `program/` | the program. Anchor, Rust, `cargo build-sbf`. |
-| `program/tests-litesvm/` | LiteSVM tests against real proofs, with the wire format written out a second time by hand. |
+| `program/tests-litesvm/` | LiteSVM tests against real proofs, with the wire format written out a second time by hand; `adversarial.rs` is session 10's attacks and `invariants.rs` its property test (`docs/decisions/adversarial-review-1.md`). |
+| `program/trident-tests/` | the Trident fuzzer, kept as the record of why it cannot run: Trident 0.12 never registers the Poseidon and alt_bn128 syscalls. `invariants.rs` runs the same model under LiteSVM. |
 | `client/` | TypeScript, browser and Node: the code, the Merkle path, the proof, the compressed points, the transaction. |
 | `artifacts/` | Semaphore's setup files, pinned. The verification key is committed; the 7.7 MB of proving artifacts are pinned by hash. |
 | `FEASIBILITY.md` | session 3's report: whether any of this was possible, and at what cost. |
@@ -29,6 +30,7 @@ cd registry/artifacts && npm install && npm run fetch     # the proving key, has
 cd registry/program   && cargo build-sbf                  # needs Solana CLI 4.2.2 or later; mainnet USDC
 cd registry/program   && cargo build-sbf --features devnet   # the same program naming devnet's USDC
 cd registry/program/tests-litesvm && cargo test -- --nocapture
+cd registry/program/tests-litesvm && FOREST_FUZZ_ITERATIONS=1000 cargo test --release --test invariants -- --nocapture
 cd registry/client    && npm install && npm test          # no chain needed
 cd registry/client    && npm run test:validator           # starts solana-test-validator itself
 ```
@@ -115,7 +117,9 @@ The treasury can turn these. Nothing else can.
   Two steps because a one-step handover has no undo: a typo in the new address would have frozen
   every dial and sent every fee to nobody, forever. Now a key nobody holds can be proposed but
   never accepted, and the treasury stays where it was. The zero key and the current key are
-  refused as proposals.
+  refused as proposals. A new treasury key should hold a little SOL (about 0.001) from the
+  moment it accepts: the runtime refuses to leave a credited account below its rent-exempt
+  minimum, so until then a sweep smaller than an empty account's rent fails whole (session 10).
 
 Two things are deliberately nobody's dial. `sweep_rent` takes no key at all, because there is no
 key behind a program-derived address, the only possible destination is the sealed treasury, and the
