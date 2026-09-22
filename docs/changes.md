@@ -280,3 +280,72 @@ Log of what was built, learned, and left open, appended at the end of every sess
   - Whether `release_by_silence` and `cancel_buyer` should observe funding themselves when they can (they cannot: a failed transaction records nothing), or whether the app always bundles `mark_funded`.
   - Not done here: devnet, Kora, a phone, any paid review. `docs/handoff.md`'s "Before mainnet" list stands in full, and the lawyer pass over the escrow program is on it.
   - Still standing from earlier sessions: the host's genesis handle, the host's import checks and deactivation, the carrier and Railway for the host, the permutation proof the code tree exists for, the pricing unit in the market file, whether a review points at its post, whether the `markets` validator reuses `validateMarket`, whether a product writes a seed file under the first passkey, the keys tests on Apple, Android and Windows, the devnet placeholder treasury, and session 3's "not measured here" list.
+
+## 2026-09-22: session 9, test site and handover experiment
+
+- **Build order:** outside the numbered list; asked for by Carlos. A static test site to put online and try on real phones. Nothing deployed. Nothing under `keys/`, `registry/`, `escrow/` or `host/` changed.
+- **Built:**
+  - **`testsite/`:** a static site with no server and no framework.
+    - `index.html` links the two pages.
+    - `build.sh` writes `dist/`.
+    - `vercel.json` is copied into `dist/` by the build.
+    - `README.md` covers deploying (import the repo into Vercel, root `testsite/dist`), rebuilding, and that nothing here is a product.
+    - `testsite/dist/` is committed, as an exception in the root `.gitignore`, so the site can go online without a build step. It has no source maps.
+  - **`testsite/keys/`:** the keys test page with the same behaviour. `index.html` is `keys/test-page/index.html` with a footer and a link back.
+    - `page.js` is copied from `keys/test-page` at build time and never kept here, so it can't drift.
+    - The library is bundled by `keys/`'s own esbuild, with `build:page`'s entry and flags plus `--minify`: 234 KB.
+  - **`testsite/handover/`:** the experiment. One plain JS file with no dependencies.
+    - **Start handover** makes a deal id (16 random bytes) and a P-256 session key in the page. It creates a passkey with:
+      - challenge = SHA-256(deal id ‖ raw session public key)
+      - a random 16-byte user id
+      - `authenticatorAttachment` `cross-platform`, so the browser offers its QR flow
+      - user verification required, attestation `none`
+    - It records:
+      - the credential id and public key
+      - `getTransports()` and `authenticatorAttachment`
+      - the flags, sign count and AAGUID
+      - the creation checks: the challenge echoed, origin, type, relying-party hash, user present, credential id and key matching the browser's
+      - the raw bytes
+    - **Confirm again** signs in with that passkey over the same challenge and checks the signature in the page with Web Crypto (ES256 via DER to r‖s, and RS256).
+    - Every try is recorded, failures included, with timings and the error. There is a note field. **Download report** saves JSON with the seller's user agent. The report survives a reload.
+    - `README.md` is the test script for a person: six cases, numbered steps, what to send back, and what this is not.
+  - **Checked here:** headless Chromium with CDP virtual authenticators, from a scratch script that is not committed, as with the keys page. It covered:
+    - create and confirm through a cross-platform authenticator, and through a platform one with the control option
+    - ES256 and RS256
+    - the signature verified again, independently, with Node's crypto
+    - a swapped public key refused
+    - a failed ceremony recorded
+    - the download, and the note surviving a reload
+    - the keys page's create, unlock, reload and unlock giving the same fingerprint and DIDs from the minified bundle
+
+    The build is byte-for-byte reproducible. The QR flow itself can't be simulated: no real phone has run either page.
+- **Changed from the task, because it could not be done as written:**
+  - **No signature at creation.** Attestation `none` returns an empty statement, so creation carries no signature to check. The page checks everything else at creation and checks the signature at Confirm again, over the same deal challenge.
+  - **A choice was added for the control:** "this device (the control)" asks for `platform`. With `cross-platform` pinned, as the task specified, the browser never offers the phone's own passkey, so the same-device case couldn't be run at all.
+  - **The control's expected result was changed.** The task expected transports `internal` and not `hybrid`. But `getTransports()` lists what the authenticator can be used over later, not how this ceremony travelled (WebAuthn's `[[transports]]` slot and MDN both say so), so a phone's passkey may report `["hybrid","internal"]` either way. The field that reports this ceremony is `authenticatorAttachment` (`cross-platform` or `platform`). The test script names it, and says to record transports as they come.
+- **Chosen, not decided** (the task was silent; the simplest option was taken):
+  - The deal id's size and encoding.
+  - P-256 for the session key, whose private half is not used.
+  - The challenge's exact byte order.
+  - The same challenge for Confirm again.
+  - "Resident key not required" read as `preferred`, not `discouraged`. Phones make a discoverable passkey either way, and a browser may hide the phone option for a request that discourages one. That is a guess about browser menus, not tested.
+  - A 120-second timeout.
+  - The deal is prepared before the tap, so the tap goes straight into the passkey call. Safari may refuse a passkey call that follows other async work; not tested.
+  - One report per case, holding every try until "Clear report", kept in `localStorage`.
+  - No download button on the keys page, because "unchanged in behaviour".
+  - `vercel.json` copied into `dist/`, because Vercel reads it from the root directory it is given, and `trailingSlash` set so `/keys` redirects to `/keys/`, where the relative script paths resolve.
+- **Learned:**
+  - **Nothing signed says a ceremony went phone to phone.** `clientDataJSON` and authenticator data carry no transport. The Bluetooth check is enforced by the browser on the device running the page, and the page records what that browser reports.
+    - So a completed QR-flow ceremony is evidence of closeness only to whoever trusts that device. It is not evidence to a third party, such as an index weighing a review.
+    - A buyer and seller who collude can produce the same report without meeting.
+    - Beyond that, a relay with two Bluetooth radios and an internet link can stretch the range. The screenshot cheat doesn't test it.
+    - The one part a third party can check is the buyer's passkey signature over the deal challenge.
+    - Written into the test script's "What this is not".
+  - In Chromium's virtual authenticators, a `usb` authenticator reports transports `["usb"]` and attachment `cross-platform`; an `internal` one reports `["internal"]` and `platform`. Real phones are expected to differ on transports; not tried.
+  - A root `.gitignore` line `dist` also matches nested folders called `dist`. The exception needs `!testsite/dist/**` as well as `!testsite/dist/`, because the keys page loads `./dist/forest-keys.js`.
+- **Open:**
+  - The six cases on real phones. Not run; the answers come back as reports.
+  - **What the handover is for.** If it should count as evidence to anyone but the seller (an index, a review's weight), something the buyer's phone signs would have to carry the closeness, and WebAuthn gives nothing for that. If it is only for the two parties, it may already be enough. A question for a chat with Carlos, not decided here.
+  - Whether an iPhone or an Android phone, as the seller's device, shows a QR code for another device when a page asks for `cross-platform`. Unknown until tried; the test script says to record it.
+  - Whether the keys page should get a download button for its own results, which would help the still-pending keys tests on Apple, Android and Windows.
+  - Still standing from earlier sessions: the market template's `cancellationSteps` and `online-tutors`' default steps, a review's escrow pointer, the Solana Pay recipient on a phone, the host's genesis handle, the host's import checks and deactivation, the carrier and Railway for the host, the permutation proof the code tree exists for, the pricing unit in the market file, whether a review points at its post, whether the `markets` validator reuses `validateMarket`, whether a product writes a seed file under the first passkey, the keys tests on Apple, Android and Windows, the devnet placeholder treasury, and session 3's "not measured here" list.

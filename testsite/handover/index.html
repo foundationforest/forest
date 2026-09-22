@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Forest handover experiment</title>
+  <style>
+    body { font: 15px/1.5 system-ui, sans-serif; max-width: 52rem; margin: 2rem auto; padding: 0 1rem; color: #222; }
+    h1 { font-size: 1.4rem; }
+    h2 { font-size: 1.1rem; margin-top: 2rem; }
+    button { font: inherit; padding: 0.4rem 0.9rem; margin: 0.25rem 0.5rem 0.25rem 0; }
+    select, textarea { font: inherit; padding: 0.3rem; width: 100%; box-sizing: border-box; }
+    label { display: block; margin: 0.5rem 0; }
+    code, pre, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85rem; word-break: break-all; }
+    table { border-collapse: collapse; width: 100%; margin-top: 0.5rem; }
+    th, td { text-align: left; vertical-align: top; padding: 0.35rem 0.5rem; border-top: 1px solid #ddd; }
+    th { width: 11rem; font-weight: 600; }
+    #status { background: #f4f4f4; padding: 0.75rem; min-height: 1.5rem; white-space: pre-wrap; }
+    #report { background: #f4f4f4; padding: 0.75rem; white-space: pre-wrap; max-height: 30rem; overflow: auto; }
+    .muted { color: #666; }
+    footer { margin-top: 3rem; border-top: 1px solid #ddd; }
+  </style>
+</head>
+<body>
+  <p class="muted"><a href="../">Forest test site</a></p>
+  <h1>Forest handover experiment</h1>
+  <p>
+    An experiment, not a product. It asks one question: can two phones show they were together,
+    in the browser, using only passkeys?
+  </p>
+  <p class="muted">
+    The seller's device runs this page. The buyer scans the QR code the browser shows, with their
+    phone's camera, and confirms with Face ID or a fingerprint. Before that phone-to-phone flow
+    finishes, the two devices must find each other over Bluetooth. Everything is recorded in this
+    tab and nothing is sent anywhere. The steps for each test are in the
+    <a href="https://github.com/foundationforest/forest/blob/main/testsite/handover/README.md">test script</a>.
+  </p>
+
+  <h2>1. Handover</h2>
+  <label>The buyer confirms on
+    <select id="attachment">
+      <option value="cross-platform">another device: a QR code (the test)</option>
+      <option value="platform">this device (the control)</option>
+    </select>
+  </label>
+  <button id="start" disabled>Start handover</button>
+  <button id="confirm" disabled>Confirm again</button>
+  <p class="muted">
+    The QR code appears in the browser's own window, not on this page. Confirm again asks the same
+    phone to sign in with the passkey it just made; it shows another QR code.
+  </p>
+  <div id="status"></div>
+
+  <h2>2. Results</h2>
+  <div id="results"><p class="muted">No handover yet.</p></div>
+
+  <h2>3. Report</h2>
+  <label>Buyer device and what you did
+    <textarea id="note" rows="3" placeholder="e.g. buyer: Pixel 8, Android 16. Scanned with the camera, fingerprint, took 20 s."></textarea>
+  </label>
+  <button id="download">Download report</button>
+  <button id="clear">Clear report</button>
+  <p class="muted">
+    One report per test case: download it, then clear. The report keeps every try since the last
+    clear, failures included. It is also kept in this browser, so a reload loses nothing.
+  </p>
+  <pre id="report"></pre>
+
+  <footer class="muted">
+    <p>
+      The passkey's relying party here is this page's own origin, so a passkey made here opens
+      nothing else. In Forest the relying party is <code>forest.foundation</code>. This is a test
+      page, not a product.
+    </p>
+  </footer>
+
+  <script type="module" src="./handover.js"></script>
+</body>
+</html>

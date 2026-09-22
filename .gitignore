@@ -147,3 +147,7 @@ host/upstream/
 host/data/
 host/*.log
 host/pds.env
+
+# testsite: the built site is committed so it can be put online without a build step
+!testsite/dist/
+!testsite/dist/**
