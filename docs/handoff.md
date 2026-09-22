@@ -44,7 +44,7 @@ Three rungs of one ladder. There are no accounts anywhere.
 | Index | Reads the carrier, scores, serves category pages, profile pages, a machine endpoint. Open algorithm. Signs scores with a ZK-friendly signature (EdDSA over Poseidon) alongside the normal one | Ours | Supabase and Vercel, at forest.foundation |
 | Registry | Sealed program: a set of list fingerprints, one code per (human, market), the 25-cent rule, a rent sweep instruction | Ours; Semaphore circuit unchanged, groth16-solana verifier, Poseidon syscall | Solana |
 | Fee payer, registrations | Sponsors registrations whose market is in the directory and whose proof checks out, rate-limited. No vouchers, no tokens, no custom code | Kora, configured | Foundation (Railway) |
-| Escrow | Sealed program per version: one shape, an amount of a plain SPL token held between two keys; released by approval, silence, split, or optional arbiter | Ours | Solana |
+| Escrow | Sealed program per version: one shape, an amount of a classic SPL token held between two keys, buyer and seller, in its own deposit account; released by the buyer's approval, by silence, by both keys agreeing a split, or by an optional arbiter; cancelled by the buyer on time steps agreed at creation, or by the seller at any time. Rules the chain reads by itself, signatures and time; every state change in the log | Ours | Solana |
 | Face check | Once. Passive liveness plus dedupe. Foundation runs it as the first issuer and owns the account holding the list; Didit holds the faces. New issuers register themselves | Didit | Theirs |
 | Issuer flow | Face check result to identity commitment to list insert | Ours, small | Foundation (Railway) |
 | Names | Every badged profile gets a random handle free, like `k7m2q.forest.foundation`; it is the profile page and the AT Protocol handle. Chosen names are optional, one per profile, paid yearly (amount a treasury dial) | Ours, small | Foundation |
@@ -83,14 +83,19 @@ Repos: `foundationforest/forest` (all foundation code, Apache 2.0) and `foundati
 
 ## Escrow
 
-One shape. An amount of a plain SPL token held between two keys, buyer and seller, released by rule.
+One shape. An amount of a classic SPL token held between two keys, buyer and seller, released by rules the chain can read by itself: signatures and time. Never by events.
 
-- Parties are Solana keys. A profile's wallet is a key; any wallet is a key. The program never knows about DIDs.
-- Each escrow has its own deposit address, fundable by a plain transfer from anywhere. The program checks "balance at least the amount," never "exactly." The refund address is the buyer's key, fixed at creation.
-- Release: the buyer approves (all to the seller, or an agreed split with the rest back to the buyer); or silence (release to the seller after N days); or objection (locked until both agree; an unresolved lock marks both); or an optional arbiter key named at creation.
-- Per hour, per day, per job: the app multiplies before funding. One escrow per payment. The program has no modes.
-- v1 accepts classic SPL Token mints only (no Token-2022 extensions). Because a transfer fee, a permanent delegate, or a transfer hook changes what "hold X, release X" means, and a sealed program can't be patched.
-- Sealed per version. New deals use the newest version; old deals finish on theirs.
+- Parties are Solana keys. A profile's wallet is a key; any wallet is a key. The program never knows about DIDs. An optional arbiter key may be named at creation.
+- Deposit address. Each escrow has its own token account. Money arrives by plain transfer from anywhere: the app, a pay link, a friend, an AI. The escrow counts as funded when the balance is at least the amount; anything above the amount goes back to the buyer at the end.
+- Service time, optional. When set, the silence clock starts there; otherwise it starts when the escrow is funded.
+- Release. The buyer approves: all to the seller, or a split with the rest back to the buyer. Or silence: after N days from the clock start, anyone may release to the seller. Or agreement: both keys sign any split. Or the arbiter, if named, decides any split.
+- Objection. The buyer objects before silence releases: the escrow is locked; only agreement or the arbiter can end it. An unresolved lock marks both, in the log.
+- Cancellation, by time only. Up to four steps of (deadline, refund percent to the buyer), agreed at creation. The buyer cancels alone before a deadline and gets that step's percent; after the last deadline the buyer cannot cancel alone. The seller cancels at any time before release: the buyer gets everything back, and the log marks the seller.
+- Rent. Whoever pays the creation rent is recorded, and the accounts are closed and the rent returned to them when the escrow ends.
+- Tokens. Classic SPL Token mints only. Because Token-2022 extensions change what "hold X, release X" means, and a sealed program cannot be patched.
+- Sealed per version. No upgrade, no pause, no admin, no fee. New deals use the newest version; old deals finish on theirs.
+- Per hour or per job is the app multiplying before funding. One escrow per payment. The market file carries the defaults (silence days, arbiter allowed or not, the cancellation steps, accepted tokens); the app puts them in the escrow at creation.
+- Every state change is emitted in the log with amounts, so indexes can read outcomes: created, funded, approved, released by silence, objected, agreed, arbitrated, cancelled by buyer, cancelled by seller, closed.
 - Moving money between profiles links them on chain. Options for users: one main wallet (default, linked), fund a profile directly from an exchange, or a third-party shielded pool by link-out. Forest never builds or embeds one.
 
 ## Reputation
@@ -103,7 +108,7 @@ One shape. An amount of a plain SPL token held between two keys, buyer and selle
 
 Four shapes, shared by every market: profile (name, photo, contact, what I do, declared wallet), post (direction, market, role, description, price block, availability, location or remote, optional expiry), review (about whom, rating, text, escrow pointer), credential (a W3C verifiable credential, issuer DID, one copy per profile). Nobody issues credentials yet; the shape exists so nothing changes when they arrive.
 
-A market file adds: standard name, roles, extra fields, default silence days, whether an arbiter is allowed, review evidence rule, accepted credential issuers, accepted tokens. Market files add fields, never new shapes. First example: online tutors (priced per hour; one escrow per session). Three real markets are still open; candidates are online services. Category pages publish at a density threshold.
+A market file adds: standard name, roles, extra fields, default silence days, whether an arbiter is allowed, default cancellation steps, review evidence rule, accepted credential issuers, accepted tokens. Market files add fields, never new shapes. First example: online tutors (priced per hour; one escrow per session). Three real markets are still open; candidates are online services. Category pages publish at a density threshold.
 
 ## Names
 
