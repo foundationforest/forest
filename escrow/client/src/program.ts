@@ -603,12 +603,39 @@ export function decodeEvent(bytes: Uint8Array): EscrowEvent | null {
   return event
 }
 
-/** Every escrow event in a transaction's log lines, in order. */
-export function decodeEvents(logs: string[]): EscrowEvent[] {
-  const out: EscrowEvent[] = []
+/**
+ * The `Program data:` payloads that `programId` itself wrote, in order. Any program can write a
+ * data line holding an escrow event's exact bytes, so the bytes alone prove nothing. What does is
+ * the runtime's own `Program <id> invoke [n]` and `Program <id> success` or `failed` lines, which
+ * no program can forge (a program's own output always starts `Program log:` or `Program data:`):
+ * a data line belongs to whichever program is innermost at that point.
+ */
+export function programDataLines(logs: string[], programId: PublicKey = PROGRAM_ID): string[] {
+  const id = programId.toBase58()
+  const running: string[] = []
+  const out: string[] = []
   for (const line of logs) {
-    if (!line.startsWith('Program data: ')) continue
-    const event = decodeEvent(new Uint8Array(Buffer.from(line.slice('Program data: '.length), 'base64')))
+    const invoked = /^Program (\S+) invoke \[\d+\]$/.exec(line)
+    if (invoked) {
+      running.push(invoked[1])
+      continue
+    }
+    if (/^Program \S+ (success$|failed)/.test(line)) {
+      running.pop()
+      continue
+    }
+    if (line.startsWith('Program data: ') && running[running.length - 1] === id) {
+      out.push(line.slice('Program data: '.length))
+    }
+  }
+  return out
+}
+
+/** Every event the escrow program wrote in a transaction's log lines, in order. */
+export function decodeEvents(logs: string[], programId: PublicKey = PROGRAM_ID): EscrowEvent[] {
+  const out: EscrowEvent[] = []
+  for (const payload of programDataLines(logs, programId)) {
+    const event = decodeEvent(new Uint8Array(Buffer.from(payload, 'base64')))
     if (event) out.push(event)
   }
   return out

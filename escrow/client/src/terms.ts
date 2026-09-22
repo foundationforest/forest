@@ -146,11 +146,15 @@ export function payout(amount: bigint, balance: bigint, sellerBps: number): { to
   return { toSeller, toBuyer: balance - toSeller }
 }
 
-/** What a buyer's cancellation pays under a step: the refund back, the rest of the amount to the seller. */
+/**
+ * What a buyer's cancellation pays under a step: the refund back, the rest of the amount to the
+ * seller. The seller's share rounds down, as in every split, so the buyer gets at least the step's
+ * percent.
+ */
 export function cancelPayout(amount: bigint, balance: bigint, refundBps: number): { toSeller: bigint; toBuyer: bigint } {
   if (balance < amount) throw new RangeError('NotFunded: the deposit account holds less than the amount')
-  const refund = share(amount, refundBps)
-  const toSeller = amount - refund
+  if (!Number.isInteger(refundBps) || refundBps < 0 || refundBps > BPS) throw new RangeError(`${refundBps} is not 0..=10,000 basis points`)
+  const toSeller = share(amount, BPS - refundBps)
   return { toSeller, toBuyer: balance - toSeller }
 }
 

@@ -364,3 +364,55 @@ Log of what was built, learned, and left open, appended at the end of every sess
   - **Wallets: one central wallet per person and one per profile; the central wallet only meets ramps; deals touch only profile wallets.** Because receipts must bind to profiles, and every seller cashing out to one place is where profiles link on chain.
   - **Moves between the central wallet and a profile wallet go through a third-party privacy pool once one is live on mainnet, reviewed and cleared by a lawyer, in round amounts after a random wait; until then they are direct and the button says so; Forest never builds or embeds a pool.** Because equal amounts minutes apart are a link anyone can read, and a user moving their own money through a reviewed pool is not Forest doing it. Replaces the old last bullet of "Escrow"; "What Soil needs from the foundation" says the same.
   - **Three items added to "Don't resurrect":** money entering each profile only from outside with no central wallet (because the cash-out funnel links profiles anyway); a mutual-receipt evidence type (because two reviews pointing at one deal id already are it); Bluetooth or NFC co-presence as evidence anyone can verify (because nothing a phone signs carries closeness).
+- **Built (Part B, the adversarial review):**
+  - **`docs/decisions/adversarial-review-1.md`:** the report. A three-line verdict, fourteen findings by severity, the threat list per program with every attack and its test, the one-tap product check, the fuzzing runs and their coverage, rules an index must follow, and what could not be tested.
+  - **The adversarial suites:**
+    - `escrow/program/tests-litesvm/tests/adversarial.rs`, 23 tests;
+    - `escrow/program/tests-litesvm/tests/one_tap.rs`, 2 tests;
+    - `registry/program/tests-litesvm/tests/adversarial.rs`, 15 tests, against the real proofs;
+    - new and extended tests in both clients' `test/client.test.ts`.
+
+    A test named `finding_…` asserts an attack the program accepts, so the suite records what the report says.
+  - **Fuzzing:**
+    - `escrow/program/trident-tests/`: Trident 0.12 against the built escrow, with a model of every escrow and seven invariants checked after every step.
+    - `registry/program/tests-litesvm/tests/invariants.rs`: the registry's five invariants as a LiteSVM property test, seeded and replayable.
+    - `registry/program/trident-tests/`: kept as the record of why Trident cannot run the registry.
+  - **Fixed, each with a test that failed first:**
+    - The escrow's `cancel_buyer` rounded the buyer's refund down, so the seller's share rounded up, against the README's sealed rule. It now computes the seller's share as `share(amount, 10,000 − refund)`, one line. The client's `cancelPayout` and its test match.
+    - Both clients' event decoders (`decodeEvents`, `decodeRegisteredEvents`) took `Program data:` lines from any program, so an index using them would have shown forged badges and forged receipts. Both now read only lines their own program wrote (`programDataLines`), by following the runtime's invoke lines.
+  - **READMEs:** both list the new suites and how to run them. The escrow README states the cancellation rounding and the decoder rule. The registry README says a new treasury key should hold a little SOL.
+- **Learned:**
+  - **One-tap Pay works with no program change.** `create`, a plain transfer in and `approve` fit one transaction: 51,727 compute units (3.7%) and 668 bytes (54%); 57,735 and 710 bytes if the seller's token account is made in the same transaction; 749 bytes with the fullest terms. The rent is fronted and returned inside the transaction, so the receipt costs no rent. There is no `Funded` event in it.
+  - **Trident 0.12 runs the escrow but cannot run the registry.**
+    - The registry fails because `trident-svm` 0.2.0 starts from `SVMFeatureSet::default()` (every feature off) and its builder cannot change that. The Poseidon and alt_bn128 syscalls are therefore never registered, and the first hash fails as "unsupported BPF instruction".
+    - Its runtime does not check signatures: every key can sign.
+    - Its progress bar swallows assertion messages when output is not a terminal. `TRIDENT_WITH_EXIT_CODE=1` gives exit 99 on any failure, and `script` recovers the messages.
+  - **The escrow fuzzer finds this session's rounding bug by itself:** 40 failures in 24,000 steps on the unfixed program.
+  - **Long runs:**
+    - Escrow: 40,000,000 flow calls (27,184,961 transactions) in 32 minutes, every invariant held, all 25 of the program's own refusals reached.
+    - Registry: 1,600,000 flow calls in two 14-minute runs, every invariant held.
+  - **The runtime refuses any transaction that leaves a credited account below rent exemption.** Two consequences:
+    - A treasury key holding no SOL refuses sweeps smaller than an empty account's rent.
+    - After the rent rate rises, a small top-up of a registry account is refused.
+  - **A rent rise after a sweep freezes nothing.** A rent-paying account can still be written, as long as its lamports do not grow.
+  - **The native mint and SOL:** wrapped SOL that arrives without a sync, and SOL sent to an escrow's address, both end with the rent payer.
+  - **Solana Pay and a program-derived recipient:**
+    - `@solana/pay` 1.0.26 derives the deposit account with no off-curve check, and requires it to exist and not be frozen.
+    - `@solana/spl-token`'s helper refuses an off-curve owner by default.
+- **Open (for Carlos; each with its trade-offs in the report):**
+  - **Deploy blocker:** replace the registry's placeholder `TREASURY` before any deploy. Also consider a build guard that refuses a mainnet build with the placeholder.
+  - **Seller consent:** strangers can lock, make receipts on, or rig escrows naming any seller. The report recommends indexes weigh only deals the seller acknowledged (two reviews across one deal id, or a seller signature on the escrow), plus terms checks in the seller's app. A seller co-sign in the program only if that proves not enough.
+  - **The deal id:** an escrow address can hold two deals by the same buyer, and it is neither 32 random bytes nor single-use. Options: define the deal id as the address plus its `Created` slot or signature; keep a permanent marker per closed address; or accept it.
+  - **Wrapped SOL:** refuse the native mint at `create` (recommended, one line), or sync before paying out.
+  - **The sponsor:** its rent can be locked in escrows nobody ends. Options: a sponsor policy (sponsor `create` only when funded in the same transaction), or let the rent payer close a never-funded escrow after a wait.
+  - **Vouchers:** the treasury can accept a token it mints itself and so bring vouchers back. Only the treasury's own discipline stops it.
+  - **The paying wallet:** it is not bound to the DID. Options: an index rule (the profile's declared wallet must have paid), binding the wallet into the proof's message (only before deploy), or accepting badge selling as bounded.
+  - **Timing:** registering right after joining can link a face check to a profile. Needs a client wait rule, sized from real joining rates.
+  - **The client's `termsFor`:** accepts milliseconds as seconds, refund steps longer than silence, and a past service time. Refuse or warn.
+  - **`shapes/`:** the review lexicon still calls its field `escrow`; the handoff now says deal id. Renaming it is a `shapes/` session. Where the person's central wallet's key comes from (a `keys/` derivation, presumably) is not decided here.
+  - **Not done here:**
+    - the Kora config (so the fee payer went untested);
+    - devnet, a phone, a face check;
+    - the cryptographic review of groth16-solana and the syscalls;
+    - the paid review and the lawyer pass in "Before mainnet".
+  - **Still standing from earlier sessions:** the market template's `cancellationSteps` and `online-tutors`' default steps; the Solana Pay recipient on a phone; the host's genesis handle, import checks and deactivation; the carrier and Railway for the host; the permutation proof the code tree exists for; the pricing unit in the market file; whether a review points at its post; whether the `markets` validator reuses `validateMarket`; whether a product writes a seed file under the first passkey; the keys tests on Apple, Android and Windows; the devnet placeholder treasury; the handover's real-phone cases; and session 3's "not measured here" list.

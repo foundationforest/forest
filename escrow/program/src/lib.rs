@@ -240,6 +240,8 @@ pub mod forest_escrow {
 
     /// The buyer cancels alone, before a deadline: the step in force says how much comes back;
     /// the rest of the amount goes to the seller. Not after the last deadline; not while locked.
+    /// The seller's share rounds down, as in every split, so the buyer gets at least the step's
+    /// percent.
     pub fn cancel_buyer(ctx: Context<SettleAs>) -> Result<()> {
         let escrow = &ctx.accounts.escrow;
         require_keys_eq!(ctx.accounts.actor.key(), escrow.buyer, EscrowError::NotTheBuyer);
@@ -250,8 +252,7 @@ pub mod forest_escrow {
         let (index, step) = escrow
             .current_step(start, now)?
             .ok_or_else(|| error!(EscrowError::AfterLastDeadline))?;
-        let refund = share(escrow.amount, step.refund_bps);
-        let to_seller = escrow.amount - refund;
+        let to_seller = share(escrow.amount, BPS - step.refund_bps);
         emit!(CancelledByBuyer {
             escrow: escrow.key(),
             step: index,

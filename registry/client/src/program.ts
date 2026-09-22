@@ -416,15 +416,44 @@ export type RegisteredEvent = {
 }
 
 /**
- * The one entry per registration, read back out of the transaction log. Anchor writes an event as
- * a `Program data:` line whose bytes are the event's discriminator followed by its fields.
+ * The `Program data:` payloads that `programId` itself wrote, in order. Any program can write a
+ * data line holding a `Registered` entry's exact bytes, with any DID and a real code copied from a
+ * real registration, so the bytes alone prove nothing. What does is the runtime's own
+ * `Program <id> invoke [n]` and `Program <id> success` or `failed` lines, which no program can
+ * forge (a program's own output always starts `Program log:` or `Program data:`): a data line
+ * belongs to whichever program is innermost at that point.
  */
-export function decodeRegisteredEvents(logs: string[]): RegisteredEvent[] {
+export function programDataLines(logs: string[], programId: PublicKey = PROGRAM_ID): string[] {
+  const id = programId.toBase58()
+  const running: string[] = []
+  const out: string[] = []
+  for (const line of logs) {
+    const invoked = /^Program (\S+) invoke \[\d+\]$/.exec(line)
+    if (invoked) {
+      running.push(invoked[1])
+      continue
+    }
+    if (/^Program \S+ (success$|failed)/.test(line)) {
+      running.pop()
+      continue
+    }
+    if (line.startsWith('Program data: ') && running[running.length - 1] === id) {
+      out.push(line.slice('Program data: '.length))
+    }
+  }
+  return out
+}
+
+/**
+ * The one entry per registration, read back out of the transaction log. Anchor writes an event as
+ * a `Program data:` line whose bytes are the event's discriminator followed by its fields; only
+ * lines the registry program itself wrote are read.
+ */
+export function decodeRegisteredEvents(logs: string[], programId: PublicKey = PROGRAM_ID): RegisteredEvent[] {
   const want = discriminator('event', 'Registered')
   const out: RegisteredEvent[] = []
-  for (const line of logs) {
-    if (!line.startsWith('Program data: ')) continue
-    const bytes = new Uint8Array(Buffer.from(line.slice('Program data: '.length), 'base64'))
+  for (const payload of programDataLines(logs, programId)) {
+    const bytes = new Uint8Array(Buffer.from(payload, 'base64'))
     if (bytes.length < 8 || !want.every((v, i) => bytes[i] === v)) continue
     let at = 8
     const readString = () => {

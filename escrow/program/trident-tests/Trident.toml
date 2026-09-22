@@ -1,0 +1,6 @@
+[fuzz.metrics]
+enabled = true
+
+[[fuzz.programs]]
+address = "FoRE4JYRAxFpqRoPBzuPZZ9Yfn6ovtkBfUggynex3MKT"
+program = "../target/deploy/forest_escrow.so"

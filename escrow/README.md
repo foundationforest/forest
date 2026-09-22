@@ -20,7 +20,8 @@ and no fee.
 | | |
 |---|---|
 | `program/` | the program. Anchor, Rust, `cargo build-sbf`. |
-| `program/tests-litesvm/` | 22 LiteSVM tests with the clock moved by hand, and the wire format written out a second time. |
+| `program/tests-litesvm/` | 22 LiteSVM tests with the clock moved by hand, and the wire format written out a second time; `adversarial.rs` and `one_tap.rs` are session 10's attacks and the one-tap payment check (`docs/decisions/adversarial-review-1.md`). |
+| `program/trident-tests/` | a Trident fuzzer: random flows against the built program, a model of every escrow beside it, seven invariants checked after every step. |
 | `client/` | TypeScript, browser and Node: every instruction, the clock and the deadlines from a market file, the deposit address and its pay link, the account and the events decoded. |
 
 ## Running it
@@ -28,6 +29,7 @@ and no fee.
 ```
 cd escrow/program   && cargo build-sbf                    # needs Solana CLI 4.2.2 or later
 cd escrow/program/tests-litesvm && cargo test -- --nocapture
+cd escrow/program/trident-tests && TRIDENT_WITH_EXIT_CODE=1 cargo run --release --bin fuzz_escrow   # exit 99 if an invariant broke
 cd escrow/client    && npm install && npm test            # no chain needed
 cd escrow/client    && npm run test:validator             # starts solana-test-validator itself
 ```
@@ -42,6 +44,7 @@ Measured this session under LiteSVM, legacy transactions with a compute-budget i
 | `approve`, split | 14,037 | 1.0% | 482 | 39% |
 | `release_by_silence` | 12,008 | 0.9% | 383 | 31% |
 | `cancel_buyer` | 14,247 | 1.0% | 480 | 39% |
+| one tap: `create`, a plain transfer in, `approve`, in one transaction (session 10) | 50,700 to 51,700 | 3.7% | 668 | 54% |
 
 `create` varies because it derives two addresses, the escrow's and the deposit account's, and a
 derivation tries bump seeds until one lands off the curve at 1,500 units a try; the keys decide
@@ -77,7 +80,9 @@ These cannot change after v1 deploys.
   past the clock start plus the silence days. A step is in force while now is before its deadline,
   the clock start plus its offset; the first such step is the one that applies. A payout to the
   seller is `amount × bps / 10,000` rounded down; the buyer gets the rest of the deposit
-  account's balance. Locked means only agreement, the arbiter, or the seller giving everything
+  account's balance. In a buyer's cancellation `bps` is 10,000 minus the step's refund, so the
+  buyer gets at least the step's percent (session 10 fixed the program, which had rounded the
+  refund down instead). Locked means only agreement, the arbiter, or the seller giving everything
   back can end it. The order of checks in each instruction.
 - **The instruction bytes and the account lists.** Ten instructions; the ten events and their
   fields. Clients and indexes read them forever.
@@ -141,7 +146,9 @@ escrow ends, so the address does not resolve to an account afterwards; it resolv
 An index looks up the transactions that touched that address and reads the events: `Created`
 (the parties, the mint, the amount, the terms), `Funded`, then whatever ended it and `Closed`. The
 review's `subject` and the reviewer's wallet should match the escrow's seller and buyer, or the
-other way round, and the amount and outcome are what the review is evidence of.
+other way round, and the amount and outcome are what the review is evidence of. Only events the
+escrow program itself wrote count: any program can write a `Program data:` line with the same
+bytes, so `decodeEvents` reads the runtime's own invoke lines to see who wrote each one.
 
 The address is `["escrow", buyer, id]`, so a buyer can reuse it by reusing an id after the first
 escrow closed. The client picks a random 64-bit id, so that is a deliberate act; an index that

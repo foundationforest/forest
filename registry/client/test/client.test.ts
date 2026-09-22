@@ -15,6 +15,7 @@ import { Keypair, PublicKey } from '@solana/web3.js'
 import {
   BN254_R,
   MESSAGE_NS,
+  PROGRAM_ID,
   SCOPE_NS,
   TREASURY,
   TREASURY_PLACEHOLDER_SEED,
@@ -229,9 +230,21 @@ test('an entry decodes back out of a log line', () => {
     new Uint8Array(new Uint32Array([7]).buffer),
   ]
   const bytes = Buffer.concat(parts.map((p) => Buffer.from(p)))
-  const [event] = decodeRegisteredEvents([`Program data: ${bytes.toString('base64')}`])
+  const id = PROGRAM_ID.toBase58()
+  const line = `Program data: ${bytes.toString('base64')}`
+  const [event] = decodeRegisteredEvents([`Program ${id} invoke [1]`, line, `Program ${id} success`])
   assert.equal(event.market, market)
   assert.equal(event.did, did)
   assert.equal(event.listIndex, 7)
   assert.equal(hex(event.code), fixtures.proofs[0].code)
+
+  // Any program can write those same bytes. An index that took them would badge any DID it was
+  // shown, with a real code copied from a real registration. Only the registry's own lines count.
+  const forger = 'Forger1111111111111111111111111111111111111'
+  const token = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA'
+  assert.deepEqual(decodeRegisteredEvents([line]), [])
+  assert.deepEqual(decodeRegisteredEvents([`Program ${forger} invoke [1]`, line, `Program ${forger} success`]), [])
+  assert.deepEqual(decodeRegisteredEvents([`Program ${id} invoke [1]`, `Program ${token} invoke [2]`, line, `Program ${token} success`, `Program ${id} success`]), [])
+  assert.deepEqual(decodeRegisteredEvents([`Program ${id} invoke [1]`, `Program ${id} success`, `Program ${forger} invoke [1]`, line, `Program ${forger} failed: custom program error: 0x1`]), [])
+  assert.equal(decodeRegisteredEvents([`Program ${forger} invoke [1]`, `Program ${id} invoke [2]`, line, `Program ${id} success`, `Program ${forger} success`]).length, 1)
 })

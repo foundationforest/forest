@@ -1,0 +1,19 @@
+[workspace]
+
+[package]
+name = "forest-escrow-fuzz"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Trident fuzz tests for the Forest escrow program: random flows against the built program, invariants checked after every step."
+
+[[bin]]
+name = "fuzz_escrow"
+path = "fuzz_escrow/test_fuzz.rs"
+
+[dependencies]
+borsh = "1.5.3"
+sha2 = "0.10"
+
+[dependencies.trident-fuzz]
+version = "0.12.0"

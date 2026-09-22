@@ -1,0 +1,6 @@
+[fuzz.metrics]
+enabled = true
+
+[[fuzz.programs]]
+address = "FoRPzGfMyWjK8uLjMoZfae2yevnviyCsGsHM7AwBwK8B"
+program = "../target/deploy/forest_registry.so"
