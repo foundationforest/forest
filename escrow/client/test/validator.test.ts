@@ -54,7 +54,7 @@ import {
   solanaPayUrl,
   sweepRentIx,
   termsFor,
-  type MarketDefaults,
+  type OfferTerms,
 } from '../src/index.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -162,18 +162,16 @@ test('two deals go through a real validator: a proposal the seller accepts, and 
     [payer, mint, buyerTokens, sellerTokens],
   )
 
-  // The market's defaults, as its file would carry them, plus the parties' choices.
-  const market: MarketDefaults = {
-    silenceDays: 7,
-    arbiterAllowed: false,
+  // The offer's terms, as the seller set them in the post, plus the deal's own choices.
+  const offer: OfferTerms = {
+    autoReleaseDays: 7,
     cancellationSteps: [
       { hours: -24, refundPercent: 100 },
       { hours: 0, refundPercent: 50 },
     ],
-    tokens: [{ symbol: 'USDC', mint: mint.publicKey.toBase58(), chain: 'solana' }],
   }
   const inTenDays = BigInt(Math.floor(Date.now() / 1000)) + 10n * 86_400n
-  const terms = termsFor(market, { seller: seller.publicKey, amount: 1_000_000n, mint: mint.publicKey, serviceTime: inTenDays })
+  const terms = termsFor(offer, { seller: seller.publicKey, amount: 1_000_000n, mint: mint.publicKey, serviceTime: inTenDays })
   const escrow = escrowAddress(buyer.publicKey, terms.id)
   const vault = depositAddress(escrow, mint.publicKey)
 
@@ -253,7 +251,7 @@ test('two deals go through a real validator: a proposal the seller accepts, and 
 
   // An invoice: the seller opens it naming the buyer, accepted from creation; the buyer reads it,
   // checks its terms, and pays and approves in one tap.
-  const invoiceTerms = termsFor(market, { seller: seller.publicKey, amount: 2_000_000n, mint: mint.publicKey, serviceTime: inTenDays })
+  const invoiceTerms = termsFor(offer, { seller: seller.publicKey, amount: 2_000_000n, mint: mint.publicKey, serviceTime: inTenDays })
   const inv = invoice({ seller: seller.publicKey, buyer: buyer.publicKey, payer: payer.publicKey, mint: mint.publicKey, decimals: 6, terms: invoiceTerms })
   const invoiced = await send([inv.instruction], [payer, seller])
   assert.deepEqual(decodeEvents(await logsOf(invoiced)).map((ev) => ev.kind), ['created', 'accepted'])

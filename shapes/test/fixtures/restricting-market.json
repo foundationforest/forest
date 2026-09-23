@@ -1,0 +1,10 @@
+{
+  "name": "online-tutors",
+  "category": "freelance-work",
+  "roles": ["tutor", "student"],
+  "fields": {},
+  "evidenceTypes": ["escrow"],
+  "suggested": { "autoReleaseDays": 7, "cancellationSteps": [] },
+  "credentialIssuers": [],
+  "arbiterAllowed": false
+}

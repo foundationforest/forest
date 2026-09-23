@@ -55,7 +55,8 @@ import {
   share,
   silenceEnds,
   solanaPayUrl,
-  stepFromMarket,
+  stepFromOffer,
+  suggestedTerms,
   sweepRentIx,
   termsFor,
   unacceptedTimeout,
@@ -63,7 +64,7 @@ import {
   vaultAddress,
   withdrawIx,
   type EscrowAccount,
-  type MarketDefaults,
+  type OfferTerms,
   type Step,
   type Terms,
 } from '../src/index.ts'
@@ -645,17 +646,15 @@ test('an event only counts when the escrow program itself wrote it', () => {
   assert.deepEqual(decodeEvents([`Program ${id} invoke [1]`, line, `Program ${id} success`], new PublicKey(token)), [])
 })
 
-test('terms come from the market file\'s defaults and the parties\' choices', () => {
-  const market: MarketDefaults = {
-    silenceDays: 7,
-    arbiterAllowed: false,
+test('terms come from the offer; a market file only suggests them and limits nothing', () => {
+  const offer: OfferTerms = {
+    autoReleaseDays: 7,
     cancellationSteps: [
       { hours: -24, refundPercent: 100 },
       { hours: 0, refundPercent: 50 },
     ],
-    tokens: [{ symbol: 'USDC', mint: mint.toBase58(), chain: 'solana' }],
   }
-  const t = termsFor(market, { seller, amount: 1_000_000n, mint, serviceTime: new Date(Number(T0) * 1000), id: 7n }, NOW)
+  const t = termsFor(offer, { seller, amount: 1_000_000n, mint, serviceTime: new Date(Number(T0) * 1000), id: 7n }, NOW)
   assert.deepEqual(t, {
     id: 7n,
     seller,
@@ -668,30 +667,30 @@ test('terms come from the market file\'s defaults and the parties\' choices', ()
       { offset: 0n, refundBps: 5_000 },
     ],
   })
-  assert.throws(() => termsFor(market, { seller, amount: 1n, mint, arbiter }, NOW), /does not allow an arbiter/)
-  assert.throws(() => termsFor(market, { seller, amount: 1n, mint: Keypair.generate().publicKey }, NOW), /does not accept mint/)
-  const allowed = termsFor({ ...market, arbiterAllowed: true }, { seller, amount: 1n, mint, arbiter, silenceDays: 3, steps: [] }, NOW)
-  assert.deepEqual(allowed.arbiter, arbiter)
-  assert.equal(allowed.silenceDays, 3)
-  assert.deepEqual(allowed.steps, [])
-  assert.equal(allowed.serviceTime, null)
-  const noSteps = termsFor({ ...market, cancellationSteps: undefined }, { seller, amount: 1n, mint }, NOW)
-  assert.deepEqual(noSteps.steps, [])
-  assert.ok(noSteps.id >= 0n)
-  assert.deepEqual(stepFromMarket({ hours: 1.5, refundPercent: 12.5 }), { offset: 5_400n, refundBps: 1_250 })
-  assert.throws(() => stepFromMarket({ hours: 1, refundPercent: 101 }), /0 to 100/)
+  // The offer's arbiter is the deal's, and any mint works: no market file is read.
+  const withArbiter = termsFor({ autoReleaseDays: 3, arbiter: arbiter.toBase58() }, { seller, amount: 1n, mint: Keypair.generate().publicKey }, NOW)
+  assert.deepEqual(withArbiter.arbiter, arbiter)
+  assert.equal(withArbiter.silenceDays, 3)
+  assert.deepEqual(withArbiter.steps, [])
+  assert.equal(withArbiter.serviceTime, null)
+  assert.ok(withArbiter.id >= 0n)
+  assert.equal(termsFor({ autoReleaseDays: 3, arbiter: null }, { seller, amount: 1n, mint }, NOW).arbiter, null)
+  // A market file's suggestions are starting values for the seller's offer, copied, never a limit.
+  const market = { suggested: { autoReleaseDays: 7, cancellationSteps: [{ hours: -24, refundPercent: 100 }] } }
+  const suggested = suggestedTerms(market)
+  assert.deepEqual(suggested, { autoReleaseDays: 7, cancellationSteps: [{ hours: -24, refundPercent: 100 }], arbiter: null })
+  suggested.cancellationSteps![0].hours = -48
+  assert.equal(market.suggested.cancellationSteps[0].hours, -24, 'editing the offer leaves the market file alone')
+  assert.deepEqual(termsFor({ ...suggested, autoReleaseDays: 14 }, { seller, amount: 1n, mint, id: 1n }, NOW).silenceDays, 14)
+  assert.deepEqual(stepFromOffer({ hours: 1.5, refundPercent: 12.5 }), { offset: 5_400n, refundBps: 1_250 })
+  assert.throws(() => stepFromOffer({ hours: 1, refundPercent: 101 }), /0 to 100/)
 })
 
 test('terms the program accepts but nobody meant are refused before signing', () => {
   // Adversarial review 1, finding 13: termsFor used to build each of these, and create accepts
   // them. They are now refused by `checkTerms`, which termsFor, createIx and acceptIx all run.
-  const market: MarketDefaults = {
-    silenceDays: 7,
-    arbiterAllowed: true,
-    cancellationSteps: [{ hours: 240, refundPercent: 100 }],
-    tokens: [{ symbol: 'USDC', mint: mint.toBase58(), chain: 'solana' }],
-  }
-  const sane = { ...market, cancellationSteps: [{ hours: 24, refundPercent: 100 }] }
+  const offer: OfferTerms = { autoReleaseDays: 7, cancellationSteps: [{ hours: 240, refundPercent: 100 }] }
+  const sane: OfferTerms = { autoReleaseDays: 7, cancellationSteps: [{ hours: 24, refundPercent: 100 }] }
   // Times in seconds: `Date.now()` is milliseconds, and would put the service time some 55,000
   // years out, where silence never comes.
   assert.throws(() => termsFor(sane, { seller, amount: 1n, mint, serviceTime: 1_800_000_000_000 }, NOW), /not unix seconds/)
@@ -699,8 +698,8 @@ test('terms the program accepts but nobody meant are refused before signing', ()
   assert.throws(() => termsFor(sane, { seller, amount: 1n, mint, serviceTime: new Date(1000) }, NOW), /already passed/)
   assert.doesNotThrow(() => termsFor(sane, { seller, amount: 1n, mint, serviceTime: T0 }, NOW))
   // Steps sane: a refund step that outlasts silence races the seller's release.
-  assert.throws(() => termsFor(market, { seller, amount: 1n, mint }, NOW), /outlasts silence/)
-  assert.doesNotThrow(() => termsFor(market, { seller, amount: 1n, mint, silenceDays: 10 }, NOW), 'a step on the last second of silence is fine')
+  assert.throws(() => termsFor(offer, { seller, amount: 1n, mint }, NOW), /outlasts silence/)
+  assert.doesNotThrow(() => termsFor({ ...offer, autoReleaseDays: 10 }, { seller, amount: 1n, mint }, NOW), 'a step on the last second of silence is fine')
   // And the same through createIx, whoever builds the terms.
   assert.throws(() => createIx({ buyer, payer, mint, terms: terms({ serviceTime: 1_800_000_000_000n }), now: NOW }), /not unix seconds/)
   assert.throws(() => createIx({ buyer, payer, mint, terms: terms({ steps: [{ offset: 8n * DAY, refundBps: 10_000 }] }), now: NOW }), /outlasts silence/)

@@ -35,7 +35,7 @@ admin, no config account, no pause and no fee.
 | `program/` | the program. Anchor, Rust, `cargo build-sbf`. |
 | `program/tests-litesvm/` | 64 LiteSVM tests with the clock moved by hand, and the wire format written out a second time: `escrow.rs` (32), `adversarial.rs` (30, session 10's attacks as sessions 11 and 12 left them, and session 12's) and `one_tap.rs` (2, the one-tap payment, its receipt, and a second payment to its link) (`docs/decisions/adversarial-review-1.md`). |
 | `program/trident-tests/` | a Trident fuzzer: random flows against the built program, a model of every escrow beside it, eleven invariants checked after every step and at the end of every run. |
-| `client/` | TypeScript, browser and Node: every instruction, the terms checked before signing, the invoice, the clock and the deadlines from a market file, the deposit address and its pay link, the account and the events decoded. |
+| `client/` | TypeScript, browser and Node: every instruction, the terms checked before signing, the invoice, the terms from an offer, the clock and the deadlines, the deposit address and its pay link, the account and the events decoded. |
 
 ## Running it
 
@@ -155,10 +155,13 @@ These cannot change after v1 deploys.
 
 ## What the app decides
 
-Everything the program does not know. The market file carries the defaults (`silenceDays`,
-`arbiterAllowed`, the accepted `tokens`, and cancellation steps as hours from the clock start and
-a refund percent, a field the market template does not have yet, see "Open"); the parties choose
-the rest; `termsFor` in the client puts them together and refuses what the market forbids.
+Everything the program does not know. An escrow is created from the offer's terms: the post's
+`terms` block, which the seller sets per offer (the auto-release days, which the program calls
+silence days; up to four cancellation steps as hours from the clock start and a refund percent;
+an optional arbiter). The deal adds its own seller, amount, mint, service time and id. `termsFor`
+in the client puts the two together. A market file only suggests starting values for an offer's
+terms (`suggestedTerms`); it restricts nothing, so any mint the program accepts and any arbiter
+work, and no market file is read when an escrow is made.
 
 - **Whether the terms make sense.** The program accepts terms nobody means. Before a party signs
   anything that commits it to them (`create`, `accept`, or paying an invoice), the client's
@@ -315,7 +318,7 @@ ships, and each is logged in `docs/changes.md`.
    seller's acceptance is that observation. Only the escrow's own address can own that account,
    so there is nothing to check but the mint. Money that arrives before the escrow does is not
    stranded.
-3. **A step's deadline is a signed offset in seconds from the clock start**, so a market can say
+3. **A step's deadline is a signed offset in seconds from the clock start**, so an offer can say
    "until a day before the session, everything back" (negative) or "within a day of funding"
    (positive), and the same steps mean the same thing whether or not a service time is set.
    Offsets must strictly rise; refunds may go in any order.
@@ -338,8 +341,9 @@ ships, and each is logged in `docs/changes.md`.
 11. **Every ending that can pay the seller takes both parties' token accounts**, even when one
     receives nothing, so those seven share one account list and one hand-written encoder.
     `withdraw` and `close_unfunded`, which never pay the seller, take the buyer's only.
-12. **The market file's steps are `{ hours, refundPercent }`**, converted by the client. The
-    market template does not have the field yet; the client treats its absence as no steps.
+12. **An offer's steps are `{ hours, refundPercent }`**, as the post's `terms` and a market file's
+    `suggested` block write them, converted by the client (`stepFromOffer`). Absent means no
+    steps.
 13. **Anchor 1.2, `cargo build-sbf`, no IDL**, as in the registry: the client and the Rust tests
     both write the bytes by hand.
 14. **The clock never starts before the seller accepts** (session 11), now decided by Carlos with
@@ -381,8 +385,7 @@ ships, and each is logged in `docs/changes.md`.
 ## What this does not do
 
 No devnet, no mainnet, no Kora. No paid review has happened, and `docs/handoff.md`'s "Before
-mainnet" list still stands in full. The market template does not yet carry cancellation steps.
-Whether the wallets people use accept a program-derived address as a Solana Pay recipient has not
+mainnet" list still stands in full. Whether the wallets people use accept a program-derived address as a Solana Pay recipient has not
 been tried on a phone; if one does not, the app sends to the deposit address directly, which the
 client also gives. Tokens of another mint sent to an escrow's address are not recovered: its
 associated token account for that mint is a different address, and nothing here signs for it. SOL

@@ -34,6 +34,10 @@
             "type": "ref",
             "ref": "#price"
           },
+          "terms": {
+            "type": "ref",
+            "ref": "#terms"
+          },
           "availability": {
             "type": "string",
             "description": "When, in the poster's words.",
@@ -65,22 +69,64 @@
     "price": {
       "type": "object",
       "description": "The price block. Per hour, per day, per job: the app multiplies before funding, one escrow per payment.",
-      "required": ["amount", "token", "per"],
+      "required": ["amount", "mint", "per"],
       "properties": {
         "amount": {
           "type": "string",
           "description": "Amount in whole units of the token, as decimal text: \"25\", \"12.50\".",
           "maxLength": 32
         },
-        "token": {
+        "mint": {
           "type": "string",
-          "description": "Token symbol as listed in the market file's accepted tokens.",
-          "maxLength": 16
+          "description": "The token, named by its mint's address on Solana, base58. Any classic token; which tokens an index weighs is the index's call.",
+          "minLength": 32,
+          "maxLength": 44
         },
         "per": {
           "type": "string",
           "description": "What one amount buys.",
           "enum": ["hour", "day", "job"]
+        }
+      }
+    },
+    "terms": {
+      "type": "object",
+      "description": "The terms every deal made from this post is created on, set by the poster per post. Required on an offer, where they are the seller's; a request's terms come from the seller who answers it. A market file only suggests starting values.",
+      "required": ["autoReleaseDays"],
+      "properties": {
+        "autoReleaseDays": {
+          "type": "integer",
+          "description": "Days after the clock starts when the money goes to the seller unless the buyer has objected.",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "cancellationSteps": {
+          "type": "array",
+          "description": "Up to four steps, deadlines strictly rising, none after auto-release. Absent: the buyer cannot cancel alone once the seller has accepted.",
+          "items": { "type": "ref", "ref": "#cancellationStep" },
+          "maxLength": 4
+        },
+        "arbiter": {
+          "type": "string",
+          "description": "Optional. The key that may decide any split once the seller has accepted, base58. Absent: no arbiter.",
+          "minLength": 32,
+          "maxLength": 44
+        }
+      }
+    },
+    "cancellationStep": {
+      "type": "object",
+      "description": "Before this deadline the buyer may cancel alone and get this percent back; the rest goes to the seller.",
+      "required": ["hours", "refundPercent"],
+      "properties": {
+        "hours": {
+          "type": "integer",
+          "description": "The deadline, in hours from the clock start. Negative: before the service time."
+        },
+        "refundPercent": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
         }
       }
     }

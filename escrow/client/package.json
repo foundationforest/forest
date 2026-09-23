@@ -2,7 +2,7 @@
   "name": "@forest/escrow-client",
   "version": "0.0.0",
   "private": true,
-  "description": "Builds every Forest escrow instruction, computes the clock start and each deadline from a market file's defaults, produces the deposit address and its pay link, and decodes the escrow account and its events.",
+  "description": "Builds every Forest escrow instruction, builds an escrow's terms from an offer's terms, computes the clock start and each deadline, produces the deposit address and its pay link, and decodes the escrow account and its events.",
   "license": "Apache-2.0",
   "type": "module",
   "main": "./dist/index.js",
