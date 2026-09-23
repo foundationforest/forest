@@ -61,6 +61,47 @@ test('a post priced per week is rejected', () => {
   assertRejected(validateRecord(post), /price\/per must be one of \(hour\|day\|job\)/)
 })
 
+test('a post names its token by mint, not by symbol', () => {
+  const post = example('post')
+  delete post.price.mint
+  post.price.token = 'USDC'
+  assertRejected(validateRecord(post), /price must have the property "mint"/)
+})
+
+test('an offer carries terms; a request need not', () => {
+  const offer = example('post')
+  delete offer.terms
+  assertRejected(validateRecord(offer), /an offer carries the seller's terms/)
+  const request = { ...offer, direction: 'request' }
+  assert.deepEqual(validateRecord(request), { ok: true, shape: 'post', errors: [] })
+  const bare = example('post')
+  bare.terms = { autoReleaseDays: 3 }
+  assert.deepEqual(validateRecord(bare), { ok: true, shape: 'post', errors: [] }, 'no steps and no arbiter is fine')
+  bare.terms.arbiter = 'FKmToEDEJAXW8Pc72r9VnkxfzyE1Z6BbhHSJGfS132ud'
+  assert.deepEqual(validateRecord(bare), { ok: true, shape: 'post', errors: [] }, 'an arbiter is always allowed')
+})
+
+test("an offer's terms are ones an escrow can be created on", () => {
+  const cases = [
+    [(t) => (t.autoReleaseDays = 0), /autoReleaseDays can not be less than 1/],
+    [(t) => (t.autoReleaseDays = 65536), /autoReleaseDays can not be greater than 65535/],
+    [(t) => (t.cancellationSteps[1].refundPercent = 101), /refundPercent can not be greater than 100/],
+    [(t) => (t.cancellationSteps[1].hours = 1.5), /hours must be an integer/],
+    [(t) => t.cancellationSteps.push({ hours: 1, refundPercent: 0 }, { hours: 2, refundPercent: 0 }, { hours: 3, refundPercent: 0 }), /cancellationSteps must not have more than 4 elements/],
+    [(t) => (t.cancellationSteps[1].hours = -24), /cancellationSteps\/1: deadlines must strictly rise/],
+    [(t) => (t.cancellationSteps[1].hours = 7 * 24 + 1), /cancellationSteps\/1: a deadline 169 hours out outlasts auto-release at 168/],
+    [(t) => (t.arbiter = 'bob'), /arbiter must not be shorter than 32 characters/],
+  ]
+  for (const [spoil, pattern] of cases) {
+    const post = example('post')
+    spoil(post.terms)
+    assertRejected(validateRecord(post), pattern)
+  }
+  const edge = example('post')
+  edge.terms.cancellationSteps[1].hours = 7 * 24
+  assert.deepEqual(validateRecord(edge), { ok: true, shape: 'post', errors: [] }, 'a step on the last hour of auto-release is fine')
+})
+
 test('a review rated 6 is rejected', () => {
   const review = example('review')
   review.rating = 6
@@ -141,36 +182,79 @@ test('a market file cannot require a field it did not add', () => {
   assertRejected(validateMarket(m), /"nope" is not one of this market's post fields/)
 })
 
-test('a market file has exactly eight keys', () => {
+test('a market file has exactly seven keys', () => {
   const extra = market()
   extra.pricing = 'hourly'
   assertRejected(validateMarket(extra), /unknown key "pricing"/)
   const missing = market()
-  delete missing.tokens
-  assertRejected(validateMarket(missing), /missing "tokens"/)
+  delete missing.suggested
+  assertRejected(validateMarket(missing), /missing "suggested"/)
+})
+
+test('a market file restricts no deal: no arbiter rule, no token list, no fixed silence', () => {
+  for (const [key, value] of [
+    ['arbiterAllowed', false],
+    ['tokens', [{ symbol: 'USDC', mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', chain: 'solana' }]],
+    ['silenceDays', 7],
+    ['reviewEvidence', 'escrow'],
+  ]) {
+    const m = market()
+    m[key] = value
+    assertRejected(validateMarket(m), new RegExp(`unknown key "${key}"`))
+  }
+  const m = market()
+  m.suggested.arbiter = 'FKmToEDEJAXW8Pc72r9VnkxfzyE1Z6BbhHSJGfS132ud'
+  assertRejected(validateMarket(m), /suggested: unknown key "arbiter"; a market suggests only autoReleaseDays and cancellationSteps, and restricts nothing/)
+})
+
+test('a category is any slug: a later one is a new file, not code', () => {
+  for (const category of ['home-services', 'freelance-work', 'buy-and-sell', 'rides']) {
+    const m = market()
+    m.category = category
+    assert.deepEqual(validateMarket(m), { ok: true, errors: [] }, category)
+  }
+  const m = market()
+  m.category = 'Home Services'
+  assertRejected(validateMarket(m), /category must be a lowercase slug/)
 })
 
 test('market scalars are checked', () => {
   const m = market()
-  m.silenceDays = 0
-  m.arbiterAllowed = 'no'
-  m.reviewEvidence = 'photo'
+  m.evidenceTypes = ['escrow', 'Shipment Tracking', 'escrow']
   m.credentialIssuers = ['bob']
-  m.tokens = [{ symbol: 'usdc', mint: 'x', chain: 'ethereum' }]
   const result = validateMarket(m)
-  assertRejected(result, /silenceDays must be a whole number of days, at least 1/)
-  assertRejected(result, /arbiterAllowed must be true or false/)
-  assertRejected(result, /reviewEvidence must be one of \(escrow\|none\)/)
+  assertRejected(result, /evidenceTypes: "Shipment Tracking" must be a lowercase slug/)
+  assertRejected(result, /evidenceTypes must be distinct/)
   assertRejected(result, /"bob" is not a DID/)
-  assertRejected(result, /symbol "usdc" must be/)
-  assertRejected(result, /mint for "usdc" must be a base58 public key/)
-  assertRejected(result, /chain for "usdc" must be one of \(solana\)/)
+  const none = market()
+  none.evidenceTypes = []
+  assert.deepEqual(validateMarket(none), { ok: true, errors: [] }, 'no evidence types is a valid list')
 })
 
-test('a token entry is symbol, mint, and chain, nothing less', () => {
+test('suggested values are ones an escrow can hold', () => {
+  const cases = [
+    [(s) => (s.autoReleaseDays = 0), /suggested\/autoReleaseDays must be a whole number of days, 1 to 65535/],
+    [(s) => (s.autoReleaseDays = 1.5), /suggested\/autoReleaseDays must be a whole number/],
+    [(s) => (s.cancellationSteps = 'none'), /suggested\/cancellationSteps must be an array/],
+    [(s) => (s.cancellationSteps = [{ hours: -24 }]), /cancellationSteps\/0: a step has exactly "hours" and "refundPercent"/],
+    [(s) => (s.cancellationSteps = [{ hours: 0, refundPercent: 50.5 }]), /cancellationSteps\/0\/refundPercent must be a whole percent, 0 to 100/],
+    [(s) => (s.cancellationSteps = [{ hours: 0, refundPercent: 100 }, { hours: 0, refundPercent: 50 }]), /cancellationSteps\/1: deadlines must strictly rise/],
+    [(s) => (s.cancellationSteps = [{ hours: 169, refundPercent: 100 }]), /outlasts auto-release at 168/],
+    [(s) => (s.cancellationSteps = [1, 2, 3, 4, 5].map((hours) => ({ hours, refundPercent: 0 }))), /at most 4 steps/],
+    [(s) => delete s.cancellationSteps, /suggested: missing "cancellationSteps"/],
+  ]
+  for (const [spoil, pattern] of cases) {
+    const m = market()
+    spoil(m.suggested)
+    assertRejected(validateMarket(m), pattern)
+  }
   const m = market()
-  m.tokens = [{ symbol: 'USDC', mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v' }]
-  assertRejected(validateMarket(m), /each entry has exactly "symbol", "mint", and "chain"/)
+  m.suggested.cancellationSteps = [
+    { hours: -24, refundPercent: 100 },
+    { hours: 0, refundPercent: 50 },
+    { hours: 168, refundPercent: 0 },
+  ]
+  assert.deepEqual(validateMarket(m), { ok: true, errors: [] })
 })
 
 // Records against their lexicon plus a market file
@@ -181,15 +265,20 @@ for (const shape of SHAPES) {
   })
 }
 
-test('a post must use the market name, one of its roles, and an accepted token', () => {
+test('a post must use the market name and one of its roles', () => {
   const post = example('post')
   post.market = 'plumbers'
   post.role = 'chef'
-  post.price.token = 'EURC'
   const result = validateRecord(post, { market: market() })
   assertRejected(result, /market must be "online-tutors", got "plumbers"/)
   assertRejected(result, /role must be one of \(tutor\|student\), got "chef"/)
-  assertRejected(result, /price\/token must be one of \(USDC\), got "EURC"/)
+})
+
+test("a market file limits no offer's token or terms", () => {
+  const post = example('post')
+  post.price.mint = 'HzwqbKZw8HxMN6bF2yFZNrht3c2iXXzpKcFu7uBEDKtr' // a mint no market file names
+  post.terms = { autoReleaseDays: 30, arbiter: 'FKmToEDEJAXW8Pc72r9VnkxfzyE1Z6BbhHSJGfS132ud' } // not the market's 7 days
+  assert.deepEqual(validateRecord(post, { market: market() }), { ok: true, shape: 'post', errors: [] })
 })
 
 test("a post must carry the market's required extra field, typed as the market says", () => {
@@ -201,15 +290,15 @@ test("a post must carry the market's required extra field, typed as the market s
   assertRejected(validateRecord(again, { market: market() }), /languages\/0 must be a well-formed BCP 47/)
 })
 
-test('review evidence weighs, never rejects: a review without an escrow is valid in an escrow market', () => {
+test('evidence weighs, never rejects: a review without an escrow is valid in an escrow market', () => {
   const review = example('review')
   delete review.escrow
-  const strict = market()
-  assert.equal(strict.reviewEvidence, 'escrow')
-  assert.deepEqual(validateRecord(review, { market: strict }), { ok: true, shape: 'review', errors: [] })
-  const lenient = market()
-  lenient.reviewEvidence = 'none'
-  assert.deepEqual(validateRecord(review, { market: lenient }), { ok: true, shape: 'review', errors: [] })
+  const withEscrow = market()
+  assert.deepEqual(withEscrow.evidenceTypes, ['escrow'])
+  assert.deepEqual(validateRecord(review, { market: withEscrow }), { ok: true, shape: 'review', errors: [] })
+  const none = market()
+  none.evidenceTypes = []
+  assert.deepEqual(validateRecord(review, { market: none }), { ok: true, shape: 'review', errors: [] })
 })
 
 test('a broken market file fails the record, and says so', () => {
@@ -237,9 +326,9 @@ test('cli: valid inputs exit 0', () => {
 })
 
 test('cli: invalid input exits 1 and lists the errors', () => {
-  const bad = cli('record', join(examples, 'review.json'), '--market', join(here, 'fixtures', 'lenient-market.json'))
+  const bad = cli('record', join(examples, 'review.json'), '--market', join(here, 'fixtures', 'restricting-market.json'))
   assert.equal(bad.code, 1)
-  assert.match(bad.err, /- market file: reviewEvidence must be one of/)
+  assert.match(bad.err, /- market file: unknown key "arbiterAllowed"/)
 })
 
 test('cli: bad usage or unreadable input exits 2', () => {

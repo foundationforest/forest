@@ -4,7 +4,14 @@
   "market": "online-tutors",
   "role": "tutor",
   "description": "Conversation-first Portuguese lessons for adults, A1 to B2. One-hour sessions over video; homework optional.",
-  "price": { "amount": "25", "token": "USDC", "per": "hour" },
+  "price": { "amount": "25", "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", "per": "hour" },
+  "terms": {
+    "autoReleaseDays": 7,
+    "cancellationSteps": [
+      { "hours": -24, "refundPercent": 100 },
+      { "hours": 0, "refundPercent": 50 }
+    ]
+  },
   "availability": "Weekday evenings, Lisbon time.",
   "remote": true,
   "expires": "2026-12-31T23:59:59Z",

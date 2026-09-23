@@ -1,12 +1,16 @@
-// From a market file's defaults and the parties' choices to the terms an escrow is created with,
-// and from an escrow's state to its clock: where the clock starts, when silence ends, when each
+// From an offer's terms and the deal's own choices to the terms an escrow is created with, and
+// from an escrow's state to its clock: where the clock starts, when silence ends, when each
 // cancellation deadline falls and which step is in force.
+//
+// An offer's terms are the seller's, set per offer in the post's `terms` block. A market file only
+// suggests starting values for them (`suggestedTerms`); nothing here reads a market file to limit
+// a deal.
 //
 // The program does none of this reading: it stores offsets and compares the cluster clock to
 // them. This file is the same arithmetic on the app's side, so a deadline the app shows is the
 // deadline the program will enforce.
 
-import type { PublicKey } from '@solana/web3.js'
+import { PublicKey } from '@solana/web3.js'
 
 import {
   BPS,
@@ -21,30 +25,32 @@ import {
   type Terms,
 } from './program.ts'
 
-/** A cancellation step as a market file writes it: hours from the clock start, and a percent. */
-export type MarketStep = { hours: number; refundPercent: number }
+/** A cancellation step as a post's terms write it: hours from the clock start, and a percent. */
+export type OfferStep = { hours: number; refundPercent: number }
 
-/** The escrow defaults a market file carries. The rest of the file is not read here. */
-export type MarketDefaults = {
-  silenceDays: number
-  arbiterAllowed: boolean
-  /** Not in the market template yet (session 8 left it open); absent means no steps. */
-  cancellationSteps?: MarketStep[]
-  tokens: { symbol: string; mint: string; chain: string }[]
+/**
+ * An offer's terms, as the post's `terms` block carries them: the seller's, set per offer. The
+ * program calls the auto-release days its silence days.
+ */
+export type OfferTerms = {
+  autoReleaseDays: number
+  /** Absent means none: the buyer cannot cancel alone once the seller has accepted. */
+  cancellationSteps?: OfferStep[]
+  /** The arbiter's key, base58. Absent or null: no arbiter. */
+  arbiter?: string | null
 }
 
-/** What the parties choose for one deal. Everything the market does not fix. */
+/** A market file's `suggested` block: starting values an app offers a seller. Never a limit. */
+export type MarketSuggestions = { autoReleaseDays: number; cancellationSteps: OfferStep[] }
+
+/** What one deal fixes beyond the offer's terms. */
 export type Choices = {
   seller: PublicKey
   amount: bigint
+  /** Any classic SPL Token mint the program accepts; the post's `price.mint`. */
   mint: PublicKey
-  arbiter?: PublicKey | null
   /** A Date or unix seconds. Null or absent: the clock starts at funding. */
   serviceTime?: Date | bigint | number | null
-  /** Overrides the market's default. */
-  silenceDays?: number
-  /** Overrides the market's default steps, already as offsets in seconds. */
-  steps?: Step[]
   id?: bigint
 }
 
@@ -56,7 +62,7 @@ export function toUnix(t: Date | bigint | number): bigint {
 }
 
 /** Hours and percent to seconds and basis points. */
-export function stepFromMarket(s: MarketStep): Step {
+export function stepFromOffer(s: OfferStep): Step {
   if (!Number.isFinite(s.hours)) throw new RangeError(`hours must be a number, not ${s.hours}`)
   if (!Number.isFinite(s.refundPercent) || s.refundPercent < 0 || s.refundPercent > 100) {
     throw new RangeError(`refundPercent must be 0 to 100, not ${s.refundPercent}`)
@@ -65,17 +71,24 @@ export function stepFromMarket(s: MarketStep): Step {
 }
 
 /**
- * The terms for one deal: the market's defaults, the parties' choices on top. Throws when the
- * choices break the market's rules (an arbiter where none is allowed, a token the market does
- * not accept), or make no sense (`checkTerms`: a time in milliseconds or already past, a refund
- * step that outlasts silence). The program's own rules are checked when the instruction is built.
+ * Starting values for a seller writing an offer's terms: the market file's suggestions, copied,
+ * with no arbiter. The seller changes any of them; nothing checks a deal against them.
  */
-export function termsFor(market: MarketDefaults, choices: Choices, now?: bigint): Terms {
-  const accepted = market.tokens.some((t) => t.chain === 'solana' && t.mint === choices.mint.toBase58())
-  if (!accepted) throw new Error(`the market does not accept mint ${choices.mint.toBase58()}`)
-  const arbiter = choices.arbiter ?? null
-  if (arbiter && !market.arbiterAllowed) throw new Error('the market does not allow an arbiter')
-  const steps = choices.steps ?? (market.cancellationSteps ?? []).map(stepFromMarket)
+export function suggestedTerms(market: { suggested: MarketSuggestions }): OfferTerms {
+  const { autoReleaseDays, cancellationSteps } = market.suggested
+  return { autoReleaseDays, cancellationSteps: cancellationSteps.map((s) => ({ ...s })), arbiter: null }
+}
+
+/**
+ * The terms for one deal, created from the offer's terms: its auto-release days, its steps and its
+ * arbiter, plus the deal's own seller, amount, mint, service time and id. No market file is read:
+ * any token and any arbiter work. Throws when the terms make no sense (`checkTerms`: a time in
+ * milliseconds or already past, a refund step that outlasts silence), with the offer's arbiter as
+ * the one agreed to. The program's own rules are checked when the instruction is built.
+ */
+export function termsFor(offer: OfferTerms, choices: Choices, now?: bigint): Terms {
+  const arbiter = offer.arbiter ? new PublicKey(offer.arbiter) : null
+  const steps = (offer.cancellationSteps ?? []).map(stepFromOffer)
   if (steps.length > MAX_STEPS) throw new Error(`at most ${MAX_STEPS} cancellation steps`)
   const terms: Terms = {
     id: choices.id ?? randomId(),
@@ -83,7 +96,7 @@ export function termsFor(market: MarketDefaults, choices: Choices, now?: bigint)
     arbiter,
     amount: choices.amount,
     serviceTime: choices.serviceTime === undefined || choices.serviceTime === null ? null : toUnix(choices.serviceTime),
-    silenceDays: choices.silenceDays ?? market.silenceDays,
+    silenceDays: offer.autoReleaseDays,
     steps,
   }
   checkTerms(terms, { arbiter, now })
