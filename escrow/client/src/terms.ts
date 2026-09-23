@@ -12,6 +12,7 @@ import {
   BPS,
   MAX_STEPS,
   SECONDS_PER_DAY,
+  UNACCEPTED_DAYS,
   checkTerms,
   randomId,
   share,
@@ -89,15 +90,29 @@ export function termsFor(market: MarketDefaults, choices: Choices, now?: bigint)
   return terms
 }
 
+const later = (a: bigint, b: bigint): bigint => (a > b ? a : b)
+
 /**
- * Where the clock starts: the service time if set, else when funding was observed, but never
- * before the seller accepted; null until then.
+ * Where the clock starts: the latest of the service time (if set), the observed funding and the
+ * seller's acceptance; null until the seller has accepted and the funding has been observed.
+ * Funding always counts, so an invoice paid late has its whole silence period after the money.
  */
 export function clockStart(e: Pick<EscrowAccount, 'serviceTime' | 'fundedAt' | 'acceptedAt'>): bigint | null {
-  if (e.acceptedAt === null) return null
-  const base = e.serviceTime ?? e.fundedAt
-  if (base === null) return null
-  return base > e.acceptedAt ? base : e.acceptedAt
+  if (e.acceptedAt === null || e.fundedAt === null) return null
+  return later(later(e.serviceTime ?? 0n, e.fundedAt), e.acceptedAt)
+}
+
+/**
+ * When anyone may send back an escrow the seller never accepted (`close_unaccepted` succeeds from
+ * the second after): the last cancellation deadline, counted from the later of the service time
+ * and the observed funding, or 30 days after the observed funding when there are no steps. Null
+ * until the funding has been observed.
+ */
+export function unacceptedTimeout(e: Pick<EscrowAccount, 'serviceTime' | 'fundedAt' | 'steps'>): bigint | null {
+  if (e.fundedAt === null) return null
+  const last = e.steps[e.steps.length - 1]
+  if (last === undefined) return e.fundedAt + UNACCEPTED_DAYS * SECONDS_PER_DAY
+  return later(e.serviceTime ?? 0n, e.fundedAt) + last.offset
 }
 
 /** When silence releases: the first second after `start + silenceDays`. */
@@ -120,7 +135,7 @@ export function currentStep(steps: Step[], start: bigint, now: bigint): Deadline
 export type Schedule = {
   /** The seller has accepted. Until then only a full approval or the buyer's withdrawal can happen. */
   accepted: boolean
-  /** null: not accepted yet, or no service time and the funding not yet observed; nothing below can be known. */
+  /** null: not accepted yet, or the funding not yet observed; nothing below can be known. */
   clockStart: bigint | null
   /** The first second at which `release_by_silence` succeeds. */
   silenceReleasesAt: bigint | null
@@ -136,6 +151,12 @@ export type Schedule = {
    * null for now. The buyer and the seller can at any time.
    */
   rentPayerCanCloseUnfundedAt: bigint | null
+  /**
+   * For a funded escrow the seller has not accepted: the first second at which anyone can
+   * `close_unaccepted` and send everything back to the buyer. Null once accepted or ended, or
+   * while the funding has not been observed (send `mark_funded`).
+   */
+  closeUnacceptedAt: bigint | null
 }
 
 /** The escrow's clock as the program will read it at `now` (unix seconds; default: now). */
@@ -150,6 +171,7 @@ export function schedule(
   const current = start === null ? null : currentStep(e.steps, start, now)
   const unfundedReference = e.serviceTime ?? e.createdAt
   const last = e.steps.length === 0 ? null : unfundedReference + e.steps[e.steps.length - 1].offset
+  const timeout = e.acceptedAt === null && e.status !== 'ended' ? unacceptedTimeout(e) : null
   return {
     accepted: e.acceptedAt !== null,
     clockStart: start,
@@ -160,6 +182,7 @@ export function schedule(
     buyerCanCancel: current !== null && e.status !== 'locked' && e.status !== 'ended',
     buyerCanObject: start !== null && !silenceOver && e.status !== 'locked' && e.status !== 'ended',
     rentPayerCanCloseUnfundedAt: last === null || now > last ? null : last + 1n,
+    closeUnacceptedAt: timeout === null ? null : timeout + 1n,
   }
 }
 

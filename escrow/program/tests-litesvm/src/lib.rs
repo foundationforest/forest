@@ -15,6 +15,7 @@ use solana_clock::Clock;
 use solana_instruction::{AccountMeta, Instruction};
 use solana_keypair::Keypair;
 use solana_message::Message;
+use solana_rent::Rent;
 use solana_signer::Signer;
 use solana_transaction::Transaction;
 
@@ -22,12 +23,15 @@ pub const PROGRAM_ID: Address = solana_address::address!("FoRE4JYRAxFpqRoPBzuPZZ
 pub const TOKEN_PROGRAM: Address = solana_address::address!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 pub const TOKEN_2022_PROGRAM: Address = solana_address::address!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
 pub const ATA_PROGRAM: Address = solana_address::address!("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
+pub const SYSTEM_PROGRAM: Address = solana_address::address!("11111111111111111111111111111111");
 
 pub const VERSION: u8 = 1;
 pub const ESCROW_LEN: usize = 8 + 311;
 pub const MAX_STEPS: usize = 4;
 pub const BPS: u16 = 10_000;
 pub const DAY: i64 = 86_400;
+/// `close_unaccepted`'s wait after the observed funding when an escrow has no steps.
+pub const UNACCEPTED_DAYS: i64 = 30;
 pub const NATIVE_MINT: Address = solana_address::address!("So11111111111111111111111111111111111111112");
 
 /// `amount × bps / 10,000`, rounded down. Written a second time here, by hand.
@@ -48,13 +52,20 @@ pub fn escrow_address(buyer: &Address, id: u64) -> Address {
     Address::find_program_address(&[b"escrow", buyer.as_ref(), &id.to_le_bytes()], &PROGRAM_ID).0
 }
 
+/// An associated token account: the standard address of `owner`'s account for `mint`.
+pub fn ata_address(owner: &Address, mint: &Address) -> Address {
+    Address::find_program_address(&[owner.as_ref(), TOKEN_PROGRAM.as_ref(), mint.as_ref()], &ATA_PROGRAM).0
+}
+
 /// The deposit account: the escrow's associated token account for the mint.
 pub fn vault_address(escrow: &Address, mint: &Address) -> Address {
-    Address::find_program_address(
-        &[escrow.as_ref(), TOKEN_PROGRAM.as_ref(), mint.as_ref()],
-        &ATA_PROGRAM,
-    )
-    .0
+    ata_address(escrow, mint)
+}
+
+/// The buyer's refund address: the buyer's associated token account for the mint. The only
+/// account `recover_late` and `close_unaccepted` pay the buyer at.
+pub fn refund_address(buyer: &Address, mint: &Address) -> Address {
+    ata_address(buyer, mint)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -276,6 +287,74 @@ pub fn agree_ix(s: &SettleAccounts, buyer: Address, seller: Address, seller_bps:
     Instruction { program_id: PROGRAM_ID, accounts, data }
 }
 
+/// `recover_late`: escrow, vault, buyer, refund, mint, caller (signs, pays for the refund account
+/// if it has to be made), token program, associated token program, system program.
+pub fn recover_late_ix(escrow: Address, vault: Address, buyer: Address, mint: Address, caller: Address) -> Instruction {
+    recover_late_ix_to(escrow, vault, buyer, refund_address(&buyer, &mint), mint, caller)
+}
+
+/// `recover_late` naming any refund account: for tests that try another one.
+pub fn recover_late_ix_to(escrow: Address, vault: Address, buyer: Address, refund: Address, mint: Address, caller: Address) -> Instruction {
+    Instruction {
+        program_id: PROGRAM_ID,
+        accounts: vec![
+            AccountMeta::new_readonly(escrow, false),
+            AccountMeta::new(vault, false),
+            AccountMeta::new(buyer, false),
+            AccountMeta::new(refund, false),
+            AccountMeta::new_readonly(mint, false),
+            AccountMeta::new(caller, true),
+            AccountMeta::new_readonly(TOKEN_PROGRAM, false),
+            AccountMeta::new_readonly(ATA_PROGRAM, false),
+            AccountMeta::new_readonly(SYSTEM_PROGRAM, false),
+        ],
+        data: discriminator("global", "recover_late").to_vec(),
+    }
+}
+
+/// `sweep_rent`: escrow, rent payer. No signer beyond the transaction's fee payer.
+pub fn sweep_rent_ix(escrow: Address, rent_payer: Address) -> Instruction {
+    Instruction {
+        program_id: PROGRAM_ID,
+        accounts: vec![AccountMeta::new(escrow, false), AccountMeta::new(rent_payer, false)],
+        data: discriminator("global", "sweep_rent").to_vec(),
+    }
+}
+
+/// `close_unaccepted`: escrow, vault, buyer, refund, mint, rent payer, caller (signs, pays for the
+/// refund account if it has to be made), token program, associated token program, system program.
+pub fn close_unaccepted_ix(escrow: Address, vault: Address, buyer: Address, mint: Address, rent_payer: Address, caller: Address) -> Instruction {
+    close_unaccepted_ix_to(escrow, vault, buyer, refund_address(&buyer, &mint), mint, rent_payer, caller)
+}
+
+/// `close_unaccepted` naming any refund account: for tests that try another one.
+pub fn close_unaccepted_ix_to(
+    escrow: Address,
+    vault: Address,
+    buyer: Address,
+    refund: Address,
+    mint: Address,
+    rent_payer: Address,
+    caller: Address,
+) -> Instruction {
+    Instruction {
+        program_id: PROGRAM_ID,
+        accounts: vec![
+            AccountMeta::new(escrow, false),
+            AccountMeta::new(vault, false),
+            AccountMeta::new_readonly(buyer, false),
+            AccountMeta::new(refund, false),
+            AccountMeta::new_readonly(mint, false),
+            AccountMeta::new(rent_payer, false),
+            AccountMeta::new(caller, true),
+            AccountMeta::new_readonly(TOKEN_PROGRAM, false),
+            AccountMeta::new_readonly(ATA_PROGRAM, false),
+            AccountMeta::new_readonly(SYSTEM_PROGRAM, false),
+        ],
+        data: discriminator("global", "close_unaccepted").to_vec(),
+    }
+}
+
 /// A plain SPL Token transfer, the way any wallet funds the deposit account: instruction 3,
 /// amount u64; source, destination, owner.
 pub fn spl_transfer_ix(from: Address, to: Address, owner: Address, amount: u64) -> Instruction {
@@ -291,6 +370,48 @@ pub fn spl_transfer_ix(from: Address, to: Address, owner: Address, amount: u64) 
         data,
     }
 }
+
+/// The associated token program's `CreateIdempotent` (instruction 1): what a wallet sends before
+/// paying an address whose token account does not exist. Payer, account, owner, mint, system,
+/// token. Returns the account's address too.
+pub fn create_ata_idempotent_ix(payer: Address, owner: Address, mint: Address) -> (Instruction, Address) {
+    let ata = ata_address(&owner, &mint);
+    let ix = Instruction {
+        program_id: ATA_PROGRAM,
+        accounts: vec![
+            AccountMeta::new(payer, true),
+            AccountMeta::new(ata, false),
+            AccountMeta::new_readonly(owner, false),
+            AccountMeta::new_readonly(mint, false),
+            AccountMeta::new_readonly(SYSTEM_PROGRAM, false),
+            AccountMeta::new_readonly(TOKEN_PROGRAM, false),
+        ],
+        data: vec![1],
+    };
+    (ix, ata)
+}
+
+/// A plain SOL transfer: the system program's instruction 2.
+pub fn sol_transfer_ix(from: Address, to: Address, lamports: u64) -> Instruction {
+    let mut data = 2u32.to_le_bytes().to_vec();
+    data.extend_from_slice(&lamports.to_le_bytes());
+    Instruction {
+        program_id: SYSTEM_PROGRAM,
+        accounts: vec![AccountMeta::new(from, true), AccountMeta::new(to, false)],
+        data,
+    }
+}
+
+/// The Rent sysvar at a given rate. The rent-exempt minimum of an account of `n` bytes is then
+/// `(128 + n) × lamports_per_byte`.
+pub fn rent_at(lamports_per_byte: u64) -> Rent {
+    let mut rent = Rent::default();
+    rent.lamports_per_byte = lamports_per_byte;
+    rent
+}
+
+/// Lamports per byte where SIMD-0437's cuts end.
+pub const RENT_FINAL: u64 = 696;
 
 // ---------------------------------------------------------------------------------------------
 // The account layout, read back out of the raw bytes.
@@ -402,6 +523,7 @@ pub enum Outcome {
     CancelledByBuyer = 4,
     CancelledBySeller = 5,
     Withdrawn = 6,
+    NeverAccepted = 7,
 }
 
 pub fn outcome_of(byte: u8) -> Outcome {
@@ -413,6 +535,7 @@ pub fn outcome_of(byte: u8) -> Outcome {
         4 => Outcome::CancelledByBuyer,
         5 => Outcome::CancelledBySeller,
         6 => Outcome::Withdrawn,
+        7 => Outcome::NeverAccepted,
         other => panic!("outcome byte {other}"),
     }
 }
@@ -458,6 +581,9 @@ pub enum Event {
         rent_lamports: u64,
     },
     Closed { escrow: Address, closed_by: Address, to_buyer: u64, rent_payer: Address, rent_lamports: u64 },
+    NeverAccepted { escrow: Address, timeout: i64, to_buyer: u64 },
+    RecoveredLate { escrow: Address, to_buyer: u64, rent_lamports: u64 },
+    RentSwept { escrow: Address, lamports: u64, left: u64 },
 }
 
 impl Event {
@@ -476,6 +602,9 @@ impl Event {
             Event::Withdrawn { .. } => "Withdrawn",
             Event::Ended { .. } => "Ended",
             Event::Closed { .. } => "Closed",
+            Event::NeverAccepted { .. } => "NeverAccepted",
+            Event::RecoveredLate { .. } => "RecoveredLate",
+            Event::RentSwept { .. } => "RentSwept",
         }
     }
 }
@@ -523,7 +652,7 @@ impl<'a> Cursor<'a> {
     }
 }
 
-const EVENT_NAMES: [&str; 13] = [
+const EVENT_NAMES: [&str; 16] = [
     "Created",
     "Accepted",
     "Funded",
@@ -537,6 +666,9 @@ const EVENT_NAMES: [&str; 13] = [
     "Withdrawn",
     "Ended",
     "Closed",
+    "NeverAccepted",
+    "RecoveredLate",
+    "RentSwept",
 ];
 
 pub fn events(logs: &[String]) -> Vec<Event> {
@@ -616,6 +748,9 @@ pub fn events(logs: &[String]) -> Vec<Event> {
                 rent_payer: c.key(),
                 rent_lamports: c.u64(),
             },
+            "NeverAccepted" => Event::NeverAccepted { escrow, timeout: c.i64(), to_buyer: c.u64() },
+            "RecoveredLate" => Event::RecoveredLate { escrow, to_buyer: c.u64(), rent_lamports: c.u64() },
+            "RentSwept" => Event::RentSwept { escrow, lamports: c.u64(), left: c.u64() },
             _ => unreachable!(),
         };
         c.done();
@@ -811,6 +946,36 @@ impl Harness {
         self.fund(&escrow, t.amount);
         self.mark_funded(&escrow).expect("mark_funded");
         escrow
+    }
+
+    /// The buyer's refund address for the harness's mint.
+    pub fn refund(&self) -> Address {
+        refund_address(&self.buyer.pubkey(), &self.mint)
+    }
+
+    /// `recover_late`, sent and paid for by `caller`.
+    pub fn recover_late(&mut self, escrow: &Address, caller: &Keypair) -> Result<litesvm::types::TransactionMetadata, String> {
+        let ix = recover_late_ix(*escrow, vault_address(escrow, &self.mint), self.buyer.pubkey(), self.mint, caller.pubkey());
+        self.send(&[ix], &[caller])
+    }
+
+    /// `sweep_rent`, with nobody but the fee payer signing.
+    pub fn sweep(&mut self, escrow: &Address) -> Result<litesvm::types::TransactionMetadata, String> {
+        let rent_payer = self.payer.pubkey();
+        self.send(&[sweep_rent_ix(*escrow, rent_payer)], &[])
+    }
+
+    /// `close_unaccepted`, sent and paid for by `caller`.
+    pub fn close_unaccepted(&mut self, escrow: &Address, caller: &Keypair) -> Result<litesvm::types::TransactionMetadata, String> {
+        let ix = close_unaccepted_ix(
+            *escrow,
+            vault_address(escrow, &self.mint),
+            self.buyer.pubkey(),
+            self.mint,
+            self.payer.pubkey(),
+            caller.pubkey(),
+        );
+        self.send(&[ix], &[caller])
     }
 
     pub fn settle_accounts(&self, escrow: &Address) -> SettleAccounts {

@@ -24,13 +24,13 @@ pub enum EscrowError {
     BadSplit,
     #[msg("the deposit account holds less than the amount")]
     NotFunded,
-    #[msg("the deposit account already holds the amount; this escrow ends by approval, silence, agreement, the arbiter, cancellation or the buyer's withdrawal")]
+    #[msg("the deposit account already holds the amount; this escrow ends by approval, silence, agreement, the arbiter, cancellation, the buyer's withdrawal, or close_unaccepted after its timeout")]
     StillFunded,
     #[msg("the funding was already observed")]
     AlreadyFunded,
     #[msg("the escrow is locked by an objection; only agreement or the arbiter can end it")]
     Locked,
-    #[msg("the clock has not started: no service time, and the funding has not been observed (send mark_funded)")]
+    #[msg("the clock has not started: the seller has not accepted, or the funding has not been observed (send mark_funded)")]
     ClockNotStarted,
     #[msg("the silence period has not ended")]
     SilenceNotOver,
@@ -52,7 +52,7 @@ pub enum EscrowError {
     NotAParty,
     #[msg("a deadline does not fit in a unix time")]
     TimeOverflow,
-    #[msg("the seller has not accepted: only a full approval or the buyer's withdrawal can end it")]
+    #[msg("the seller has not accepted: only a full approval, the buyer's withdrawal, or close_unaccepted after its timeout can end it")]
     NotAccepted,
     #[msg("the seller has already accepted")]
     AlreadyAccepted,
@@ -62,4 +62,13 @@ pub enum EscrowError {
     NativeMint,
     #[msg("only the buyer, the seller, or the rent payer after the last deadline can close an escrow that never held the amount")]
     NotACloser,
+    // Session 12, appended so every code above keeps its number.
+    #[msg("this escrow has not ended; money above the amount goes back to the buyer when it does")]
+    NotEnded,
+    #[msg("the escrow account holds no more than its rent-exempt minimum")]
+    NothingToSweep,
+    #[msg("the funding has not been observed: send mark_funded first")]
+    FundingNotObserved,
+    #[msg("an escrow the seller never accepted can be sent back only after its last cancellation deadline, or 30 days after its funding when it has no steps")]
+    BeforeTimeout,
 }

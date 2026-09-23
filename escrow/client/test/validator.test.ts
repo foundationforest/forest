@@ -3,6 +3,8 @@
 // money arrives by a plain token transfer any wallet could make, anyone marks it funded, and the
 // buyer approves a split. In the second the seller opens it as an invoice and the buyer pays and
 // approves in one transaction. Then the balances, the rent, the receipts and the events are checked.
+// Last, the invoice's old pay link is paid again: a stranger sends that money back to the buyer's
+// refund address, and SOL sent to the receipt is swept back to the rent payer.
 //
 //   npm run test:validator
 //
@@ -24,6 +26,7 @@ import {
   ACCOUNT_SIZE,
   MINT_SIZE,
   TOKEN_PROGRAM_ID,
+  createAssociatedTokenAccountIdempotentInstruction,
   createInitializeAccount3Instruction,
   createInitializeMint2Instruction,
   createMintToInstruction,
@@ -45,8 +48,11 @@ import {
   invoice,
   markFundedIx,
   payout,
+  recoverLateIx,
+  refundAddress,
   schedule,
   solanaPayUrl,
+  sweepRentIx,
   termsFor,
   type MarketDefaults,
 } from '../src/index.ts'
@@ -195,7 +201,7 @@ test('two deals go through a real validator: a proposal the seller accepts, and 
 
   // The pay link points at the escrow; the money arrives by a plain transfer to the deposit
   // address, the way any wallet would send it. Half a dollar too much, on purpose.
-  const link = solanaPayUrl({ escrow, mint: mint.publicKey, amount: terms.amount, decimals: 6 })
+  const link = solanaPayUrl({ account: e, decimals: 6 })
   assert.ok(link.startsWith(`solana:${escrow.toBase58()}?amount=1&`))
   await send([createTransferInstruction(buyerTokens.publicKey, vault, buyer.publicKey, 1_500_000)], [payer, buyer])
   assert.equal((await getAccount(connection, vault)).amount, 1_500_000n)
@@ -207,8 +213,9 @@ test('two deals go through a real validator: a proposal the seller accepts, and 
   e = decodeEscrow(new Uint8Array((await connection.getAccountInfo(escrow))!.data))
   assert.equal(e.status, 'funded')
   assert.ok(e.fundedAt !== null)
+  assert.throws(() => solanaPayUrl({ account: e, decimals: 6 }), /one-time/, 'no second link once the money is in')
   const s = schedule(e)
-  assert.equal(s.clockStart, inTenDays, 'the service time is the clock start')
+  assert.equal(s.clockStart, inTenDays, 'the service time, later than the funding and the acceptance, is the clock start')
   assert.deepEqual(s.deadlines.map((d) => d.deadline), [inTenDays - 86_400n, inTenDays])
   assert.equal(s.silenceReleasesAt, inTenDays + 7n * 86_400n + 1n)
   assert.equal(s.buyerCanCancel, true)
@@ -262,6 +269,39 @@ test('two deals go through a real validator: a proposal the seller accepts, and 
   assert.ok(paidEvents[1].kind === 'ended' && paidEvents[1].acceptedAt === onChain.acceptedAt, 'the receipt says the seller accepted')
   assert.equal((await getAccount(connection, sellerTokens.publicKey)).amount, expected.toSeller + 2_000_000n)
 
+  // The invoice's link is paid again, after the end: the deposit account is made again (here the
+  // app pays for it; the buyer holds no SOL in this test) and the buyer sends. A stranger sends it
+  // back to the buyer's refund address, which does not exist yet, so the stranger makes it; the
+  // deposit account's rent goes to the buyer.
+  await send(
+    [
+      createAssociatedTokenAccountIdempotentInstruction(payer.publicKey, inv.deposit, inv.escrow, mint.publicKey),
+      createTransferInstruction(buyerTokens.publicKey, inv.deposit, buyer.publicKey, 300_000),
+    ],
+    [payer, buyer],
+  )
+  const stranger = Keypair.generate()
+  await send([SystemProgram.transfer({ fromPubkey: payer.publicKey, toPubkey: stranger.publicKey, lamports: LAMPORTS_PER_SOL / 10 })], [payer])
+  const ended = decodeEscrow(new Uint8Array((await connection.getAccountInfo(inv.escrow))!.data))
+  const receiptBytes = (await connection.getAccountInfo(inv.escrow))!.data
+  const recovered = await send([recoverLateIx({ account: ended, caller: stranger.publicKey })], [payer, stranger])
+  const [late] = decodeEvents(await logsOf(recovered))
+  assert.equal(late.kind, 'recoveredLate')
+  assert.equal(late.kind === 'recoveredLate' && late.toBuyer, 300_000n)
+  assert.equal((await getAccount(connection, refundAddress(buyer.publicKey, mint.publicKey))).amount, 300_000n, "at the buyer's refund address")
+  assert.equal(await connection.getAccountInfo(inv.deposit), null, 'the deposit account is closed again')
+  assert.deepEqual((await connection.getAccountInfo(inv.escrow))!.data, receiptBytes, 'the receipt does not change')
+
+  // SOL sent to the receipt goes back to the rent payer, and the receipt keeps exactly its minimum.
+  const minimum = await connection.getBalance(inv.escrow)
+  await send([SystemProgram.transfer({ fromPubkey: stranger.publicKey, toPubkey: inv.escrow, lamports: 1_000_000 })], [payer, stranger])
+  const payerBeforeSweep = await connection.getBalance(payer.publicKey)
+  const swept = await send([sweepRentIx({ escrow: inv.escrow, rentPayer: payer.publicKey })], [payer])
+  const [sweep] = decodeEvents(await logsOf(swept))
+  assert.deepEqual(sweep, { kind: 'rentSwept', escrow: inv.escrow, lamports: 1_000_000n, left: BigInt(minimum) })
+  assert.equal(await connection.getBalance(inv.escrow), minimum)
+  assert.equal(await connection.getBalance(payer.publicKey), payerBeforeSweep + 1_000_000 - 5_000, 'the rent payer, less this fee')
+
   console.log(`  escrow ${escrow.toBase58()}: accepted, funded 1.5 by plain transfer, approved 70/30, ${vaultRent} lamports of rent returned, ${escrowRent} kept in the receipt`)
-  console.log(`  invoice ${inv.escrow.toBase58()}: paid and approved in one tap`)
+  console.log(`  invoice ${inv.escrow.toBase58()}: paid and approved in one tap; paid again later and sent back to the buyer by a stranger; a SOL tip swept to the rent payer`)
 })

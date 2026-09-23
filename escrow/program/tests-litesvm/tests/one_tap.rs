@@ -13,45 +13,18 @@
 //! Run with `cargo test --test one_tap -- --nocapture` for the numbers.
 
 use forest_escrow_tests::*;
-use solana_address::Address;
 use solana_compute_budget_interface::ComputeBudgetInstruction;
-use solana_instruction::{AccountMeta, Instruction};
+use solana_instruction::Instruction;
 use solana_keypair::Keypair;
 use solana_message::Message;
-use solana_rent::Rent;
 use solana_signer::Signer;
 use solana_transaction::Transaction;
 
 const AMOUNT: u64 = 1_000_000;
 /// Lamports per byte: what session 3 read from mainnet, and where SIMD-0437's cuts end.
 const RENT_TODAY: u64 = 5_080;
-const RENT_FINAL: u64 = 696;
 /// The dollar price of SOL the READMEs use for every rent figure.
 const SOL_USD: f64 = 100.24;
-
-fn rent_at(lamports_per_byte: u64) -> Rent {
-    let mut rent = Rent::default();
-    rent.lamports_per_byte = lamports_per_byte;
-    rent
-}
-
-/// The associated token program's `CreateIdempotent`: payer, account, owner, mint, system, token.
-fn create_ata_idempotent_ix(payer: Address, owner: Address, mint: Address) -> (Instruction, Address) {
-    let ata = vault_address(&owner, &mint); // the same derivation, for any owner
-    let ix = Instruction {
-        program_id: ATA_PROGRAM,
-        accounts: vec![
-            AccountMeta::new(payer, true),
-            AccountMeta::new(ata, false),
-            AccountMeta::new_readonly(owner, false),
-            AccountMeta::new_readonly(mint, false),
-            AccountMeta::new_readonly(solana_system_interface::program::ID, false),
-            AccountMeta::new_readonly(TOKEN_PROGRAM, false),
-        ],
-        data: vec![1],
-    };
-    (ix, ata)
-}
 
 struct Measured {
     cu: u64,
@@ -193,12 +166,13 @@ fn create_fund_and_approve_ride_in_one_transaction() {
 }
 
 #[test]
-fn finding_a_second_payment_to_a_one_tap_link_is_stranded_for_good() {
+fn a_second_payment_to_a_one_tap_link_goes_back_to_the_buyer() {
     // An index reading a one-tap payment sees the same Created and Ended it would see for an escrow
-    // that lived a week, and the same receipt at the same kind of address. But the receipt is
-    // permanent now: a second transfer to the same link later lands in a deposit account the
-    // program will never pay out, because the escrow has ended and its address can never be
-    // reopened. Session 10's way out, the buyer reopening the id, is gone with it.
+    // that lived a week, and the same receipt at the same kind of address. The receipt is
+    // permanent, so a second transfer to the same link later lands in a deposit account the
+    // escrow will never pay out as part of the deal, and the address never reopens. Session 11
+    // left that money stranded for good. Session 12's `recover_late` sends it back to the buyer's
+    // refund address, and anyone may send it.
     let mut h = Harness::new();
     let buyer = h.buyer.insecure_clone();
     let mut t = h.terms(1);
@@ -215,9 +189,10 @@ fn finding_a_second_payment_to_a_one_tap_link_is_stranded_for_good() {
         &[&buyer],
     )
     .expect("one tap");
+    let receipt = h.account(&escrow);
     // Someone pays the same link again: a wallet makes the deposit account again (anyone may) and
     // sends.
-    let (ata_ix, again) = create_ata_idempotent_ix(h.payer.pubkey(), escrow, h.mint);
+    let (ata_ix, again) = create_ata_idempotent_ix(buyer.pubkey(), escrow, h.mint);
     assert_eq!(again, vault);
     h.send(&[ata_ix, spl_transfer_ix(h.buyer_tokens, vault, buyer.pubkey(), AMOUNT)], &[&buyer]).expect("a second payment");
     assert_eq!(h.balance(&vault), AMOUNT, "at a closed-over deposit address");
@@ -227,6 +202,17 @@ fn finding_a_second_payment_to_a_one_tap_link_is_stranded_for_good() {
         let err = h.send(&[ix], &[&buyer]).expect_err("the escrow has ended");
         assert!(err.contains("Ended") || err.contains("StillFunded"), "{err}");
     }
-    assert_eq!(h.balance(&vault), AMOUNT, "stranded for good: no instruction pays it out");
-    println!("FINDING (money, for Carlos): a second payment to an ended escrow's link is stranded forever now that receipts are permanent");
+    // A stranger sends it back. The buyer's refund address does not exist yet; the stranger makes
+    // it, and pays for it.
+    let stranger = Keypair::new();
+    h.svm.airdrop(&stranger.pubkey(), 1_000_000_000).unwrap();
+    let refund = h.refund();
+    assert!(!h.exists(&refund));
+    let meta = h.recover_late(&escrow, &stranger).expect("recover_late");
+    let names: Vec<_> = events(&meta.logs).iter().map(|e| e.name()).collect();
+    assert_eq!(names, ["RecoveredLate"]);
+    assert_eq!(h.balance(&refund), AMOUNT, "the second payment is back with the buyer");
+    assert!(!h.exists(&vault), "and the deposit account is closed again");
+    assert_eq!(h.account(&escrow).data, receipt.data, "the receipt still says one payment");
+    println!("a second payment to a one-tap link: sent back to the buyer's refund address by a stranger; the receipt unchanged");
 }

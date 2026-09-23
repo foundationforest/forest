@@ -655,3 +655,19 @@ Two rules for an index change. Rule 4 now has something to read: a receipt's `ac
 account and in the `Ended` event) says whether the seller accepted. Rule 5 no longer applies to a
 funded escrow, whose address never holds a second deal. And one rule is new: a badge counts for a
 profile only when the `Registered` entry's wallet is the wallet its profile record declares.
+
+## After session 12
+
+Carlos decided the escrow questions session 11 left open; session 12 built them. Two rows above
+change, and two findings that session 11 itself raised are closed:
+
+| # | Finding | Now | Test |
+|---|---|---|---|
+| 3 | Sponsor's rent | Closed for a funded escrow nobody accepts: after its timeout anyone sends everything back to the buyer (`close_unaccepted`) and the deposit account's rent returns to the rent payer. A far deadline is still a far wait, funded or not; that is the sponsor's policy | `sponsor_a_funded_escrow_nobody_accepts_comes_back_thirty_days_after_its_funding`, `finding_a_sponsor_waits_for_the_last_deadline_even_a_century_away` |
+| 14 | A second payment to a one-tap link | Closed: `recover_late` sends it to the buyer's refund address, and anyone may send that | `a_second_payment_to_a_one_tap_link_goes_back_to_the_buyer` |
+| | An invoice paid late released at once | Closed: the clock waits for the observed funding | `clock_an_invoice_paid_late_no_longer_releases_the_moment_the_money_lands` |
+| | Receipts keep the rent the cuts free, and any SOL sent to them | Closed: `sweep_rent` returns what is above the minimum to the rent payer | `sweep_pays_only_the_recorded_rent_payer_and_never_below_the_minimum` |
+
+Rule 4 for an index now has its weights, in the handoff's "Deals and evidence": a deal counts in
+full when both said yes, a one-tap payment with no acceptance is one-sided until the seller reviews
+the same deal id, and an escrow nobody accepted and nobody paid in full counts for nothing.

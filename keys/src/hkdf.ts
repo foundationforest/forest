@@ -22,6 +22,8 @@ export const INFO = {
   seedFileLabel: `forest.foundation/seed-file/label/${VERSION}`,
   // No profile index: the registry's identity is per human, not per profile.
   identity: `forest.foundation/identity/${VERSION}`,
+  // No profile index either: one central wallet per person, where money meets a ramp.
+  central: `forest.foundation/central/${VERSION}`,
 } as const
 
 /** A passkey's PRF output is 32 bytes. */

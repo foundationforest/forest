@@ -19,8 +19,10 @@ import {
   NATIVE_MINT,
   PROGRAM_ID,
   TOKEN_PROGRAM_ID,
+  UNACCEPTED_DAYS,
   VERSION,
   acceptIx,
+  awaitingPayment,
   agreeIx,
   approveIx,
   cancelBuyerIx,
@@ -28,6 +30,7 @@ import {
   cancelSellerIx,
   checkTerms,
   clockStart,
+  closeUnacceptedIx,
   closeUnfundedIx,
   createArgsBytes,
   createIx,
@@ -45,13 +48,17 @@ import {
   objectIx,
   payout,
   randomId,
+  recoverLateIx,
+  refundAddress,
   releaseBySilenceIx,
   schedule,
   share,
   silenceEnds,
   solanaPayUrl,
   stepFromMarket,
+  sweepRentIx,
   termsFor,
+  unacceptedTimeout,
   validateTerms,
   vaultAddress,
   withdrawIx,
@@ -73,6 +80,35 @@ const seller = Keypair.generate().publicKey
 const arbiter = Keypair.generate().publicKey
 const mint = Keypair.generate().publicKey
 const payer = Keypair.generate().publicKey
+
+/** An escrow account as `decodeEscrow` would return it: open, unfunded, the standard terms. */
+function escrowAccount(over: Partial<EscrowAccount> = {}): EscrowAccount {
+  const escrow = escrowAddress(buyer, 7n)
+  return {
+    version: 1,
+    id: 7n,
+    buyer,
+    seller,
+    arbiter: null,
+    mint,
+    vault: vaultAddress(escrow, mint),
+    rentPayer: payer,
+    amount: 1_000_000n,
+    serviceTime: null,
+    silenceDays: 7,
+    steps: [],
+    createdAt: T0,
+    fundedAt: null,
+    status: 'open',
+    bump: 255,
+    acceptedAt: null,
+    endedAt: null,
+    outcome: null,
+    toSeller: 0n,
+    toBuyer: 0n,
+    ...over,
+  }
+}
 
 function terms(over: Partial<Terms> = {}): Terms {
   return {
@@ -100,7 +136,9 @@ test('the program id, the seed and the size are the ones the program bakes in', 
   assert.ok(lib.includes(`assert!(Escrow::LEN == ${ESCROW_LEN});`))
   assert.ok(state.includes('pub const MAX_STEPS: usize = 4;'))
   assert.ok(state.includes('pub const BPS: u16 = 10_000;'))
+  assert.ok(state.includes(`pub const UNACCEPTED_DAYS: i64 = ${UNACCEPTED_DAYS};`))
   assert.equal(BPS, 10_000)
+  assert.equal(UNACCEPTED_DAYS, 30n)
 })
 
 test('the discriminators are pinned', () => {
@@ -117,6 +155,9 @@ test('the discriminators are pinned', () => {
     cancel_seller: 'd11d75c3f77f09a3',
     withdraw: 'b712469c946da122',
     close_unfunded: '06d9705bfa5c6746',
+    recover_late: '525629b57534cce3',
+    sweep_rent: '11ea3af1fb9487b9',
+    close_unaccepted: '8582b3216b0acfae',
   }
   for (const [name, want] of Object.entries(ixs)) assert.equal(hex(discriminator('global', name)), want, name)
   const events: Record<string, string> = {
@@ -133,6 +174,9 @@ test('the discriminators are pinned', () => {
     Withdrawn: '1459dfc6c27cdb0d',
     Ended: '467b96d69c092dc5',
     Closed: '321f579b87dcc3ef',
+    NeverAccepted: 'a22d3e52bc62fd89',
+    RecoveredLate: 'bd249dc10194f8ce',
+    RentSwept: 'cb5605b151a70c19',
   }
   for (const [name, want] of Object.entries(events)) assert.equal(hex(discriminator('event', name)), want, name)
   assert.equal(hex(discriminator('account', 'Escrow')), '1fd57bbbba16da9b')
@@ -262,6 +306,57 @@ test('the endings share one account list and add their signers after it', () => 
 
   assert.throws(() => approveIx({ accounts, buyer, sellerBps: 10_001 }), /BadSplit/)
   assert.throws(() => agreeIx({ accounts, buyer, seller, sellerBps: -1 }), /BadSplit/)
+})
+
+test('late money, the rent sweep and the unaccepted timeout: their accounts, and what the builders refuse', () => {
+  const escrow = escrowAddress(buyer, 7n)
+  const caller = Keypair.generate().publicKey
+  const refund = refundAddress(buyer, mint)
+  assert.deepEqual(refund, getAssociatedTokenAddressSync(mint, buyer), "the buyer's refund address is its standard token account")
+  const metas = (ix: { keys: { pubkey: PublicKey; isSigner: boolean; isWritable: boolean }[] }) =>
+    ix.keys.map((k) => `${k.pubkey.toBase58()}${k.isSigner ? ' signer' : ''}${k.isWritable ? ' w' : ''}`)
+  const system = '11111111111111111111111111111111'
+
+  const ended = escrowAccount({ status: 'ended', fundedAt: T0, acceptedAt: T0, endedAt: T0 + DAY, outcome: 'approved', toSeller: 1_000_000n })
+  const late = recoverLateIx({ account: ended, caller })
+  assert.deepEqual(metas(late), [
+    escrow.toBase58(),
+    `${ended.vault.toBase58()} w`,
+    `${buyer.toBase58()} w`,
+    `${refund.toBase58()} w`,
+    mint.toBase58(),
+    `${caller.toBase58()} signer w`,
+    TOKEN_PROGRAM_ID.toBase58(),
+    ASSOCIATED_TOKEN_PROGRAM_ID.toBase58(),
+    system,
+  ])
+  assert.equal(hex(late.data), hex(discriminator('global', 'recover_late')))
+  for (const status of ['open', 'accepted', 'funded', 'locked'] as const) {
+    assert.throws(() => recoverLateIx({ account: escrowAccount({ status }), caller }), /NotEnded/, status)
+  }
+
+  const sweep = sweepRentIx({ escrow, rentPayer: payer })
+  assert.deepEqual(metas(sweep), [`${escrow.toBase58()} w`, `${payer.toBase58()} w`])
+  assert.equal(hex(sweep.data), hex(discriminator('global', 'sweep_rent')))
+
+  const unaccepted = escrowAccount({ fundedAt: T0 })
+  const close = closeUnacceptedIx({ account: unaccepted, caller })
+  assert.deepEqual(metas(close), [
+    `${escrow.toBase58()} w`,
+    `${unaccepted.vault.toBase58()} w`,
+    buyer.toBase58(),
+    `${refund.toBase58()} w`,
+    mint.toBase58(),
+    `${payer.toBase58()} w`,
+    `${caller.toBase58()} signer w`,
+    TOKEN_PROGRAM_ID.toBase58(),
+    ASSOCIATED_TOKEN_PROGRAM_ID.toBase58(),
+    system,
+  ])
+  assert.equal(hex(close.data), hex(discriminator('global', 'close_unaccepted')))
+  assert.throws(() => closeUnacceptedIx({ account: escrowAccount(), caller }), /FundingNotObserved/)
+  assert.throws(() => closeUnacceptedIx({ account: escrowAccount({ fundedAt: T0, acceptedAt: T0, status: 'funded' }), caller }), /AlreadyAccepted/)
+  assert.throws(() => closeUnacceptedIx({ account: { ...ended, acceptedAt: null }, caller }), /Ended/)
 })
 
 test('bad terms fail before a transaction is built, with the program\'s own error names', () => {
@@ -493,6 +588,29 @@ test('events decode from the log, in order', () => {
   closed.writeBigUInt64LE(4_000_000n, 112)
   assert.deepEqual(decodeEvent(new Uint8Array(closed)), { kind: 'closed', escrow, closedBy: seller, toBuyer: 400_000n, rentPayer: payer, rentLamports: 4_000_000n })
 
+  // Session 12: an escrow nobody accepted, sent back; late money; a rent sweep.
+  const never = Buffer.alloc(8 + 32 + 8 + 8)
+  Buffer.from('a22d3e52bc62fd89', 'hex').copy(never, 0)
+  escrow.toBuffer().copy(never, 8)
+  never.writeBigInt64LE(T0 + 30n * DAY, 40)
+  never.writeBigUInt64LE(1_000_005n, 48)
+  assert.deepEqual(decodeEvent(new Uint8Array(never)), { kind: 'neverAccepted', escrow, timeout: T0 + 30n * DAY, toBuyer: 1_000_005n })
+  const neverEnded = Buffer.from(ended)
+  neverEnded[40] = 7
+  assert.equal((decodeEvent(new Uint8Array(neverEnded)) as { outcome: string }).outcome, 'neverAccepted')
+  const recovered = Buffer.alloc(8 + 32 + 8 + 8)
+  Buffer.from('bd249dc10194f8ce', 'hex').copy(recovered, 0)
+  escrow.toBuffer().copy(recovered, 8)
+  recovered.writeBigUInt64LE(400_000n, 40)
+  recovered.writeBigUInt64LE(2_039_280n, 48)
+  assert.deepEqual(decodeEvent(new Uint8Array(recovered)), { kind: 'recoveredLate', escrow, toBuyer: 400_000n, rentLamports: 2_039_280n })
+  const swept = Buffer.alloc(8 + 32 + 8 + 8)
+  Buffer.from('cb5605b151a70c19', 'hex').copy(swept, 0)
+  escrow.toBuffer().copy(swept, 8)
+  swept.writeBigUInt64LE(2_800_008n, 40)
+  swept.writeBigUInt64LE(311_112n, 48)
+  assert.deepEqual(decodeEvent(new Uint8Array(swept)), { kind: 'rentSwept', escrow, lamports: 2_800_008n, left: 311_112n })
+
   assert.equal(decodeEvent(new Uint8Array(7)), null)
   assert.throws(() => decodeEvent(new Uint8Array([...ended, 0])), /trailing/)
 })
@@ -715,6 +833,24 @@ test('the clock start, silence and each deadline, as the program will read them'
   assert.equal(schedule({ ...timed, fundedAt: null, status: 'open' }, T0).rentPayerCanCloseUnfundedAt, T0 + 30n * DAY + 1n)
   // A service time the seller accepted after: the clock starts at the acceptance.
   assert.equal(clockStart({ ...timed, acceptedAt: T0 + 40n * DAY }), T0 + 40n * DAY)
+
+  // Funding always counts: an invoice due on day 1 and paid on day 30 starts its clock on day 30,
+  // and a service time with the funding not yet observed starts nothing.
+  const invoice = { ...base, acceptedAt: T0, serviceTime: T0 + DAY, fundedAt: T0 + 30n * DAY, status: 'funded' as const }
+  assert.equal(clockStart(invoice), T0 + 30n * DAY)
+  assert.equal(schedule(invoice, T0 + 30n * DAY).silenceReleasesAt, T0 + 37n * DAY + 1n)
+  assert.equal(clockStart({ ...invoice, fundedAt: null }), null)
+
+  // Never accepted: anyone may send it back after its timeout, once the funding is observed.
+  const open = { ...base, steps: [] as Step[], fundedAt: T0 + DAY }
+  assert.equal(unacceptedTimeout(open), T0 + DAY + 30n * DAY, 'no steps: thirty days after the funding')
+  assert.equal(schedule(open, T0 + DAY).closeUnacceptedAt, T0 + 31n * DAY + 1n)
+  assert.equal(unacceptedTimeout({ ...open, steps }), T0 + DAY + 3n * DAY, 'steps: the last deadline from the funding')
+  assert.equal(unacceptedTimeout({ ...open, steps, serviceTime: T0 + 10n * DAY }), T0 + 13n * DAY, 'or from a later service time')
+  assert.equal(unacceptedTimeout({ ...open, fundedAt: null }), null, 'not before the funding is observed')
+  assert.equal(schedule({ ...open, fundedAt: null }, T0).closeUnacceptedAt, null)
+  assert.equal(schedule({ ...open, acceptedAt: T0 + 2n * DAY, status: 'funded' }, T0).closeUnacceptedAt, null, 'not once accepted')
+  assert.equal(schedule({ ...open, status: 'ended' }, T0).closeUnacceptedAt, null, 'not once ended')
 })
 
 test('payouts: the seller\'s share rounds down, the buyer gets the rest and the excess', () => {
@@ -735,7 +871,7 @@ test('payouts: the seller\'s share rounds down, the buyer gets the rest and the 
   assert.throws(() => cancelPayout(2n, 1n, 10_000), /NotFunded/)
 })
 
-test('the pay link names the escrow, the token and the amount', () => {
+test('the pay link names the escrow, the token and the amount, and only while the escrow waits for its money', () => {
   const escrow = escrowAddress(buyer, 7n)
   assert.equal(formatAmount(1_000_000n, 6), '1')
   assert.equal(formatAmount(1_500_000n, 6), '1.5')
@@ -743,7 +879,8 @@ test('the pay link names the escrow, the token and the amount', () => {
   assert.equal(formatAmount(0n, 6), '0')
   assert.equal(formatAmount(123_456_789n, 8), '1.23456789')
   assert.equal(formatAmount(5n, 0), '5')
-  const url = solanaPayUrl({ escrow, mint, amount: 1_500_000n, decimals: 6, label: 'Forest', message: 'Maths, Tuesday 4pm' })
+  const account = escrowAccount({ amount: 1_500_000n })
+  const url = solanaPayUrl({ account, decimals: 6, label: 'Forest', message: 'Maths, Tuesday 4pm' })
   const parsed = new URL(url)
   assert.equal(parsed.protocol, 'solana:')
   assert.equal(parsed.pathname, escrow.toBase58())
@@ -753,4 +890,18 @@ test('the pay link names the escrow, the token and the amount', () => {
   assert.equal(parsed.searchParams.get('label'), 'Forest')
   assert.equal(parsed.searchParams.get('message'), 'Maths, Tuesday 4pm')
   assert.ok(!/wallet|USDC|chain|gas/i.test(url.replace(mint.toBase58(), '')), 'no crypto words in what a person reads')
+
+  // One-time: an accepted invoice still waiting is fine; anything funded or ended is refused.
+  assert.ok(awaitingPayment(account))
+  assert.doesNotThrow(() => solanaPayUrl({ account: { ...account, status: 'accepted', acceptedAt: T0 }, decimals: 6 }))
+  for (const over of [
+    { status: 'funded' as const, fundedAt: T0, acceptedAt: T0 },
+    { status: 'locked' as const, fundedAt: T0, acceptedAt: T0 },
+    { status: 'ended' as const, fundedAt: T0, endedAt: T0 },
+    { status: 'open' as const, fundedAt: T0 },
+    { status: 'accepted' as const, fundedAt: T0, acceptedAt: T0 },
+  ]) {
+    assert.equal(awaitingPayment({ ...account, ...over }), false, over.status)
+    assert.throws(() => solanaPayUrl({ account: { ...account, ...over }, decimals: 6 }), /one-time/, over.status)
+  }
 })

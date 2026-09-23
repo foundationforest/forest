@@ -32,6 +32,10 @@
     ],
     "commitment": "14568690134484466610252976219100933485694269593799802854234702390895629808185"
   },
+  "central": {
+    "note": "One per seed, not per profile. HKDF from the seed with info forest.foundation/central/v1, used as an ed25519 seed; the address is its public key in base58. Added in session 12; every value above it is unchanged.",
+    "wallet": "zYJoj63ZWmXRMaPWPLmNgToTcj3zPckW6E53KXFCXCV"
+  },
   "words": "diesel subject diet salad fiction identify spider assume shaft nature forest neglect pistol winter must bus rebuild have whale again effort festival skull bicycle",
   "seedFile": {
     "prf": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",

@@ -44,7 +44,8 @@ function secp256k1(privateKey: Uint8Array): Promise<Secp256k1Keypair> {
   return Secp256k1Keypair.import(privateKey, { exportable: false })
 }
 
-function ed25519Wallet(privateKey: Uint8Array): Wallet {
+/** An ed25519 wallet from a 32-byte HKDF output: the profile wallets and the central wallet alike. */
+export function ed25519Wallet(privateKey: Uint8Array): Wallet {
   const publicKey = ed25519.getPublicKey(privateKey)
   return { privateKey, publicKey, address: base58.encode(publicKey) }
 }
