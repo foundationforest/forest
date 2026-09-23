@@ -20,7 +20,7 @@ of it.
 |---|---|
 | `program/` | the program. Anchor, Rust, `cargo build-sbf`. |
 | `program/tests-litesvm/` | 39 LiteSVM tests against real proofs, with the wire format written out a second time by hand: `registry.rs` (23), `adversarial.rs` (15, session 10's attacks as session 11 left them) and `invariants.rs` (the property test) (`docs/decisions/adversarial-review-1.md`). |
-| `program/trident-tests/` | the Trident fuzzer, kept as the record of why it cannot run: Trident 0.12 never registers the Poseidon and alt_bn128 syscalls. `invariants.rs` runs the same model under LiteSVM. |
+| `program/trident-tests/` | the Trident fuzzer, kept as the record of why it cannot run: Trident 0.12 never registers the Poseidon and alt_bn128 syscalls. Its model is still session 10's wire format; `invariants.rs` runs the same model under LiteSVM and is the one kept current. |
 | `client/` | TypeScript, browser and Node: the code, the Merkle path, the proof, the compressed points, the transaction. |
 | `artifacts/` | Semaphore's setup files, pinned. The verification key is committed; the 7.7 MB of proving artifacts are pinned by hash. |
 | `FEASIBILITY.md` | session 3's report: whether any of this was possible, and at what cost. |
@@ -50,7 +50,7 @@ Measured in session 11, one proof, compressed points, on the program in `program
 
 | | |
 |---|---|
-| Transaction on the wire | **830 bytes** of the 1,232 limit, 67%, on both paths: the profile paying, or a sponsor that is also the fee payer paying (legacy, with a compute-budget instruction; the client's v0 form is 832 on a local validator) |
+| Transaction on the wire | **830 bytes** of the 1,232 limit, 67%, on both paths, each with two signers: the profile paying the fee while a separate fee payer covers the network fee and the code account's rent, or a sponsor that is also the fee payer paying everything (legacy, with a compute-budget instruction; the client's v0 form is 832 on a local validator) |
 | Compute units | **133,033** (the profile paying) and **135,474** (a sponsor paying) of the 1,400,000 limit, **9.5 to 9.7%**; 133,027 on a local validator |
 | Instruction data | 257 bytes, 11 accounts |
 | Proof on this machine | about 1.8 to 2.6 seconds in Node at depth 32 |
