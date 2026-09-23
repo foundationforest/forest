@@ -1,7 +1,8 @@
-// The client against a real validator: start one, load the program, and run one deal end to
-// end. The buyer opens the escrow, money arrives by a plain token transfer any wallet could
-// make, anyone marks it funded, and the buyer approves a split. Then the balances, the rent and
-// the events are checked.
+// The client against a real validator: start one, load the program, and run two deals end to
+// end. In the first the buyer opens the escrow, the seller reads it off the chain and accepts,
+// money arrives by a plain token transfer any wallet could make, anyone marks it funded, and the
+// buyer approves a split. In the second the seller opens it as an invoice and the buyer pays and
+// approves in one transaction. Then the balances, the rent, the receipts and the events are checked.
 //
 //   npm run test:validator
 //
@@ -33,12 +34,15 @@ import { Connection, Keypair, LAMPORTS_PER_SOL, PublicKey, SystemProgram, Transa
 
 import {
   PROGRAM_ID,
+  acceptIx,
   approveIx,
+  checkTerms,
   createIx,
   decodeEscrow,
   decodeEvents,
   depositAddress,
   escrowAddress,
+  invoice,
   markFundedIx,
   payout,
   schedule,
@@ -119,7 +123,7 @@ after(() => {
   if (ledger) rmSync(ledger, { recursive: true, force: true })
 })
 
-test('one deal goes through a real validator: create, fund by plain transfer, mark, approve a split', { timeout: 300_000 }, async (t) => {
+test('two deals go through a real validator: a proposal the seller accepts, and an invoice paid in one tap', { timeout: 300_000 }, async (t) => {
   const why = missing()
   if (why) return t.skip(why)
   if (!validator) return t.skip('solana-test-validator did not start (is it on the PATH?)')
@@ -178,8 +182,16 @@ test('one deal goes through a real validator: create, fund by plain transfer, ma
   assert.deepEqual(e.vault, vault)
   assert.equal(e.serviceTime, inTenDays)
   assert.deepEqual(e.steps, terms.steps)
-  const rentHeld = (await connection.getBalance(escrow)) + (await connection.getBalance(vault))
-  assert.ok(rentHeld > 0)
+  const escrowRent = await connection.getBalance(escrow)
+  const vaultRent = await connection.getBalance(vault)
+  assert.ok(escrowRent > 0 && vaultRent > 0)
+
+  // The seller reads the escrow off the chain, checks its terms, and accepts.
+  const accepted = await send([acceptIx({ account: e, seller: seller.publicKey, arbiter: null })], [payer, seller])
+  assert.deepEqual(decodeEvents(await logsOf(accepted)).map((ev) => ev.kind), ['accepted'])
+  e = decodeEscrow(new Uint8Array((await connection.getAccountInfo(escrow))!.data))
+  assert.equal(e.status, 'accepted')
+  assert.ok(e.acceptedAt !== null)
 
   // The pay link points at the escrow; the money arrives by a plain transfer to the deposit
   // address, the way any wallet would send it. Half a dollar too much, on purpose.
@@ -208,25 +220,48 @@ test('one deal goes through a real validator: create, fund by plain transfer, ma
   const events = decodeEvents(await logsOf(approved))
   assert.deepEqual(
     events.map((ev) => ev.kind),
-    ['approved', 'closed'],
+    ['approved', 'ended'],
   )
   assert.deepEqual(events[0], { kind: 'approved', escrow, sellerBps: 7_000, toSeller: 700_000n, toBuyer: 800_000n })
-  assert.equal(events[1].kind, 'closed')
-  if (events[1].kind === 'closed') {
+  assert.equal(events[1].kind, 'ended')
+  if (events[1].kind === 'ended') {
     assert.equal(events[1].outcome, 'approved')
     assert.equal(events[1].balance, 1_500_000n)
-    assert.equal(events[1].rentLamports, BigInt(rentHeld))
+    assert.equal(events[1].acceptedAt, e.acceptedAt)
+    assert.equal(events[1].rentLamports, BigInt(vaultRent))
     assert.deepEqual(events[1].rentPayer, payer.publicKey)
   }
   assert.equal((await getAccount(connection, sellerTokens.publicKey)).amount, expected.toSeller)
   assert.equal((await getAccount(connection, buyerTokens.publicKey)).amount, 10_000_000n - 1_500_000n + expected.toBuyer)
-  assert.equal(await connection.getAccountInfo(escrow), null, 'the escrow account is closed')
   assert.equal(await connection.getAccountInfo(vault), null, 'the deposit account is closed')
-  // The rent payer paid three transaction fees (create, mark, approve) and the transfer's, and
-  // got every lamport of rent back.
-  const fees = 4 * 5_000 + 5_000 // four signatures on the first three, two on the transfer and approve
+  // The escrow account stays: the receipt, with how it ended and who got what.
+  const receipt = decodeEscrow(new Uint8Array((await connection.getAccountInfo(escrow))!.data))
+  assert.deepEqual([receipt.status, receipt.outcome, receipt.toSeller, receipt.toBuyer], ['ended', 'approved', 700_000n, 800_000n])
+  assert.equal(await connection.getBalance(escrow), escrowRent, 'the receipt keeps its rent')
+  // The rent payer paid the transaction fees and the receipt's rent, and got the deposit account's back.
+  const fees = 10 * 5_000 // generously: five transactions of at most two signatures
   const payerAfter = await connection.getBalance(payer.publicKey)
-  assert.ok(payerBefore - payerAfter <= fees * 2, `only fees left the payer: ${payerBefore - payerAfter} lamports`)
+  const spent = payerBefore - payerAfter - escrowRent
+  assert.ok(spent > 0 && spent <= fees, `only fees and the receipt's rent left the payer: ${payerBefore - payerAfter} lamports`)
 
-  console.log(`  escrow ${escrow.toBase58()}: funded 1.5 by plain transfer, approved 70/30, ${rentHeld} lamports of rent returned`)
+  // An invoice: the seller opens it naming the buyer, accepted from creation; the buyer reads it,
+  // checks its terms, and pays and approves in one tap.
+  const invoiceTerms = termsFor(market, { seller: seller.publicKey, amount: 2_000_000n, mint: mint.publicKey, serviceTime: inTenDays })
+  const inv = invoice({ seller: seller.publicKey, buyer: buyer.publicKey, payer: payer.publicKey, mint: mint.publicKey, decimals: 6, terms: invoiceTerms })
+  const invoiced = await send([inv.instruction], [payer, seller])
+  assert.deepEqual(decodeEvents(await logsOf(invoiced)).map((ev) => ev.kind), ['created', 'accepted'])
+  const onChain = decodeEscrow(new Uint8Array((await connection.getAccountInfo(inv.escrow))!.data))
+  checkTerms(onChain, { arbiter: null })
+  const invoiceAccounts = { escrow: inv.escrow, vault: inv.deposit, buyerTokens: buyerTokens.publicKey, sellerTokens: sellerTokens.publicKey, rentPayer: payer.publicKey }
+  const paid = await send(
+    [createTransferInstruction(buyerTokens.publicKey, inv.deposit, buyer.publicKey, 2_000_000), approveIx({ accounts: invoiceAccounts, buyer: buyer.publicKey })],
+    [payer, buyer],
+  )
+  const paidEvents = decodeEvents(await logsOf(paid))
+  assert.deepEqual(paidEvents.map((ev) => ev.kind), ['approved', 'ended'])
+  assert.ok(paidEvents[1].kind === 'ended' && paidEvents[1].acceptedAt === onChain.acceptedAt, 'the receipt says the seller accepted')
+  assert.equal((await getAccount(connection, sellerTokens.publicKey)).amount, expected.toSeller + 2_000_000n)
+
+  console.log(`  escrow ${escrow.toBase58()}: accepted, funded 1.5 by plain transfer, approved 70/30, ${vaultRent} lamports of rent returned, ${escrowRent} kept in the receipt`)
+  console.log(`  invoice ${inv.escrow.toBase58()}: paid and approved in one tap`)
 })

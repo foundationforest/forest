@@ -5,6 +5,11 @@
 //! plain transfer into the deposit account and `approve` to ride in one transaction. This file
 //! sends exactly that, measures it, and checks what it leaves behind.
 //!
+//! Session 11: the escrow account is no longer closed when an escrow that held the amount ends. A
+//! one-tap payment therefore leaves a permanent receipt, and the payer keeps its rent in it; the
+//! deposit account's rent still comes back in the same transaction. The rent is measured here at
+//! today's rate and at the rate the cuts end at.
+//!
 //! Run with `cargo test --test one_tap -- --nocapture` for the numbers.
 
 use forest_escrow_tests::*;
@@ -13,10 +18,22 @@ use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_instruction::{AccountMeta, Instruction};
 use solana_keypair::Keypair;
 use solana_message::Message;
+use solana_rent::Rent;
 use solana_signer::Signer;
 use solana_transaction::Transaction;
 
 const AMOUNT: u64 = 1_000_000;
+/// Lamports per byte: what session 3 read from mainnet, and where SIMD-0437's cuts end.
+const RENT_TODAY: u64 = 5_080;
+const RENT_FINAL: u64 = 696;
+/// The dollar price of SOL the READMEs use for every rent figure.
+const SOL_USD: f64 = 100.24;
+
+fn rent_at(lamports_per_byte: u64) -> Rent {
+    let mut rent = Rent::default();
+    rent.lamports_per_byte = lamports_per_byte;
+    rent
+}
 
 /// The associated token program's `CreateIdempotent`: payer, account, owner, mint, system, token.
 fn create_ata_idempotent_ix(payer: Address, owner: Address, mint: Address) -> (Instruction, Address) {
@@ -76,14 +93,17 @@ fn create_fund_and_approve_ride_in_one_transaction() {
     ];
     let m = send_measured(&mut h, ixs, &[&buyer]);
     let names: Vec<_> = m.events.iter().map(|e| e.name()).collect();
-    assert_eq!(names, ["Created", "Approved", "Closed"], "the receipt: no Funded, since nobody observed funding separately");
-    let Some(Event::Closed { outcome, balance, to_seller, rent_lamports, .. }) = m.events.last().cloned() else { unreachable!() };
-    assert_eq!((outcome, balance, to_seller), (Outcome::Approved, AMOUNT, AMOUNT));
-    assert!(!h.exists(&escrow) && !h.exists(&vault), "nothing stays open");
+    assert_eq!(names, ["Created", "Approved", "Ended"], "the receipt: no Funded, since nobody observed funding separately");
+    let Some(Event::Ended { outcome, balance, to_seller, accepted_at, rent_lamports, .. }) = m.events.last().cloned() else { unreachable!() };
+    assert_eq!((outcome, balance, to_seller, accepted_at), (Outcome::Approved, AMOUNT, AMOUNT, 0));
+    assert!(!h.exists(&vault), "the deposit account is closed");
+    let e = h.escrow(&escrow);
+    assert_eq!((e.status, e.outcome, e.to_seller), (Status::Ended, Some(Outcome::Approved), AMOUNT), "the escrow account stays: the receipt");
     assert_eq!(h.balance(&h.seller_tokens), AMOUNT);
     assert_eq!(h.balance(&h.buyer_tokens), BUYER_START - AMOUNT);
     let fee = 2 * 5_000;
-    assert_eq!(h.lamports(&h.payer.pubkey()), payer_before - fee, "the rent came back in the same transaction");
+    let receipt_rent = h.lamports(&escrow);
+    assert_eq!(h.lamports(&h.payer.pubkey()), payer_before - fee - receipt_rent, "the deposit account's rent came back; the receipt's stays");
     println!(
         "   seller already has a token account : {:>6} compute units ({:.1}% of 1,400,000)   {:>4} bytes ({:.0}% of 1,232)",
         m.cu,
@@ -91,7 +111,7 @@ fn create_fund_and_approve_ride_in_one_transaction() {
         m.bytes,
         m.bytes as f64 / 1232.0 * 100.0
     );
-    println!("   rent fronted for the transaction's length: {rent_lamports} lamports, all of it back; the receipt costs no rent");
+    println!("   the deposit account's {rent_lamports} lamports of rent come back in the same transaction; the receipt keeps {receipt_rent}");
 
     // The seller has never held this token: the same transaction creates the seller's account
     // first. That account's rent is not returned; it is the seller's account from then on.
@@ -144,18 +164,41 @@ fn create_fund_and_approve_ride_in_one_transaction() {
         assert!(m.bytes <= 1232, "fits one transaction");
         assert!(m.cu < 200_000);
     }
-    // The escrow account is 286 bytes and the deposit account 165; with the 128-byte overhead
-    // each, at 5,080 lamports a byte (today) and 696 (after the cuts).
-    let bytes = (128 + 8 + 278) + (128 + 165);
-    println!("   rent fronted at 5,080 lamports/byte: {} lamports; at 696: {}", bytes * 5_080, bytes * 696);
+
+    // The receipt's rent, measured: the same one tap with the Rent sysvar at today's rate and at
+    // the rate the cuts end at. The payer's balance moves by the fee and by the receipt's rent,
+    // and by nothing else: the deposit account's rent is fronted and returned inside the
+    // transaction.
+    for (id, rate) in [(10u64, RENT_TODAY), (11, RENT_FINAL)] {
+        h.svm.set_sysvar(&rent_at(rate));
+        let mut t = h.terms(id);
+        t.steps = vec![];
+        let escrow = escrow_address(&buyer.pubkey(), t.id);
+        let vault = vault_address(&escrow, &h.mint);
+        let s = h.settle_accounts(&escrow);
+        let before = h.lamports(&h.payer.pubkey());
+        let ixs = vec![
+            create_ix(&t, &h.create_accounts()),
+            spl_transfer_ix(h.buyer_tokens, vault, buyer.pubkey(), AMOUNT),
+            approve_ix(&s, buyer.pubkey(), 10_000),
+        ];
+        send_measured(&mut h, ixs, &[&buyer]);
+        let kept = before - 2 * 5_000 - h.lamports(&h.payer.pubkey());
+        assert_eq!(kept, h.lamports(&escrow), "the receipt holds exactly what the payer kept out");
+        assert_eq!(kept, (128 + ESCROW_LEN as u64) * rate, "{ESCROW_LEN} bytes and the 128-byte overhead, at {rate} a byte");
+        let usd = kept as f64 / 1e9 * SOL_USD;
+        println!("   the receipt's rent at {rate:>5} lamports/byte: {kept:>9} lamports, ${usd:.4} at SOL ${SOL_USD}, kept for good");
+    }
     println!();
 }
 
 #[test]
-fn a_one_tap_receipt_is_the_same_record_as_a_slow_one() {
-    // An index reading a one-tap payment sees the same Created and Closed it would see for an
-    // escrow that lived a week, at an address it can look up later. Nothing is left open, so a
-    // second transfer to the same address later is stranded until the buyer reopens that id.
+fn finding_a_second_payment_to_a_one_tap_link_is_stranded_for_good() {
+    // An index reading a one-tap payment sees the same Created and Ended it would see for an escrow
+    // that lived a week, and the same receipt at the same kind of address. But the receipt is
+    // permanent now: a second transfer to the same link later lands in a deposit account the
+    // program will never pay out, because the escrow has ended and its address can never be
+    // reopened. Session 10's way out, the buyer reopening the id, is gone with it.
     let mut h = Harness::new();
     let buyer = h.buyer.insecure_clone();
     let mut t = h.terms(1);
@@ -173,13 +216,17 @@ fn a_one_tap_receipt_is_the_same_record_as_a_slow_one() {
     )
     .expect("one tap");
     // Someone pays the same link again: a wallet makes the deposit account again (anyone may) and
-    // sends. Nothing in the program can pay it out until the same buyer reopens the same id.
+    // sends.
     let (ata_ix, again) = create_ata_idempotent_ix(h.payer.pubkey(), escrow, h.mint);
     assert_eq!(again, vault);
     h.send(&[ata_ix, spl_transfer_ix(h.buyer_tokens, vault, buyer.pubkey(), AMOUNT)], &[&buyer]).expect("a second payment");
-    assert!(!h.exists(&escrow));
-    assert_eq!(h.balance(&vault), AMOUNT, "stranded at a closed escrow's deposit address");
-    let (_, meta) = h.create(&t).expect("the buyer reopens the id");
-    assert_eq!(events(&meta.logs).iter().map(|e| e.name()).collect::<Vec<_>>(), ["Created", "Funded"]);
-    println!("a second payment to a one-tap link is stranded until the buyer reopens the id, which adopts it as funded");
+    assert_eq!(h.balance(&vault), AMOUNT, "at a closed-over deposit address");
+    let err = h.create(&t).expect_err("the buyer cannot reopen the id");
+    assert!(err.contains("already in use"), "{err}");
+    for ix in [approve_ix(&s, buyer.pubkey(), 10_000), withdraw_ix(&s, buyer.pubkey()), close_unfunded_ix(&s, buyer.pubkey())] {
+        let err = h.send(&[ix], &[&buyer]).expect_err("the escrow has ended");
+        assert!(err.contains("Ended") || err.contains("StillFunded"), "{err}");
+    }
+    assert_eq!(h.balance(&vault), AMOUNT, "stranded for good: no instruction pays it out");
+    println!("FINDING (money, for Carlos): a second payment to an ended escrow's link is stranded forever now that receipts are permanent");
 }

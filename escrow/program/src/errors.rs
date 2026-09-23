@@ -24,7 +24,7 @@ pub enum EscrowError {
     BadSplit,
     #[msg("the deposit account holds less than the amount")]
     NotFunded,
-    #[msg("the deposit account already holds the amount; this escrow ends by approval, silence, agreement, the arbiter or cancellation")]
+    #[msg("the deposit account already holds the amount; this escrow ends by approval, silence, agreement, the arbiter, cancellation or the buyer's withdrawal")]
     StillFunded,
     #[msg("the funding was already observed")]
     AlreadyFunded,
@@ -38,7 +38,7 @@ pub enum EscrowError {
     SilenceOver,
     #[msg("the last cancellation deadline has passed; the buyer cannot cancel alone")]
     AfterLastDeadline,
-    #[msg("the last cancellation deadline has not passed; the buyer cannot close yet")]
+    #[msg("the last cancellation deadline has not passed; the rent payer cannot close yet")]
     BeforeLastDeadline,
     #[msg("no arbiter was named at creation")]
     NoArbiter,
@@ -52,4 +52,14 @@ pub enum EscrowError {
     NotAParty,
     #[msg("a deadline does not fit in a unix time")]
     TimeOverflow,
+    #[msg("the seller has not accepted: only a full approval or the buyer's withdrawal can end it")]
+    NotAccepted,
+    #[msg("the seller has already accepted")]
+    AlreadyAccepted,
+    #[msg("this escrow has ended; its account is the receipt and nothing more happens to it")]
+    Ended,
+    #[msg("wrapped SOL is not accepted: a plain SOL transfer to its deposit account would not count")]
+    NativeMint,
+    #[msg("only the buyer, the seller, or the rent payer after the last deadline can close an escrow that never held the amount")]
+    NotACloser,
 }

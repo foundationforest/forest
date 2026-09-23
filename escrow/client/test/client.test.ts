@@ -16,16 +16,19 @@ import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
   BPS,
   ESCROW_LEN,
+  NATIVE_MINT,
   PROGRAM_ID,
   TOKEN_PROGRAM_ID,
   VERSION,
+  acceptIx,
   agreeIx,
   approveIx,
   cancelBuyerIx,
   cancelPayout,
   cancelSellerIx,
+  checkTerms,
   clockStart,
-  closeIx,
+  closeUnfundedIx,
   createArgsBytes,
   createIx,
   currentStep,
@@ -36,6 +39,8 @@ import {
   discriminator,
   escrowAddress,
   formatAmount,
+  invoice,
+  invoiceIx,
   markFundedIx,
   objectIx,
   payout,
@@ -49,6 +54,7 @@ import {
   termsFor,
   validateTerms,
   vaultAddress,
+  withdrawIx,
   type EscrowAccount,
   type MarketDefaults,
   type Step,
@@ -59,6 +65,8 @@ const here = dirname(fileURLToPath(import.meta.url))
 const hex = (b: Uint8Array) => Buffer.from(b).toString('hex')
 const DAY = 86_400n
 const T0 = 1_800_000_000n
+/** The clock the terms checks read in these tests: a day before T0. */
+const NOW = T0 - DAY
 
 const buyer = Keypair.generate().publicKey
 const seller = Keypair.generate().publicKey
@@ -88,6 +96,7 @@ test('the program id, the seed and the size are the ones the program bakes in', 
   assert.ok(lib.includes(`declare_id!("${PROGRAM_ID.toBase58()}")`))
   assert.ok(lib.includes(`pub const VERSION: u8 = ${VERSION};`))
   assert.ok(lib.includes('pub const ESCROW_SEED: &[u8] = b"escrow";'))
+  assert.ok(lib.includes(`pub const NATIVE_MINT: Pubkey = pubkey!("${NATIVE_MINT.toBase58()}");`))
   assert.ok(lib.includes(`assert!(Escrow::LEN == ${ESCROW_LEN});`))
   assert.ok(state.includes('pub const MAX_STEPS: usize = 4;'))
   assert.ok(state.includes('pub const BPS: u16 = 10_000;'))
@@ -97,6 +106,7 @@ test('the program id, the seed and the size are the ones the program bakes in', 
 test('the discriminators are pinned', () => {
   const ixs: Record<string, string> = {
     create: '181ec828051c0777',
+    accept: '419646d885066b04',
     mark_funded: '9a19863dc8b81d38',
     approve: '454ad9247375614c',
     release_by_silence: '30c52c966e7a5822',
@@ -105,11 +115,13 @@ test('the discriminators are pinned', () => {
     arbitrate: '695b6e96d80b8e8e',
     cancel_buyer: '5387a78fe8b163f5',
     cancel_seller: 'd11d75c3f77f09a3',
-    close: '62a5c9b16c41ce60',
+    withdraw: 'b712469c946da122',
+    close_unfunded: '06d9705bfa5c6746',
   }
   for (const [name, want] of Object.entries(ixs)) assert.equal(hex(discriminator('global', name)), want, name)
   const events: Record<string, string> = {
     Created: '41fe44f56694f44c',
+    Accepted: '36a28ca7b3be5f46',
     Funded: '43543858c00cc9b1',
     Approved: '11e09689ae68075b',
     ReleasedBySilence: 'e92671208e065438',
@@ -118,6 +130,8 @@ test('the discriminators are pinned', () => {
     Arbitrated: '45c47f6b8dab3ae2',
     CancelledByBuyer: '98aa1e87b1d8de49',
     CancelledBySeller: '4582b9a7fdf2512f',
+    Withdrawn: '1459dfc6c27cdb0d',
+    Ended: '467b96d69c092dc5',
     Closed: '321f579b87dcc3ef',
   }
   for (const [name, want] of Object.entries(events)) assert.equal(hex(discriminator('event', name)), want, name)
@@ -141,31 +155,32 @@ test('the deposit address is the standard associated token account of the escrow
 
 test('create carries exactly the bytes the program reads', () => {
   const t = terms({ arbiter, serviceTime: T0 + 10n * DAY })
-  const bytes = createArgsBytes(t)
-  // id 8, seller 32, arbiter 1+32, amount 8, service_time 1+8, silence_days 2, steps 4 + 2×10.
-  assert.equal(bytes.length, 8 + 32 + 33 + 8 + 9 + 2 + 4 + 20)
+  const bytes = createArgsBytes(t, buyer)
+  // id 8, buyer 32, seller 32, arbiter 1+32, amount 8, service_time 1+8, silence_days 2, steps 4 + 2×10.
+  assert.equal(bytes.length, 8 + 32 + 32 + 33 + 8 + 9 + 2 + 4 + 20)
   const v = new DataView(bytes.buffer, bytes.byteOffset)
   assert.equal(v.getBigUint64(0, true), 7n)
-  assert.deepEqual(new PublicKey(bytes.subarray(8, 40)), seller)
-  assert.equal(bytes[40], 1)
-  assert.deepEqual(new PublicKey(bytes.subarray(41, 73)), arbiter)
-  assert.equal(v.getBigUint64(73, true), 1_000_000n)
-  assert.equal(bytes[81], 1)
-  assert.equal(v.getBigInt64(82, true), T0 + 10n * DAY)
-  assert.equal(v.getUint16(90, true), 7)
-  assert.equal(v.getUint32(92, true), 2)
-  assert.equal(v.getBigInt64(96, true), DAY)
-  assert.equal(v.getUint16(104, true), 10_000)
-  assert.equal(v.getBigInt64(106, true), 3n * DAY)
-  assert.equal(v.getUint16(114, true), 5_000)
+  assert.deepEqual(new PublicKey(bytes.subarray(8, 40)), buyer)
+  assert.deepEqual(new PublicKey(bytes.subarray(40, 72)), seller)
+  assert.equal(bytes[72], 1)
+  assert.deepEqual(new PublicKey(bytes.subarray(73, 105)), arbiter)
+  assert.equal(v.getBigUint64(105, true), 1_000_000n)
+  assert.equal(bytes[113], 1)
+  assert.equal(v.getBigInt64(114, true), T0 + 10n * DAY)
+  assert.equal(v.getUint16(122, true), 7)
+  assert.equal(v.getUint32(124, true), 2)
+  assert.equal(v.getBigInt64(128, true), DAY)
+  assert.equal(v.getUint16(136, true), 10_000)
+  assert.equal(v.getBigInt64(138, true), 3n * DAY)
+  assert.equal(v.getUint16(146, true), 5_000)
 
   // No arbiter, no service time, no steps: one byte each for the options, four for the count.
-  const bare = createArgsBytes(terms({ steps: [] }))
-  assert.equal(bare.length, 8 + 32 + 1 + 8 + 1 + 2 + 4)
-  assert.equal(bare[40], 0)
-  assert.equal(bare[49], 0)
+  const bare = createArgsBytes(terms({ steps: [] }), buyer)
+  assert.equal(bare.length, 8 + 32 + 32 + 1 + 8 + 1 + 2 + 4)
+  assert.equal(bare[72], 0)
+  assert.equal(bare[81], 0)
 
-  const ix = createIx({ buyer, payer, mint, terms: t })
+  const ix = createIx({ buyer, payer, mint, terms: t, now: NOW })
   assert.deepEqual(ix.programId, PROGRAM_ID)
   assert.equal(hex(ix.data.subarray(0, 8)), '181ec828051c0777')
   assert.equal(hex(ix.data.subarray(8)), hex(bytes))
@@ -183,6 +198,15 @@ test('create carries exactly the bytes the program reads', () => {
       ['11111111111111111111111111111111', false, false],
     ],
   )
+
+  // An invoice: the same bytes and the same address, with the seller in the creator's slot.
+  const inv = invoiceIx({ seller, buyer, payer, mint, terms: t, now: NOW })
+  assert.equal(hex(inv.data), hex(ix.data))
+  assert.deepEqual(inv.keys[0].pubkey, escrow)
+  assert.deepEqual([inv.keys[2].pubkey.toBase58(), inv.keys[2].isSigner], [seller.toBase58(), true])
+  assert.throws(() => createIx({ buyer, payer, mint, terms: t, creator: arbiter, now: NOW }), /NotAParty/)
+  assert.throws(() => createIx({ buyer, payer, mint: NATIVE_MINT, terms: t, now: NOW }), /NativeMint/)
+  assert.throws(() => invoiceIx({ seller: arbiter, buyer, payer, mint, terms: t, now: NOW }), /its own seller/)
 })
 
 test('the endings share one account list and add their signers after it', () => {
@@ -219,10 +243,19 @@ test('the endings share one account list and add their signers after it', () => 
   for (const [ix, who] of [
     [cancelBuyerIx({ accounts, buyer }), buyer],
     [cancelSellerIx({ accounts, seller }), seller],
-    [closeIx({ accounts, party: seller }), seller],
   ] as const) {
     assert.deepEqual(keys(ix), [...common, who.toBase58()])
     assert.equal(ix.data.length, 8)
+  }
+  // The two exits that pay the seller nothing name no seller account.
+  const short = [accounts.escrow, accounts.vault, accounts.buyerTokens, accounts.rentPayer, TOKEN_PROGRAM_ID].map((k) => k.toBase58())
+  for (const [ix, who, name] of [
+    [withdrawIx({ accounts, buyer }), buyer, 'withdraw'],
+    [closeUnfundedIx({ accounts, closer: payer }), payer, 'close_unfunded'],
+  ] as const) {
+    assert.deepEqual(keys(ix), [...short, who.toBase58()])
+    assert.deepEqual(signers(ix), [who.toBase58()])
+    assert.equal(hex(ix.data), hex(discriminator('global', name)))
   }
   assert.deepEqual(keys(markFundedIx({ escrow, vault: accounts.vault })), [escrow.toBase58(), accounts.vault.toBase58()])
   assert.deepEqual(signers(objectIx({ escrow, vault: accounts.vault, buyer })), [buyer.toBase58()])
@@ -247,8 +280,9 @@ test('bad terms fail before a transaction is built, with the program\'s own erro
   ]
   for (const [what, over, want] of bad) {
     assert.throws(() => validateTerms(terms(over), buyer), want, what)
-    assert.throws(() => createIx({ buyer, payer, mint, terms: terms(over) }), want, what)
+    assert.throws(() => createIx({ buyer, payer, mint, terms: terms(over), now: NOW }), want, what)
   }
+  assert.throws(() => validateTerms(terms(), PublicKey.default), /EmptyKey/, 'the zero key as buyer')
   assert.doesNotThrow(() => validateTerms(terms({ arbiter, serviceTime: T0, steps: [{ offset: -DAY, refundBps: 10_000 }, { offset: 0n, refundBps: 7_500 }, { offset: DAY, refundBps: 2_500 }, { offset: 2n * DAY, refundBps: 0 }] }), buyer))
 })
 
@@ -277,8 +311,9 @@ test('the escrow account decodes at the pinned offsets', () => {
   d.writeBigInt64LE(999n, 240) // an unused slot: ignored
   d.writeBigInt64LE(T0, 260)
   d.writeBigInt64LE(T0 + DAY, 268)
-  d[276] = 2
+  d[276] = 3 // locked
   d[277] = 254
+  d.writeBigInt64LE(T0 + DAY / 2n, 278)
   const e = decodeEscrow(new Uint8Array(b))
   assert.deepEqual(e, {
     version: 1,
@@ -300,36 +335,68 @@ test('the escrow account decodes at the pinned offsets', () => {
     fundedAt: T0 + DAY,
     status: 'locked',
     bump: 254,
+    acceptedAt: T0 + DAY / 2n,
+    endedAt: null,
+    outcome: null,
+    toSeller: 0n,
+    toBuyer: 0n,
   } satisfies EscrowAccount)
+
+  // The receipt: ended, with how and what, at 286..311.
+  d[276] = 4
+  d.writeBigInt64LE(T0 + 2n * DAY, 286)
+  d[294] = 6 // withdrawn
+  d.writeBigUInt64LE(0n, 295)
+  d.writeBigUInt64LE(1_000_000n, 303)
+  const r = decodeEscrow(new Uint8Array(b))
+  assert.deepEqual([r.status, r.endedAt, r.outcome, r.toSeller, r.toBuyer], ['ended', T0 + 2n * DAY, 'withdrawn', 0n, 1_000_000n])
+  // The outcome byte means nothing before the end.
+  d[276] = 2
+  assert.equal(decodeEscrow(new Uint8Array(b)).outcome, null)
+  d[276] = 1
+  assert.equal(decodeEscrow(new Uint8Array(b)).status, 'accepted')
 
   // The zero key and zero times read back as null.
   PublicKey.default.toBuffer().copy(d, 73)
   d.writeBigInt64LE(0n, 209)
   d.writeBigInt64LE(0n, 268)
+  d.writeBigInt64LE(0n, 278)
+  d.writeBigInt64LE(0n, 286)
   d[276] = 0
   const bare = decodeEscrow(new Uint8Array(b))
   assert.equal(bare.arbiter, null)
   assert.equal(bare.serviceTime, null)
   assert.equal(bare.fundedAt, null)
+  assert.equal(bare.acceptedAt, null)
+  assert.equal(bare.endedAt, null)
   assert.equal(bare.status, 'open')
 
-  assert.throws(() => decodeEscrow(new Uint8Array(10)), /286 bytes/)
+  assert.throws(() => decodeEscrow(new Uint8Array(10)), /319 bytes/)
   b[0] ^= 1
   assert.throws(() => decodeEscrow(new Uint8Array(b)), /not an escrow/)
 })
 
+/** An `Ended` event's bytes: outcome, amount, balance, to_seller, to_buyer, accepted_at, ended_at, rent payer, rent. */
+function endedBytes(escrow: PublicKey, over: { outcome?: number; amounts?: bigint[]; acceptedAt?: bigint } = {}): Buffer {
+  const b = Buffer.alloc(8 + 32 + 1 + 8 * 4 + 8 + 8 + 32 + 8)
+  Buffer.from('467b96d69c092dc5', 'hex').copy(b, 0)
+  escrow.toBuffer().copy(b, 8)
+  b[40] = over.outcome ?? 4
+  const [amount, balance, toSeller, toBuyer] = over.amounts ?? [1_000_000n, 1_000_001n, 500_000n, 500_001n]
+  b.writeBigUInt64LE(amount, 41)
+  b.writeBigUInt64LE(balance, 49)
+  b.writeBigUInt64LE(toSeller, 57)
+  b.writeBigUInt64LE(toBuyer, 65)
+  b.writeBigInt64LE(over.acceptedAt ?? T0, 73)
+  b.writeBigInt64LE(T0 + DAY, 81)
+  payer.toBuffer().copy(b, 89)
+  b.writeBigUInt64LE(2_039_280n, 121)
+  return b
+}
+
 test('events decode from the log, in order', () => {
   const escrow = escrowAddress(buyer, 7n)
-  const closed = Buffer.alloc(8 + 32 + 1 + 8 * 4 + 32 + 8)
-  Buffer.from('321f579b87dcc3ef', 'hex').copy(closed, 0)
-  escrow.toBuffer().copy(closed, 8)
-  closed[40] = 4 // CancelledByBuyer
-  closed.writeBigUInt64LE(1_000_000n, 41)
-  closed.writeBigUInt64LE(1_000_001n, 49)
-  closed.writeBigUInt64LE(500_000n, 57)
-  closed.writeBigUInt64LE(500_001n, 65)
-  payer.toBuffer().copy(closed, 73)
-  closed.writeBigUInt64LE(4_000_000n, 105)
+  const ended = endedBytes(escrow)
 
   const cancelled = Buffer.alloc(8 + 32 + 1 + 2 + 8 + 8)
   Buffer.from('98aa1e87b1d8de49', 'hex').copy(cancelled, 0)
@@ -358,16 +425,23 @@ test('events decode from the log, in order', () => {
   created.writeUInt16LE(10_000, 271)
   created.writeBigInt64LE(T0, 273)
 
+  const accepted = Buffer.alloc(8 + 32 + 32 + 8)
+  Buffer.from('36a28ca7b3be5f46', 'hex').copy(accepted, 0)
+  escrow.toBuffer().copy(accepted, 8)
+  seller.toBuffer().copy(accepted, 40)
+  accepted.writeBigInt64LE(T0, 72)
+
   const logs = [
     'Program FoRE4JYRAxFpqRoPBzuPZZ9Yfn6ovtkBfUggynex3MKT invoke [1]',
     `Program data: ${created.toString('base64')}`,
+    `Program data: ${accepted.toString('base64')}`,
     'Program log: something else',
     `Program data: ${cancelled.toString('base64')}`,
-    `Program data: ${closed.toString('base64')}`,
+    `Program data: ${ended.toString('base64')}`,
     'Program data: AAAA',
   ]
   const events = decodeEvents(logs)
-  assert.equal(events.length, 3)
+  assert.equal(events.length, 4)
   assert.deepEqual(events[0], {
     kind: 'created',
     escrow,
@@ -385,20 +459,42 @@ test('events decode from the log, in order', () => {
     steps: [{ offset: DAY, refundBps: 10_000 }],
     createdAt: T0,
   })
-  assert.deepEqual(events[1], { kind: 'cancelledByBuyer', escrow, step: 1, refundBps: 5_000, toBuyer: 500_001n, toSeller: 500_000n })
-  assert.deepEqual(events[2], {
-    kind: 'closed',
+  assert.deepEqual(events[1], { kind: 'accepted', escrow, seller, acceptedAt: T0 })
+  assert.deepEqual(events[2], { kind: 'cancelledByBuyer', escrow, step: 1, refundBps: 5_000, toBuyer: 500_001n, toSeller: 500_000n })
+  assert.deepEqual(events[3], {
+    kind: 'ended',
     escrow,
     outcome: 'cancelledByBuyer',
     amount: 1_000_000n,
     balance: 1_000_001n,
     toSeller: 500_000n,
     toBuyer: 500_001n,
+    acceptedAt: T0,
+    endedAt: T0 + DAY,
     rentPayer: payer,
-    rentLamports: 4_000_000n,
+    rentLamports: 2_039_280n,
   })
+  // A full approval before the seller accepted: the receipt says so.
+  const unaccepted = decodeEvent(new Uint8Array(endedBytes(escrow, { outcome: 0, acceptedAt: 0n })))
+  assert.ok(unaccepted?.kind === 'ended' && unaccepted.acceptedAt === null && unaccepted.outcome === 'approved')
+
+  // A withdrawal, and the close of an escrow that never held the amount.
+  const withdrawn = Buffer.alloc(8 + 32 + 8)
+  Buffer.from('1459dfc6c27cdb0d', 'hex').copy(withdrawn, 0)
+  escrow.toBuffer().copy(withdrawn, 8)
+  withdrawn.writeBigUInt64LE(1_000_000n, 40)
+  assert.deepEqual(decodeEvent(new Uint8Array(withdrawn)), { kind: 'withdrawn', escrow, toBuyer: 1_000_000n })
+  const closed = Buffer.alloc(8 + 32 + 32 + 8 + 32 + 8)
+  Buffer.from('321f579b87dcc3ef', 'hex').copy(closed, 0)
+  escrow.toBuffer().copy(closed, 8)
+  seller.toBuffer().copy(closed, 40)
+  closed.writeBigUInt64LE(400_000n, 72)
+  payer.toBuffer().copy(closed, 80)
+  closed.writeBigUInt64LE(4_000_000n, 112)
+  assert.deepEqual(decodeEvent(new Uint8Array(closed)), { kind: 'closed', escrow, closedBy: seller, toBuyer: 400_000n, rentPayer: payer, rentLamports: 4_000_000n })
+
   assert.equal(decodeEvent(new Uint8Array(7)), null)
-  assert.throws(() => decodeEvent(new Uint8Array([...closed, 0])), /trailing/)
+  assert.throws(() => decodeEvent(new Uint8Array([...ended, 0])), /trailing/)
 })
 
 test('an event only counts when the escrow program itself wrote it', () => {
@@ -406,15 +502,8 @@ test('an event only counts when the escrow program itself wrote it', () => {
   // for a deal that never happened, at any address. The runtime's own invoke and success lines
   // say which program wrote each line, and no program can forge those.
   const escrow = escrowAddress(buyer, 7n)
-  const closed = Buffer.alloc(8 + 32 + 1 + 8 * 4 + 32 + 8)
-  Buffer.from('321f579b87dcc3ef', 'hex').copy(closed, 0)
-  escrow.toBuffer().copy(closed, 8)
-  closed[40] = 0 // Approved
-  closed.writeBigUInt64LE(10_000_000_000n, 41)
-  closed.writeBigUInt64LE(10_000_000_000n, 49)
-  closed.writeBigUInt64LE(10_000_000_000n, 57)
-  payer.toBuffer().copy(closed, 73)
-  const line = `Program data: ${closed.toString('base64')}`
+  const ended = endedBytes(escrow, { outcome: 0, amounts: [10_000_000_000n, 10_000_000_000n, 10_000_000_000n, 0n] })
+  const line = `Program data: ${ended.toString('base64')}`
   const forger = 'Forger1111111111111111111111111111111111111'
   const token = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA'
   const id = PROGRAM_ID.toBase58()
@@ -448,7 +537,7 @@ test('terms come from the market file\'s defaults and the parties\' choices', ()
     ],
     tokens: [{ symbol: 'USDC', mint: mint.toBase58(), chain: 'solana' }],
   }
-  const t = termsFor(market, { seller, amount: 1_000_000n, mint, serviceTime: new Date(Number(T0) * 1000), id: 7n })
+  const t = termsFor(market, { seller, amount: 1_000_000n, mint, serviceTime: new Date(Number(T0) * 1000), id: 7n }, NOW)
   assert.deepEqual(t, {
     id: 7n,
     seller,
@@ -461,42 +550,110 @@ test('terms come from the market file\'s defaults and the parties\' choices', ()
       { offset: 0n, refundBps: 5_000 },
     ],
   })
-  assert.throws(() => termsFor(market, { seller, amount: 1n, mint, arbiter }), /does not allow an arbiter/)
-  assert.throws(() => termsFor(market, { seller, amount: 1n, mint: Keypair.generate().publicKey }), /does not accept mint/)
-  const allowed = termsFor({ ...market, arbiterAllowed: true }, { seller, amount: 1n, mint, arbiter, silenceDays: 3, steps: [] })
+  assert.throws(() => termsFor(market, { seller, amount: 1n, mint, arbiter }, NOW), /does not allow an arbiter/)
+  assert.throws(() => termsFor(market, { seller, amount: 1n, mint: Keypair.generate().publicKey }, NOW), /does not accept mint/)
+  const allowed = termsFor({ ...market, arbiterAllowed: true }, { seller, amount: 1n, mint, arbiter, silenceDays: 3, steps: [] }, NOW)
   assert.deepEqual(allowed.arbiter, arbiter)
   assert.equal(allowed.silenceDays, 3)
   assert.deepEqual(allowed.steps, [])
   assert.equal(allowed.serviceTime, null)
-  const noSteps = termsFor({ ...market, cancellationSteps: undefined }, { seller, amount: 1n, mint })
+  const noSteps = termsFor({ ...market, cancellationSteps: undefined }, { seller, amount: 1n, mint }, NOW)
   assert.deepEqual(noSteps.steps, [])
   assert.ok(noSteps.id >= 0n)
   assert.deepEqual(stepFromMarket({ hours: 1.5, refundPercent: 12.5 }), { offset: 5_400n, refundBps: 1_250 })
   assert.throws(() => stepFromMarket({ hours: 1, refundPercent: 101 }), /0 to 100/)
 })
 
-test('finding: termsFor builds terms the program accepts but no buyer meant', () => {
-  // Adversarial review 1. Each of these passes termsFor and validateTerms, and create accepts it.
-  // Pinned so a change that refuses or warns shows up here.
+test('terms the program accepts but nobody meant are refused before signing', () => {
+  // Adversarial review 1, finding 13: termsFor used to build each of these, and create accepts
+  // them. They are now refused by `checkTerms`, which termsFor, createIx and acceptIx all run.
   const market: MarketDefaults = {
     silenceDays: 7,
     arbiterAllowed: true,
     cancellationSteps: [{ hours: 240, refundPercent: 100 }],
     tokens: [{ symbol: 'USDC', mint: mint.toBase58(), chain: 'solana' }],
   }
-  // A number is read as unix seconds, so `Date.now()` (milliseconds) puts the service time some
-  // 55,000 years out: silence never comes, and the buyer can cancel for a full refund until then.
-  const ms = termsFor(market, { seller, amount: 1n, mint, serviceTime: 1_800_000_000_000 })
-  assert.equal(ms.serviceTime, 1_800_000_000_000n)
-  validateTerms(ms, buyer)
-  // A market whose refund step outlasts its silence: from day seven both the seller's release and
-  // the buyer's full cancellation are valid, and whichever lands first wins.
-  const race = termsFor(market, { seller, amount: 1n, mint })
-  assert.ok(race.steps[0].offset > BigInt(race.silenceDays) * 86_400n)
-  validateTerms(race, buyer)
-  // A service time already past: funding that arrives after silence releases in the same second.
-  const past = termsFor(market, { seller, amount: 1n, mint, serviceTime: new Date(0 + 1000) })
-  validateTerms(past, buyer)
+  const sane = { ...market, cancellationSteps: [{ hours: 24, refundPercent: 100 }] }
+  // Times in seconds: `Date.now()` is milliseconds, and would put the service time some 55,000
+  // years out, where silence never comes.
+  assert.throws(() => termsFor(sane, { seller, amount: 1n, mint, serviceTime: 1_800_000_000_000 }, NOW), /not unix seconds/)
+  // A service time already past: the clock has started before the money lands.
+  assert.throws(() => termsFor(sane, { seller, amount: 1n, mint, serviceTime: new Date(1000) }, NOW), /already passed/)
+  assert.doesNotThrow(() => termsFor(sane, { seller, amount: 1n, mint, serviceTime: T0 }, NOW))
+  // Steps sane: a refund step that outlasts silence races the seller's release.
+  assert.throws(() => termsFor(market, { seller, amount: 1n, mint }, NOW), /outlasts silence/)
+  assert.doesNotThrow(() => termsFor(market, { seller, amount: 1n, mint, silenceDays: 10 }, NOW), 'a step on the last second of silence is fine')
+  // And the same through createIx, whoever builds the terms.
+  assert.throws(() => createIx({ buyer, payer, mint, terms: terms({ serviceTime: 1_800_000_000_000n }), now: NOW }), /not unix seconds/)
+  assert.throws(() => createIx({ buyer, payer, mint, terms: terms({ steps: [{ offset: 8n * DAY, refundBps: 10_000 }] }), now: NOW }), /outlasts silence/)
+  assert.throws(() => createIx({ buyer, payer, mint, terms: terms({ serviceTime: NOW - 1n }), now: NOW }), /already passed/)
+
+  // An arbiter only if named: the escrow's arbiter must be the one the signer expects.
+  const t = terms({ arbiter })
+  assert.doesNotThrow(() => checkTerms(t, { arbiter, now: NOW }))
+  assert.throws(() => checkTerms(t, { arbiter: null, now: NOW }), /did not agree to/)
+  assert.throws(() => checkTerms(t, { arbiter: Keypair.generate().publicKey, now: NOW }), /did not agree to/)
+  assert.throws(() => checkTerms(terms(), { arbiter, now: NOW }), /names no arbiter/)
+  assert.doesNotThrow(() => checkTerms(terms(), { arbiter: null, now: NOW }))
+})
+
+test('the seller accepts only an escrow read from the chain, after checking its terms', () => {
+  const escrow = escrowAddress(buyer, 7n)
+  const account: EscrowAccount = {
+    version: 1,
+    id: 7n,
+    buyer,
+    seller,
+    arbiter: null,
+    mint,
+    vault: vaultAddress(escrow, mint),
+    rentPayer: payer,
+    amount: 1_000_000n,
+    serviceTime: T0,
+    silenceDays: 7,
+    steps: [{ offset: -DAY, refundBps: 10_000 }],
+    createdAt: NOW,
+    fundedAt: null,
+    status: 'open',
+    bump: 255,
+    acceptedAt: null,
+    endedAt: null,
+    outcome: null,
+    toSeller: 0n,
+    toBuyer: 0n,
+  }
+  const ix = acceptIx({ account, seller, arbiter: null, now: NOW })
+  assert.equal(hex(ix.data), '419646d885066b04')
+  assert.deepEqual(
+    ix.keys.map((k) => [k.pubkey.toBase58(), k.isSigner, k.isWritable]),
+    [
+      [escrow.toBase58(), false, true],
+      [account.vault.toBase58(), false, false],
+      [seller.toBase58(), true, false],
+    ],
+  )
+  assert.throws(() => acceptIx({ account, seller: buyer, arbiter: null, now: NOW }), /NotTheSeller/)
+  assert.throws(() => acceptIx({ account: { ...account, status: 'accepted' }, seller, arbiter: null, now: NOW }), /AlreadyAccepted/)
+  assert.throws(() => acceptIx({ account: { ...account, status: 'ended' }, seller, arbiter: null, now: NOW }), /Ended/)
+  // The buyer named an arbiter the seller never agreed to: its second key, perhaps.
+  assert.throws(() => acceptIx({ account: { ...account, arbiter: Keypair.generate().publicKey }, seller, arbiter: null, now: NOW }), /did not agree to/)
+  assert.throws(() => acceptIx({ account: { ...account, serviceTime: 1_800_000_000_000n }, seller, arbiter: null, now: NOW }), /not unix seconds/)
+  assert.throws(() => acceptIx({ account: { ...account, steps: [{ offset: 30n * DAY, refundBps: 10_000 }] }, seller, arbiter: null, now: NOW }), /outlasts silence/)
+})
+
+test('an invoice is the seller\'s create, and its pay link', () => {
+  const t = terms({ serviceTime: T0 })
+  const inv = invoice({ seller, buyer, payer, mint, decimals: 6, terms: t, label: 'Forest', message: 'Maths, Tuesday 4pm', now: NOW })
+  const escrow = escrowAddress(buyer, 7n)
+  assert.deepEqual(inv.escrow, escrow)
+  assert.deepEqual(inv.deposit, vaultAddress(escrow, mint))
+  assert.deepEqual([inv.instruction.keys[2].pubkey.toBase58(), inv.instruction.keys[2].isSigner], [seller.toBase58(), true])
+  assert.equal(hex(inv.instruction.data), hex(createIx({ buyer, payer, mint, terms: t, now: NOW }).data))
+  const url = new URL(inv.url)
+  assert.equal(url.pathname, escrow.toBase58())
+  assert.equal(url.searchParams.get('amount'), '1')
+  assert.equal(url.searchParams.get('reference'), escrow.toBase58())
+  assert.throws(() => invoice({ seller, buyer, payer, mint, decimals: 6, terms: terms({ serviceTime: NOW - DAY }), now: NOW }), /already passed/)
 })
 
 test('the clock start, silence and each deadline, as the program will read them', () => {
@@ -504,23 +661,28 @@ test('the clock start, silence and each deadline, as the program will read them'
     { offset: DAY, refundBps: 10_000 },
     { offset: 3n * DAY, refundBps: 5_000 },
   ]
-  const base = { serviceTime: null, fundedAt: null, silenceDays: 7, steps, createdAt: T0, status: 'open' as const }
+  const base = { serviceTime: null, fundedAt: null, acceptedAt: null, silenceDays: 7, steps, createdAt: T0, status: 'open' as const }
 
   // Not yet funded, no service time: no clock.
   let s = schedule(base, T0 + DAY)
+  assert.equal(s.accepted, false)
   assert.equal(s.clockStart, null)
   assert.equal(s.silenceReleasesAt, null)
   assert.deepEqual(s.deadlines, [])
   assert.equal(s.buyerCanCancel, false)
   assert.equal(s.buyerCanObject, false)
-  assert.equal(s.buyerCanCloseUnfundedAt, T0 + 3n * DAY + 1n, 'measured from creation when there is no service time')
-  assert.equal(schedule(base, T0 + 3n * DAY + 1n).buyerCanCloseUnfundedAt, null, 'now')
-  assert.equal(schedule({ ...base, steps: [] }, T0).buyerCanCloseUnfundedAt, null, 'no steps: now')
+  assert.equal(s.rentPayerCanCloseUnfundedAt, T0 + 3n * DAY + 1n, 'measured from creation when there is no service time')
+  assert.equal(schedule(base, T0 + 3n * DAY + 1n).rentPayerCanCloseUnfundedAt, null, 'now')
+  assert.equal(schedule({ ...base, steps: [] }, T0).rentPayerCanCloseUnfundedAt, null, 'no steps: now')
+  // Funded but not accepted: still no clock.
+  assert.equal(clockStart({ ...base, fundedAt: T0 }), null)
+  assert.equal(schedule({ ...base, serviceTime: T0 }, T0 + DAY).clockStart, null, 'not even from a service time')
 
-  // Funded at T0 + 1 day.
-  const funded = { ...base, fundedAt: T0 + DAY, status: 'funded' as const }
+  // Accepted at T0, funded at T0 + 1 day.
+  const funded = { ...base, acceptedAt: T0, fundedAt: T0 + DAY, status: 'funded' as const }
   assert.equal(clockStart(funded), T0 + DAY)
   s = schedule(funded, T0 + DAY)
+  assert.equal(s.accepted, true)
   assert.equal(s.clockStart, T0 + DAY)
   assert.equal(s.silenceReleasesAt, T0 + 8n * DAY + 1n)
   assert.equal(silenceEnds(T0 + DAY, 7), T0 + 8n * DAY)
@@ -540,6 +702,9 @@ test('the clock start, silence and each deadline, as the program will read them'
   assert.equal(schedule(funded, T0 + 8n * DAY + 1n).buyerCanObject, false)
   assert.equal(schedule({ ...funded, status: 'locked' }, T0 + DAY).buyerCanCancel, false)
   assert.equal(schedule({ ...funded, status: 'locked' }, T0 + DAY).buyerCanObject, false)
+  assert.equal(schedule({ ...funded, status: 'ended' }, T0 + DAY).buyerCanCancel, false)
+  // Funded first, accepted ten days later: the clock starts at the acceptance.
+  assert.equal(clockStart({ ...funded, fundedAt: T0, acceptedAt: T0 + 10n * DAY }), T0 + 10n * DAY)
 
   // A service time wins over the funding time, and negative offsets fall before it.
   const timed = { ...funded, serviceTime: T0 + 30n * DAY, steps: [{ offset: -DAY, refundBps: 10_000 }, { offset: 0n, refundBps: 5_000 }] }
@@ -547,7 +712,9 @@ test('the clock start, silence and each deadline, as the program will read them'
   assert.equal(s.clockStart, T0 + 30n * DAY)
   assert.equal(s.silenceReleasesAt, T0 + 37n * DAY + 1n)
   assert.deepEqual(s.deadlines.map((d) => d.deadline), [T0 + 29n * DAY, T0 + 30n * DAY])
-  assert.equal(schedule({ ...timed, fundedAt: null, status: 'open' }, T0).buyerCanCloseUnfundedAt, T0 + 30n * DAY + 1n)
+  assert.equal(schedule({ ...timed, fundedAt: null, status: 'open' }, T0).rentPayerCanCloseUnfundedAt, T0 + 30n * DAY + 1n)
+  // A service time the seller accepted after: the clock starts at the acceptance.
+  assert.equal(clockStart({ ...timed, acceptedAt: T0 + 40n * DAY }), T0 + 40n * DAY)
 })
 
 test('payouts: the seller\'s share rounds down, the buyer gets the rest and the excess', () => {

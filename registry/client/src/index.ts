@@ -29,8 +29,8 @@ export * from './program.ts'
 export * from './proof.ts'
 
 /**
- * A registration measured at 132,302 compute units under LiteSVM and 132,296 on a local
- * validator, rounded up with room for a runtime that prices a syscall differently. Well under
+ * A registration measured at about 133,000 compute units under LiteSVM and on a local validator
+ * (session 11), rounded up with room for a runtime that prices a syscall differently. Well under
  * the 1,400,000 a transaction may ask for.
  */
 export const REGISTER_COMPUTE_UNITS = 220_000
@@ -40,7 +40,10 @@ export type Registration = MembershipProof & {
   /** The account the program creates. Its existence is this human's badge in this market. */
   codeAccount: PublicKey
   instruction: TransactionInstruction
-  /** Unsigned. The profile's wallet signs it, then the fee payer co-signs and sends it. */
+  /**
+   * Unsigned. The profile's wallet signs it for consent, whoever pays; the fee authority signs if it
+   * is someone else (a sponsor paying the fee); the fee payer co-signs for the network fee and sends.
+   */
   transaction: VersionedTransaction
 }
 
@@ -63,6 +66,7 @@ export async function buildRegistration(input: {
     secret: input.secret,
     market: input.market,
     did: input.did,
+    wallet: input.accounts.profileWallet,
     leaves: input.leaves,
     artifacts: input.artifacts,
   })

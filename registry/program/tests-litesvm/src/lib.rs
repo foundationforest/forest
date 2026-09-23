@@ -32,13 +32,9 @@ pub const TREASURY: Address = solana_address::address!("F35kGoXPCdZLdanwTGuShYXx
 /// default build; a `--features devnet` build names devnet's instead.
 pub const USDC_MINT: Address = solana_address::address!("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
 
-/// 0.25 in a mint's own base units: 25 × 10^(decimals − 2). Written a second time here, by hand.
-pub fn registration_fee(decimals: u8) -> Option<u64> {
-    if decimals < 2 {
-        return None;
-    }
-    25u64.checked_mul(10u64.checked_pow(u32::from(decimals - 2))?)
-}
+/// USDC's fee, a program constant: 0.25 at six decimals. Written a second time here, by hand. Every
+/// other mint's fee is whatever the treasury set at `add_token`.
+pub const USDC_FEE: u64 = 250_000;
 
 pub fn treasury_keypair() -> Keypair {
     let kp = Keypair::new_from_array(TREASURY_SEED);
@@ -47,7 +43,7 @@ pub fn treasury_keypair() -> Keypair {
 }
 
 pub const ROOT_HISTORY: usize = 128;
-pub const CONFIG_LEN: usize = 8 + 598;
+pub const CONFIG_LEN: usize = 8 + 710;
 pub const LIST_LEN: usize = 8 + 5456;
 pub const CODE_TREE_LEN: usize = 8 + 1104;
 pub const USED_CODE_LEN: usize = 8 + 1;
@@ -77,6 +73,11 @@ pub struct FixtureProof {
     pub list_index: u32,
     pub market: String,
     pub did: String,
+    /// The profile's wallet, base58: it signs, and the proof's message names it.
+    pub wallet: String,
+    /// Its 32-byte ed25519 seed, hex, so the tests can sign as it. Alice's is the keys recipe's.
+    #[serde(rename = "walletSeed")]
+    pub wallet_seed: String,
     pub root: String,
     pub code: String,
     pub scope: String,
@@ -112,6 +113,12 @@ impl Fixtures {
 }
 
 impl FixtureProof {
+    /// The profile's wallet, as a key that can sign.
+    pub fn wallet_keypair(&self) -> Keypair {
+        let kp = Keypair::new_from_array(from_hex32(&self.wallet_seed));
+        assert_eq!(kp.pubkey().to_string(), self.wallet, "{}: the wallet seed must derive the wallet", self.name);
+        kp
+    }
     pub fn root_bytes(&self) -> [u8; 32] {
         from_hex32(&self.root)
     }
@@ -204,10 +211,14 @@ pub struct RegisterArgs<'a> {
     pub proof_c: [u8; 32],
 }
 
+/// The payer (network fee and the code account's rent), the profile's wallet (consent, named in
+/// the proof), and the fee authority with the token account the fee comes from (the profile's
+/// wallet itself, or a sponsor).
 pub struct RegisterAccounts {
     pub payer: Address,
     pub profile_wallet: Address,
-    pub profile_tokens: Address,
+    pub fee_authority: Address,
+    pub fee_tokens: Address,
     pub treasury_tokens: Address,
 }
 
@@ -230,7 +241,8 @@ pub fn register_ix(args: &RegisterArgs, accounts: &RegisterAccounts) -> Instruct
             AccountMeta::new(used_code_address(&args.code), false),
             AccountMeta::new(accounts.payer, true),
             AccountMeta::new_readonly(accounts.profile_wallet, true),
-            AccountMeta::new(accounts.profile_tokens, false),
+            AccountMeta::new_readonly(accounts.fee_authority, true),
+            AccountMeta::new(accounts.fee_tokens, false),
             AccountMeta::new(accounts.treasury_tokens, false),
             AccountMeta::new_readonly(TOKEN_PROGRAM, false),
             AccountMeta::new_readonly(solana_system_interface::program::ID, false),
@@ -318,6 +330,21 @@ pub fn issuer_ix(name: &str, treasury: Address, list_index: u32, issuer: Address
     }
 }
 
+/// `close_list`: the same accounts as the issuer dials, and the list index.
+pub fn close_list_ix(treasury: Address, list_index: u32) -> Instruction {
+    let mut data = discriminator("global", "close_list").to_vec();
+    data.extend_from_slice(&list_index.to_le_bytes());
+    Instruction {
+        program_id: PROGRAM_ID,
+        accounts: vec![
+            AccountMeta::new_readonly(config_address(), false),
+            AccountMeta::new(list_address(list_index), false),
+            AccountMeta::new_readonly(treasury, true),
+        ],
+        data,
+    }
+}
+
 pub fn insert_identity_ix(issuer: Address, list_index: u32, commitment: [u8; 32]) -> Instruction {
     let mut data = discriminator("global", "insert_identity").to_vec();
     data.extend_from_slice(&list_index.to_le_bytes());
@@ -332,7 +359,10 @@ pub fn insert_identity_ix(issuer: Address, list_index: u32, commitment: [u8; 32]
     }
 }
 
-pub fn add_token_ix(treasury: Address, mint: Address) -> Instruction {
+/// `add_token`: the mint, at `fee` in its own base units.
+pub fn add_token_ix(treasury: Address, mint: Address, fee: u64) -> Instruction {
+    let mut data = discriminator("global", "add_token").to_vec();
+    data.extend_from_slice(&fee.to_le_bytes());
     Instruction {
         program_id: PROGRAM_ID,
         accounts: vec![
@@ -340,7 +370,7 @@ pub fn add_token_ix(treasury: Address, mint: Address) -> Instruction {
             AccountMeta::new_readonly(treasury, true),
             AccountMeta::new_readonly(mint, false),
         ],
-        data: discriminator("global", "add_token").to_vec(),
+        data,
     }
 }
 
@@ -399,24 +429,24 @@ pub fn sweep_rent_ix(target: &SweepTarget, treasury: Address) -> Instruction {
 pub struct ConfigView {
     pub treasury: Address,
     pub mints: Vec<Address>,
-    /// One per accepted mint, at the same index.
-    pub decimals: Vec<u8>,
+    /// One per accepted mint, at the same index: its fee in its own base units.
+    pub fees: Vec<u64>,
     pub list_count: u32,
     /// The proposed treasury, or the zero key when no handover is pending.
     pub pending_treasury: Address,
 }
 
-/// treasury 0..32, mints 32..544, decimals 544..560, mint_count 560, list_count 561..565, bump 565,
-/// pending_treasury 566..598.
+/// treasury 0..32, mints 32..544, fees 544..672, mint_count 672, list_count 673..677, bump 677,
+/// pending_treasury 678..710.
 pub fn read_config(data: &[u8]) -> ConfigView {
     let b = &data[8..];
-    let mint_count = b[560] as usize;
+    let mint_count = b[672] as usize;
     ConfigView {
         treasury: Address::try_from(&b[0..32]).unwrap(),
         mints: (0..mint_count).map(|i| Address::try_from(&b[32 + i * 32..64 + i * 32]).unwrap()).collect(),
-        decimals: b[544..544 + mint_count].to_vec(),
-        list_count: u32::from_le_bytes(b[561..565].try_into().unwrap()),
-        pending_treasury: Address::try_from(&b[566..598]).unwrap(),
+        fees: (0..mint_count).map(|i| u64::from_le_bytes(b[544 + i * 8..552 + i * 8].try_into().unwrap())).collect(),
+        list_count: u32::from_le_bytes(b[673..677].try_into().unwrap()),
+        pending_treasury: Address::try_from(&b[678..710]).unwrap(),
     }
 }
 
@@ -424,6 +454,8 @@ pub struct ListView {
     pub leaf_count: u64,
     pub index: u32,
     pub issuer_count: u8,
+    /// Byte 14, once padding.
+    pub closed: bool,
     pub root: [u8; 32],
     pub roots: Vec<[u8; 32]>,
     pub issuers: Vec<Address>,
@@ -436,6 +468,7 @@ pub fn read_list(data: &[u8]) -> ListView {
         leaf_count: u64::from_le_bytes(b[0..8].try_into().unwrap()),
         index: u32::from_le_bytes(b[8..12].try_into().unwrap()),
         issuer_count,
+        closed: b[14] != 0,
         root: b[16..48].try_into().unwrap(),
         roots: (0..ROOT_HISTORY).map(|i| b[1104 + i * 32..1136 + i * 32].try_into().unwrap()).collect(),
         issuers: (0..issuer_count as usize)
@@ -465,6 +498,7 @@ pub fn token_amount(data: &[u8]) -> u64 {
 pub struct RegisteredEvent {
     pub market: String,
     pub did: String,
+    pub wallet: Address,
     pub code: [u8; 32],
     pub list_index: u32,
 }
@@ -479,7 +513,7 @@ pub fn registered_events(logs: &[String]) -> Vec<RegisteredEvent> {
             continue;
         }
         let mut at = 8usize;
-        let mut read_string = |at: &mut usize| {
+        let read_string = |at: &mut usize| {
             let len = u32::from_le_bytes(bytes[*at..*at + 4].try_into().unwrap()) as usize;
             *at += 4;
             let s = String::from_utf8(bytes[*at..*at + len].to_vec()).unwrap();
@@ -488,11 +522,14 @@ pub fn registered_events(logs: &[String]) -> Vec<RegisteredEvent> {
         };
         let market = read_string(&mut at);
         let did = read_string(&mut at);
+        let wallet = Address::try_from(&bytes[at..at + 32]).unwrap();
+        at += 32;
         let code: [u8; 32] = bytes[at..at + 32].try_into().unwrap();
         at += 32;
         out.push(RegisteredEvent {
             market,
             did,
+            wallet,
             code,
             list_index: u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap()),
         });
@@ -689,6 +726,15 @@ impl Harness {
         let tokens = Address::new_unique();
         self.svm.set_account(tokens, spl_token_account(&mint, &owner, 0)).unwrap();
         tokens
+    }
+
+    /// A profile's own wallet, from its fixture, with a token account for `mint` holding `amount`:
+    /// the paid path, where the profile pays its own fee.
+    pub fn profile_with(&mut self, p: &FixtureProof, mint: Address, amount: u64) -> (Keypair, Address) {
+        let wallet = p.wallet_keypair();
+        let tokens = Address::new_unique();
+        self.svm.set_account(tokens, spl_token_account(&mint, &wallet.pubkey(), amount)).unwrap();
+        (wallet, tokens)
     }
 
     /// A wallet holding `amount` of `mint`, ready to pay.

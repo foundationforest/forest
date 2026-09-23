@@ -36,7 +36,7 @@ pub enum RegistryError {
     MintMismatch,
     #[msg("the fee would move from an account to itself")]
     FeeGoesNowhere,
-    #[msg("0.25 of this mint is not a whole number of base units that fits: it needs 2 to 19 decimals")]
+    #[msg("the USDC mint must count in six decimals, so that its fixed fee of 250,000 base units is 0.25")]
     WrongDecimals,
     #[msg("the treasury cannot be the zero key")]
     TreasuryEmpty,
@@ -52,4 +52,8 @@ pub enum RegistryError {
     WrongSweepTarget,
     #[msg("there is nothing above the rent-exempt minimum to sweep")]
     NothingToSweep,
+    #[msg("a mint's fee must be above zero: registration is never free inside the program")]
+    FeeZero,
+    #[msg("this list is closed to new members")]
+    ListClosed,
 }

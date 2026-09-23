@@ -8,17 +8,21 @@
 //! keeps the attempt). LiteSVM registers them, so the same model and the same invariants run here,
 //! with real signatures and a seeded random generator instead of Trident's.
 //!
-//! Random flows: register (the five real proofs, sometimes corrupted), insert, propose and accept
-//! a treasury, add a token, add and remove issuers, open a list, send lamports to a registry
-//! account, sweep, and move the rent rate between the three rates the sweep exists for. The model
-//! says whether each must land; after each, the invariants:
+//! Random flows: register (the five real proofs, sometimes corrupted, signed by the profile's own
+//! wallet or by another, the fee paid by the profile or by anyone else), insert, propose and accept
+//! a treasury, add a token at a fee of the treasury's choosing, add and remove issuers, open and
+//! close a list, send lamports to a registry account, sweep, and move the rent rate between the
+//! three rates the sweep exists for. The model says whether each must land; after each, the
+//! invariants:
 //!   R1 a code is never recorded twice, and the code tree's count and root are those of the codes
 //!      accepted, in order;
 //!   R2 no key that has held the treasury ever loses a lamport or a token unit; it gains exactly
 //!      the fee on a registration and exactly the excess on a sweep;
 //!   R3 each list's identity count only grows, and its root is the LeanIMT root of its leaves;
 //!   R4 each list's ring holds exactly its last 128 roots;
-//!   R5 the program accepts exactly what the rules allow and refuses everything else.
+//!   R5 the program accepts exactly what the rules allow and refuses everything else;
+//!   R6 every registration is signed by the wallet its proof names, and its entry names that
+//!      wallet; each mint's fee never changes once set; a closed list takes no member and stays closed.
 //!
 //! `cargo test --release --test invariants -- --nocapture`; `FOREST_FUZZ_ITERATIONS`,
 //! `FOREST_FUZZ_FLOWS` and `FOREST_FUZZ_SEED` size and replay a run.
@@ -74,15 +78,19 @@ struct World {
     h: Harness,
     rng: Rng,
     proofs: Vec<(u32, String, String, [u8; 32], [u8; 32], [u8; 32], [u8; 64], [u8; 32])>,
+    /// Each proof's profile wallet, at the same index as `proofs`.
+    profiles: Vec<Keypair>,
     people: Vec<Keypair>,
     treasuries: Vec<Keypair>,
     treasury: Address,
     pending: Address,
-    mints: Vec<(Address, u8)>,
+    /// Accepted mints and the fee each was set at.
+    mints: Vec<(Address, u64)>,
     tokens: HashMap<(Address, Address), Address>,
     leaves: Vec<Vec<[u8; 32]>>,
     rings: Vec<Vec<[u8; 32]>>,
     issuers: Vec<Vec<Address>>,
+    closed: Vec<bool>,
     codes: Vec<[u8; 32]>,
     used: HashSet<[u8; 32]>,
     watch: HashMap<Address, Vec<u64>>,
@@ -106,19 +114,22 @@ impl World {
             .iter()
             .map(|p| (p.list_index, p.market.clone(), p.did.clone(), p.root_bytes(), p.code_bytes(), p.a_bytes(), p.b_bytes(), p.c_bytes()))
             .collect();
+        let profiles = f.proofs.iter().map(|p| p.wallet_keypair()).collect();
         let mut w = World {
             h,
             rng: Rng(seed | 1),
             proofs,
+            profiles,
             people,
             treasuries,
             treasury: TREASURY,
             pending: Address::default(),
-            mints: vec![(USDC_MINT, 6)],
+            mints: vec![(USDC_MINT, USDC_FEE)],
             tokens: HashMap::new(),
             leaves: vec![vec![]],
             rings: vec![vec![]],
             issuers: vec![],
+            closed: vec![false],
             codes: vec![],
             used: HashSet::new(),
             watch: HashMap::new(),
@@ -129,8 +140,12 @@ impl World {
             errors: BTreeMap::new(),
         };
         w.h.svm.set_sysvar(&rent_at(RENT_HIGH));
-        for p in &w.people {
-            w.h.svm.airdrop(&p.pubkey(), 1_000_000_000_000).unwrap();
+        // Alice's two proofs share one profile wallet: one airdrop each key.
+        let mut funded = HashSet::new();
+        for p in w.people.iter().chain(w.profiles.iter()) {
+            if funded.insert(p.pubkey()) {
+                w.h.svm.airdrop(&p.pubkey(), 1_000_000_000_000).unwrap();
+            }
         }
         w.issuers.push(vec![w.people[0].pubkey()]);
         w.give_token_accounts(USDC_MINT);
@@ -139,6 +154,7 @@ impl World {
         assert!(w.send(&[open_list_ix(payer, TREASURY, 1)], "open_list"));
         w.leaves.push(vec![]);
         w.rings.push(vec![]);
+        w.closed.push(false);
         let issuer = w.people[0].pubkey();
         assert!(w.send(&[issuer_ix("add_issuer", TREASURY, 1, issuer)], "add_issuer"));
         w.issuers.push(vec![issuer]);
@@ -160,10 +176,20 @@ impl World {
         if *a == self.h.payer.pubkey() {
             return &self.h.payer;
         }
-        self.people.iter().chain(self.treasuries.iter()).find(|k| k.pubkey() == *a).unwrap_or_else(|| panic!("no key for {a}"))
+        self.people
+            .iter()
+            .chain(self.treasuries.iter())
+            .chain(self.profiles.iter())
+            .find(|k| k.pubkey() == *a)
+            .unwrap_or_else(|| panic!("no key for {a}"))
     }
 
     fn send(&mut self, ixs: &[Instruction], name: &str) -> bool {
+        self.send_logged(ixs, name).is_some()
+    }
+
+    /// As `send`, with the transaction's logs when it lands.
+    fn send_logged(&mut self, ixs: &[Instruction], name: &str) -> Option<Vec<String>> {
         self.h.svm.expire_blockhash();
         let msg = Message::new(ixs, Some(&self.h.payer.pubkey()));
         let n = msg.header.num_required_signatures as usize;
@@ -185,7 +211,7 @@ impl World {
                 *self.errors.entry(format!("{name}: {code}")).or_default() += 1;
             }
         }
-        out.is_ok()
+        out.ok().map(|meta| meta.logs)
     }
 
     fn a_person(&mut self) -> Address {
@@ -208,8 +234,11 @@ impl World {
         let owners: Vec<(Address, bool)> = self
             .people
             .iter()
+            .chain(self.profiles.iter())
             .map(|k| (k.pubkey(), false))
             .chain(self.treasuries.iter().map(|k| (k.pubkey(), true)))
+            .collect::<std::collections::BTreeMap<_, _>>()
+            .into_iter()
             .collect();
         for (owner, is_treasury) in owners {
             let t = Address::new_unique();
@@ -252,36 +281,52 @@ impl World {
         let corrupted = (market.clone(), did.clone(), list, root, code, a, b, c) != (p_market, p_did, p_list, p_root, p_code, p_a, p_b, p_c);
 
         let payer = self.a_person();
-        let wallet = self.a_person();
+        // The profile's wallet signs: usually the one the proof names, sometimes another profile's
+        // or anyone's. The fee authority is the profile itself (the paid path) or anyone (a sponsor).
+        let profile = match self.rng.below(12) {
+            0 => self.profiles[self.rng.below(self.profiles.len())].pubkey(),
+            1 => self.a_person(),
+            _ => self.profiles[k].pubkey(),
+        };
+        let wallet_ok = profile == self.profiles[k].pubkey();
+        let fee_authority = if self.rng.coin() { profile } else { self.a_person() };
         let mint = if self.rng.below(4) == 0 && !self.extra_mints.is_empty() {
             let j = self.rng.below(self.extra_mints.len());
             self.extra_mints[j]
         } else {
             USDC_MINT
         };
-        let decimals = self.mints.iter().find(|(m, _)| *m == mint).map(|(_, d)| *d);
-        let fee = decimals.and_then(registration_fee).unwrap_or(u64::MAX);
-        let profile_tokens = self.tokens[&(mint, wallet)];
+        let fee_set = self.mints.iter().find(|(m, _)| *m == mint).map(|(_, f)| *f);
+        let fee = fee_set.unwrap_or(u64::MAX);
+        let fee_tokens = self.tokens[&(mint, fee_authority)];
         let fee_to = match self.rng.below(20) {
             0 => self.a_person(),
             1 => self.a_treasury(),
             _ => self.treasury,
         };
         let treasury_tokens = self.tokens[&(mint, fee_to)];
-        let balance = self.balance(&profile_tokens);
+        let balance = self.balance(&fee_tokens);
         let root_ok = (list as usize) < self.rings.len() && self.rings[list as usize].contains(&root);
-        let valid = !corrupted && !self.used.contains(&code) && root_ok && decimals.is_some() && fee_to == self.treasury && balance >= fee;
+        let valid = !corrupted
+            && wallet_ok
+            && !self.used.contains(&code)
+            && root_ok
+            && fee_set.is_some()
+            && fee_to == self.treasury
+            && balance >= fee;
 
-        let accounts = RegisterAccounts { payer, profile_wallet: wallet, profile_tokens, treasury_tokens };
+        let accounts = RegisterAccounts { payer, profile_wallet: profile, fee_authority, fee_tokens, treasury_tokens };
         let args = RegisterArgs { market: &market, did: &did, list_index: list, root, code, proof_a: a, proof_b: b, proof_c: c };
         let ix = register_ix(&args, &accounts);
         let t_before = self.balance(&treasury_tokens);
-        let ok = self.send(&[ix], "register");
-        assert_eq!(ok, valid, "R5 register: model {valid}, program {ok} (corrupted {corrupted}, root {root_ok})");
-        if !ok {
-            return;
-        }
-        assert_eq!(self.balance(&profile_tokens), balance - fee, "the wallet paid exactly the fee");
+        let ok = self.send_logged(&[ix], "register");
+        assert_eq!(ok.is_some(), valid, "R5 register: model {valid}, program {} (corrupted {corrupted}, wallet {wallet_ok}, root {root_ok})", ok.is_some());
+        let Some(logs) = ok else { return };
+        let entries = registered_events(&logs);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].wallet, profile, "R6 the entry names the wallet that signed");
+        assert_eq!(profile, self.profiles[k].pubkey(), "R6 and it is the wallet the proof names");
+        assert_eq!(self.balance(&fee_tokens), balance - fee, "the fee authority paid exactly the fee");
         assert_eq!(self.balance(&treasury_tokens), t_before + fee, "R2 the treasury got exactly the fee");
         self.used.insert(code);
         self.codes.push(code);
@@ -308,6 +353,7 @@ impl World {
         };
         let valid = (list as usize) < self.leaves.len()
             && self.issuers[list as usize].contains(&signer)
+            && !self.closed[list as usize]
             && commitment != [0u8; 32]
             && is_field(&commitment);
         self.do_insert(list, signer, commitment, valid);
@@ -372,40 +418,57 @@ impl World {
 
     fn add_token(&mut self) {
         let signer = if self.rng.below(10) < 7 { self.treasury } else { self.any_key() };
-        let (mint, decimals, classic) = match self.rng.below(10) {
-            0 => (USDC_MINT, 6, true),
+        let (mint, classic) = match self.rng.below(10) {
+            0 => (USDC_MINT, true),
             1 if !self.extra_mints.is_empty() => {
                 let j = self.rng.below(self.extra_mints.len());
-                let m = self.extra_mints[j];
-                (m, self.mints.iter().find(|(x, _)| *x == m).unwrap().1, true)
+                (self.extra_mints[j], true)
             }
             2 => {
                 let m = Address::new_unique();
                 let mut acct = spl_mint_account(6);
                 acct.owner = TOKEN_2022;
                 self.h.svm.set_account(m, acct).unwrap();
-                (m, 6, false)
+                (m, false)
             }
             _ => {
                 let m = Address::new_unique();
-                let d = if self.rng.below(4) == 0 { self.rng.below(22) as u8 } else { [2u8, 6, 8, 9, 18, 19][self.rng.below(6)] };
-                self.h.svm.set_account(m, spl_mint_account(d)).unwrap();
-                (m, d, true)
+                self.h.svm.set_account(m, spl_mint_account(self.rng.below(256) as u8)).unwrap();
+                (m, true)
             }
+        };
+        // Any fee the treasury chooses, zero aside; decimals play no part.
+        let fee = match self.rng.below(8) {
+            0 => 0,
+            1 => 1,
+            2 => u64::MAX,
+            _ => 1 + self.rng.next() % 1_000_000_000,
         };
         let valid = signer == self.treasury
             && classic
-            && registration_fee(decimals).is_some()
+            && fee > 0
             && !self.mints.iter().any(|(m, _)| *m == mint)
             && self.mints.len() < 16;
-        let ok = self.send(&[add_token_ix(signer, mint)], "add_token");
-        assert_eq!(ok, valid, "R5 add_token: model {valid}, program {ok} (decimals {decimals}, classic {classic})");
+        let ok = self.send(&[add_token_ix(signer, mint, fee)], "add_token");
+        assert_eq!(ok, valid, "R5 add_token: model {valid}, program {ok} (fee {fee}, classic {classic})");
         if ok {
-            self.mints.push((mint, decimals));
+            self.mints.push((mint, fee));
             self.extra_mints.push(mint);
             self.give_token_accounts(mint);
         }
         self.check_config();
+    }
+
+    fn close_list(&mut self) {
+        let list = self.rng.below(self.leaves.len() + 1) as u32;
+        let signer = if self.rng.below(10) < 7 { self.treasury } else { self.any_key() };
+        let exists = (list as usize) < self.leaves.len();
+        let valid = signer == self.treasury && exists && !self.closed[list as usize];
+        let ok = self.send(&[close_list_ix(signer, list)], "close_list");
+        assert_eq!(ok, valid, "R5 close_list: model {valid}, program {ok}");
+        if ok {
+            self.closed[list as usize] = true;
+        }
     }
 
     fn issuers(&mut self) {
@@ -448,6 +511,7 @@ impl World {
             self.leaves.push(vec![]);
             self.rings.push(vec![]);
             self.issuers.push(vec![]);
+            self.closed.push(false);
         }
     }
 
@@ -509,6 +573,7 @@ impl World {
         assert_eq!(c.treasury, self.treasury, "the treasury is who the model says");
         assert_eq!(c.pending_treasury, self.pending, "the pending key is who the model says");
         assert_eq!(c.mints.len(), self.mints.len(), "the accepted mints");
+        assert_eq!(c.fees, self.mints.iter().map(|(_, f)| *f).collect::<Vec<_>>(), "R6 each mint's fee, as set and never changed");
     }
 
     fn check_treasuries(&mut self) {
@@ -531,7 +596,9 @@ impl World {
         self.check_treasuries();
         self.check_config();
         for (i, leaves) in self.leaves.iter().enumerate() {
-            assert_eq!(self.h.list(i as u32).leaf_count, leaves.len() as u64, "R3 leaf count");
+            let view = self.h.list(i as u32);
+            assert_eq!(view.leaf_count, leaves.len() as u64, "R3 leaf count");
+            assert_eq!(view.closed, self.closed[i], "R6 a closed list stays closed, an open one open");
         }
         for code in &self.codes {
             let a: Account = self.h.svm.get_account(&used_code_address(code)).expect("R1 every code's account stays");
@@ -549,13 +616,11 @@ impl World {
             4 => self.accept(),
             5 => self.add_token(),
             6 => self.issuers(),
-            7 => {
-                if self.rng.coin() {
-                    self.open_list()
-                } else {
-                    self.rent_moves()
-                }
-            }
+            7 => match self.rng.below(5) {
+                0 | 1 => self.open_list(),
+                2 => self.close_list(),
+                _ => self.rent_moves(),
+            },
             _ => self.sweep(),
         }
         self.check_everything();

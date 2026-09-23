@@ -3,7 +3,9 @@
 //! One verified human, one badge per market, without saying who. A registration carries one
 //! Semaphore proof, one rule and 25 cents, and writes one account whose address is a hash of the
 //! proof's nullifier. That account's existence is the whole of "one badge per market per human":
-//! the runtime does the check, for free, and cannot be fooled.
+//! the runtime does the check, for free, and cannot be fooled. The profile's own wallet signs
+//! every registration, and the proof names that wallet, so nobody can badge a profile whose
+//! wallet did not consent.
 //!
 //! This program is sealed per version. The upgrade authority is removed at deploy, so nothing
 //! here can be patched: read `registry/README.md` for what is sealed and what is a dial. There is
@@ -44,19 +46,13 @@ pub const USDC_MINT: Pubkey = pubkey!("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTD
 #[cfg(feature = "devnet")]
 pub const USDC_MINT: Pubkey = pubkey!("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU");
 
-/// 0.25 in the base units of a mint with these decimals: 25 × 10^(decimals − 2). One rule,
-/// 25 cents, always, in whatever units the mint counts in. `None` when 0.25 is not a whole
-/// number of base units (fewer than two decimals) or would not fit in a u64 (more than nineteen),
-/// which is what `init` and `add_token` refuse.
-pub const fn registration_fee(decimals: u8) -> Option<u64> {
-    if decimals < 2 {
-        return None;
-    }
-    match 10u64.checked_pow((decimals - 2) as u32) {
-        Some(scale) => 25u64.checked_mul(scale),
-        None => None,
-    }
-}
+/// USDC's fee: 0.25, in its six decimals. A program constant, written as `fees[0]` at `init`, that
+/// nothing can change or remove. Every other accepted mint carries the fee the treasury set when it
+/// accepted that mint, in that mint's own units, so that if the dollar ever fails the treasury can
+/// accept another token at a sensible amount and registration continues.
+pub const USDC_FEE: u64 = 250_000;
+/// The decimals `USDC_FEE` assumes. `init` refuses a USDC mint that counts in anything else.
+pub const USDC_DECIMALS: u8 = 6;
 
 /// The longest market name and DID a registration can carry. Both are hashed, so neither is a
 /// limit on what a scope can be; they only bound the instruction and the log.
@@ -66,7 +62,8 @@ pub const MAX_DID: usize = 64;
 /// The scope is a hash of a namespaced market name, so a name of any length works and a scope
 /// from one namespace can never collide with one from another.
 pub const SCOPE_NS: &[u8] = b"forest.foundation/market/v1/";
-/// The message binds a proof to one profile, so it cannot be replayed for another.
+/// The message binds a proof to one profile: its wallet and its DID, so it cannot be replayed for
+/// another profile, or landed by a wallet that is not that profile's.
 pub const MESSAGE_NS: &[u8] = b"forest.foundation/profile/v1/";
 
 pub const CONFIG_SEED: &[u8] = b"config";
@@ -76,10 +73,13 @@ pub const CODE_SEED: &[u8] = b"code";
 
 const FIRST_LIST_INDEX: [u8; 4] = 0u32.to_le_bytes();
 
-/// `keccak256(namespace || bytes) >> 8`, the way Semaphore's proof package turns a value into a
+/// `keccak256(namespace || parts...) >> 8`, the way Semaphore's proof package turns a value into a
 /// field element. The shift by one byte is what keeps the result below BN254's scalar order.
-pub fn field_hash(namespace: &[u8], bytes: &[u8]) -> [u8; 32] {
-    let h = solana_keccak_hasher::hashv(&[namespace, bytes]).to_bytes();
+pub fn field_hash(namespace: &[u8], parts: &[&[u8]]) -> [u8; 32] {
+    let mut input: Vec<&[u8]> = Vec::with_capacity(parts.len() + 1);
+    input.push(namespace);
+    input.extend_from_slice(parts);
+    let h = solana_keccak_hasher::hashv(&input).to_bytes();
     let mut out = [0u8; 32];
     out[1..].copy_from_slice(&h[..31]);
     out
@@ -92,20 +92,18 @@ pub mod forest_registry {
     /// Create the registry: the config, the first identity list, and the tree of used codes.
     ///
     /// Anyone may call it, once, and it writes the same bytes whoever does: the treasury is
-    /// `TREASURY`, the first mint is `USDC_MINT`, and nothing in the instruction chooses either.
-    /// A second call fails because the config account already exists.
+    /// `TREASURY`, the first mint is `USDC_MINT` at `USDC_FEE`, and nothing in the instruction
+    /// chooses any of them. A second call fails because the config account already exists.
     pub fn init(ctx: Context<Init>) -> Result<()> {
-        // The first mint is held to the same rule as every later one, so there is no mint in the
-        // config that `add_token` would have refused. Its decimals are read off the mint, not
-        // assumed.
+        // 250,000 base units is 0.25 only at six decimals. The mint is read, not assumed.
         let decimals = ctx.accounts.usdc_mint.decimals;
-        require!(registration_fee(decimals).is_some(), RegistryError::WrongDecimals);
+        require!(decimals == USDC_DECIMALS, RegistryError::WrongDecimals);
         let config = &mut ctx.accounts.config;
         config.treasury = TREASURY;
         config.mints = [Pubkey::default(); MAX_MINTS];
-        config.decimals = [0u8; MAX_MINTS];
+        config.fees = [0u64; MAX_MINTS];
         config.mints[0] = USDC_MINT;
-        config.decimals[0] = decimals;
+        config.fees[0] = USDC_FEE;
         config.mint_count = 1;
         config.list_count = 1;
         config.bump = ctx.bumps.config;
@@ -118,7 +116,7 @@ pub mod forest_registry {
         let mut code_tree = ctx.accounts.code_tree.load_init()?;
         code_tree.bump = ctx.bumps.code_tree;
 
-        emit!(RegistryOpened { treasury: TREASURY, usdc_mint: USDC_MINT, decimals });
+        emit!(RegistryOpened { treasury: TREASURY, usdc_mint: USDC_MINT, fee: USDC_FEE });
         Ok(())
     }
 
@@ -185,6 +183,19 @@ pub mod forest_registry {
         Ok(())
     }
 
+    /// Close a list to new members. The treasury signs.
+    ///
+    /// Nothing else about the list changes: its members stay, its root and its last 128 roots
+    /// stay, and every proof made against it keeps verifying forever. Nothing reopens a closed
+    /// list, and no instruction deletes a list at all.
+    pub fn close_list(ctx: Context<ListAdmin>, _list_index: u32) -> Result<()> {
+        let mut list = ctx.accounts.list.load_mut()?;
+        require!(!list.is_closed(), RegistryError::ListClosed);
+        list.closed = 1;
+        emit!(ListClosed { list_index: list.index, leaf_count: list.leaf_count, root: list.root });
+        Ok(())
+    }
+
     /// Let a key insert into one list. The treasury signs.
     pub fn add_issuer(ctx: Context<ListAdmin>, _list_index: u32, issuer: Pubkey) -> Result<()> {
         let mut list = ctx.accounts.list.load_mut()?;
@@ -230,6 +241,7 @@ pub mod forest_registry {
 
         let mut list = ctx.accounts.list.load_mut()?;
         require!(list.is_issuer(&ctx.accounts.issuer.key()), RegistryError::NotAnIssuer);
+        require!(!list.is_closed(), RegistryError::ListClosed);
 
         let count = list.leaf_count;
         let root = tree::append(&mut list.frontier, count, commitment)?;
@@ -246,6 +258,12 @@ pub mod forest_registry {
 
     /// One registration: one proof, one rule, 25 cents.
     ///
+    /// The profile's wallet signs, whoever pays: that signature is the profile's consent, and the
+    /// proof's message names the same wallet, so a proof cannot be landed under any other. The fee
+    /// comes from a token account the fee authority owns: the profile's own wallet, or a sponsor
+    /// paying under its own policy. The transaction's fee payer covers the network fee and the
+    /// code account's rent.
+    ///
     /// The order of checks is sealed with everything else. Any failure reverts all of it: there
     /// is no state in which a code is written and the fee is not paid, or the other way round.
     pub fn register(ctx: Context<Register>, args: RegisterArgs) -> Result<()> {
@@ -258,11 +276,14 @@ pub mod forest_registry {
             RegistryError::DidLength
         );
 
-        // The program never takes a scope or a message from the client. It derives both from the
-        // market name and the DID in the instruction, and hands them to the verifier as public
-        // inputs, so a proof made for another market or another profile cannot verify at all.
-        let scope = field_hash(SCOPE_NS, args.market.as_bytes());
-        let message = field_hash(MESSAGE_NS, args.did.as_bytes());
+        // The program never takes a scope or a message from the client. It derives both, from the
+        // market name, and from the signing wallet and the DID, and hands them to the verifier as
+        // public inputs: a proof made for another market, another profile, or another wallet
+        // cannot verify at all. Without the wallet in the message, anyone who saw a proof before
+        // it landed (a relay, a sponsor) could land it under their own wallet and burn the code.
+        let wallet = ctx.accounts.profile_wallet.key();
+        let scope = field_hash(SCOPE_NS, &[args.market.as_bytes()]);
+        let message = field_hash(MESSAGE_NS, &[wallet.as_ref(), args.did.as_bytes()]);
 
         // The root must be one this list actually held, and never the empty tree's zero.
         {
@@ -294,37 +315,33 @@ pub mod forest_registry {
             code_tree.root = root;
         }
 
-        // 0.25 of an accepted token, from the profile's wallet to the treasury's.
-        let mint = ctx.accounts.profile_tokens.mint;
+        // The fee of an accepted token, from the fee authority's account to the treasury's.
+        let mint = ctx.accounts.fee_tokens.mint;
         // One rule, 25 cents, always. Paying yourself is not paying: the same account on both
         // sides would move nothing, and the only key that could arrange it is the treasury's.
         // Anchor's duplicate-mutable-account check catches this first; the rule is written here
         // as well because these bytes are frozen at deploy and it must be findable in the
         // program's own text, not only in what a macro happened to generate.
         require_keys_neq!(
-            ctx.accounts.profile_tokens.key(),
+            ctx.accounts.fee_tokens.key(),
             ctx.accounts.treasury_tokens.key(),
             RegistryError::FeeGoesNowhere
         );
         require!(ctx.accounts.treasury_tokens.mint == mint, RegistryError::MintMismatch);
-        // 0.25 in this mint's own base units, from the decimals read off the mint when it was
-        // accepted. The mint account is not read again here: a classic SPL Token mint has no
-        // instruction that changes its decimals and none that closes it, so the byte recorded at
-        // `add_token` is the byte the mint holds now, and re-reading would cost every
-        // registration an account for a change the token program cannot make.
-        let decimals = ctx
+        // The fee recorded for this mint: `USDC_FEE` for USDC, and for any other the amount the
+        // treasury set when it accepted the mint, in that mint's own base units.
+        let fee = ctx
             .accounts
             .config
-            .decimals_of(&mint)
+            .fee_of(&mint)
             .ok_or(error!(RegistryError::MintNotAccepted))?;
-        let fee = registration_fee(decimals).ok_or(error!(RegistryError::WrongDecimals))?;
         token::transfer(
             CpiContext::new(
                 ctx.accounts.token_program.key(),
                 Transfer {
-                    from: ctx.accounts.profile_tokens.to_account_info(),
+                    from: ctx.accounts.fee_tokens.to_account_info(),
                     to: ctx.accounts.treasury_tokens.to_account_info(),
-                    authority: ctx.accounts.profile_wallet.to_account_info(),
+                    authority: ctx.accounts.fee_authority.to_account_info(),
                 },
             ),
             fee,
@@ -333,36 +350,34 @@ pub mod forest_registry {
         emit!(Registered {
             market: args.market,
             did: args.did,
+            wallet,
             code: args.code,
             list_index: args.list_index,
         });
         Ok(())
     }
 
-    /// Accept one more mint. The treasury signs.
+    /// Accept one more mint, at a fee in its own base units. The treasury signs.
     ///
     /// What a program can check is checked: the mint is a classic SPL Token mint (the account's
     /// owner is the token program, which `anchor_spl::token::Mint` enforces), it is initialized,
-    /// and its decimals let 0.25 be a whole number of base units. The decimals are read off the
-    /// mint here and stored next to it, so `register` charges 25 cents in that mint's own units
-    /// and no mint is ever locked out for counting differently from USDC. Whether a mint really
-    /// is a dollar stablecoin is a judgement no program can make; it is the treasury's, and this
-    /// is the pattern that bounds it.
+    /// and the fee is not zero. What the fee is worth is a judgement no program can make: it is
+    /// the treasury's, meant to be 25 cents, and set once. If the dollar ever fails, this is how
+    /// registration continues: another token, at a sensible amount.
     ///
-    /// Nothing removes a mint, so `mints[0]`, USDC, is there forever and registration can never
-    /// be halted by taking a token away.
-    pub fn add_token(ctx: Context<AddToken>) -> Result<()> {
+    /// Nothing changes a fee once set, and nothing removes a mint, so `mints[0]`, USDC at 0.25,
+    /// is there forever and registration can never be halted by taking a token away.
+    pub fn add_token(ctx: Context<AddToken>, fee: u64) -> Result<()> {
         let mint = ctx.accounts.mint.key();
-        let decimals = ctx.accounts.mint.decimals;
-        require!(registration_fee(decimals).is_some(), RegistryError::WrongDecimals);
+        require!(fee > 0, RegistryError::FeeZero);
         let config = &mut ctx.accounts.config;
         require!(!config.accepts(&mint), RegistryError::MintAlreadyAccepted);
         let n = config.mint_count as usize;
         require!(n < MAX_MINTS, RegistryError::TooManyMints);
         config.mints[n] = mint;
-        config.decimals[n] = decimals;
+        config.fees[n] = fee;
         config.mint_count = (n + 1) as u8;
-        emit!(TokenAccepted { mint, decimals });
+        emit!(TokenAccepted { mint, fee, decimals: ctx.accounts.mint.decimals });
         Ok(())
     }
 
@@ -559,10 +574,13 @@ pub struct Register<'info> {
     /// Pays the code account's rent and the network fee. A sponsor, or the person themselves.
     #[account(mut)]
     pub payer: Signer<'info>,
-    /// The profile's wallet, which the 0.25 comes from.
+    /// The profile's wallet: the key derived for this profile, which its profile record declares.
+    /// It signs on every path, sponsored or paid, and the proof's message names it.
     pub profile_wallet: Signer<'info>,
-    #[account(mut, token::authority = profile_wallet)]
-    pub profile_tokens: Account<'info, TokenAccount>,
+    /// Whoever pays the fee: the profile's wallet itself, or a sponsor.
+    pub fee_authority: Signer<'info>,
+    #[account(mut, token::authority = fee_authority)]
+    pub fee_tokens: Account<'info, TokenAccount>,
     #[account(mut, token::authority = config.treasury)]
     pub treasury_tokens: Account<'info, TokenAccount>,
     pub token_program: Program<'info, Token>,
@@ -594,7 +612,7 @@ pub struct SweepRent<'info> {
 pub struct RegistryOpened {
     pub treasury: Pubkey,
     pub usdc_mint: Pubkey,
-    pub decimals: u8,
+    pub fee: u64,
 }
 
 /// A handover proposed, or cleared (`proposed` is the zero key then).
@@ -616,6 +634,14 @@ pub struct ListOpened {
     pub list_index: u32,
 }
 
+/// A list closed to new members: how many it holds and its final root, which stays valid forever.
+#[event]
+pub struct ListClosed {
+    pub list_index: u32,
+    pub leaf_count: u64,
+    pub root: [u8; 32],
+}
+
 #[event]
 pub struct IssuerChanged {
     pub list_index: u32,
@@ -632,18 +658,22 @@ pub struct IdentityInserted {
 }
 
 /// One entry per registration, in the transaction log and in no account. This is what an index
-/// reads to build a badge page.
+/// reads to build a badge page. `wallet` is the profile's wallet that signed and that the proof
+/// names: a badge counts for a profile only when its profile record declares that wallet.
 #[event]
 pub struct Registered {
     pub market: String,
     pub did: String,
+    pub wallet: Pubkey,
     pub code: [u8; 32],
     pub list_index: u32,
 }
 
+/// A mint accepted at a fee in its own base units. `decimals` is read off the mint, for readers.
 #[event]
 pub struct TokenAccepted {
     pub mint: Pubkey,
+    pub fee: u64,
     pub decimals: u8,
 }
 
@@ -658,15 +688,9 @@ pub struct RentSwept {
 const _: () = {
     assert!(IdentityList::LEN == 5456);
     assert!(CodeTree::LEN == 1104);
-    assert!(Config::LEN == 598);
-    // The rule, written out at the two decimals that exist today and the edges it refuses.
-    assert!(matches!(registration_fee(6), Some(250_000)));
-    assert!(matches!(registration_fee(8), Some(25_000_000)));
-    assert!(matches!(registration_fee(2), Some(25)));
-    assert!(matches!(registration_fee(19), Some(2_500_000_000_000_000_000)));
-    assert!(registration_fee(1).is_none());
-    assert!(registration_fee(0).is_none());
-    assert!(registration_fee(20).is_none());
+    assert!(Config::LEN == 710);
+    // 0.25 at USDC's six decimals.
+    assert!(USDC_FEE == 25 * 10u64.pow(USDC_DECIMALS as u32 - 2));
     assert!(UsedCode::LEN == 1);
     assert!(FRONTIER_LEN == MAX_DEPTH + 1);
 };

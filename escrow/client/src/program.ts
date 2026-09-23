@@ -17,6 +17,8 @@ import {
 export const PROGRAM_ID = new PublicKey('FoRE4JYRAxFpqRoPBzuPZZ9Yfn6ovtkBfUggynex3MKT')
 export const TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA')
 export const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL')
+/** Wrapped SOL: a classic SPL Token mint that `create` refuses by name. */
+export const NATIVE_MINT = new PublicKey('So11111111111111111111111111111111111111112')
 
 /** Written into every escrow. A v2 is a new program at a new address. */
 export const VERSION = 1
@@ -25,7 +27,7 @@ export const MAX_STEPS = 4
 export const BPS = 10_000
 export const SECONDS_PER_DAY = 86_400n
 /** The escrow account's bytes after Anchor's eight-byte discriminator. */
-export const ESCROW_LEN = 278
+export const ESCROW_LEN = 311
 export const ESCROW_SEED = new TextEncoder().encode('escrow')
 
 /**
@@ -34,7 +36,7 @@ export const ESCROW_SEED = new TextEncoder().encode('escrow')
  */
 export type Step = { offset: bigint; refundBps: number }
 
-/** What `create` carries. */
+/** What `create` carries, besides the buyer, whose key is passed beside it. */
 export type Terms = {
   /** Any number the buyer has not used before. `randomId()` picks one. */
   id: bigint
@@ -169,6 +171,7 @@ export function vaultAddress(escrow: PublicKey, mint: PublicKey): PublicKey {
 export function validateTerms(terms: Terms, buyer: PublicKey): void {
   if (terms.seller.equals(buyer)) throw new Error('SameParty: the buyer and the seller must be different keys')
   if (terms.seller.equals(PublicKey.default)) throw new Error('EmptyKey: the seller cannot be the zero key')
+  if (buyer.equals(PublicKey.default)) throw new Error('EmptyKey: the buyer cannot be the zero key')
   if (terms.arbiter) {
     if (terms.arbiter.equals(PublicKey.default)) throw new Error('EmptyKey: the arbiter cannot be the zero key')
     if (terms.arbiter.equals(buyer) || terms.arbiter.equals(terms.seller)) {
@@ -196,13 +199,14 @@ export function validateTerms(terms: Terms, buyer: PublicKey): void {
 }
 
 /**
- * id u64, seller, arbiter as an `Option` (0, or 1 then the key), amount u64, service_time as an
- * `Option` (0, or 1 then i64), silence_days u16, steps as a `Vec` (u32 count, then each as
+ * id u64, buyer, seller, arbiter as an `Option` (0, or 1 then the key), amount u64, service_time
+ * as an `Option` (0, or 1 then i64), silence_days u16, steps as a `Vec` (u32 count, then each as
  * offset i64 and refund_bps u16).
  */
-export function createArgsBytes(terms: Terms): Uint8Array {
+export function createArgsBytes(terms: Terms, buyer: PublicKey): Uint8Array {
   return concat([
     u64le(terms.id),
+    buyer.toBytes(),
     terms.seller.toBytes(),
     terms.arbiter ? concat([u8(1), terms.arbiter.toBytes()]) : u8(0),
     u64le(terms.amount),
@@ -216,34 +220,143 @@ export function createArgsBytes(terms: Terms): Uint8Array {
 const ro = (pubkey: PublicKey, isSigner = false): AccountMeta => ({ pubkey, isSigner, isWritable: false })
 const rw = (pubkey: PublicKey, isSigner = false): AccountMeta => ({ pubkey, isSigner, isWritable: true })
 
-/** `create`: the buyer signs; the payer signs, pays both rents and is recorded to get them back. */
+/**
+ * `create`. The creator signs: the buyer (the default), proposing a deal the seller has yet to
+ * accept, or the seller, invoicing, accepted from creation (`invoiceIx`). The payer signs, pays both
+ * rents, and is recorded to get back the deposit account's at the end, or both if it never held
+ * the amount. The terms are checked against the program's rules (`validateTerms`) and for sense
+ * (`checkTerms`) before anything is built.
+ */
 export function createIx(args: {
   buyer: PublicKey
   payer: PublicKey
   mint: PublicKey
   terms: Terms
+  /** Who signs as creator: the buyer, unless the seller is invoicing. */
+  creator?: PublicKey
+  /** Unix seconds, for `checkTerms`. Default: the device's clock. */
+  now?: bigint
   programId?: PublicKey
 }): TransactionInstruction {
   const programId = args.programId ?? PROGRAM_ID
+  const creator = args.creator ?? args.buyer
   validateTerms(args.terms, args.buyer)
+  if (!creator.equals(args.buyer) && !creator.equals(args.terms.seller)) {
+    throw new Error('NotAParty: the buyer or the seller opens an escrow')
+  }
+  if (args.mint.equals(NATIVE_MINT)) throw new Error('NativeMint: wrapped SOL is not accepted')
+  checkTerms(args.terms, { now: args.now, arbiter: args.terms.arbiter })
   const escrow = escrowAddress(args.buyer, args.terms.id, programId)
   return new TransactionInstruction({
     programId,
     keys: [
       rw(escrow),
       rw(vaultAddress(escrow, args.mint)),
-      ro(args.buyer, true),
+      ro(creator, true),
       rw(args.payer, true),
       ro(args.mint),
       ro(TOKEN_PROGRAM_ID),
       ro(ASSOCIATED_TOKEN_PROGRAM_ID),
       ro(SystemProgram.programId),
     ],
-    data: concat([discriminator('global', 'create'), createArgsBytes(args.terms)]),
+    data: concat([discriminator('global', 'create'), createArgsBytes(args.terms, args.buyer)]),
   })
 }
 
-/** `mark_funded`: anyone. Records the moment the deposit account is seen holding the amount. */
+/** `create` by the seller: an invoice naming the buyer, accepted from creation. */
+export function invoiceIx(args: {
+  seller: PublicKey
+  buyer: PublicKey
+  payer: PublicKey
+  mint: PublicKey
+  terms: Terms
+  now?: bigint
+  programId?: PublicKey
+}): TransactionInstruction {
+  if (!args.terms.seller.equals(args.seller)) throw new Error('an invoice names its own seller in the terms')
+  return createIx({ ...args, creator: args.seller })
+}
+
+/** A service time at or above this is not unix seconds: `Date.now()` today is about 1.8 × 10^12. */
+export const MAX_UNIX_SECONDS = 10_000_000_000n
+
+/**
+ * What a party checks before signing anything that commits it to an escrow's terms: `create`,
+ * `accept`, or paying an invoice. The program accepts all of these; nobody means them.
+ *
+ * - Times in seconds: a service time is unix seconds, below 10^10 (the year 2286), so a
+ *   millisecond timestamp is caught; and not already past, because a service time is the clock
+ *   start and a past one starts silence before the money lands.
+ * - Steps sane: at most four, deadlines strictly rising, refunds 0 to 100%, and none after silence
+ *   ends, or the buyer's cancellation and the seller's release are both live and race.
+ * - An arbiter only if named: the escrow's arbiter is the one the signer expects, and none if it
+ *   expects none. A key the signer did not agree to could be the other party's second key.
+ *
+ * Throws with the reason.
+ */
+export function checkTerms(
+  terms: Pick<Terms, 'arbiter' | 'serviceTime' | 'silenceDays' | 'steps'>,
+  expect: { arbiter: PublicKey | null; now?: bigint },
+): void {
+  const now = expect.now ?? BigInt(Math.floor(Date.now() / 1000))
+  if (terms.serviceTime !== null) {
+    if (terms.serviceTime >= MAX_UNIX_SECONDS) {
+      throw new Error(`the service time ${terms.serviceTime} is not unix seconds (milliseconds?)`)
+    }
+    if (terms.serviceTime < now) throw new Error('the service time has already passed')
+  }
+  if (terms.steps.length > MAX_STEPS) throw new Error('TooManySteps: an escrow holds at most four cancellation steps')
+  const silence = BigInt(terms.silenceDays) * SECONDS_PER_DAY
+  let previous: bigint | null = null
+  for (const step of terms.steps) {
+    if (!Number.isInteger(step.refundBps) || step.refundBps < 0 || step.refundBps > BPS) {
+      throw new Error('StepOverHundred: a refund is between 0 and 10,000 basis points')
+    }
+    if (previous !== null && step.offset <= previous) {
+      throw new Error('StepsUnsorted: cancellation steps must have strictly rising deadlines')
+    }
+    if (step.offset > silence) {
+      throw new Error('a refund step outlasts silence: the buyer\'s cancellation and the seller\'s release would race')
+    }
+    previous = step.offset
+  }
+  const want = expect.arbiter
+  if (terms.arbiter === null ? want !== null : want === null || !terms.arbiter.equals(want)) {
+    throw new Error(
+      terms.arbiter === null
+        ? 'the escrow names no arbiter, and one was expected'
+        : `the escrow names an arbiter the signer did not agree to: ${terms.arbiter.toBase58()}`,
+    )
+  }
+}
+
+/**
+ * `accept`: the seller signs, accepting the escrow as it stands. Built only from the escrow
+ * account as read from the chain, after `checkTerms` against the arbiter the seller agreed to:
+ * accepting is where a seller consents to terms someone else wrote.
+ */
+export function acceptIx(args: {
+  account: EscrowAccount
+  seller: PublicKey
+  /** The arbiter the seller agreed to, or null for none. */
+  arbiter: PublicKey | null
+  now?: bigint
+  programId?: PublicKey
+}): TransactionInstruction {
+  const programId = args.programId ?? PROGRAM_ID
+  const a = args.account
+  if (!a.seller.equals(args.seller)) throw new Error('NotTheSeller: this escrow names another seller')
+  if (a.status === 'ended') throw new Error('Ended: this escrow has ended')
+  if (a.status !== 'open') throw new Error('AlreadyAccepted: the seller has already accepted')
+  checkTerms(a, { arbiter: args.arbiter, now: args.now })
+  return new TransactionInstruction({
+    programId,
+    keys: [rw(escrowAddress(a.buyer, a.id, programId)), ro(a.vault), ro(args.seller, true)],
+    data: concat([discriminator('global', 'accept')]),
+  })
+}
+
+/** `mark_funded`: anyone, once the seller has accepted. Records the moment the deposit account is seen holding the amount. */
 export function markFundedIx(args: { escrow: PublicKey; vault: PublicKey; programId?: PublicKey }): TransactionInstruction {
   return new TransactionInstruction({
     programId: args.programId ?? PROGRAM_ID,
@@ -292,7 +405,7 @@ export function releaseBySilenceIx(args: { accounts: SettleAccounts; programId?:
 }
 
 function settleAsIx(
-  name: 'approve' | 'arbitrate' | 'cancel_buyer' | 'cancel_seller' | 'close',
+  name: 'approve' | 'arbitrate' | 'cancel_buyer' | 'cancel_seller',
   accounts: SettleAccounts,
   actor: PublicKey,
   sellerBps: number | null,
@@ -308,7 +421,10 @@ function settleAsIx(
   })
 }
 
-/** `approve`: the buyer signs. `sellerBps` of the amount to the seller (10,000, the default, is all of it). */
+/**
+ * `approve`: the buyer signs. `sellerBps` of the amount to the seller (10,000, the default, is all
+ * of it). Before the seller accepts, only all of it.
+ */
 export function approveIx(args: {
   accounts: SettleAccounts
   buyer: PublicKey
@@ -338,12 +454,31 @@ export function cancelSellerIx(args: { accounts: SettleAccounts; seller: PublicK
   return settleAsIx('cancel_seller', args.accounts, args.seller, null, args.programId ?? PROGRAM_ID)
 }
 
-/** `close`: a never-funded escrow, by the seller any time or the buyer after the last deadline. */
-export function closeIx(args: { accounts: SettleAccounts; party: PublicKey; programId?: PublicKey }): TransactionInstruction {
-  return settleAsIx('close', args.accounts, args.party, null, args.programId ?? PROGRAM_ID)
+/** The two exits that pay the seller nothing name no seller account. */
+export type RefundAccounts = Omit<SettleAccounts, 'sellerTokens'>
+
+function refundIx(name: 'withdraw' | 'close_unfunded', accounts: RefundAccounts, signer: PublicKey, programId: PublicKey): TransactionInstruction {
+  return new TransactionInstruction({
+    programId,
+    keys: [rw(accounts.escrow), rw(accounts.vault), rw(accounts.buyerTokens), rw(accounts.rentPayer), ro(TOKEN_PROGRAM_ID), ro(signer, true)],
+    data: concat([discriminator('global', name)]),
+  })
 }
 
-/** `agree`: both keys sign any split. Any state once funded, locked included. */
+/** `withdraw`: the buyer signs, before the seller accepts. Everything back; the receipt stays. */
+export function withdrawIx(args: { accounts: RefundAccounts; buyer: PublicKey; programId?: PublicKey }): TransactionInstruction {
+  return refundIx('withdraw', args.accounts, args.buyer, args.programId ?? PROGRAM_ID)
+}
+
+/**
+ * `close_unfunded`: an escrow that never held the amount, by the buyer or the seller at any time,
+ * or by the rent payer after the last deadline (at once with no steps). Both accounts close.
+ */
+export function closeUnfundedIx(args: { accounts: RefundAccounts; closer: PublicKey; programId?: PublicKey }): TransactionInstruction {
+  return refundIx('close_unfunded', args.accounts, args.closer, args.programId ?? PROGRAM_ID)
+}
+
+/** `agree`: both keys sign any split, once the seller has accepted and it is funded, locked included. */
 export function agreeIx(args: {
   accounts: SettleAccounts
   buyer: PublicKey
@@ -365,8 +500,8 @@ export function agreeIx(args: {
 // The account.
 // ---------------------------------------------------------------------------------------------
 
-export type Status = 'open' | 'funded' | 'locked' | 'ended'
-const STATUS: Status[] = ['open', 'funded', 'locked', 'ended']
+export type Status = 'open' | 'accepted' | 'funded' | 'locked' | 'ended'
+const STATUS: Status[] = ['open', 'accepted', 'funded', 'locked', 'ended']
 
 export type EscrowAccount = {
   version: number
@@ -388,13 +523,23 @@ export type EscrowAccount = {
   fundedAt: bigint | null
   status: Status
   bump: number
+  /** When the seller accepted, or null. */
+  acceptedAt: bigint | null
+  /** When it ended, or null. */
+  endedAt: bigint | null
+  /** How it ended, or null while it has not. */
+  outcome: Outcome | null
+  /** What each party was paid at the end; 0 before. */
+  toSeller: bigint
+  toBuyer: bigint
 }
 
 /**
  * version 0, id 1..9, buyer 9..41, seller 41..73, arbiter 73..105, mint 105..137, vault 137..169,
  * rent_payer 169..201, amount 201..209, service_time 209..217, silence_days 217..219,
  * step_count 219, steps 220..260 (four of offset i64, refund_bps u16), created_at 260..268,
- * funded_at 268..276, status 276, bump 277.
+ * funded_at 268..276, status 276, bump 277, accepted_at 278..286, ended_at 286..294, outcome 294,
+ * to_seller 295..303, to_buyer 303..311.
  */
 export function decodeEscrow(data: Uint8Array): EscrowAccount {
   if (data.length !== 8 + ESCROW_LEN) throw new Error(`an escrow account is ${8 + ESCROW_LEN} bytes, not ${data.length}`)
@@ -423,8 +568,15 @@ export function decodeEscrow(data: Uint8Array): EscrowAccount {
   const fundedAt = r.i64()
   const status = STATUS[r.u8()]
   const bump = r.u8()
+  const acceptedAt = r.i64()
+  const endedAt = r.i64()
+  const outcomeByte = r.u8()
+  const toSeller = r.u64()
+  const toBuyer = r.u64()
   r.done()
   if (!status) throw new Error('unknown status byte')
+  const outcome = status === 'ended' ? OUTCOME[outcomeByte] : null
+  if (status === 'ended' && !outcome) throw new Error('unknown outcome byte')
   return {
     version,
     id,
@@ -442,6 +594,11 @@ export function decodeEscrow(data: Uint8Array): EscrowAccount {
     fundedAt: fundedAt === 0n ? null : fundedAt,
     status,
     bump,
+    acceptedAt: acceptedAt === 0n ? null : acceptedAt,
+    endedAt: endedAt === 0n ? null : endedAt,
+    outcome,
+    toSeller,
+    toBuyer,
   }
 }
 
@@ -456,7 +613,7 @@ export type Outcome =
   | 'arbitrated'
   | 'cancelledByBuyer'
   | 'cancelledBySeller'
-  | 'neverFunded'
+  | 'withdrawn'
 const OUTCOME: Outcome[] = [
   'approved',
   'releasedBySilence',
@@ -464,7 +621,7 @@ const OUTCOME: Outcome[] = [
   'arbitrated',
   'cancelledByBuyer',
   'cancelledBySeller',
-  'neverFunded',
+  'withdrawn',
 ]
 
 export type EscrowEvent =
@@ -485,6 +642,7 @@ export type EscrowEvent =
       steps: Step[]
       createdAt: bigint
     }
+  | { kind: 'accepted'; escrow: PublicKey; seller: PublicKey; acceptedAt: bigint }
   | { kind: 'funded'; escrow: PublicKey; balance: bigint; fundedAt: bigint }
   | { kind: 'approved'; escrow: PublicKey; sellerBps: number; toSeller: bigint; toBuyer: bigint }
   | { kind: 'releasedBySilence'; escrow: PublicKey; clockStart: bigint; silenceEnded: bigint; toSeller: bigint; toBuyer: bigint }
@@ -493,20 +651,27 @@ export type EscrowEvent =
   | { kind: 'arbitrated'; escrow: PublicKey; arbiter: PublicKey; sellerBps: number; toSeller: bigint; toBuyer: bigint }
   | { kind: 'cancelledByBuyer'; escrow: PublicKey; step: number; refundBps: number; toBuyer: bigint; toSeller: bigint }
   | { kind: 'cancelledBySeller'; escrow: PublicKey; seller: PublicKey; toBuyer: bigint }
+  | { kind: 'withdrawn'; escrow: PublicKey; toBuyer: bigint }
   | {
-      kind: 'closed'
+      kind: 'ended'
       escrow: PublicKey
       outcome: Outcome
       amount: bigint
       balance: bigint
       toSeller: bigint
       toBuyer: bigint
+      /** null when the seller never accepted. */
+      acceptedAt: bigint | null
+      endedAt: bigint
       rentPayer: PublicKey
+      /** The deposit account's rent, returned. The escrow account's stays in the receipt. */
       rentLamports: bigint
     }
+  | { kind: 'closed'; escrow: PublicKey; closedBy: PublicKey; toBuyer: bigint; rentPayer: PublicKey; rentLamports: bigint }
 
 const EVENT_NAMES: [string, EscrowEvent['kind']][] = [
   ['Created', 'created'],
+  ['Accepted', 'accepted'],
   ['Funded', 'funded'],
   ['Approved', 'approved'],
   ['ReleasedBySilence', 'releasedBySilence'],
@@ -515,6 +680,8 @@ const EVENT_NAMES: [string, EscrowEvent['kind']][] = [
   ['Arbitrated', 'arbitrated'],
   ['CancelledByBuyer', 'cancelledByBuyer'],
   ['CancelledBySeller', 'cancelledBySeller'],
+  ['Withdrawn', 'withdrawn'],
+  ['Ended', 'ended'],
   ['Closed', 'closed'],
 ]
 
@@ -560,6 +727,9 @@ export function decodeEvent(bytes: Uint8Array): EscrowEvent | null {
       }
       break
     }
+    case 'accepted':
+      event = { kind, escrow, seller: r.key(), acceptedAt: r.i64() }
+      break
     case 'funded':
       event = { kind, escrow, balance: r.u64(), fundedAt: r.i64() }
       break
@@ -582,22 +752,35 @@ export function decodeEvent(bytes: Uint8Array): EscrowEvent | null {
     case 'cancelledBySeller':
       event = { kind, escrow, seller: r.key(), toBuyer: r.u64() }
       break
-    case 'closed': {
+    case 'withdrawn':
+      event = { kind, escrow, toBuyer: r.u64() }
+      break
+    case 'ended': {
       const outcome = OUTCOME[r.u8()]
       if (!outcome) throw new Error('unknown outcome byte')
+      const amount = r.u64()
+      const balance = r.u64()
+      const toSeller = r.u64()
+      const toBuyer = r.u64()
+      const acceptedAt = r.i64()
       event = {
         kind,
         escrow,
         outcome,
-        amount: r.u64(),
-        balance: r.u64(),
-        toSeller: r.u64(),
-        toBuyer: r.u64(),
+        amount,
+        balance,
+        toSeller,
+        toBuyer,
+        acceptedAt: acceptedAt === 0n ? null : acceptedAt,
+        endedAt: r.i64(),
         rentPayer: r.key(),
         rentLamports: r.u64(),
       }
       break
     }
+    case 'closed':
+      event = { kind, escrow, closedBy: r.key(), toBuyer: r.u64(), rentPayer: r.key(), rentLamports: r.u64() }
+      break
   }
   r.done()
   return event

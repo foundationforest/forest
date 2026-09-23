@@ -10,7 +10,10 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { hkdf } from '@noble/hashes/hkdf.js'
+import { sha256 } from '@noble/hashes/sha2.js'
 import { Identity } from '@semaphore-protocol/identity'
+import { Keypair } from '@solana/web3.js'
 
 import { commitmentOf } from '../src/code.ts'
 import { toBytes32 } from '../src/field.ts'
@@ -41,6 +44,32 @@ const dids = {
   carol: 'did:plc:ewvi7nxzyoun6zhxrhs64oiz',
 }
 
+// Each profile's wallet: the key that signs the registration and that the proof names. Alice's is
+// her profile 0 wallet from the keys recipe, derived from the seed `keys/test/vectors.json` pins,
+// so the chain runs from the seed to the wallet as well as to the identity. The others are plain
+// fixture seeds. The seeds are written into the fixtures so the Rust tests can sign.
+const keysVectors = JSON.parse(readFileSync(join(here, '../../../keys/test/vectors.json'), 'utf8'))
+const aliceWalletSeed = hkdf(
+  sha256,
+  Buffer.from(keysVectors.seed, 'hex'),
+  new Uint8Array(0),
+  new TextEncoder().encode('forest.foundation/profile/0/wallet/v1'),
+  32,
+)
+if (Keypair.fromSeed(aliceWalletSeed).publicKey.toBase58() !== keysVectors.profiles[0].wallet) {
+  throw new Error("Alice's wallet does not match the keys recipe's profile 0 wallet")
+}
+const walletSeeds = {
+  alice: aliceWalletSeed,
+  bob: sha256(new TextEncoder().encode('forest registry fixture: wallet bob')),
+  carol: sha256(new TextEncoder().encode('forest registry fixture: wallet carol')),
+}
+const wallets = {
+  alice: Keypair.fromSeed(walletSeeds.alice).publicKey,
+  bob: Keypair.fromSeed(walletSeeds.bob).publicKey,
+  carol: Keypair.fromSeed(walletSeeds.carol).publicKey,
+}
+
 // Two markets from the directory's first example, and one more so a proof can be presented
 // against the wrong name.
 const markets = { tutors: 'online-tutors', cleaning: 'house-cleaning' }
@@ -60,12 +89,12 @@ const list1 = [commitmentOf(filler(4)), commitmentOf(secrets.carol), commitmentO
 const extra = Array.from({ length: 128 }, (_, i) => commitmentOf(filler(100 + i)))
 
 const cases = [
-  { name: 'alice-tutors', listIndex: 0, leaves: list0, secret: secrets.alice, did: dids.alice, market: markets.tutors },
-  { name: 'alice-cleaning', listIndex: 0, leaves: list0, secret: secrets.alice, did: dids.alice, market: markets.cleaning },
-  { name: 'bob-tutors', listIndex: 0, leaves: list0, secret: secrets.bob, did: dids.bob, market: markets.tutors },
-  { name: 'bob-cleaning', listIndex: 0, leaves: list0, secret: secrets.bob, did: dids.bob, market: markets.cleaning },
-  { name: 'carol-tutors-list1', listIndex: 1, leaves: list1, secret: secrets.carol, did: dids.carol, market: markets.tutors },
-]
+  { name: 'alice-tutors', listIndex: 0, leaves: list0, who: 'alice', secret: secrets.alice, did: dids.alice, market: markets.tutors },
+  { name: 'alice-cleaning', listIndex: 0, leaves: list0, who: 'alice', secret: secrets.alice, did: dids.alice, market: markets.cleaning },
+  { name: 'bob-tutors', listIndex: 0, leaves: list0, who: 'bob', secret: secrets.bob, did: dids.bob, market: markets.tutors },
+  { name: 'bob-cleaning', listIndex: 0, leaves: list0, who: 'bob', secret: secrets.bob, did: dids.bob, market: markets.cleaning },
+  { name: 'carol-tutors-list1', listIndex: 1, leaves: list1, who: 'carol', secret: secrets.carol, did: dids.carol, market: markets.tutors },
+] as const
 
 const proofs = []
 for (const c of cases) {
@@ -74,6 +103,7 @@ for (const c of cases) {
     secret: c.secret,
     market: c.market,
     did: c.did,
+    wallet: wallets[c.who],
     leaves: c.leaves,
     artifacts,
   })
@@ -83,6 +113,8 @@ for (const c of cases) {
     listIndex: c.listIndex,
     market: c.market,
     did: c.did,
+    wallet: wallets[c.who].toBase58(),
+    walletSeed: hex(walletSeeds[c.who]),
     root: hex(toBytes32(p.root)),
     code: hex(toBytes32(p.code)),
     scope: hex(toBytes32(p.scope)),
@@ -117,6 +149,7 @@ const out = {
   },
   scopeNamespace: SCOPE_NS,
   messageNamespace: MESSAGE_NS,
+  messageLayout: 'keccak256(messageNamespace || wallet (32 bytes) || did) >> 8',
   lists: [
     { index: 0, leaves: list0.map(String) },
     { index: 1, leaves: list1.map(String) },

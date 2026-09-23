@@ -628,3 +628,30 @@ above show an index must do. Each is a thing to write into `index/` and its skil
 - **Fresh proofs inside the fuzzer.** A proof takes about a second to make, so the registry fuzzer
   uses the five real proofs, corrupted in many ways, rather than new humans.
 - **Line coverage.** See "Coverage": neither tool can measure it for these programs.
+
+## After session 11
+
+Carlos decided the escrow and registry questions this report left for him; session 11 built them.
+The findings' tests were updated as the report said they would be: a hole closed turns a
+`finding_…` test into a refusal. Where each finding stands now:
+
+| # | Finding | Now | Test |
+|---|---|---|---|
+| 1 | Placeholder treasury | Unchanged; the first line of `registry/README.md`'s deploy checklist | `finding_the_placeholder_treasury_is_anyones_key` |
+| 2 | Wrapped SOL | Closed: the native mint is refused at `create` | `tokens_wrapped_sol_is_refused_at_create` |
+| 3 | Sponsor's rent | Narrowed: the rent payer closes a never-funded escrow after its last deadline (`close_unfunded`); a far deadline, or a funded escrow the seller never accepts, still holds it | `finding_a_sponsor_waits_for_the_last_deadline_and_cannot_close_a_funded_escrow_nobody_accepts` |
+| 4, 5 | Rounding, forged events | Fixed in session 10 | as above |
+| 6 | Seller consent | Closed for locks, arbiters and clocks: the seller accepts first. A full payment still needs no consent, by decision; its receipt says the seller never accepted | `consent_a_stranger_cannot_lock_an_escrow_naming_any_seller`, `consent_a_buyers_puppet_arbiter_decides_nothing_the_seller_did_not_accept`, `clock_a_past_service_time_no_longer_releases_the_moment_the_money_lands`, `finding_a_stranger_can_still_pay_any_seller_in_full_and_the_receipt_says_unaccepted`, `finding_an_invoice_with_a_service_time_releases_as_soon_as_late_money_lands` |
+| 7 | One address, two deals | Closed: a funded escrow's account is a permanent receipt | `reinit_an_ended_escrows_address_never_holds_a_second_deal` |
+| 8 | Vouchers | Unchanged; with a fee per token the treasury now also sets the amount | `finding_the_treasury_can_accept_a_token_it_mints_itself` |
+| 9 | Paying wallet not bound | Closed in the program: the profile's wallet signs and the proof's message names it; an index still has to check the entry's wallet against the profile record | `proof_bound_to_the_profiles_wallet_and_nobody_else_can_land_it`, `the_profiles_wallet_signs_on_the_paid_and_the_sponsored_path` |
+| 10 | Timing | Policy in the handoff: Soil waits a random interval before a first registration; the issuer inserts in batches | none (reasoned) |
+| 11 | Treasury with no SOL | Documented in the deploy checklist; the rule is the runtime's, so no program change | `finding_a_sweep_into_a_treasury_holding_no_sol_fails_until_someone_funds_it` |
+| 12 | Both token accounts | Narrowed: `withdraw` and `close_unfunded` name no seller account | `rent_returns_to_the_rent_payer_on_every_ending_and_the_escrow_account_stays` |
+| 13 | `termsFor` | Closed in the client: `checkTerms` before any signature | `terms the program accepts but nobody meant are refused before signing` |
+| 14 | A second payment to a one-tap link | Worse: the address never reopens, so it is stranded for good (open) | `finding_a_second_payment_to_a_one_tap_link_is_stranded_for_good` |
+
+Two rules for an index change. Rule 4 now has something to read: a receipt's `accepted_at` (in the
+account and in the `Ended` event) says whether the seller accepted. Rule 5 no longer applies to a
+funded escrow, whose address never holds a second deal. And one rule is new: a badge counts for a
+profile only when the `Registered` entry's wallet is the wallet its profile record declares.

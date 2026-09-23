@@ -9,7 +9,7 @@
   "types": "./dist/index.d.ts",
   "scripts": {
     "test": "node --test test/client.test.ts",
-    "test:validator": "node --test test/validator.test.ts",
+    "test:validator": "node --test --test-force-exit test/validator.test.ts",
     "check": "tsc --noEmit",
     "build": "tsc -p tsconfig.build.json",
     "fixtures": "node scripts/fixtures.ts"

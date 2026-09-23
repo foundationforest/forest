@@ -22,21 +22,25 @@ pub struct Step {
     pub refund_bps: u16,
 }
 
-/// Where an escrow is. `Ended` is never stored: the account is closed when the escrow ends and
-/// the outcome lives in the `Closed` event. It is here so the four states have their numbers.
+/// Where an escrow is. Stored, and `Ended` included: an ended escrow's account is never closed,
+/// so its address is a permanent receipt that holds the final state and can never be reused.
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Status {
-    /// Created; the deposit account has not been observed holding the amount.
+    /// Created by the buyer; the seller has not accepted. The deposit account may already hold
+    /// money: only a full approval or the buyer's withdrawal can end it then.
     Open,
-    /// Observed holding the amount (`funded_at` is set).
+    /// The seller accepted (`accepted_at` is set); the funding has not been observed yet.
+    Accepted,
+    /// Accepted, and observed holding the amount (`funded_at` is set).
     Funded,
     /// The buyer objected before silence released. Only agreement, the arbiter, or the seller
     /// giving everything back can end it.
     Locked,
+    /// Paid out. `outcome`, `ended_at`, `to_seller` and `to_buyer` say how. Nothing more happens.
     Ended,
 }
 
-/// How an escrow ended, in the `Closed` event.
+/// How an escrow ended: in the account once it has, and in the `Ended` event.
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Outcome {
     Approved,
@@ -45,12 +49,13 @@ pub enum Outcome {
     Arbitrated,
     CancelledByBuyer,
     CancelledBySeller,
-    /// Closed without ever holding the amount. Whatever the deposit account held went back to
-    /// the buyer.
-    NeverFunded,
+    /// The buyer took everything back before the seller accepted.
+    Withdrawn,
 }
 
-/// One escrow. Address: `["escrow", buyer, id]`. Closed, and its rent returned, when it ends.
+/// One escrow. Address: `["escrow", buyer, id]`. Never closed once it has held the amount: when
+/// it ends, the deposit account closes and its rent goes back, and this account stays as the receipt.
+/// Only an escrow that never held the amount is closed (`close_unfunded`).
 #[account]
 pub struct Escrow {
     /// `crate::VERSION`. A v2 is a new program; this says which program's rules a record followed.
@@ -65,7 +70,8 @@ pub struct Escrow {
     /// The deposit account: this escrow's associated token account for `mint`. Derivable from
     /// the escrow address alone, and recorded so a reader need not derive it.
     pub vault: Pubkey,
-    /// Who paid the creation rent; both accounts' rent goes back here at the end.
+    /// Who paid the creation rent. The deposit account's rent goes back here at the end; the
+    /// escrow account's stays in the receipt, unless it never held the amount.
     pub rent_payer: Pubkey,
     pub amount: u64,
     /// Unix seconds, or 0 when none. When set, the clock starts here.
@@ -80,14 +86,27 @@ pub struct Escrow {
     pub funded_at: i64,
     pub status: Status,
     pub bump: u8,
+    /// When the seller accepted, or 0. An escrow the seller created (an invoice) is accepted at
+    /// creation. Appended after `bump`, with the four below it, so every offset before it is the
+    /// one session 8 pinned.
+    pub accepted_at: i64,
+    /// When it ended, or 0 while it has not.
+    pub ended_at: i64,
+    /// How it ended. Meaningful only when `status` is `Ended`; zero before.
+    pub outcome: Outcome,
+    /// What the seller and the buyer were paid at the end. `to_seller + to_buyer` is what the
+    /// deposit account held. Zero before the end.
+    pub to_seller: u64,
+    pub to_buyer: u64,
 }
 
 impl Escrow {
     /// version 0, id 1..9, buyer 9..41, seller 41..73, arbiter 73..105, mint 105..137,
     /// vault 137..169, rent_payer 169..201, amount 201..209, service_time 209..217,
     /// silence_days 217..219, step_count 219, steps 220..260 (four of offset 8, refund_bps 2),
-    /// created_at 260..268, funded_at 268..276, status 276, bump 277.
-    pub const LEN: usize = 1 + 8 + 32 * 6 + 8 + 8 + 2 + 1 + MAX_STEPS * 10 + 8 + 8 + 1 + 1;
+    /// created_at 260..268, funded_at 268..276, status 276, bump 277, accepted_at 278..286,
+    /// ended_at 286..294, outcome 294, to_seller 295..303, to_buyer 303..311.
+    pub const LEN: usize = 1 + 8 + 32 * 6 + 8 + 8 + 2 + 1 + MAX_STEPS * 10 + 8 + 8 + 1 + 1 + 8 + 8 + 1 + 8 + 8;
 
     pub fn has_arbiter(&self) -> bool {
         self.arbiter != Pubkey::default()
@@ -97,20 +116,36 @@ impl Escrow {
         &self.steps[..self.step_count as usize]
     }
 
-    /// The clock start: the service time if set, else the observed funding time, else none yet.
-    /// Silence and every cancellation deadline are measured from here.
+    pub fn accepted(&self) -> bool {
+        self.accepted_at != 0
+    }
+
+    pub fn ended(&self) -> bool {
+        self.status == Status::Ended
+    }
+
+    /// The clock start: the service time if set, else the observed funding time, but never before
+    /// the seller accepted. `None` until the seller has accepted and there is something to count
+    /// from. Silence and every cancellation deadline are measured from here.
+    ///
+    /// A seller who accepts late cannot find the silence already over: the clock starts at the
+    /// acceptance, so the buyer always has the whole silence period after it in which to object.
     pub fn clock_start(&self) -> Option<i64> {
-        if self.service_time != 0 {
-            Some(self.service_time)
-        } else if self.funded_at != 0 {
-            Some(self.funded_at)
-        } else {
-            None
+        if !self.accepted() {
+            return None;
         }
+        let base = if self.service_time != 0 {
+            self.service_time
+        } else if self.funded_at != 0 {
+            self.funded_at
+        } else {
+            return None;
+        };
+        Some(base.max(self.accepted_at))
     }
 
     /// The reference a never-funded escrow's deadlines are measured from: the service time if
-    /// set, else creation. Only `close` uses it, and only for the buyer's wait.
+    /// set, else creation. Only `close_unfunded` uses it, and only for the rent payer's wait.
     pub fn unfunded_reference(&self) -> i64 {
         if self.service_time != 0 {
             self.service_time
