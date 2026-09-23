@@ -24,10 +24,11 @@ pub const TOKEN_2022_PROGRAM: Address = solana_address::address!("TokenzQdBNbLqP
 pub const ATA_PROGRAM: Address = solana_address::address!("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
 
 pub const VERSION: u8 = 1;
-pub const ESCROW_LEN: usize = 8 + 278;
+pub const ESCROW_LEN: usize = 8 + 311;
 pub const MAX_STEPS: usize = 4;
 pub const BPS: u16 = 10_000;
 pub const DAY: i64 = 86_400;
+pub const NATIVE_MINT: Address = solana_address::address!("So11111111111111111111111111111111111111112");
 
 /// `amount × bps / 10,000`, rounded down. Written a second time here, by hand.
 pub fn share(amount: u64, bps: u16) -> u64 {
@@ -77,18 +78,20 @@ pub struct Terms {
     pub steps: Vec<Step>,
 }
 
+/// The buyer, whose key and the id make the escrow's address, the rent payer and the mint.
 pub struct CreateAccounts {
     pub buyer: Address,
     pub payer: Address,
     pub mint: Address,
 }
 
-/// id u64, seller, arbiter as an `Option` (0, or 1 then the key), amount u64, service_time as an
-/// `Option` (0, or 1 then i64), silence_days u16, steps as a `Vec` (u32 count, then each as
+/// id u64, buyer, seller, arbiter as an `Option` (0, or 1 then the key), amount u64, service_time
+/// as an `Option` (0, or 1 then i64), silence_days u16, steps as a `Vec` (u32 count, then each as
 /// offset i64 and refund_bps u16).
-pub fn create_args_bytes(t: &Terms) -> Vec<u8> {
+pub fn create_args_bytes(t: &Terms, buyer: &Address) -> Vec<u8> {
     let mut data = Vec::new();
     data.extend_from_slice(&t.id.to_le_bytes());
+    data.extend_from_slice(buyer.as_ref());
     data.extend_from_slice(t.seller.as_ref());
     match t.arbiter {
         Some(k) => {
@@ -114,16 +117,28 @@ pub fn create_args_bytes(t: &Terms) -> Vec<u8> {
     data
 }
 
+/// `create` opened by the buyer: a proposal the seller has yet to accept.
 pub fn create_ix(t: &Terms, a: &CreateAccounts) -> Instruction {
+    create_ix_by(t, a, a.buyer)
+}
+
+/// `create` opened by the seller: an invoice, accepted from creation.
+pub fn invoice_ix(t: &Terms, a: &CreateAccounts) -> Instruction {
+    create_ix_by(t, a, t.seller)
+}
+
+/// `create` with `creator` in the signer slot: escrow, vault, creator, payer, mint, token
+/// program, associated token program, system program.
+pub fn create_ix_by(t: &Terms, a: &CreateAccounts, creator: Address) -> Instruction {
     let escrow = escrow_address(&a.buyer, t.id);
     let mut data = discriminator("global", "create").to_vec();
-    data.extend_from_slice(&create_args_bytes(t));
+    data.extend_from_slice(&create_args_bytes(t, &a.buyer));
     Instruction {
         program_id: PROGRAM_ID,
         accounts: vec![
             AccountMeta::new(escrow, false),
             AccountMeta::new(vault_address(&escrow, &a.mint), false),
-            AccountMeta::new_readonly(a.buyer, true),
+            AccountMeta::new_readonly(creator, true),
             AccountMeta::new(a.payer, true),
             AccountMeta::new_readonly(a.mint, false),
             AccountMeta::new_readonly(TOKEN_PROGRAM, false),
@@ -131,6 +146,19 @@ pub fn create_ix(t: &Terms, a: &CreateAccounts) -> Instruction {
             AccountMeta::new_readonly(solana_system_interface::program::ID, false),
         ],
         data,
+    }
+}
+
+/// `accept`: escrow, vault, seller.
+pub fn accept_ix(escrow: Address, vault: Address, seller: Address) -> Instruction {
+    Instruction {
+        program_id: PROGRAM_ID,
+        accounts: vec![
+            AccountMeta::new(escrow, false),
+            AccountMeta::new_readonly(vault, false),
+            AccountMeta::new_readonly(seller, true),
+        ],
+        data: discriminator("global", "accept").to_vec(),
     }
 }
 
@@ -209,8 +237,33 @@ pub fn cancel_buyer_ix(s: &SettleAccounts, buyer: Address) -> Instruction {
 pub fn cancel_seller_ix(s: &SettleAccounts, seller: Address) -> Instruction {
     settle_as_ix("cancel_seller", s, seller, None)
 }
-pub fn close_ix(s: &SettleAccounts, party: Address) -> Instruction {
-    settle_as_ix("close", s, party, None)
+
+/// The two exits that pay the seller nothing name no seller account: escrow, vault, buyer_tokens,
+/// rent_payer, token program, then the signer.
+fn refund_ix(name: &str, s: &SettleAccounts, signer: Address) -> Instruction {
+    Instruction {
+        program_id: PROGRAM_ID,
+        accounts: vec![
+            AccountMeta::new(s.escrow, false),
+            AccountMeta::new(s.vault, false),
+            AccountMeta::new(s.buyer_tokens, false),
+            AccountMeta::new(s.rent_payer, false),
+            AccountMeta::new_readonly(TOKEN_PROGRAM, false),
+            AccountMeta::new_readonly(signer, true),
+        ],
+        data: discriminator("global", name).to_vec(),
+    }
+}
+
+/// `withdraw`: the buyer, before the seller accepts. `s.seller_tokens` is not sent.
+pub fn withdraw_ix(s: &SettleAccounts, buyer: Address) -> Instruction {
+    refund_ix("withdraw", s, buyer)
+}
+
+/// `close_unfunded`: the buyer, the seller, or the rent payer after the last deadline.
+/// `s.seller_tokens` is not sent.
+pub fn close_unfunded_ix(s: &SettleAccounts, closer: Address) -> Instruction {
+    refund_ix("close_unfunded", s, closer)
 }
 
 /// `agree`: both keys sign.
@@ -246,9 +299,10 @@ pub fn spl_transfer_ix(from: Address, to: Address, owner: Address, amount: u64) 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Status {
     Open = 0,
-    Funded = 1,
-    Locked = 2,
-    Ended = 3,
+    Accepted = 1,
+    Funded = 2,
+    Locked = 3,
+    Ended = 4,
 }
 
 #[derive(Debug)]
@@ -270,11 +324,20 @@ pub struct EscrowView {
     pub funded_at: i64,
     pub status: Status,
     pub bump: u8,
+    /// 0 until the seller accepts.
+    pub accepted_at: i64,
+    /// 0 until it ends.
+    pub ended_at: i64,
+    /// `None` until it ends.
+    pub outcome: Option<Outcome>,
+    pub to_seller: u64,
+    pub to_buyer: u64,
 }
 
 /// version 0, id 1..9, buyer 9..41, seller 41..73, arbiter 73..105, mint 105..137, vault 137..169,
 /// rent_payer 169..201, amount 201..209, service_time 209..217, silence_days 217..219,
-/// step_count 219, steps 220..260, created_at 260..268, funded_at 268..276, status 276, bump 277.
+/// step_count 219, steps 220..260, created_at 260..268, funded_at 268..276, status 276, bump 277,
+/// accepted_at 278..286, ended_at 286..294, outcome 294, to_seller 295..303, to_buyer 303..311.
 pub fn read_escrow(data: &[u8]) -> EscrowView {
     assert_eq!(data.len(), ESCROW_LEN);
     assert_eq!(data[..8], discriminator("account", "Escrow"));
@@ -289,6 +352,14 @@ pub fn read_escrow(data: &[u8]) -> EscrowView {
             refund_bps: u16::from_le_bytes(b[228 + i * 10..230 + i * 10].try_into().unwrap()),
         })
         .collect();
+    let status = match b[276] {
+        0 => Status::Open,
+        1 => Status::Accepted,
+        2 => Status::Funded,
+        3 => Status::Locked,
+        4 => Status::Ended,
+        other => panic!("status byte {other}"),
+    };
     EscrowView {
         version: b[0],
         id: u64_at(1),
@@ -304,14 +375,13 @@ pub fn read_escrow(data: &[u8]) -> EscrowView {
         steps,
         created_at: i64_at(260),
         funded_at: i64_at(268),
-        status: match b[276] {
-            0 => Status::Open,
-            1 => Status::Funded,
-            2 => Status::Locked,
-            3 => Status::Ended,
-            other => panic!("status byte {other}"),
-        },
+        status,
         bump: b[277],
+        accepted_at: i64_at(278),
+        ended_at: i64_at(286),
+        outcome: if status == Status::Ended { Some(outcome_of(b[294])) } else { None },
+        to_seller: u64_at(295),
+        to_buyer: u64_at(303),
     }
 }
 
@@ -331,7 +401,20 @@ pub enum Outcome {
     Arbitrated = 3,
     CancelledByBuyer = 4,
     CancelledBySeller = 5,
-    NeverFunded = 6,
+    Withdrawn = 6,
+}
+
+pub fn outcome_of(byte: u8) -> Outcome {
+    match byte {
+        0 => Outcome::Approved,
+        1 => Outcome::ReleasedBySilence,
+        2 => Outcome::Agreed,
+        3 => Outcome::Arbitrated,
+        4 => Outcome::CancelledByBuyer,
+        5 => Outcome::CancelledBySeller,
+        6 => Outcome::Withdrawn,
+        other => panic!("outcome byte {other}"),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -352,6 +435,7 @@ pub enum Event {
         steps: Vec<Step>,
         created_at: i64,
     },
+    Accepted { escrow: Address, seller: Address, accepted_at: i64 },
     Funded { escrow: Address, balance: u64, funded_at: i64 },
     Approved { escrow: Address, seller_bps: u16, to_seller: u64, to_buyer: u64 },
     ReleasedBySilence { escrow: Address, clock_start: i64, silence_ended: i64, to_seller: u64, to_buyer: u64 },
@@ -360,22 +444,27 @@ pub enum Event {
     Arbitrated { escrow: Address, arbiter: Address, seller_bps: u16, to_seller: u64, to_buyer: u64 },
     CancelledByBuyer { escrow: Address, step: u8, refund_bps: u16, to_buyer: u64, to_seller: u64 },
     CancelledBySeller { escrow: Address, seller: Address, to_buyer: u64 },
-    Closed {
+    Withdrawn { escrow: Address, to_buyer: u64 },
+    Ended {
         escrow: Address,
         outcome: Outcome,
         amount: u64,
         balance: u64,
         to_seller: u64,
         to_buyer: u64,
+        accepted_at: i64,
+        ended_at: i64,
         rent_payer: Address,
         rent_lamports: u64,
     },
+    Closed { escrow: Address, closed_by: Address, to_buyer: u64, rent_payer: Address, rent_lamports: u64 },
 }
 
 impl Event {
     pub fn name(&self) -> &'static str {
         match self {
             Event::Created { .. } => "Created",
+            Event::Accepted { .. } => "Accepted",
             Event::Funded { .. } => "Funded",
             Event::Approved { .. } => "Approved",
             Event::ReleasedBySilence { .. } => "ReleasedBySilence",
@@ -384,6 +473,8 @@ impl Event {
             Event::Arbitrated { .. } => "Arbitrated",
             Event::CancelledByBuyer { .. } => "CancelledByBuyer",
             Event::CancelledBySeller { .. } => "CancelledBySeller",
+            Event::Withdrawn { .. } => "Withdrawn",
+            Event::Ended { .. } => "Ended",
             Event::Closed { .. } => "Closed",
         }
     }
@@ -432,8 +523,9 @@ impl<'a> Cursor<'a> {
     }
 }
 
-const EVENT_NAMES: [&str; 10] = [
+const EVENT_NAMES: [&str; 13] = [
     "Created",
+    "Accepted",
     "Funded",
     "Approved",
     "ReleasedBySilence",
@@ -442,6 +534,8 @@ const EVENT_NAMES: [&str; 10] = [
     "Arbitrated",
     "CancelledByBuyer",
     "CancelledBySeller",
+    "Withdrawn",
+    "Ended",
     "Closed",
 ];
 
@@ -475,6 +569,7 @@ pub fn events(logs: &[String]) -> Vec<Event> {
                 steps: c.steps(),
                 created_at: c.i64(),
             },
+            "Accepted" => Event::Accepted { escrow, seller: c.key(), accepted_at: c.i64() },
             "Funded" => Event::Funded { escrow, balance: c.u64(), funded_at: c.i64() },
             "Approved" => Event::Approved { escrow, seller_bps: c.u16(), to_seller: c.u64(), to_buyer: c.u64() },
             "ReleasedBySilence" => Event::ReleasedBySilence {
@@ -501,21 +596,22 @@ pub fn events(logs: &[String]) -> Vec<Event> {
                 to_seller: c.u64(),
             },
             "CancelledBySeller" => Event::CancelledBySeller { escrow, seller: c.key(), to_buyer: c.u64() },
-            "Closed" => Event::Closed {
+            "Withdrawn" => Event::Withdrawn { escrow, to_buyer: c.u64() },
+            "Ended" => Event::Ended {
                 escrow,
-                outcome: match c.u8() {
-                    0 => Outcome::Approved,
-                    1 => Outcome::ReleasedBySilence,
-                    2 => Outcome::Agreed,
-                    3 => Outcome::Arbitrated,
-                    4 => Outcome::CancelledByBuyer,
-                    5 => Outcome::CancelledBySeller,
-                    6 => Outcome::NeverFunded,
-                    other => panic!("outcome byte {other}"),
-                },
+                outcome: outcome_of(c.u8()),
                 amount: c.u64(),
                 balance: c.u64(),
                 to_seller: c.u64(),
+                to_buyer: c.u64(),
+                accepted_at: c.i64(),
+                ended_at: c.i64(),
+                rent_payer: c.key(),
+                rent_lamports: c.u64(),
+            },
+            "Closed" => Event::Closed {
+                escrow,
+                closed_by: c.key(),
                 to_buyer: c.u64(),
                 rent_payer: c.key(),
                 rent_lamports: c.u64(),
@@ -687,14 +783,31 @@ impl Harness {
             .expect("fund");
     }
 
+    /// `create`, opened by the seller as an invoice, signed by the seller and the payer.
+    pub fn invoice(&mut self, t: &Terms) -> Result<(Address, litesvm::types::TransactionMetadata), String> {
+        let a = self.create_accounts();
+        let seller = self.seller.insecure_clone();
+        let meta = self.send(&[invoice_ix(t, &a)], &[&seller])?;
+        Ok((escrow_address(&a.buyer, t.id), meta))
+    }
+
+    /// The seller accepts.
+    pub fn accept(&mut self, escrow: &Address) -> Result<litesvm::types::TransactionMetadata, String> {
+        let vault = vault_address(escrow, &self.mint);
+        let seller = self.seller.insecure_clone();
+        self.send(&[accept_ix(*escrow, vault, seller.pubkey())], &[&seller])
+    }
+
     pub fn mark_funded(&mut self, escrow: &Address) -> Result<litesvm::types::TransactionMetadata, String> {
         let vault = vault_address(escrow, &self.mint);
         self.send(&[mark_funded_ix(*escrow, vault)], &[])
     }
 
-    /// Created, funded with exactly the amount by a plain transfer, and marked funded at `T0`.
+    /// Created by the buyer, accepted by the seller, funded with exactly the amount by a plain
+    /// transfer, and marked funded, all at the current time (`T0` unless a test moved it).
     pub fn funded(&mut self, t: &Terms) -> Address {
         let (escrow, _) = self.create(t).expect("create");
+        self.accept(&escrow).expect("accept");
         self.fund(&escrow, t.amount);
         self.mark_funded(&escrow).expect("mark_funded");
         escrow

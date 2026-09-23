@@ -30,10 +30,11 @@ pub struct Config {
     /// removed: nothing in this program removes a mint at all, so registration can never be
     /// halted by taking one away.
     pub mints: [Pubkey; MAX_MINTS],
-    /// Each accepted mint's decimals, read off the mint account when it was accepted, at the
-    /// same index as the mint. The 25-cent rule is `crate::registration_fee(decimals[i])` of
-    /// `mints[i]`: 0.25 × 10^decimals, in that mint's own units.
-    pub decimals: [u8; MAX_MINTS],
+    /// Each accepted mint's fee, in that mint's own base units, at the same index as the mint.
+    /// `fees[0]` is `crate::USDC_FEE`, 0.25 USDC, written at `init`. Every other is the amount
+    /// the treasury set at `add_token`, meant to be worth 25 cents. Nothing changes a fee once
+    /// written, and nothing removes one.
+    pub fees: [u64; MAX_MINTS],
     pub mint_count: u8,
     /// How many identity lists have been opened. The next one gets this index.
     pub list_count: u32,
@@ -46,16 +47,19 @@ pub struct Config {
 }
 
 impl Config {
-    pub const LEN: usize = 32 + 32 * MAX_MINTS + MAX_MINTS + 1 + 4 + 1 + 32;
+    /// treasury 0..32, mints 32..544, fees 544..672, mint_count 672, list_count 673..677,
+    /// bump 677, pending_treasury 678..710.
+    pub const LEN: usize = 32 + 32 * MAX_MINTS + 8 * MAX_MINTS + 1 + 4 + 1 + 32;
 
     pub fn accepts(&self, mint: &Pubkey) -> bool {
-        self.decimals_of(mint).is_some()
+        self.fee_of(mint).is_some()
     }
 
-    /// The decimals recorded for an accepted mint, or `None` if the mint is not accepted.
-    pub fn decimals_of(&self, mint: &Pubkey) -> Option<u8> {
+    /// The fee recorded for an accepted mint, in its own base units, or `None` if the mint is
+    /// not accepted.
+    pub fn fee_of(&self, mint: &Pubkey) -> Option<u64> {
         let n = self.mint_count as usize;
-        self.mints[..n].iter().position(|m| m == mint).map(|i| self.decimals[i])
+        self.mints[..n].iter().position(|m| m == mint).map(|i| self.fees[i])
     }
 }
 
@@ -70,7 +74,12 @@ pub struct IdentityList {
     pub index: u32,
     pub issuer_count: u8,
     pub bump: u8,
-    pub _pad: [u8; 2],
+    /// 1 once the treasury has closed the list to new members (`close_list`); 0 while open. A
+    /// closed list keeps its members, its root and its last 128 roots, so every proof against it
+    /// still verifies; it only takes no more inserts. Nothing reopens it and nothing deletes it.
+    /// It sits in what was padding, so the account's size and every other offset are unchanged.
+    pub closed: u8,
+    pub _pad: [u8; 1],
     /// The current root. Zero while the list is empty, and a zero root is never accepted.
     pub root: [u8; 32],
     /// One node per level: the left node at that level still waiting for a right sibling.
@@ -83,7 +92,11 @@ pub struct IdentityList {
 }
 
 impl IdentityList {
-    pub const LEN: usize = 8 + 4 + 1 + 1 + 2 + 32 + 32 * FRONTIER_LEN + 32 * ROOT_HISTORY + 32 * MAX_ISSUERS;
+    pub const LEN: usize = 8 + 4 + 1 + 1 + 1 + 1 + 32 + 32 * FRONTIER_LEN + 32 * ROOT_HISTORY + 32 * MAX_ISSUERS;
+
+    pub fn is_closed(&self) -> bool {
+        self.closed != 0
+    }
 
     pub fn is_issuer(&self, key: &Pubkey) -> bool {
         self.issuers[..self.issuer_count as usize].contains(key)

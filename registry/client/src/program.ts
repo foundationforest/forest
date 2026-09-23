@@ -32,15 +32,11 @@ export const USDC_MINT = new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyT
 export const USDC_MINT_DEVNET = new PublicKey('4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU')
 
 /**
- * 0.25 in a mint's own base units: 25 × 10^(decimals − 2). One rule, 25 cents, always. The
- * program refuses a mint outside 2..=19 decimals, where 0.25 is not a whole number that fits.
+ * USDC's fee: 0.25 at six decimals, `fees[0]` forever. Every other accepted mint's fee is the amount
+ * the treasury set at `add_token`, in that mint's own base units; read it from the config.
  */
-export function registrationFee(decimals: number): bigint {
-  if (!Number.isInteger(decimals) || decimals < 2 || decimals > 19) {
-    throw new RangeError(`0.25 is not a whole number of base units at ${decimals} decimals`)
-  }
-  return 25n * 10n ** BigInt(decimals - 2)
-}
+export const USDC_FEE = 250_000n
+export const USDC_DECIMALS = 6
 /** The circuit's depth, sealed with the verification key. */
 export const MAX_DEPTH = 32
 /** How many recent roots a list keeps. */
@@ -59,6 +55,13 @@ export function discriminator(namespace: string, name: string): Uint8Array {
 function u32le(n: number): Uint8Array {
   const b = new Uint8Array(4)
   new DataView(b.buffer).setUint32(0, n, true)
+  return b
+}
+
+function u64le(n: bigint): Uint8Array {
+  if (n < 0n || n >= 1n << 64n) throw new RangeError('not a u64')
+  const b = new Uint8Array(8)
+  new DataView(b.buffer).setBigUint64(0, n, true)
   return b
 }
 
@@ -209,6 +212,19 @@ function issuerIx(
 export const addIssuerIx = (args: Parameters<typeof issuerIx>[1]) => issuerIx('add_issuer', args)
 export const removeIssuerIx = (args: Parameters<typeof issuerIx>[1]) => issuerIx('remove_issuer', args)
 
+/**
+ * Close a list to new members, for good. The treasury signs. Its members, its root and its last
+ * 128 roots stay: every proof against it still verifies.
+ */
+export function closeListIx(args: { treasury: PublicKey; listIndex: number; programId?: PublicKey }): TransactionInstruction {
+  const programId = args.programId ?? PROGRAM_ID
+  return new TransactionInstruction({
+    programId,
+    keys: [ro(configAddress(programId)), rw(listAddress(args.listIndex, programId)), ro(args.treasury, true)],
+    data: concat([discriminator('global', 'close_list'), u32le(args.listIndex)]),
+  })
+}
+
 export function insertIdentityIx(args: {
   issuer: PublicKey
   listIndex: number
@@ -229,16 +245,19 @@ export function insertIdentityIx(args: {
   })
 }
 
+/** Accept a mint at `fee`, in its own base units, set once. The treasury signs. */
 export function addTokenIx(args: {
   treasury: PublicKey
   mint: PublicKey
+  fee: bigint
   programId?: PublicKey
 }): TransactionInstruction {
   const programId = args.programId ?? PROGRAM_ID
+  if (args.fee <= 0n) throw new RangeError('FeeZero: a fee is above zero')
   return new TransactionInstruction({
     programId,
     keys: [rw(configAddress(programId)), ro(args.treasury, true), ro(args.mint)],
-    data: concat([discriminator('global', 'add_token')]),
+    data: concat([discriminator('global', 'add_token'), u64le(args.fee)]),
   })
 }
 
@@ -294,10 +313,17 @@ export function sweepRentIx(args: {
   })
 }
 
+/**
+ * Who signs a registration, and what pays. The payer covers the network fee and the code account's
+ * rent (the fee payer, a sponsor). The profile's wallet signs for consent on every path, and the
+ * proof names it. The fee authority owns `feeTokens`, which the fee comes from: the profile's
+ * wallet itself on the paid path, or a sponsor.
+ */
 export type RegisterAccounts = {
   payer: PublicKey
   profileWallet: PublicKey
-  profileTokens: PublicKey
+  feeAuthority: PublicKey
+  feeTokens: PublicKey
   treasuryTokens: PublicKey
 }
 
@@ -323,7 +349,8 @@ export function registerIx(args: {
       rw(usedCodeAddress(code, programId)),
       rw(args.accounts.payer, true),
       ro(args.accounts.profileWallet, true),
-      rw(args.accounts.profileTokens),
+      ro(args.accounts.feeAuthority, true),
+      rw(args.accounts.feeTokens),
       rw(args.accounts.treasuryTokens),
       ro(TOKEN_PROGRAM_ID),
       ro(SystemProgram.programId),
@@ -345,8 +372,8 @@ export function registerIx(args: {
 export type ConfigAccount = {
   treasury: PublicKey
   mints: PublicKey[]
-  /** One per accepted mint, at the same index: the decimals read off the mint when it was accepted. */
-  decimals: number[]
+  /** One per accepted mint, at the same index: its fee in its own base units. `fees[0]` is USDC's 0.25. */
+  fees: bigint[]
   listCount: number
   bump: number
   /** The key a handover has been proposed to, or `null` when nothing is pending. */
@@ -354,29 +381,41 @@ export type ConfigAccount = {
 }
 
 /**
- * treasury 0..32, mints 32..544, decimals 544..560, mint_count 560, list_count 561..565, bump 565,
- * pending_treasury 566..598.
+ * treasury 0..32, mints 32..544, fees 544..672, mint_count 672, list_count 673..677, bump 677,
+ * pending_treasury 678..710.
  */
 export function decodeConfig(data: Uint8Array): ConfigAccount {
   const b = data.subarray(8)
-  const mintCount = b[560]
+  const mintCount = b[672]
   const mints: PublicKey[] = []
-  for (let i = 0; i < mintCount; i++) mints.push(new PublicKey(b.subarray(32 + i * 32, 64 + i * 32)))
-  const pending = new PublicKey(b.subarray(566, 598))
+  const fees: bigint[] = []
+  for (let i = 0; i < mintCount; i++) {
+    mints.push(new PublicKey(b.subarray(32 + i * 32, 64 + i * 32)))
+    fees.push(readU64le(b, 544 + i * 8))
+  }
+  const pending = new PublicKey(b.subarray(678, 710))
   return {
     treasury: new PublicKey(b.subarray(0, 32)),
     mints,
-    decimals: Array.from(b.subarray(544, 544 + mintCount)),
-    listCount: readU32le(b, 561),
-    bump: b[565],
+    fees,
+    listCount: readU32le(b, 673),
+    bump: b[677],
     pendingTreasury: pending.equals(PublicKey.default) ? null : pending,
   }
+}
+
+/** The fee a registration paying in `mint` moves, from a decoded config, or null if the mint is not accepted. */
+export function feeFor(config: ConfigAccount, mint: PublicKey): bigint | null {
+  const i = config.mints.findIndex((m) => m.equals(mint))
+  return i === -1 ? null : config.fees[i]
 }
 
 export type IdentityListAccount = {
   leafCount: bigint
   index: number
   bump: number
+  /** Closed to new members by the treasury, for good. Proofs against it still verify. */
+  closed: boolean
   root: Uint8Array
   roots: Uint8Array[]
   issuers: PublicKey[]
@@ -395,6 +434,7 @@ export function decodeIdentityList(data: Uint8Array): IdentityListAccount {
     leafCount: readU64le(b, 0),
     index: readU32le(b, 8),
     bump: b[13],
+    closed: b[14] !== 0,
     root: b.subarray(16, 48),
     roots,
     issuers,
@@ -411,6 +451,8 @@ export function decodeCodeTree(data: Uint8Array): CodeTreeAccount {
 export type RegisteredEvent = {
   market: string
   did: string
+  /** The profile's wallet that signed and that the proof names. A badge counts for the DID only if its profile record declares this wallet. */
+  wallet: PublicKey
   code: Uint8Array
   listIndex: number
 }
@@ -465,9 +507,11 @@ export function decodeRegisteredEvents(logs: string[], programId: PublicKey = PR
     }
     const market = readString()
     const did = readString()
+    const wallet = new PublicKey(bytes.subarray(at, at + 32))
+    at += 32
     const code = bytes.slice(at, at + 32)
     at += 32
-    out.push({ market, did, code, listIndex: readU32le(bytes, at) })
+    out.push({ market, did, wallet, code, listIndex: readU32le(bytes, at) })
   }
   return out
 }

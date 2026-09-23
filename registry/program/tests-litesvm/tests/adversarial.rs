@@ -15,8 +15,7 @@ use solana_instruction::Instruction;
 use solana_keypair::Keypair;
 use solana_signer::Signer;
 
-const TUTORS: &str = "online-tutors";
-const QUARTER_USDC: u64 = 250_000;
+const QUARTER_USDC: u64 = USDC_FEE;
 const TOKEN_2022_PROGRAM: Address = solana_address::address!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
 
 /// BN254's scalar field order, the bound every public input must sit under.
@@ -31,8 +30,10 @@ fn ready() -> (Harness, Fixtures) {
     (h, f)
 }
 
-/// A fixture's registration, as bytes an attacker can then change.
+/// A fixture's registration, as bytes an attacker can then change, and the profile's wallet that
+/// signs it.
 struct Reg {
+    profile: Keypair,
     market: String,
     did: String,
     list_index: u32,
@@ -46,6 +47,7 @@ struct Reg {
 impl Reg {
     fn of(p: &FixtureProof) -> Self {
         Reg {
+            profile: p.wallet_keypair(),
             market: p.market.clone(),
             did: p.did.clone(),
             list_index: p.list_index,
@@ -73,13 +75,20 @@ impl Reg {
     }
 }
 
-fn accounts(h: &Harness, wallet: &Keypair, tokens: Address) -> RegisterAccounts {
-    RegisterAccounts { payer: h.payer.pubkey(), profile_wallet: wallet.pubkey(), profile_tokens: tokens, treasury_tokens: h.treasury_tokens }
+/// The profile's wallet signs; `fee_wallet` pays the fee from `tokens` (a sponsor, here).
+fn accounts(h: &Harness, r: &Reg, fee_wallet: &Keypair, tokens: Address) -> RegisterAccounts {
+    RegisterAccounts {
+        payer: h.payer.pubkey(),
+        profile_wallet: r.profile.pubkey(),
+        fee_authority: fee_wallet.pubkey(),
+        fee_tokens: tokens,
+        treasury_tokens: h.treasury_tokens,
+    }
 }
 
-fn send_reg(h: &mut Harness, r: &Reg, wallet: &Keypair, tokens: Address) -> Result<litesvm::types::TransactionMetadata, String> {
-    let ix = r.ix(&accounts(h, wallet, tokens));
-    h.send_signed(&[ix], &[wallet])
+fn send_reg(h: &mut Harness, r: &Reg, fee_wallet: &Keypair, tokens: Address) -> Result<litesvm::types::TransactionMetadata, String> {
+    let ix = r.ix(&accounts(h, r, fee_wallet, tokens));
+    h.send_signed(&[ix], &[&r.profile, fee_wallet])
 }
 
 fn add_be(a: &[u8; 32], b: &str) -> [u8; 32] {
@@ -119,9 +128,10 @@ fn finding_the_placeholder_treasury_is_anyones_key() {
     let attacker_tokens = h.token_account_for(h.usdc, attacker.pubkey());
     let p = f.proof("alice-tutors");
     let (wallet, tokens) = h.wallet_with(h.usdc, 1_000_000);
-    let mut a = accounts(&h, &wallet, tokens);
+    let r = Reg::of(p);
+    let mut a = accounts(&h, &r, &wallet, tokens);
     a.treasury_tokens = attacker_tokens;
-    h.send_signed(&[Reg::of(p).ix(&a)], &[&wallet]).expect("registration pays the attacker");
+    h.send_signed(&[r.ix(&a)], &[&r.profile, &wallet]).expect("registration pays the attacker");
     assert_eq!(token_amount(&h.account(&attacker_tokens).data), QUARTER_USDC);
     println!("FINDING (money and promise, deploy blocker): the placeholder treasury is a public key pair; replace before deploy");
 }
@@ -151,6 +161,8 @@ fn proof_bound_to_its_did_market_root_and_code() {
         ("an empty DID", Box::new(|r| r.did = String::new()), &["DidLength", "between 1 and 64"]),
         ("a 65-byte DID", Box::new(|r| r.did = "d".repeat(65)), &["DidLength", "between 1 and 64"]),
         ("list 1 named for a list-0 proof", Box::new(|r| r.list_index = 1), &["AccountNotInitialized", "AccountOwnedByWrongProgram", "ConstraintSeeds", "3012"]),
+        ("another profile's wallet signing", Box::new(|r| r.profile = bob.wallet_keypair()), &["ProofRejected", "does not verify"]),
+        ("a stranger's wallet signing", Box::new(|r| r.profile = Keypair::new()), &["ProofRejected", "does not verify"]),
     ];
     for (what, change, wants) in cases {
         let mut r = Reg::of(alice);
@@ -160,7 +172,7 @@ fn proof_bound_to_its_did_market_root_and_code() {
     }
     assert_eq!(h.code_tree().count, 0, "nothing written");
     assert_eq!(token_amount(&h.account(&tokens).data), 10_000_000, "nothing paid");
-    println!("rejected as expected: thirteen ways of bending a real proof");
+    println!("rejected as expected: fifteen ways of bending a real proof");
 }
 
 #[test]
@@ -192,21 +204,31 @@ fn proof_every_single_bit_flip_in_the_points_is_refused() {
 }
 
 #[test]
-fn finding_the_paying_wallet_is_not_bound_to_the_did() {
-    // A registration's proof binds the market and the DID. It does not bind the wallet that pays.
-    // Anyone holding a copy of Alice's instruction (a relay, a fee payer, a front-runner) can
-    // land it paying from their own wallet: Alice's DID gets Alice's badge. Harmless to Alice.
-    // The flip side: the human who makes a proof chooses the DID, and nothing checks that the
-    // human controls it, so a badge can be made for, and sold to, a profile its owner never
-    // face-checked. One per human per market, still.
+fn proof_bound_to_the_profiles_wallet_and_nobody_else_can_land_it() {
+    // Session 10's finding 9: the proof bound the market and the DID, not the wallet, so the human
+    // who made a proof could badge a profile they did not control, and nothing in the entry said
+    // which wallet stood behind it. Now the profile's wallet signs and the proof's message names it.
     let (mut h, f) = ready();
     let alice = f.proof("alice-tutors");
-    let (stranger, stranger_tokens) = h.wallet_with(h.usdc, 1_000_000);
-    let meta = send_reg(&mut h, &Reg::of(alice), &stranger, stranger_tokens).expect("accepted");
+    let (sponsor, sponsor_tokens) = h.wallet_with(h.usdc, 1_000_000);
+    let r = Reg::of(alice);
+
+    // A front-runner, a relay or the sponsor itself copies Alice's instruction and puts its own key
+    // in the profile's slot, signing for it: the proof no longer verifies, and Alice's code is not
+    // burned under a wallet her profile does not declare.
+    let mut a = accounts(&h, &r, &sponsor, sponsor_tokens);
+    a.profile_wallet = sponsor.pubkey();
+    let err = h.send_signed(&[r.ix(&a)], &[&sponsor]).expect_err("landed under another wallet");
+    assert!(err.contains("ProofRejected") || err.contains("does not verify"), "{err}");
+    assert!(h.svm.get_account(&used_code_address(&alice.code_bytes())).is_none(), "Alice's code is still hers");
+
+    // A relay that lands Alice's own instruction, signed by her wallet, paying the fee itself, does
+    // her no harm: the badge is hers, and the entry names her wallet.
+    let meta = send_reg(&mut h, &r, &sponsor, sponsor_tokens).expect("relayed, Alice signing");
     let ev = registered_events(&meta.logs);
-    assert_eq!(ev[0].did, alice.did);
-    assert_eq!(token_amount(&h.account(&stranger_tokens).data), 1_000_000 - QUARTER_USDC);
-    println!("FINDING (for Carlos): the stranger paid, Alice's DID was badged; the payer is not in the event either");
+    assert_eq!((ev[0].did.as_str(), ev[0].wallet.to_string()), (alice.did.as_str(), alice.wallet.clone()));
+    assert_eq!(token_amount(&h.account(&sponsor_tokens).data), 1_000_000 - QUARTER_USDC);
+    println!("rejected as expected: the proof names the profile's wallet; only it can land it; the entry says which wallet");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -218,8 +240,9 @@ fn replay_one_code_twice_in_one_transaction_reverts_both() {
     let (mut h, f) = ready();
     let alice = f.proof("alice-tutors");
     let (w, t) = h.wallet_with(h.usdc, 1_000_000);
-    let ix = Reg::of(alice).ix(&accounts(&h, &w, t));
-    let err = h.send_signed(&[ix.clone(), ix], &[&w]).expect_err("must be refused");
+    let r = Reg::of(alice);
+    let ix = r.ix(&accounts(&h, &r, &w, t));
+    let err = h.send_signed(&[ix.clone(), ix], &[&r.profile, &w]).expect_err("must be refused");
     assert!(err.contains("already in use"), "{err}");
     assert!(h.svm.get_account(&used_code_address(&alice.code_bytes())).is_none(), "not even the first one");
     assert_eq!(token_amount(&h.account(&t).data), 1_000_000);
@@ -263,22 +286,22 @@ fn substitution_every_account_in_register() {
     acct.owner = TOKEN_2022_PROGRAM;
     h.svm.set_account(t22, acct).unwrap();
 
-    let base = alice.ix(&accounts(&h, &w, t));
+    let base = alice.ix(&accounts(&h, &alice, &w, t));
     let cases: Vec<(&str, usize, Address, &[&str])> = vec![
         ("list 0 swapped for the code tree", 1, code_tree_address(), &["ConstraintSeeds", "AccountDiscriminator", "2006"]),
         ("the code tree swapped for list 0", 2, list_address(0), &["ConstraintSeeds", "AccountDiscriminator", "2006"]),
         ("a config that is the code tree", 0, code_tree_address(), &["ConstraintSeeds", "AccountDiscriminator", "2006"]),
         ("the code account at another address", 3, used_code_address(&[9u8; 32]), &["ConstraintSeeds", "2006"]),
-        ("paying from a victim's token account", 6, victims_usdc, &["ConstraintTokenOwner", "2015"]),
-        ("the fee to a stranger's account", 7, strangers_usdc, &["ConstraintTokenOwner", "2015"]),
-        ("the fee to the treasury's account for another mint", 7, treasury_other_mint, &["MintMismatch", "different mints"]),
-        ("the fee to a Token-2022 account", 7, t22, &["AccountOwnedByWrongProgram", "3007"]),
-        ("Token-2022 as the token program", 8, TOKEN_2022_PROGRAM, &["InvalidProgramId", "3008"]),
+        ("paying from a victim's token account", 7, victims_usdc, &["ConstraintTokenOwner", "2015"]),
+        ("the fee to a stranger's account", 8, strangers_usdc, &["ConstraintTokenOwner", "2015"]),
+        ("the fee to the treasury's account for another mint", 8, treasury_other_mint, &["MintMismatch", "different mints"]),
+        ("the fee to a Token-2022 account", 8, t22, &["AccountOwnedByWrongProgram", "3007"]),
+        ("Token-2022 as the token program", 9, TOKEN_2022_PROGRAM, &["InvalidProgramId", "3008"]),
     ];
     for (what, at, key, wants) in cases {
         let mut ix = base.clone();
         ix.accounts[at].pubkey = key;
-        let err = h.send_signed(&[ix], &[&w]).err().unwrap_or_else(|| panic!("{what}: must be refused"));
+        let err = h.send_signed(&[ix], &[&alice.profile, &w]).err().unwrap_or_else(|| panic!("{what}: must be refused"));
         assert!(wants.iter().any(|x| err.contains(x)), "{what}: expected one of {wants:?}, got\n{err}");
     }
     assert_eq!(h.code_tree().count, 0);
@@ -293,7 +316,7 @@ fn substitution_a_token_2022_mint_cannot_be_accepted() {
     let mut acct = spl_mint_account(6);
     acct.owner = TOKEN_2022_PROGRAM;
     h.svm.set_account(m22, acct).unwrap();
-    let err = h.send(&[add_token_ix(h.treasury, m22)], &[Harness::PAYER, Harness::TREASURY]).expect_err("Token-2022 mint");
+    let err = h.send(&[add_token_ix(h.treasury, m22, QUARTER_USDC)], &[Harness::PAYER, Harness::TREASURY]).expect_err("Token-2022 mint");
     assert!(err.contains("AccountOwnedByWrongProgram"), "{err}");
     println!("rejected as expected: a Token-2022 mint at add_token");
 }
@@ -360,12 +383,14 @@ fn finding_the_treasury_can_accept_a_token_it_mints_itself() {
     let (mut h, f) = ready();
     let voucher = Address::new_unique();
     h.svm.set_account(voucher, spl_mint_account(6)).unwrap();
-    h.send(&[add_token_ix(h.treasury, voucher)], &[Harness::PAYER, Harness::TREASURY]).expect("add");
-    let (w, t) = h.wallet_with(voucher, QUARTER_USDC);
-    let mut a = accounts(&h, &w, t);
+    // With a fee per token (session 11), the treasury also sets how much of its voucher counts.
+    h.send(&[add_token_ix(h.treasury, voucher, 1)], &[Harness::PAYER, Harness::TREASURY]).expect("add");
+    let (w, t) = h.wallet_with(voucher, 1);
+    let r = Reg::of(f.proof("alice-tutors"));
+    let mut a = accounts(&h, &r, &w, t);
     a.treasury_tokens = h.token_account_for(voucher, h.treasury);
-    h.send_signed(&[Reg::of(f.proof("alice-tutors")).ix(&a)], &[&w]).expect("paid in the voucher");
-    println!("FINDING (promise, for Carlos): the treasury can bring vouchers back as a token; the program cannot tell");
+    h.send_signed(&[r.ix(&a)], &[&r.profile, &w]).expect("paid in the voucher");
+    println!("FINDING (promise, for Carlos): the treasury can bring vouchers back as a token, now at any amount; the program cannot tell");
 }
 
 // ---------------------------------------------------------------------------------------------

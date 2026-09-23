@@ -1,6 +1,7 @@
 // Field elements, and the one hash the registry derives everything public from.
 
 import { keccak_256 } from '@noble/hashes/sha3.js'
+import type { PublicKey } from '@solana/web3.js'
 
 /** BN254's scalar field order. Every public signal is below it. */
 export const BN254_R = 21888242871839275222246405745257275088548364400416034343698204186575808495617n
@@ -34,19 +35,21 @@ export function isFieldElement(value: bigint): boolean {
 }
 
 /**
- * `keccak256(namespace || bytes) >> 8`, the same bytes the program hashes.
+ * `keccak256(namespace || parts...) >> 8`, the same bytes the program hashes.
  *
  * Semaphore's own proof package hashes a 32-byte big-endian number this way, which caps a scope
  * at 32 bytes. Hashing a namespaced string instead lets a market name or a DID be any length,
  * and keeps one namespace's values from ever colliding with another's. The shift by one byte is
  * what keeps the result below `BN254_R`.
  */
-export function fieldHash(namespace: string, value: string | Uint8Array): bigint {
-  const ns = new TextEncoder().encode(namespace)
-  const v = typeof value === 'string' ? new TextEncoder().encode(value) : value
-  const input = new Uint8Array(ns.length + v.length)
-  input.set(ns)
-  input.set(v, ns.length)
+export function fieldHash(namespace: string, ...parts: (string | Uint8Array)[]): bigint {
+  const bytes = [namespace, ...parts].map((p) => (typeof p === 'string' ? new TextEncoder().encode(p) : p))
+  const input = new Uint8Array(bytes.reduce((n, b) => n + b.length, 0))
+  let at = 0
+  for (const b of bytes) {
+    input.set(b, at)
+    at += b.length
+  }
   return fromBytes32(keccak_256(input)) >> 8n
 }
 
@@ -55,7 +58,13 @@ export function scopeOf(market: string): bigint {
   return fieldHash(SCOPE_NS, market)
 }
 
-/** The proof's message: what binds a proof to one profile, so it cannot be replayed for another. */
-export function messageOf(did: string): bigint {
-  return fieldHash(MESSAGE_NS, did)
+/**
+ * The proof's message: what binds a proof to one profile, its wallet and its DID, so it cannot be
+ * replayed for another profile or landed by any wallet but the one that must sign it. The wallet's
+ * 32 bytes come first, then the DID.
+ */
+export function messageOf(wallet: PublicKey | Uint8Array, did: string): bigint {
+  const w = wallet instanceof Uint8Array ? wallet : wallet.toBytes()
+  if (w.length !== 32) throw new RangeError('a wallet is 32 bytes')
+  return fieldHash(MESSAGE_NS, w, did)
 }

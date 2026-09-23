@@ -5,7 +5,7 @@
 use forest_escrow_tests::*;
 use solana_address::Address;
 use solana_compute_budget_interface::ComputeBudgetInstruction;
-use solana_instruction::{AccountMeta, Instruction};
+use solana_instruction::Instruction;
 use solana_keypair::Keypair;
 use solana_message::Message;
 use solana_signer::Signer;
@@ -18,11 +18,12 @@ fn zero() -> Address {
     Address::default()
 }
 
-fn closed(events: &[Event]) -> (Outcome, u64, u64, u64, u64) {
-    let Some(Event::Closed { outcome, balance, to_seller, to_buyer, rent_lamports, .. }) =
-        events.iter().find(|e| e.name() == "Closed")
+/// The `Ended` event: outcome, balance, to the seller, to the buyer, rent returned.
+fn ended(events: &[Event]) -> (Outcome, u64, u64, u64, u64) {
+    let Some(Event::Ended { outcome, balance, to_seller, to_buyer, rent_lamports, .. }) =
+        events.iter().find(|e| e.name() == "Ended")
     else {
-        panic!("no Closed event in {events:?}")
+        panic!("no Ended event in {events:?}")
     };
     (*outcome, *balance, *to_seller, *to_buyer, *rent_lamports)
 }
@@ -31,10 +32,13 @@ fn names(events: &[Event]) -> Vec<&'static str> {
     events.iter().map(|e| e.name()).collect()
 }
 
-/// Both accounts gone, the rent payer whole again, the parties' balances as given.
+/// The deposit account gone, the escrow account still there as the receipt, holding what the
+/// parties were paid, and the parties' balances as given.
 fn assert_ended(h: &Harness, escrow: &Address, buyer_tokens: u64, seller_tokens: u64) {
-    assert!(!h.exists(escrow), "the escrow account must be closed");
     assert!(!h.exists(&vault_address(escrow, &h.mint)), "the deposit account must be closed");
+    let e = h.escrow(escrow);
+    assert_eq!(e.status, Status::Ended, "the escrow account stays, ended");
+    assert!(e.outcome.is_some() && e.ended_at != 0, "and says how and when");
     assert_eq!(h.balance(&h.buyer_tokens), buyer_tokens, "buyer's tokens");
     assert_eq!(h.balance(&h.seller_tokens), seller_tokens, "seller's tokens");
 }
@@ -67,7 +71,8 @@ fn create_writes_the_terms_and_makes_the_deposit_account() {
     assert_eq!(e.steps, t.steps);
     assert_eq!(e.created_at, T0);
     assert_eq!(e.funded_at, 0);
-    assert_eq!(e.status, Status::Open);
+    assert_eq!(e.status, Status::Open, "opened by the buyer: the seller has yet to accept");
+    assert_eq!((e.accepted_at, e.ended_at, e.outcome, e.to_seller, e.to_buyer), (0, 0, None, 0, 0));
 
     // The deposit account: a classic token account for the mint, owned by the escrow, empty.
     let vault = h.account(&e.vault);
@@ -105,12 +110,17 @@ fn money_arrives_by_plain_transfer_and_anyone_marks_it_funded() {
     let mut h = Harness::new();
     let t = h.terms(1);
     let (escrow, _) = h.create(&t).expect("create");
+    // Nobody can observe funding before the seller accepts.
+    let err = h.mark_funded(&escrow).expect_err("not accepted");
+    assert!(err.contains("NotAccepted"), "{err}");
+    h.accept(&escrow).expect("accept");
+    assert_eq!(h.escrow(&escrow).status, Status::Accepted);
 
     // Short by one base unit: not funded.
     h.fund(&escrow, AMOUNT - 1);
     let err = h.mark_funded(&escrow).expect_err("short");
     assert!(err.contains("NotFunded"), "{err}");
-    assert_eq!(h.escrow(&escrow).status, Status::Open);
+    assert_eq!(h.escrow(&escrow).status, Status::Accepted);
 
     // One more base unit, a day later. Nobody but the fee payer signs mark_funded.
     h.advance(DAY);
@@ -125,17 +135,22 @@ fn money_arrives_by_plain_transfer_and_anyone_marks_it_funded() {
     let err = h.mark_funded(&escrow).expect_err("twice");
     assert!(err.contains("AlreadyFunded"), "{err}");
 
-    // Money that arrived before the escrow did: create adopts the account and counts it funded.
+    // Money that arrived before the escrow did: create adopts the account, and the seller's
+    // acceptance is the observation that counts it funded.
     let t2 = h.terms(2);
     let escrow2 = escrow_address(&h.buyer.pubkey(), 2);
     let vault2 = vault_address(&escrow2, &h.mint);
     h.svm.set_account(vault2, spl_token_account(&h.mint, &escrow2, AMOUNT + 5)).unwrap();
     let (_, meta) = h.create(&t2).expect("create over an existing deposit account");
-    assert_eq!(names(&events(&meta.logs)), ["Created", "Funded"]);
+    assert_eq!(names(&events(&meta.logs)), ["Created"]);
+    assert_eq!(h.escrow(&escrow2).status, Status::Open, "held, but not accepted");
+    h.advance(DAY);
+    let meta = h.accept(&escrow2).expect("accept");
+    assert_eq!(names(&events(&meta.logs)), ["Accepted", "Funded"]);
     let e2 = h.escrow(&escrow2);
     assert_eq!(e2.status, Status::Funded);
-    assert_eq!(e2.funded_at, T0 + DAY);
-    println!("funded by two plain transfers; a pre-funded deposit account is adopted at create");
+    assert_eq!((e2.accepted_at, e2.funded_at), (T0 + 2 * DAY, T0 + 2 * DAY));
+    println!("funded by two plain transfers; a pre-funded deposit account is adopted at create and counted at acceptance");
 }
 
 #[test]
@@ -150,20 +165,25 @@ fn the_buyer_approves_all_or_a_split_and_the_excess_comes_back() {
     let buyer = h.buyer.insecure_clone();
     let meta = h.send(&[approve_ix(&s, buyer.pubkey(), 10_000)], &[&buyer]).expect("approve all");
     let ev = events(&meta.logs);
-    assert_eq!(names(&ev), ["Approved", "Closed"]);
+    assert_eq!(names(&ev), ["Approved", "Ended"]);
     assert_eq!(ev[0], Event::Approved { escrow, seller_bps: 10_000, to_seller: AMOUNT, to_buyer: 500_000 });
-    let (outcome, balance, to_seller, to_buyer, rent) = closed(&ev);
+    let (outcome, balance, to_seller, to_buyer, rent) = ended(&ev);
     assert_eq!((outcome, balance, to_seller, to_buyer), (Outcome::Approved, 1_500_000, AMOUNT, 500_000));
     assert_ended(&h, &escrow, BUYER_START - 1_500_000 + 500_000, AMOUNT);
     // The rent payer got both accounts' rent back. The same key paid the transaction fee, two
     // signatures at 5,000 lamports each, which is the only other thing that moved.
     assert_eq!(h.lamports(&h.payer.pubkey()), before + rent - 2 * 5_000, "rent back, one fee paid");
 
-    // A split: 70% to the seller, 30% and the excess back.
+    assert_eq!(h.escrow(&escrow).accepted_at, 0, "paid in full before the seller accepted: the receipt says so");
+
+    // A split: 70% to the seller, 30% and the excess back. A split needs the seller's acceptance.
     let t2 = h.terms(2);
     let (escrow2, _) = h.create(&t2).expect("create");
     let s2 = h.settle_accounts(&escrow2);
     h.fund(&escrow2, 1_500_000);
+    let err = h.send(&[approve_ix(&s2, buyer.pubkey(), 7_000)], &[&buyer]).expect_err("a split before acceptance");
+    assert!(err.contains("NotAccepted"), "{err}");
+    h.accept(&escrow2).expect("accept");
     let meta = h.send(&[approve_ix(&s2, buyer.pubkey(), 7_000)], &[&buyer]).expect("approve split");
     let ev = events(&meta.logs);
     assert_eq!(ev[0], Event::Approved { escrow: escrow2, seller_bps: 7_000, to_seller: 700_000, to_buyer: 800_000 });
@@ -172,10 +192,11 @@ fn the_buyer_approves_all_or_a_split_and_the_excess_comes_back() {
     // Zero to the seller is a split too.
     let t3 = h.terms(3);
     let (escrow3, _) = h.create(&t3).expect("create");
+    h.accept(&escrow3).expect("accept");
     let s3 = h.settle_accounts(&escrow3);
     h.fund(&escrow3, AMOUNT);
     let meta = h.send(&[approve_ix(&s3, buyer.pubkey(), 0)], &[&buyer]).expect("approve nothing");
-    assert_eq!(closed(&events(&meta.logs)).2, 0);
+    assert_eq!(ended(&events(&meta.logs)).2, 0);
     assert_ended(&h, &escrow3, 8_300_000, 1_700_000);
     println!("approve: all, 70/30 and 0/100, excess back each time, exact");
 }
@@ -195,7 +216,7 @@ fn silence_releases_to_the_seller_and_anyone_may_send_it() {
     h.set_time(T0 + 7 * DAY + 1);
     let meta = h.send(&[release_by_silence_ix(&s)], &[]).expect("one second past");
     let ev = events(&meta.logs);
-    assert_eq!(names(&ev), ["ReleasedBySilence", "Closed"]);
+    assert_eq!(names(&ev), ["ReleasedBySilence", "Ended"]);
     assert_eq!(
         ev[0],
         Event::ReleasedBySilence { escrow, clock_start: T0, silence_ended: T0 + 7 * DAY, to_seller: AMOUNT, to_buyer: 250_000 }
@@ -271,17 +292,21 @@ fn the_buyer_objects_and_then_both_agree() {
     // Both sign a 40/60 split.
     let meta = h.send(&[agree_ix(&s, buyer.pubkey(), seller.pubkey(), 4_000)], &[&buyer, &seller]).expect("agree");
     let ev = events(&meta.logs);
-    assert_eq!(names(&ev), ["Agreed", "Closed"]);
+    assert_eq!(names(&ev), ["Agreed", "Ended"]);
     assert_eq!(ev[0], Event::Agreed { escrow, seller_bps: 4_000, to_seller: 400_000, to_buyer: 600_000 });
-    assert_eq!(closed(&ev).0, Outcome::Agreed);
+    assert_eq!(ended(&ev).0, Outcome::Agreed);
     assert_ended(&h, &escrow, BUYER_START - AMOUNT + 600_000, 400_000);
 
     // Agreement needs no lock: a funded, unlocked escrow can be agreed too, and so can one whose
-    // funding was never marked.
+    // funding was never marked. It needs the seller's acceptance, like everything but a full
+    // approval or a withdrawal.
     let t2 = h.terms(2);
     let (escrow2, _) = h.create(&t2).expect("create");
     let s2 = h.settle_accounts(&escrow2);
     h.fund(&escrow2, AMOUNT);
+    let err = h.send(&[agree_ix(&s2, buyer.pubkey(), seller.pubkey(), 10_000)], &[&buyer, &seller]).expect_err("before acceptance");
+    assert!(err.contains("NotAccepted"), "{err}");
+    h.accept(&escrow2).expect("accept");
     h.send(&[agree_ix(&s2, buyer.pubkey(), seller.pubkey(), 10_000)], &[&buyer, &seller]).expect("agree unlocked");
     assert_ended(&h, &escrow2, BUYER_START - 2 * AMOUNT + 600_000, 1_400_000);
     println!("objected on day six, silence refused on day 400, agreed 40/60");
@@ -292,6 +317,7 @@ fn an_objection_is_also_the_first_observation_of_funding() {
     let mut h = Harness::new();
     let t = h.terms(1);
     let (escrow, _) = h.create(&t).expect("create");
+    h.accept(&escrow).expect("accept");
     let vault = vault_address(&escrow, &h.mint);
     let buyer = h.buyer.insecure_clone();
     h.fund(&escrow, AMOUNT);
@@ -320,7 +346,7 @@ fn the_arbiter_decides_from_funded_and_from_locked() {
         ev[0],
         Event::Arbitrated { escrow, arbiter: arbiter.pubkey(), seller_bps: 2_500, to_seller: 250_000, to_buyer: 750_000 }
     );
-    assert_eq!(closed(&ev).0, Outcome::Arbitrated);
+    assert_eq!(ended(&ev).0, Outcome::Arbitrated);
     assert_ended(&h, &escrow, BUYER_START - AMOUNT + 750_000, 250_000);
 
     let mut t2 = h.terms(2);
@@ -349,13 +375,13 @@ fn the_buyer_cancels_at_each_step_with_the_steps_refund() {
         let meta = h.send(&[cancel_buyer_ix(&s, buyer.pubkey())], &[&buyer]).expect("cancel");
         let ev = events(&meta.logs);
         let refund = share(AMOUNT, refund_bps);
-        assert_eq!(names(&ev), ["CancelledByBuyer", "Closed"]);
+        assert_eq!(names(&ev), ["CancelledByBuyer", "Ended"]);
         assert_eq!(
             ev[0],
             Event::CancelledByBuyer { escrow, step: step_index, refund_bps, to_buyer: refund + 1, to_seller: AMOUNT - refund }
         );
-        assert_eq!(closed(&ev).0, Outcome::CancelledByBuyer);
-        assert!(!h.exists(&escrow));
+        assert_eq!(ended(&ev).0, Outcome::CancelledByBuyer);
+        assert_eq!(h.escrow(&escrow).status, Status::Ended);
     }
     // Buyer paid 3 × 1.000001 and got back 1.000001 + 0.500001 + 0.500001.
     assert_eq!(h.balance(&h.buyer_tokens), BUYER_START - 3_000_003 + 2_000_003);
@@ -376,9 +402,9 @@ fn the_seller_cancels_from_funded_and_from_locked_and_the_buyer_gets_everything(
     h.set_time(T0 + 100 * DAY); // any time
     let meta = h.send(&[cancel_seller_ix(&s, seller.pubkey())], &[&seller]).expect("cancel_seller");
     let ev = events(&meta.logs);
-    assert_eq!(names(&ev), ["CancelledBySeller", "Closed"]);
+    assert_eq!(names(&ev), ["CancelledBySeller", "Ended"]);
     assert_eq!(ev[0], Event::CancelledBySeller { escrow, seller: seller.pubkey(), to_buyer: AMOUNT + 123 });
-    assert_eq!(closed(&ev).0, Outcome::CancelledBySeller);
+    assert_eq!(ended(&ev).0, Outcome::CancelledBySeller);
     assert_ended(&h, &escrow, BUYER_START, 0);
 
     let t2 = h.terms(2);
@@ -393,59 +419,93 @@ fn the_seller_cancels_from_funded_and_from_locked_and_the_buyer_gets_everything(
 }
 
 #[test]
-fn a_never_funded_escrow_is_closed_by_the_seller_any_time_or_the_buyer_after_the_last_deadline() {
+fn a_never_funded_escrow_is_closed_by_either_party_any_time_or_by_the_rent_payer_after_the_last_deadline() {
+    // A rent payer who is neither party: a sponsor.
     let mut h = Harness::new();
     let buyer = h.buyer.insecure_clone();
     let seller = h.seller.insecure_clone();
+    let sponsor = Keypair::new();
+    h.svm.airdrop(&sponsor.pubkey(), 1_000_000_000).unwrap();
+    let sponsor_start = h.lamports(&sponsor.pubkey());
+    let open = |h: &mut Harness, t: &Terms| -> (Address, SettleAccounts) {
+        let a = CreateAccounts { buyer: buyer.pubkey(), payer: sponsor.pubkey(), mint: h.mint };
+        h.send(&[create_ix(t, &a)], &[&buyer, &sponsor]).expect("create");
+        let escrow = escrow_address(&buyer.pubkey(), t.id);
+        let mut s = h.settle_accounts(&escrow);
+        s.rent_payer = sponsor.pubkey();
+        (escrow, s)
+    };
 
-    // Partly funded, closed by the seller at once: the part comes back, nothing is marked.
-    let t = h.terms(1);
-    let (escrow, _) = h.create(&t).expect("create");
-    let s = h.settle_accounts(&escrow);
+    // Partly funded, closed by the seller at once: the part comes back, both accounts close,
+    // both rents go back to the sponsor, and nothing is left at the address.
+    let t1 = h.terms(1);
+    let (escrow, s) = open(&mut h, &t1);
     h.fund(&escrow, 400_000);
-    let meta = h.send(&[close_ix(&s, seller.pubkey())], &[&seller]).expect("seller closes");
-    let ev = events(&meta.logs);
-    assert_eq!(names(&ev), ["Closed"]);
-    assert_eq!(closed(&ev), (Outcome::NeverFunded, 400_000, 0, 400_000, closed(&ev).4));
-    assert_ended(&h, &escrow, BUYER_START, 0);
+    let held = h.lamports(&escrow) + h.lamports(&s.vault);
+    let meta = h.send(&[close_unfunded_ix(&s, seller.pubkey())], &[&seller]).expect("seller closes");
+    assert_eq!(
+        events(&meta.logs),
+        [Event::Closed { escrow, closed_by: seller.pubkey(), to_buyer: 400_000, rent_payer: sponsor.pubkey(), rent_lamports: held }]
+    );
+    assert!(!h.exists(&escrow) && !h.exists(&s.vault), "never funded: no receipt, both accounts gone");
+    assert_eq!(h.balance(&h.buyer_tokens), BUYER_START);
+    assert_eq!(h.lamports(&sponsor.pubkey()), sponsor_start, "both rents back");
 
-    // The buyer waits for the last deadline, measured from creation when there is no service time.
-    let t2 = h.terms(2); // last step at three days
-    let (escrow2, _) = h.create(&t2).expect("create");
-    let s2 = h.settle_accounts(&escrow2);
+    // The buyer, at any time too, accepted or not.
+    let t2 = h.terms(2);
+    let (escrow2, s2) = open(&mut h, &t2);
+    h.send(&[accept_ix(escrow2, s2.vault, seller.pubkey())], &[&seller]).expect("accept");
+    h.send(&[close_unfunded_ix(&s2, buyer.pubkey())], &[&buyer]).expect("buyer closes at once");
+    assert!(!h.exists(&escrow2));
+
+    // The rent payer waits for the last deadline, measured from creation when there is no service
+    // time (the standard terms' last step is at three days).
+    let t3 = h.terms(3);
+    let (escrow3, s3) = open(&mut h, &t3);
     h.set_time(T0 + 3 * DAY);
-    let err = h.send(&[close_ix(&s2, buyer.pubkey())], &[&buyer]).expect_err("too soon");
+    let err = h.send(&[close_unfunded_ix(&s3, sponsor.pubkey())], &[&sponsor]).expect_err("too soon");
     assert!(err.contains("BeforeLastDeadline"), "{err}");
     h.set_time(T0 + 3 * DAY + 1);
-    h.send(&[close_ix(&s2, buyer.pubkey())], &[&buyer]).expect("buyer closes");
-    assert_ended(&h, &escrow2, BUYER_START, 0);
+    h.send(&[close_unfunded_ix(&s3, sponsor.pubkey())], &[&sponsor]).expect("the rent payer closes");
+    assert!(!h.exists(&escrow3));
 
     // With a service time, from that instead.
-    let mut t3 = h.terms(3);
-    t3.service_time = Some(T0 + 20 * DAY);
-    t3.steps = vec![step(-DAY, 10_000)];
+    let mut t4 = h.terms(4);
+    t4.service_time = Some(T0 + 20 * DAY);
+    t4.steps = vec![step(-DAY, 10_000)];
     h.set_time(T0);
-    let (escrow3, _) = h.create(&t3).expect("create");
-    let s3 = h.settle_accounts(&escrow3);
+    let (_, s4) = open(&mut h, &t4);
     h.set_time(T0 + 19 * DAY);
-    let err = h.send(&[close_ix(&s3, buyer.pubkey())], &[&buyer]).expect_err("too soon");
+    let err = h.send(&[close_unfunded_ix(&s4, sponsor.pubkey())], &[&sponsor]).expect_err("too soon");
     assert!(err.contains("BeforeLastDeadline"), "{err}");
     h.set_time(T0 + 19 * DAY + 1);
-    h.send(&[close_ix(&s3, buyer.pubkey())], &[&buyer]).expect("buyer closes");
+    h.send(&[close_unfunded_ix(&s4, sponsor.pubkey())], &[&sponsor]).expect("the rent payer closes");
 
-    // No steps: the buyer closes at once.
-    let mut t4 = h.terms(4);
-    t4.steps = vec![];
-    h.set_time(T0);
-    let (escrow4, _) = h.create(&t4).expect("create");
-    let s4 = h.settle_accounts(&escrow4);
-    h.send(&[close_ix(&s4, buyer.pubkey())], &[&buyer]).expect("buyer closes at once");
-    assert!(!h.exists(&escrow4));
-    println!("never funded: seller at once with the part back; buyer after day 3, after the service time's deadline, or at once with no steps");
+    // No steps: the rent payer closes at once.
+    let mut t5 = h.terms(5);
+    t5.steps = vec![];
+    let (escrow5, s5) = open(&mut h, &t5);
+    h.send(&[close_unfunded_ix(&s5, sponsor.pubkey())], &[&sponsor]).expect("rent payer at once");
+    assert!(!h.exists(&escrow5));
+
+    // Nobody else, ever; and nobody at all once it holds the amount.
+    let t6 = h.terms(6);
+    let (escrow6, s6) = open(&mut h, &t6);
+    let stranger = Keypair::new();
+    h.svm.airdrop(&stranger.pubkey(), 1_000_000_000).unwrap();
+    h.set_time(T0 + 400 * DAY);
+    let err = h.send(&[close_unfunded_ix(&s6, stranger.pubkey())], &[&stranger]).expect_err("a stranger");
+    assert!(err.contains("NotACloser"), "{err}");
+    h.fund(&escrow6, AMOUNT);
+    for (who, key) in [("buyer", &buyer), ("seller", &seller), ("rent payer", &sponsor)] {
+        let err = h.send(&[close_unfunded_ix(&s6, key.pubkey())], &[key]).expect_err("funded");
+        assert!(err.contains("StillFunded"), "{who}: {err}");
+    }
+    println!("never funded: either party at once, the rent payer after the last deadline or at once with no steps; both rents back, no receipt");
 }
 
 #[test]
-fn rent_returns_to_the_rent_payer_on_every_ending() {
+fn rent_returns_to_the_rent_payer_on_every_ending_and_the_escrow_account_stays() {
     // A rent payer who is not the fee payer, so its balance moves only by rent.
     let mut h = Harness::new();
     let rent_payer = Keypair::new();
@@ -455,16 +515,18 @@ fn rent_returns_to_the_rent_payer_on_every_ending() {
     let seller = h.seller.insecure_clone();
     let arbiter = h.arbiter.insecure_clone();
 
-    let endings: [(&str, u64); 7] = [
-        ("approve", 1),
-        ("release_by_silence", 2),
-        ("agree", 3),
-        ("arbitrate", 4),
-        ("cancel_buyer", 5),
-        ("cancel_seller", 6),
-        ("close", 7),
+    let endings: [(&str, u64, Outcome); 8] = [
+        ("approve", 1, Outcome::Approved),
+        ("release_by_silence", 2, Outcome::ReleasedBySilence),
+        ("agree", 3, Outcome::Agreed),
+        ("arbitrate", 4, Outcome::Arbitrated),
+        ("cancel_buyer", 5, Outcome::CancelledByBuyer),
+        ("cancel_seller", 6, Outcome::CancelledBySeller),
+        ("withdraw", 7, Outcome::Withdrawn),
+        ("approve before acceptance", 8, Outcome::Approved),
     ];
-    for (name, id) in endings {
+    let mut kept = 0;
+    for (name, id, outcome) in endings {
         h.set_time(T0);
         let mut t = h.terms(id);
         t.arbiter = Some(arbiter.pubkey());
@@ -472,17 +534,21 @@ fn rent_returns_to_the_rent_payer_on_every_ending() {
         h.send(&[create_ix(&t, &a)], &[&buyer, &rent_payer]).expect("create");
         let escrow = escrow_address(&buyer.pubkey(), id);
         let vault = vault_address(&escrow, &h.mint);
-        let held = h.lamports(&escrow) + h.lamports(&vault);
-        assert_eq!(h.lamports(&rent_payer.pubkey()), start - held, "{name}: the rent payer paid both rents");
-        assert!(held > 0);
+        let escrow_rent = h.lamports(&escrow);
+        let vault_rent = h.lamports(&vault);
+        assert_eq!(h.lamports(&rent_payer.pubkey()), start - kept - escrow_rent - vault_rent, "{name}: the rent payer paid both rents");
         let mut s = h.settle_accounts(&escrow);
         s.rent_payer = rent_payer.pubkey();
-        if name != "close" {
-            h.fund(&escrow, AMOUNT);
+        let unaccepted = name == "withdraw" || name == "approve before acceptance";
+        if !unaccepted {
+            h.accept(&escrow).expect("accept");
+        }
+        h.fund(&escrow, AMOUNT);
+        if !unaccepted {
             h.mark_funded(&escrow).expect("mark_funded");
         }
         let ix = match name {
-            "approve" => approve_ix(&s, buyer.pubkey(), 10_000),
+            "approve" | "approve before acceptance" => approve_ix(&s, buyer.pubkey(), 10_000),
             "release_by_silence" => {
                 h.set_time(T0 + 7 * DAY + 1);
                 release_by_silence_ix(&s)
@@ -491,29 +557,178 @@ fn rent_returns_to_the_rent_payer_on_every_ending() {
             "arbitrate" => arbitrate_ix(&s, arbiter.pubkey(), 5_000),
             "cancel_buyer" => cancel_buyer_ix(&s, buyer.pubkey()),
             "cancel_seller" => cancel_seller_ix(&s, seller.pubkey()),
-            "close" => close_ix(&s, seller.pubkey()),
+            "withdraw" => withdraw_ix(&s, buyer.pubkey()),
             _ => unreachable!(),
         };
         let signers: Vec<&Keypair> = match name {
-            "approve" | "cancel_buyer" => vec![&buyer],
+            "approve" | "approve before acceptance" | "cancel_buyer" | "withdraw" => vec![&buyer],
             "release_by_silence" => vec![],
             "agree" => vec![&buyer, &seller],
             "arbitrate" => vec![&arbiter],
-            "cancel_seller" | "close" => vec![&seller],
+            "cancel_seller" => vec![&seller],
             _ => unreachable!(),
         };
         let meta = h.send(&[ix], &signers).unwrap_or_else(|e| panic!("{name}: {e}"));
-        assert_eq!(closed(&events(&meta.logs)).4, held, "{name}: the Closed event says how much rent went back");
-        assert_eq!(h.lamports(&rent_payer.pubkey()), start, "{name}: the rent payer is whole again");
-        assert!(!h.exists(&escrow) && !h.exists(&vault), "{name}: both accounts closed");
+        let ev = events(&meta.logs);
+        assert_eq!(ended(&ev).0, outcome, "{name}");
+        assert_eq!(ended(&ev).4, vault_rent, "{name}: the Ended event says how much rent went back: the deposit account's");
+        kept += escrow_rent;
+        assert_eq!(h.lamports(&rent_payer.pubkey()), start - kept, "{name}: the deposit account's rent is back; the receipt keeps its own");
+        assert!(!h.exists(&vault), "{name}: the deposit account is closed");
+        assert_eq!(h.lamports(&escrow), escrow_rent, "{name}: the escrow account is not");
+        let e = h.escrow(&escrow);
+        assert_eq!((e.status, e.outcome, e.ended_at), (Status::Ended, Some(outcome), h.now()), "{name}: the receipt");
+        assert_eq!(e.to_seller + e.to_buyer, AMOUNT, "{name}: the receipt's amounts add up");
+        assert_eq!(e.accepted_at != 0, !unaccepted, "{name}: the receipt says whether the seller accepted");
     }
-    println!("seven endings, {} lamports of rent out and back each time", {
-        let t = h.terms(99);
-        let a = CreateAccounts { buyer: buyer.pubkey(), payer: rent_payer.pubkey(), mint: h.mint };
-        h.send(&[create_ix(&t, &a)], &[&buyer, &rent_payer]).expect("create");
-        let e = escrow_address(&buyer.pubkey(), 99);
-        h.lamports(&e) + h.lamports(&vault_address(&e, &h.mint))
-    });
+    println!("eight endings: the deposit account's rent back each time, {} lamports kept in each receipt", kept / 8);
+}
+
+// ---------------------------------------------------------------------------------------------
+// The seller's acceptance
+// ---------------------------------------------------------------------------------------------
+
+#[test]
+fn before_acceptance_only_a_full_approval_or_the_buyers_withdrawal_ends_a_funded_escrow() {
+    let mut h = Harness::new();
+    let buyer = h.buyer.insecure_clone();
+    let seller = h.seller.insecure_clone();
+    let arbiter = h.arbiter.insecure_clone();
+    let mut t = h.terms(1);
+    t.arbiter = Some(arbiter.pubkey());
+    let (escrow, _) = h.create(&t).expect("create");
+    let s = h.settle_accounts(&escrow);
+    let vault = vault_address(&escrow, &h.mint);
+    h.fund(&escrow, AMOUNT + 250_000);
+
+    // A month later, with the money in, nothing that needs the seller's consent runs.
+    h.set_time(T0 + 30 * DAY);
+    let cases: Vec<(&str, Instruction, Vec<&Keypair>)> = vec![
+        ("mark_funded", mark_funded_ix(escrow, vault), vec![]),
+        ("object", object_ix(escrow, vault, buyer.pubkey()), vec![&buyer]),
+        ("release_by_silence", release_by_silence_ix(&s), vec![]),
+        ("agree", agree_ix(&s, buyer.pubkey(), seller.pubkey(), 5_000), vec![&buyer, &seller]),
+        ("arbitrate", arbitrate_ix(&s, arbiter.pubkey(), 5_000), vec![&arbiter]),
+        ("cancel_buyer", cancel_buyer_ix(&s, buyer.pubkey()), vec![&buyer]),
+        ("cancel_seller", cancel_seller_ix(&s, seller.pubkey()), vec![&seller]),
+        ("approve a split", approve_ix(&s, buyer.pubkey(), 9_999), vec![&buyer]),
+    ];
+    for (what, ix, signers) in cases {
+        let err = h.send(&[ix], &signers).err().unwrap_or_else(|| panic!("{what}: must be refused"));
+        assert!(err.contains("NotAccepted"), "{what}: expected NotAccepted, got\n{err}");
+    }
+    assert_eq!(h.escrow(&escrow).status, Status::Open);
+
+    // The buyer takes everything back, the excess included. The receipt says nobody dealt.
+    let meta = h.send(&[withdraw_ix(&s, buyer.pubkey())], &[&buyer]).expect("withdraw");
+    let ev = events(&meta.logs);
+    assert_eq!(names(&ev), ["Withdrawn", "Ended"]);
+    assert_eq!(ev[0], Event::Withdrawn { escrow, to_buyer: AMOUNT + 250_000 });
+    let (outcome, balance, to_seller, to_buyer, _) = ended(&ev);
+    assert_eq!((outcome, balance, to_seller, to_buyer), (Outcome::Withdrawn, AMOUNT + 250_000, 0, AMOUNT + 250_000));
+    let Event::Ended { accepted_at, .. } = ev[1] else { unreachable!() };
+    assert_eq!(accepted_at, 0);
+    assert_ended(&h, &escrow, BUYER_START, 0);
+    assert_eq!(h.escrow(&escrow).outcome, Some(Outcome::Withdrawn));
+
+    // Once the seller has accepted, the buyer's way out is a cancellation step, not a withdrawal;
+    // and acceptance happens once.
+    let escrow2 = h.funded(&h.terms(2));
+    let s2 = h.settle_accounts(&escrow2);
+    let err = h.send(&[withdraw_ix(&s2, buyer.pubkey())], &[&buyer]).expect_err("withdraw after acceptance");
+    assert!(err.contains("AlreadyAccepted"), "{err}");
+    let err = h.accept(&escrow2).expect_err("accept twice");
+    assert!(err.contains("AlreadyAccepted"), "{err}");
+    println!("before acceptance: eight instructions refused a month in; the buyer withdrew everything; after acceptance, no withdrawal");
+}
+
+#[test]
+fn the_clock_never_starts_before_the_seller_accepts() {
+    let mut h = Harness::new();
+    let buyer = h.buyer.insecure_clone();
+
+    // Funded at once, accepted ten days later, after a seven-day silence would have ended had it
+    // counted from funding. It counts from the acceptance: the seller cannot accept and release in
+    // one breath, and the buyer has the whole silence period after acceptance to object.
+    let seller = h.seller.insecure_clone();
+    let t = h.terms(1);
+    let (escrow, _) = h.create(&t).expect("create");
+    let s = h.settle_accounts(&escrow);
+    h.fund(&escrow, AMOUNT);
+    h.set_time(T0 + 10 * DAY);
+    let err = h
+        .send(&[accept_ix(escrow, s.vault, seller.pubkey()), release_by_silence_ix(&s)], &[&seller])
+        .expect_err("accept and release together");
+    assert!(err.contains("SilenceNotOver"), "{err}");
+    let meta = h.accept(&escrow).expect("accept");
+    assert_eq!(names(&events(&meta.logs)), ["Accepted", "Funded"], "the acceptance observes the funding");
+    let e = h.escrow(&escrow);
+    assert_eq!((e.accepted_at, e.funded_at, e.status), (T0 + 10 * DAY, T0 + 10 * DAY, Status::Funded));
+    let err = h.send(&[release_by_silence_ix(&s)], &[]).expect_err("silence from acceptance");
+    assert!(err.contains("SilenceNotOver"), "{err}");
+    // The steps count from the acceptance too: an hour in, step 0 (full refund) is in force.
+    h.set_time(T0 + 10 * DAY + 3_600);
+    let meta = h.send(&[cancel_buyer_ix(&s, buyer.pubkey())], &[&buyer]).expect("cancel");
+    let (outcome, _, to_seller, to_buyer, _) = ended(&events(&meta.logs));
+    assert_eq!((outcome, to_seller, to_buyer), (Outcome::CancelledByBuyer, 0, AMOUNT));
+
+    // A service time the seller accepts after: the clock starts at the acceptance, not before it.
+    let mut t2 = h.terms(2);
+    t2.service_time = Some(T0 + DAY);
+    h.set_time(T0);
+    let (escrow2, _) = h.create(&t2).expect("create");
+    let s2 = h.settle_accounts(&escrow2);
+    h.fund(&escrow2, AMOUNT);
+    h.set_time(T0 + 20 * DAY);
+    h.accept(&escrow2).expect("accept, nineteen days after the service time");
+    let err = h.send(&[release_by_silence_ix(&s2)], &[]).expect_err("silence from acceptance");
+    assert!(err.contains("SilenceNotOver"), "{err}");
+    h.set_time(T0 + 27 * DAY);
+    let vault2 = vault_address(&escrow2, &h.mint);
+    h.send(&[object_ix(escrow2, vault2, buyer.pubkey())], &[&buyer]).expect("the buyer can still object on day seven after acceptance");
+
+    // A service time ahead of the acceptance is the clock start, as designed.
+    let mut t3 = h.terms(3);
+    t3.service_time = Some(T0 + 40 * DAY);
+    let escrow3 = h.funded(&t3);
+    let s3 = h.settle_accounts(&escrow3);
+    h.set_time(T0 + 47 * DAY + 1);
+    h.send(&[release_by_silence_ix(&s3)], &[]).expect("seven days after the service time");
+    println!("funded day 0, accepted day 10: silence and steps from day 10; a past service time counts from acceptance; a future one as designed");
+}
+
+#[test]
+fn an_escrow_the_seller_opens_is_an_invoice_accepted_from_creation() {
+    let mut h = Harness::new();
+    let buyer = h.buyer.insecure_clone();
+    let t = h.terms(1);
+    let (escrow, meta) = h.invoice(&t).expect("invoice");
+    assert_eq!(escrow, escrow_address(&buyer.pubkey(), 1), "the same address a buyer's escrow would have");
+    let ev = events(&meta.logs);
+    assert_eq!(names(&ev), ["Created", "Accepted"]);
+    assert_eq!(ev[1], Event::Accepted { escrow, seller: h.seller.pubkey(), accepted_at: T0 });
+    let e = h.escrow(&escrow);
+    assert_eq!((e.status, e.accepted_at, e.created_at, e.buyer), (Status::Accepted, T0, T0, buyer.pubkey()));
+
+    // The buyer pays by plain transfer, anyone marks it, and the deal runs: a split needs nothing more.
+    h.advance(DAY);
+    h.fund(&escrow, AMOUNT);
+    h.mark_funded(&escrow).expect("mark_funded");
+    assert_eq!(h.escrow(&escrow).funded_at, T0 + DAY, "the clock starts at funding");
+    let s = h.settle_accounts(&escrow);
+    let err = h.send(&[withdraw_ix(&s, buyer.pubkey())], &[&buyer]).expect_err("no withdrawal from an invoice");
+    assert!(err.contains("AlreadyAccepted"), "{err}");
+    h.send(&[approve_ix(&s, buyer.pubkey(), 6_000)], &[&buyer]).expect("a split");
+    assert_ended(&h, &escrow, BUYER_START - 600_000, 600_000);
+
+    // An invoice over a deposit account that already holds the amount is funded from creation.
+    let t2 = h.terms(2);
+    let escrow2 = escrow_address(&buyer.pubkey(), 2);
+    h.svm.set_account(vault_address(&escrow2, &h.mint), spl_token_account(&h.mint, &escrow2, AMOUNT)).unwrap();
+    let (_, meta) = h.invoice(&t2).expect("invoice over a funded deposit account");
+    assert_eq!(names(&events(&meta.logs)), ["Created", "Accepted", "Funded"]);
+    assert_eq!(h.escrow(&escrow2).status, Status::Funded);
+    println!("an invoice: Created and Accepted in one transaction, then paid and split like any accepted deal");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -540,11 +755,26 @@ fn the_wrong_signer_is_refused_for_every_instruction() {
     let stranger = Keypair::new();
     h.svm.airdrop(&stranger.pubkey(), 1_000_000_000).unwrap();
 
-    // create: the buyer must sign. A stranger cannot open an escrow in someone's name.
+    // create: the buyer or the seller must sign. A stranger cannot open an escrow in either's name.
     let t = h.terms(1);
     let a = h.create_accounts();
     let err = h.send(&[unsigned(create_ix(&t, &a), &buyer.pubkey())], &[]).expect_err("create unsigned");
     assert!(err.contains("AccountNotSigner"), "{err}");
+    let err = h.send(&[create_ix_by(&t, &a, stranger.pubkey())], &[&stranger]).expect_err("a stranger creates");
+    assert!(err.contains("NotAParty"), "{err}");
+    let err = h.send(&[create_ix_by(&t, &a, arbiter.pubkey())], &[&arbiter]).expect_err("the arbiter creates");
+    assert!(err.contains("NotAParty"), "{err}");
+
+    // accept: the seller and nobody else.
+    let (open, _) = h.create(&h.terms(9)).expect("create");
+    let open_vault = vault_address(&open, &h.mint);
+    for (who, key) in [("the buyer", &buyer), ("the arbiter", &arbiter), ("a stranger", &stranger)] {
+        let err = h.send(&[accept_ix(open, open_vault, key.pubkey())], &[key]).expect_err("accept");
+        assert!(err.contains("ConstraintHasOne"), "accept by {who}: {err}");
+    }
+    let err = h.send(&[unsigned(accept_ix(open, open_vault, seller.pubkey()), &seller.pubkey())], &[]).expect_err("unsigned");
+    assert!(err.contains("AccountNotSigner"), "{err}");
+    assert_eq!(h.escrow(&open).accepted_at, 0);
 
     let mut t = h.terms(1);
     t.arbiter = Some(arbiter.pubkey());
@@ -565,7 +795,8 @@ fn the_wrong_signer_is_refused_for_every_instruction() {
         ("cancel_buyer by the seller", cancel_buyer_ix(&s, seller.pubkey()), vec![&seller], "NotTheBuyer"),
         ("cancel_seller by the buyer", cancel_seller_ix(&s, buyer.pubkey()), vec![&buyer], "NotTheSeller"),
         ("cancel_seller by the arbiter", cancel_seller_ix(&s, arbiter.pubkey()), vec![&arbiter], "NotTheSeller"),
-        ("close by a stranger", close_ix(&s, stranger.pubkey()), vec![&stranger], "StillFunded"),
+        ("close_unfunded by a stranger", close_unfunded_ix(&s, stranger.pubkey()), vec![&stranger], "StillFunded"),
+        ("withdraw by the seller", withdraw_ix(&s, seller.pubkey()), vec![&seller], "ConstraintHasOne"),
         ("approve with the buyer not signing", unsigned(approve_ix(&s, buyer.pubkey(), 10_000), &buyer.pubkey()), vec![], "AccountNotSigner"),
     ];
     for (what, ix, signers, want) in cases {
@@ -573,12 +804,12 @@ fn the_wrong_signer_is_refused_for_every_instruction() {
         assert!(err.contains(want), "{what}: expected {want}, got\n{err}");
     }
 
-    // close by a stranger on a never-funded escrow: the rule after the funding check.
+    // close_unfunded by a stranger on a never-funded escrow: the rule after the funding check.
     let t2 = h.terms(2);
     let (escrow2, _) = h.create(&t2).expect("create");
     let s2 = h.settle_accounts(&escrow2);
-    let err = h.send(&[close_ix(&s2, stranger.pubkey())], &[&stranger]).expect_err("close by a stranger");
-    assert!(err.contains("NotAParty"), "{err}");
+    let err = h.send(&[close_unfunded_ix(&s2, stranger.pubkey())], &[&stranger]).expect_err("close by a stranger");
+    assert!(err.contains("NotACloser"), "{err}");
 
     // Payouts go only to accounts the parties own: a stranger's token account as the seller's.
     let strangers_tokens = Address::new_unique();
@@ -610,6 +841,12 @@ fn an_unfunded_escrow_cannot_be_approved_agreed_arbitrated_cancelled_or_objected
     let s = h.settle_accounts(&escrow);
     let vault = vault_address(&escrow, &h.mint);
     h.fund(&escrow, AMOUNT - 1);
+    // Before acceptance, the buyer's two exits need the amount too.
+    let err = h.send(&[approve_ix(&s, buyer.pubkey(), 10_000)], &[&buyer]).expect_err("approve short");
+    assert!(err.contains("NotFunded"), "{err}");
+    let err = h.send(&[withdraw_ix(&s, buyer.pubkey())], &[&buyer]).expect_err("withdraw short");
+    assert!(err.contains("NotFunded"), "{err}");
+    h.accept(&escrow).expect("accept");
 
     let cases: Vec<(&str, Instruction, Vec<&Keypair>)> = vec![
         ("approve", approve_ix(&s, buyer.pubkey(), 10_000), vec![&buyer]),
@@ -625,7 +862,7 @@ fn an_unfunded_escrow_cannot_be_approved_agreed_arbitrated_cancelled_or_objected
         assert!(err.contains("NotFunded"), "{what}: expected NotFunded, got\n{err}");
     }
     assert_eq!(h.vault_balance(&escrow), AMOUNT - 1);
-    println!("one base unit short: seven instructions refused, the money still in the deposit account");
+    println!("one base unit short: nine instructions refused, before and after acceptance, the money still in the deposit account");
 }
 
 #[test]
@@ -633,9 +870,10 @@ fn silence_is_refused_too_early_while_locked_and_before_the_clock_starts() {
     let mut h = Harness::new();
     let buyer = h.buyer.insecure_clone();
 
-    // Funded but never observed, no service time: no clock to count from.
+    // Accepted, funded but never observed, no service time: no clock to count from.
     let t = h.terms(1);
     let (escrow, _) = h.create(&t).expect("create");
+    h.accept(&escrow).expect("accept");
     let s = h.settle_accounts(&escrow);
     h.fund(&escrow, AMOUNT);
     h.set_time(T0 + 30 * DAY);
@@ -690,38 +928,71 @@ fn the_buyer_cannot_cancel_after_the_last_deadline_or_while_locked_and_cannot_ob
     assert!(err.contains("Locked"), "{err}");
     let err = h.send(&[object_ix(escrow2, vault2, buyer.pubkey())], &[&buyer]).expect_err("twice");
     assert!(err.contains("Locked"), "{err}");
-    let err = h.send(&[close_ix(&s2, buyer.pubkey())], &[&buyer]).expect_err("funded");
+    let err = h.send(&[close_unfunded_ix(&s2, buyer.pubkey())], &[&buyer]).expect_err("funded");
     assert!(err.contains("StillFunded"), "{err}");
     println!("cancel after day 3, object after day 7, and cancel, approve, object and close under a lock: all refused");
 }
 
 #[test]
-fn nothing_can_be_done_to_an_escrow_after_it_ends() {
+fn an_ended_escrow_is_a_permanent_receipt_and_accepts_nothing() {
     let mut h = Harness::new();
     let buyer = h.buyer.insecure_clone();
     let seller = h.seller.insecure_clone();
-    let t = h.terms(1);
+    let arbiter = h.arbiter.insecure_clone();
+    let mut t = h.terms(1);
+    t.arbiter = Some(arbiter.pubkey());
     let escrow = h.funded(&t);
     let s = h.settle_accounts(&escrow);
     let vault = vault_address(&escrow, &h.mint);
-    h.send(&[approve_ix(&s, buyer.pubkey(), 10_000)], &[&buyer]).expect("approve");
+    h.advance(DAY / 2);
+    h.send(&[approve_ix(&s, buyer.pubkey(), 7_000)], &[&buyer]).expect("approve");
 
+    // The receipt: everything the deal was, and how it ended, at an address that stays.
+    let receipt = h.account(&escrow);
+    let e = read_escrow(&receipt.data);
+    assert_eq!((e.status, e.outcome), (Status::Ended, Some(Outcome::Approved)));
+    assert_eq!((e.accepted_at, e.funded_at, e.ended_at), (T0, T0, T0 + DAY / 2));
+    assert_eq!((e.amount, e.to_seller, e.to_buyer), (AMOUNT, 700_000, 300_000));
+    assert_eq!((e.buyer, e.seller, e.arbiter, e.mint), (buyer.pubkey(), seller.pubkey(), arbiter.pubkey(), h.mint));
+    assert!(!h.exists(&vault));
+
+    // Someone pays the same address again: a wallet makes the deposit account again and sends.
+    // With the deposit account back, every instruction still finds the escrow ended.
+    h.svm.set_account(vault, spl_token_account(&h.mint, &escrow, 2 * AMOUNT)).unwrap();
     let cases: Vec<(&str, Instruction, Vec<&Keypair>)> = vec![
-        ("cancel_seller after release", cancel_seller_ix(&s, seller.pubkey()), vec![&seller]),
-        ("approve again", approve_ix(&s, buyer.pubkey(), 10_000), vec![&buyer]),
-        ("object", object_ix(escrow, vault, buyer.pubkey()), vec![&buyer]),
+        ("accept", accept_ix(escrow, vault, seller.pubkey()), vec![&seller]),
         ("mark_funded", mark_funded_ix(escrow, vault), vec![]),
-        ("close", close_ix(&s, seller.pubkey()), vec![&seller]),
+        ("object", object_ix(escrow, vault, buyer.pubkey()), vec![&buyer]),
+        ("approve again", approve_ix(&s, buyer.pubkey(), 10_000), vec![&buyer]),
+        ("release_by_silence", release_by_silence_ix(&s), vec![]),
+        ("agree", agree_ix(&s, buyer.pubkey(), seller.pubkey(), 5_000), vec![&buyer, &seller]),
+        ("arbitrate", arbitrate_ix(&s, arbiter.pubkey(), 5_000), vec![&arbiter]),
+        ("cancel_buyer", cancel_buyer_ix(&s, buyer.pubkey()), vec![&buyer]),
+        ("cancel_seller after release", cancel_seller_ix(&s, seller.pubkey()), vec![&seller]),
+        ("withdraw", withdraw_ix(&s, buyer.pubkey()), vec![&buyer]),
     ];
+    h.set_time(T0 + 30 * DAY);
     for (what, ix, signers) in cases {
         let err = h.send(&[ix], &signers).err().unwrap_or_else(|| panic!("{what}: must be refused"));
-        assert!(
-            err.contains("AccountNotInitialized") || err.contains("AccountOwnedByWrongProgram"),
-            "{what}: the account is gone, got\n{err}"
-        );
+        assert!(err.contains("Ended"), "{what}: the escrow has ended, got\n{err}");
     }
-    assert_eq!(h.balance(&h.seller_tokens), AMOUNT);
-    println!("after approve the accounts are gone: five instructions find nothing there");
+    // close_unfunded, with less than the amount there: it would close the receipt, and must not.
+    h.svm.set_account(vault, spl_token_account(&h.mint, &escrow, 1)).unwrap();
+    for (who, key) in [("buyer", &buyer), ("seller", &seller)] {
+        let err = h.send(&[close_unfunded_ix(&s, key.pubkey())], &[key]).expect_err("close the receipt");
+        assert!(err.contains("Ended"), "{who}: {err}");
+    }
+    // And the address never opens again, whoever tries and whatever the terms.
+    let mut t2 = h.terms(1);
+    t2.seller = Keypair::new().pubkey();
+    let err = h.create(&t2).expect_err("reopen as buyer");
+    assert!(err.contains("already in use"), "{err}");
+    let err = h.invoice(&t).expect_err("reopen as seller");
+    assert!(err.contains("already in use"), "{err}");
+    assert_eq!(h.account(&escrow).data, receipt.data, "the receipt's bytes never change");
+    assert_eq!(h.account(&escrow).lamports, receipt.lamports);
+    assert_eq!(h.balance(&h.seller_tokens), 700_000);
+    println!("after approve the receipt stays: eleven instructions and two reopenings refused, its bytes unchanged");
 }
 
 #[test]
@@ -836,6 +1107,7 @@ fn measure(h: &mut Harness, what: &str, ix: Instruction, signers: &[&Keypair]) -
 fn what_each_step_costs() {
     let mut h = Harness::new();
     let buyer = h.buyer.insecure_clone();
+    let seller = h.seller.insecure_clone();
     println!("\n== one escrow, a legacy transaction with a compute-budget instruction ==");
 
     // create, with the fullest terms: an arbiter, a service time and four steps.
@@ -846,7 +1118,9 @@ fn what_each_step_costs() {
     let a = h.create_accounts();
     measure(&mut h, "create", create_ix(&t, &a), &[&buyer]);
     let escrow = escrow_address(&buyer.pubkey(), 1);
+    let vault = vault_address(&escrow, &h.mint);
     h.fund(&escrow, AMOUNT + 1);
+    measure(&mut h, "accept", accept_ix(escrow, vault, seller.pubkey()), &[&seller]);
     let s = h.settle_accounts(&escrow);
     measure(&mut h, "approve (split)", approve_ix(&s, buyer.pubkey(), 7_000), &[&buyer]);
 
@@ -862,5 +1136,14 @@ fn what_each_step_costs() {
     let s3 = h.settle_accounts(&escrow3);
     h.set_time(T0 + 2 * DAY);
     measure(&mut h, "cancel_buyer", cancel_buyer_ix(&s3, buyer.pubkey()), &[&buyer]);
+
+    let (escrow4, _) = h.create(&h.terms(4)).expect("create");
+    h.fund(&escrow4, AMOUNT);
+    let s4 = h.settle_accounts(&escrow4);
+    measure(&mut h, "withdraw", withdraw_ix(&s4, buyer.pubkey()), &[&buyer]);
+
+    let (escrow5, _) = h.create(&h.terms(5)).expect("create");
+    let s5 = h.settle_accounts(&escrow5);
+    measure(&mut h, "close_unfunded", close_unfunded_ix(&s5, seller.pubkey()), &[&seller]);
     println!();
 }

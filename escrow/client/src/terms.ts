@@ -8,7 +8,17 @@
 
 import type { PublicKey } from '@solana/web3.js'
 
-import { BPS, MAX_STEPS, SECONDS_PER_DAY, randomId, share, type EscrowAccount, type Step, type Terms } from './program.ts'
+import {
+  BPS,
+  MAX_STEPS,
+  SECONDS_PER_DAY,
+  checkTerms,
+  randomId,
+  share,
+  type EscrowAccount,
+  type Step,
+  type Terms,
+} from './program.ts'
 
 /** A cancellation step as a market file writes it: hours from the clock start, and a percent. */
 export type MarketStep = { hours: number; refundPercent: number }
@@ -37,6 +47,7 @@ export type Choices = {
   id?: bigint
 }
 
+/** A Date, or unix seconds. `checkTerms` refuses a number that is really milliseconds. */
 export function toUnix(t: Date | bigint | number): bigint {
   if (t instanceof Date) return BigInt(Math.floor(t.getTime() / 1000))
   if (typeof t === 'number') return BigInt(Math.floor(t))
@@ -55,16 +66,17 @@ export function stepFromMarket(s: MarketStep): Step {
 /**
  * The terms for one deal: the market's defaults, the parties' choices on top. Throws when the
  * choices break the market's rules (an arbiter where none is allowed, a token the market does
- * not accept) or the program's (see `validateTerms`).
+ * not accept), or make no sense (`checkTerms`: a time in milliseconds or already past, a refund
+ * step that outlasts silence). The program's own rules are checked when the instruction is built.
  */
-export function termsFor(market: MarketDefaults, choices: Choices): Terms {
+export function termsFor(market: MarketDefaults, choices: Choices, now?: bigint): Terms {
   const accepted = market.tokens.some((t) => t.chain === 'solana' && t.mint === choices.mint.toBase58())
   if (!accepted) throw new Error(`the market does not accept mint ${choices.mint.toBase58()}`)
   const arbiter = choices.arbiter ?? null
   if (arbiter && !market.arbiterAllowed) throw new Error('the market does not allow an arbiter')
   const steps = choices.steps ?? (market.cancellationSteps ?? []).map(stepFromMarket)
   if (steps.length > MAX_STEPS) throw new Error(`at most ${MAX_STEPS} cancellation steps`)
-  return {
+  const terms: Terms = {
     id: choices.id ?? randomId(),
     seller: choices.seller,
     arbiter,
@@ -73,13 +85,19 @@ export function termsFor(market: MarketDefaults, choices: Choices): Terms {
     silenceDays: choices.silenceDays ?? market.silenceDays,
     steps,
   }
+  checkTerms(terms, { arbiter, now })
+  return terms
 }
 
-/** Where the clock starts: the service time if set, else when funding was observed, else null. */
-export function clockStart(e: Pick<EscrowAccount, 'serviceTime' | 'fundedAt'>): bigint | null {
-  if (e.serviceTime !== null) return e.serviceTime
-  if (e.fundedAt !== null) return e.fundedAt
-  return null
+/**
+ * Where the clock starts: the service time if set, else when funding was observed, but never
+ * before the seller accepted; null until then.
+ */
+export function clockStart(e: Pick<EscrowAccount, 'serviceTime' | 'fundedAt' | 'acceptedAt'>): bigint | null {
+  if (e.acceptedAt === null) return null
+  const base = e.serviceTime ?? e.fundedAt
+  if (base === null) return null
+  return base > e.acceptedAt ? base : e.acceptedAt
 }
 
 /** When silence releases: the first second after `start + silenceDays`. */
@@ -100,7 +118,9 @@ export function currentStep(steps: Step[], start: bigint, now: bigint): Deadline
 }
 
 export type Schedule = {
-  /** null: no service time and the funding not yet observed; nothing below can be known. */
+  /** The seller has accepted. Until then only a full approval or the buyer's withdrawal can happen. */
+  accepted: boolean
+  /** null: not accepted yet, or no service time and the funding not yet observed; nothing below can be known. */
   clockStart: bigint | null
   /** The first second at which `release_by_silence` succeeds. */
   silenceReleasesAt: bigint | null
@@ -111,13 +131,16 @@ export type Schedule = {
   buyerCanCancel: boolean
   /** The buyer can `object` now, from the clock alone. */
   buyerCanObject: boolean
-  /** For a never-funded escrow: the first second at which the buyer can `close`, or null for now. */
-  buyerCanCloseUnfundedAt: bigint | null
+  /**
+   * For a never-funded escrow: the first second at which the rent payer can `close_unfunded`, or
+   * null for now. The buyer and the seller can at any time.
+   */
+  rentPayerCanCloseUnfundedAt: bigint | null
 }
 
 /** The escrow's clock as the program will read it at `now` (unix seconds; default: now). */
 export function schedule(
-  e: Pick<EscrowAccount, 'serviceTime' | 'fundedAt' | 'silenceDays' | 'steps' | 'createdAt' | 'status'>,
+  e: Pick<EscrowAccount, 'serviceTime' | 'fundedAt' | 'acceptedAt' | 'silenceDays' | 'steps' | 'createdAt' | 'status'>,
   now: bigint = BigInt(Math.floor(Date.now() / 1000)),
 ): Schedule {
   const start = clockStart(e)
@@ -128,14 +151,15 @@ export function schedule(
   const unfundedReference = e.serviceTime ?? e.createdAt
   const last = e.steps.length === 0 ? null : unfundedReference + e.steps[e.steps.length - 1].offset
   return {
+    accepted: e.acceptedAt !== null,
     clockStart: start,
     silenceReleasesAt: ends === null ? null : ends + 1n,
     silenceOver,
     deadlines: ds,
     currentStep: current,
-    buyerCanCancel: current !== null && e.status !== 'locked',
-    buyerCanObject: start !== null && !silenceOver && e.status !== 'locked',
-    buyerCanCloseUnfundedAt: last === null || now > last ? null : last + 1n,
+    buyerCanCancel: current !== null && e.status !== 'locked' && e.status !== 'ended',
+    buyerCanObject: start !== null && !silenceOver && e.status !== 'locked' && e.status !== 'ended',
+    rentPayerCanCloseUnfundedAt: last === null || now > last ? null : last + 1n,
   }
 }
 

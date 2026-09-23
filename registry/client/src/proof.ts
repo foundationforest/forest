@@ -7,6 +7,7 @@
 
 import { Group } from '@semaphore-protocol/group'
 import type { Identity } from '@semaphore-protocol/identity'
+import type { PublicKey } from '@solana/web3.js'
 import { groth16 } from 'snarkjs'
 
 import { codeFor, commitmentOf, identityFrom } from './code.ts'
@@ -45,6 +46,8 @@ export async function proveMembership(input: {
   secret: Uint8Array | Identity
   market: string
   did: string
+  /** The profile's wallet: it signs the registration, and the proof names it. */
+  wallet: PublicKey | Uint8Array
   leaves: Leaves
   artifacts: Artifacts
 }): Promise<MembershipProof> {
@@ -58,7 +61,7 @@ export async function proveMembership(input: {
   const merkleProof = group.generateMerkleProof(index)
 
   const scope = scopeOf(input.market)
-  const message = messageOf(input.did)
+  const message = messageOf(input.wallet, input.did)
 
   // The circuit walks `merkleProofLength` levels; the arrays are padded to the sealed depth and
   // the padding is never read.

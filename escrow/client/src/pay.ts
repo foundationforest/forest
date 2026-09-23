@@ -4,10 +4,14 @@
 // transfer request names the owner, not the token account, and the wallet derives the same
 // address, so the link's recipient is the escrow's own address. Nothing in the link is trusted
 // by the program: whatever arrives, from wherever, counts.
+//
+// The invoice pattern: the seller opens the escrow, naming the buyer, so it is accepted from the
+// start, and sends the buyer its pay link. The buyer's app reads the escrow, checks its terms
+// (`checkTerms`) and pays by a plain transfer, then approves when the work is done, or at once.
 
-import type { PublicKey } from '@solana/web3.js'
+import type { PublicKey, TransactionInstruction } from '@solana/web3.js'
 
-import { vaultAddress } from './program.ts'
+import { escrowAddress, invoiceIx, vaultAddress, type Terms } from './program.ts'
 
 /** Where money is sent. Any wallet's plain transfer of the mint to this account funds the escrow. */
 export function depositAddress(escrow: PublicKey, mint: PublicKey): PublicKey {
@@ -45,4 +49,38 @@ export function solanaPayUrl(args: {
   if (args.message) params.set('message', args.message)
   if (args.memo) params.set('memo', args.memo)
   return `solana:${args.escrow.toBase58()}?${params.toString()}`
+}
+
+/**
+ * The seller's side of an invoice: the `create` the seller signs (as creator; `payer` pays the
+ * rent), the escrow's address, its deposit address, and the pay link to send the buyer. The terms
+ * are checked before anything is built, as for any `create`.
+ */
+export function invoice(args: {
+  seller: PublicKey
+  buyer: PublicKey
+  payer: PublicKey
+  mint: PublicKey
+  decimals: number
+  terms: Terms
+  label?: string
+  message?: string
+  now?: bigint
+  programId?: PublicKey
+}): { escrow: PublicKey; deposit: PublicKey; instruction: TransactionInstruction; url: string } {
+  const instruction = invoiceIx(args)
+  const escrow = escrowAddress(args.buyer, args.terms.id, args.programId)
+  return {
+    escrow,
+    deposit: vaultAddress(escrow, args.mint),
+    instruction,
+    url: solanaPayUrl({
+      escrow,
+      mint: args.mint,
+      amount: args.terms.amount,
+      decimals: args.decimals,
+      label: args.label,
+      message: args.message,
+    }),
+  }
 }
