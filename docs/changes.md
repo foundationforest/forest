@@ -480,3 +480,139 @@ Log of what was built, learned, and left open, appended at the end of every sess
   - `registry/program/trident-tests/` still models session 10's wire format; it cannot run anyway, and `invariants.rs` is the model kept current.
   - The Kora config (so neither fee payer path went through Kora); devnet, a phone, a face check; the cryptographic review of groth16-solana and the syscalls; the paid review and the lawyer pass.
 - **Still standing:** from session 10, the vouchers finding (the treasury can accept a token it mints itself and now sets that token's fee; only its own discipline stops it), the size of Soil's random wait (from real joining rates), and `shapes/`' review lexicon still calling its field `escrow`. From earlier sessions, the market template's `cancellationSteps` and `online-tutors`' default steps; the Solana Pay recipient on a phone; the host's genesis handle, import checks and deactivation; the carrier and Railway for the host; the permutation proof the code tree exists for; the pricing unit in the market file; whether a review points at its post; whether the `markets` validator reuses `validateMarket`; whether a product writes a seed file under the first passkey; the keys tests on Apple, Android and Windows; the devnet placeholder treasury; the handover's real-phone cases; and session 3's "not measured here" list.
+
+## 2026-09-23: session 12, follow-ups from session 11
+
+- **Build order:** outside the numbered list; asked for by Carlos. Two parts: program follow-ups Carlos decided in a chat (escrow, registry wording, keys), and handoff updates. Nothing deployed anywhere.
+- **Decided (by Carlos; built or written here), one line of reason each:**
+  - **A1, escrow, late money:** `recover_late`. Anyone may send it on an ended escrow; whatever sits at its deposit address, re-created or not, goes to the buyer's refund address, which the caller may create. Because a second tap on an old pay link is almost always the buyer's own money.
+  - **A2, escrow, rent sweep:** `sweep_rent`, mirroring the registry's. What the escrow account holds above its current rent-exempt minimum goes to the rent payer; it never goes below the minimum or touches anything else; anyone may send it. Because receipts are never closed, so without it every receipt would keep for good the rent Solana's cuts free.
+  - **A3, escrow, unaccepted timeout:** `close_unaccepted`. Anyone may close a funded escrow nobody accepted, after its last cancellation deadline, or 30 days after funding with no steps: all money to the buyer's refund address, rent to the rent payer, receipt kept with outcome "never accepted". Because a sponsor's rent must not depend on the buyer coming back.
+  - **A4, escrow, clock start:** the latest of service time, funding and acceptance; funding always counts. Because an old invoice paid late could otherwise be released at once.
+  - **A5, escrow, the rest:** README state machine, client (`recoverLateIx`, `sweepRentIx`, `closeUnacceptedIx`, the clock in `terms.ts`), one-time pay links, three new fuzz invariants, the handoff's Escrow section. Because each of those states or checks the rules above.
+  - **The refund address is the buyer's associated token account for the escrow's mint** (settled with Carlos in this session's planning). The two instructions anyone may send pay the buyer only there and let the caller create it; endings the buyer signs keep taking any token account the buyer owns. Because two keys recorded at creation fix it, so nothing new is stored, and only a computed address is one a stranger can create.
+  - **`mark_funded` may run before the seller accepts** (settled with Carlos in this session's planning). It records the time and nothing else. Because A3's thirty days count from the funding and nothing else could record it for an escrow nobody accepted, and A4's clock takes the later of it and the acceptance, so recording it early starts nothing early.
+  - **A6, registry wording:** CLAUDE.md's rule is now "Registration: one proof, one rule: 25 cents in USDC, always; other accepted tokens at the fee set for them."; the handoff's Registration bullet says the same. Because another token's fee is whatever the treasury set at `add_token`, so "25 cents, always" was true of USDC only.
+  - **A7, keys, central wallet:** info string `forest.foundation/central/v1`, no profile index, an ed25519 wallet like the profile wallets. Because it must come back from the seed like every other key, and link to no profile.
+  - **B1, names:** v1 has only random handles, the host's at creation (under the app's domain) and the foundation's under forest.foundation when a profile is badged; chosen names are v2, sold by auction once there are enough people to make prices real; random names always free. Because a price set before there are enough people is not a real price.
+  - **B2, pools and ramps:** features an app offers and a user chooses; any app may offer any provider; Hinkal the first pool candidate, Crossmint the first ramp; nothing about them built into the foundation. Because a user choosing a provider in an app is not the foundation doing it.
+  - **B3, receipt weighting:** an index weighs a deal by who said yes; both counts in full; a one-tap payment with no acceptance is real but one-sided until the seller reviews the same deal id; an escrow nobody accepted and nobody paid in full counts for nothing. Because a payment the seller never agreed to is one party's word about a deal.
+- **Closed from session 11's "Open":** 1 (A1); 2 (A2); 3 (A3, for a funded escrow nobody accepts; a far deadline is still the sponsor's policy, see Open); 4 (B3); 5 (A4); 6 (A6); 7 (A7); and 8 in part, since the clock's start is now Carlos's rule. From 8, the wallet in the proof's message and the index rule on the declared wallet are still for Carlos to confirm; 9, the placeholder `TREASURY`, stands.
+- **Chosen here, not decided (each in `escrow/README.md`'s "Chosen, not decided", 19 to 23, unless said):**
+  - **`recover_late` closes the re-created deposit account and sends its rent to the buyer.** It runs with no tokens there too. Not to the caller: the caller could front-run to take rent the buyer's wallet paid. Not to the rent payer: it did not pay that rent.
+  - **An unaccepted escrow's last deadline counts from the later of the service time and the observed funding.** That is A4's clock without the acceptance, the only clock start there is before one.
+  - **`sweep_rent` runs on an escrow in any state.** A live escrow's lamports are the rent payer's either way.
+  - **Appended names.** The outcome `NeverAccepted` is 7. The errors `NotEnded`, `NothingToSweep`, `FundingNotObserved` and `BeforeTimeout` go after the old ones. The events are `NeverAccepted`, `RecoveredLate` and `RentSwept`. `close_unaccepted` emits `NeverAccepted` then `Ended`, not `Closed`, since its account stays. The account's size and offsets are unchanged.
+  - **"Open" for a pay link means open or accepted, with the funding not yet observed.**
+    - `solanaPayUrl` now takes the escrow account read off the chain; `awaitingPayment` says whether a link may be built.
+    - Status `open` alone would have refused an invoice, which is accepted from creation.
+  - **B1, beyond the two bullets:**
+    - "First come, first served" is dropped from the Names section, since chosen names are auctioned now.
+    - The Layers row and `names/README.md` say the same as the bullets.
+  - **B2, beyond the new text:**
+    - The old gate ("once one is live on mainnet, reviewed, and cleared by a lawyer") went with the old text.
+    - The advice that an app using a pool moves round amounts after a random wait, and that a direct move's button says it links the two, is kept.
+  - **`keys/SPEC.md`:** the central wallet is a new section 5, so sections 5 to 10 became 6 to 11, as session 4 did for the identity secret.
+- **Built:**
+  - **`escrow/program/`:**
+    - `recover_late`, `sweep_rent` and `close_unaccepted`, 12 → 15 instructions;
+    - `Escrow::unaccepted_timeout`, `UNACCEPTED_DAYS`, and the clock start in `state.rs`;
+    - `mark_funded` without the acceptance gate, and `accept` keeping an earlier observation;
+    - three events (16 in all), the outcome, four errors, and reworded messages for `ClockNotStarted`, `NotAccepted` and `StillFunded`.
+  - **`escrow/program/tests-litesvm/`:** 64 tests (51 before).
+    - The wire format by hand again.
+    - New in `escrow.rs`: late money, the sweep at 696 lamports a byte, both timeouts, the refusals, the early observation, an invoice paid late, and a service time with no observation.
+    - New in `adversarial.rs`: redirecting late money or a timeout, a closed never-funded escrow, sweep substitutions and a rent rise, the race with acceptance, and two findings (a century-long step; funding after the last deadline).
+    - Session 11's tests for the invoice paid late, stray SOL, the sponsor and one-tap's second payment now assert the new behaviour.
+    - The cost test measures the three new instructions.
+  - **`escrow/program/trident-tests/`:**
+    - The model follows the new clock and the early `mark_funded`.
+    - New flows: `recover_late`, `sweep_rent`, `close_unaccepted`, and SOL tips to escrow addresses.
+    - Buyers' refund addresses count toward I6.
+    - I8 is now "bytes never change, never closes"; I9 to I11 are new, I11 run at the end of every run.
+  - **`escrow/client/`:**
+    - `refundAddress`, `associatedTokenAddress`, `recoverLateIx`, `sweepRentIx`, `closeUnacceptedIx`;
+    - `unacceptedTimeout`, `schedule().closeUnacceptedAt` and the clock in `terms.ts`;
+    - `awaitingPayment` and the one-time `solanaPayUrl`;
+    - the new outcome and events.
+    - 17 unit tests (16 before). The validator test adds a second payment to a paid invoice's address, sent back by a stranger, and a SOL tip swept back to the rent payer.
+  - **`keys/`:** `INFO.central`, `centralWallet(seed)` in `src/central.ts`, `SPEC.md` (plain words, a new section 5, the fixed-strings row, the vectors line), `vectors.json` (a `central` object; every existing value unchanged), 3 new tests (30 in all).
+  - **Docs:**
+    - `CLAUDE.md` (A6);
+    - `docs/handoff.md`: the Layers rows for Escrow and Names, Registration, the Escrow section (refund address, clock, acceptance, late money, rent, events, wallets), Deals and evidence, Names, What Soil needs, Open;
+    - `escrow/README.md`;
+    - `names/README.md`;
+    - an "After session 12" section in `docs/decisions/adversarial-review-1.md`, whose session 11 table names two tests renamed here.
+- **Learned:**
+  - **"Fails before" was checked against session 11's built program:** 22 of the 64 LiteSVM tests fail there, and every program change has at least one of them:
+    - `recover_late`: the late-money tests and one-tap's second payment;
+    - `sweep_rent`: the sweep tests and the stray-SOL test;
+    - `close_unaccepted`: the timeout tests and the sponsor test;
+    - the clock: `an_invoice_paid_late_gets_the_whole_silence_period`, `a_service_time_does_not_start_the_clock_before_the_funding_is_observed` and the adversarial invoice test;
+    - the early observation: `the_funding_can_be_observed_before_acceptance_and_the_acceptance_keeps_it`.
+
+    The other 42 test behaviour this session did not change. In `keys/`, the new tests fail against the old library (no `centralWallet` export).
+  - **The fuzzer reaches everything new and catches two planted bugs.**
+    - In 5,000 iterations with metrics: all 34 of the program's own refusals, the four new ones included. `recover_late` landed 1,338 times, `close_unaccepted` 740 (627 of them the end-of-run check sending back every unaccepted escrow), and `sweep_rent` 2,819.
+    - With the timeout check taken out of `close_unaccepted`: 2,184 I11 failures, exit 99.
+    - With the session 11 clock put back: I7 failures on `cancel_buyer`, `object` and `release_by_silence`, exit 99.
+    - Both restored; the rebuilt program is byte-identical.
+  - **Long run:** 40,000,000 flow calls (500,000 iterations of 80) on four threads, still running at this commit.
+  - **Costs:**
+    - `close_unaccepted`, making the buyer's refund address: 31,500 to 45,100 compute units (2 to 3%), 579 bytes (47%).
+    - `recover_late`, the refund address already there: 11,700 to 16,200 (0.8 to 1.2%), 578 bytes.
+    - `sweep_rent`: 4,290 (0.3%), 251 bytes (20%).
+    - The spread is the refund address's derivation. The old instructions moved by at most 21 units.
+    - At 696 lamports a byte a sweep returns 2,800,008 of a receipt's 3,111,120 at LiteSVM's rate. At mainnet's 5,080 a receipt made today gets back 1,959,648 once the cuts land.
+  - **Anchor 1.2 details:**
+    - Its duplicate-writable check covers only account types it writes back on exit. So the buyer sending `recover_late` itself, as buyer and caller at once, is fine.
+    - On an existing token account, `init_if_needed` with `associated_token` checks the owner before the address. A stranger's account fails with `ConstraintTokenOwner`; one the buyer owns that is not its standard account fails with `AccountNotAssociatedTokenAccount`.
+    - After an ending, `accept` fails loading the closed deposit account before its own `Ended` check.
+  - **A sponsor that ends an unaccepted escrow for a buyer with no standard token account pays for that account.** Its rent (2,039,280 lamports at LiteSVM's rate) equals the deposit account's rent it gets back, so it nets nothing.
+  - **Hinkal, read about this session:** a blog post (blockeden.xyz, April 19, 2026) says:
+    - its privacy wallet went live on Solana on March 16, 2026;
+    - shielded use needs an "Access Token" minted after an attestation by a major exchange, a custodian or a KYC provider.
+
+    The page says nothing about audits, or about whether money can leave the pool to an address that holds no token. "Audited" in the handoff is Carlos's word; this session did not check it.
+- **Open (for Carlos):**
+  1. **Which wallet holds a pool's compliance attestation.**
+     - On the central wallet it adds to what the ramp's check already ties to that wallet.
+     - On a profile wallet it would put a person next to a profile, which CLAUDE.md forbids.
+     - Whether Hinkal lets a pool move money to a profile wallet that holds no token of its own is not known here.
+  2. **SOL sent to an escrow's address goes to the rent payer, not to whoever sent it.** That is A2's rule; the program cannot tell stray SOL from rent. Changing it is a program change, only before deploy.
+  3. **An escrow funded after its own last cancellation deadline can be sent back at once**, before the seller could accept (`finding_an_escrow_funded_after_its_own_last_deadline_can_go_back_before_the_seller_could_accept`). The money goes to the buyer, so nobody is robbed; the deal lapses. Options:
+     - accept it;
+     - have the buyer's app refuse to fund such an escrow;
+     - a floor on the timeout after funding (a program change, only before deploy).
+  4. **A far deadline is still a far wait for the rent payer, funded or not** (`finding_a_sponsor_waits_for_the_last_deadline_even_a_century_away`). The sponsor's policy should cap the deadlines it sponsors.
+  5. **Tokens of another mint sent to an escrow's address are not recovered.** They land in the escrow's associated token account for that mint, which nothing signs for. Options: a `recover_late` for any mint (a program change, only before deploy), or accept it.
+  6. **The endings the buyer does not sign still pay the buyer at any token account the buyer owns.** These are `release_by_silence`, `cancel_seller`, `arbitrate`, and `close_unfunded` by the seller or the rent payer. CLAUDE.md's "refund address fixed at creation" is fully true only of `recover_late` and `close_unaccepted`. Options: tighten them all to the refund address (a program change, only before deploy), or reword the rule.
+  7. **A frozen refund address blocks the two anyone-sent returns.** If the mint's freeze authority (USDC has one) freezes the buyer's standard token account, `recover_late` and `close_unaccepted` fail until it is unfrozen. The buyer can still `withdraw` to any account it owns, but a sponsor's rent waits. Noted, not tested.
+  8. **CLAUDE.md's names rule** ("badged profiles only, a random one free per profile, chosen names paid") does not mention v1's host handle under the app's domain, or that chosen names are v2 by auction. It is Carlos's to reword.
+  9. **B2 removed the foundation's gate on pools.** Whether an app offering one keeps "reviewed and cleared by a lawyer" is the app's call. The "Before mainnet" lawyer pass lists the ramp referral but not a pool.
+  10. **B1 leaves three questions** (in the handoff's Open):
+     - when chosen names open and how the auction runs;
+     - whether an auctioned name is held for good or renewed, and where its money goes (the handoff's "Don't resurrect" lists recurring foundation revenue);
+     - whether a badged profile's active handle moves to forest.foundation by default.
+  11. **Still from session 11:** confirm or undo the wallet in the proof's message and the index rule on the declared wallet; the registry's placeholder `TREASURY` blocks any deploy.
+- **Not done here:**
+  - devnet, a phone, Kora;
+  - the paid review and the lawyer pass;
+  - the registry's tests, not rerun because no registry file changed;
+  - `testsite/dist`'s committed keys bundle, which predates `centralWallet` (its page does not use it; `testsite/build.sh` rebuilds it).
+- **Still standing:**
+  - From session 10: the vouchers finding, the size of Soil's random wait, and `shapes/`' review lexicon still calling its field `escrow`.
+  - From earlier sessions:
+    - the market template's `cancellationSteps` and `online-tutors`' default steps;
+    - the Solana Pay recipient on a phone;
+    - the host's genesis handle, import checks and deactivation;
+    - the carrier and Railway for the host;
+    - the permutation proof the code tree exists for;
+    - the pricing unit in the market file;
+    - whether a review points at its post;
+    - whether the `markets` validator reuses `validateMarket`;
+    - whether a product writes a seed file under the first passkey;
+    - the keys tests on Apple, Android and Windows;
+    - the devnet placeholder treasury;
+    - the handover's real-phone cases;
+    - session 3's "not measured here" list.
