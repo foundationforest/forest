@@ -616,3 +616,86 @@ Log of what was built, learned, and left open, appended at the end of every sess
     - the devnet placeholder treasury;
     - the handover's real-phone cases;
     - session 3's "not measured here" list.
+
+## 2026-09-23: session 13, handoff rewritten clean, market model
+
+- **Build order:** outside the numbered list; asked for by Carlos. Two parts: `docs/handoff.md` rewritten as one current document, and the two shape changes the market model forces. Nothing deployed anywhere. Neither sealed program changed.
+- **Decided (by Carlos; written or built here):**
+  - **The handoff is one current document.** It follows Carlos's nineteen sections, with no history and the Markets section in his words. Because it had been patched session by session and read like a diff.
+  - **Markets.** A category is a deal shape (home services, freelance work, buy and sell at launch); a market is a trade inside one; a market file suggests and restricts nothing. Because the arbiter, the token, the auto-release days and the cancellation steps are the seller's to set per offer.
+  - **The post carries the seller's terms**, and an escrow is created from them. `termsFor` takes an offer's terms; a market file's values are suggestions only.
+  - **The market template loses every field that restricts a deal**, keeps evidence types and suggested values, and gains a `category`.
+  - **Settled in this session's planning:** a post names its token by mint. Because with no token list in the market file, a symbol has nothing to pin it to a mint. This ends session 2's rule "symbol in records, mint in the market file".
+  - **Also settled in planning:** `terms` is optional in the lexicon and required on an offer by the validator. Because a request's terms come from the seller who answers it.
+- **Handoff corrected to match code:**
+  1. **New issuers.** The Face check row said new issuers "register themselves". In the registry only the treasury adds or removes issuer keys, up to eight per list. The handoff now says an issuer that inserts into the lists needs the treasury to add its key; any issuer can sign credentials. The row's "owns the account holding the list" went too: the lists are the program's accounts, and the treasury decides who inserts.
+  2. **Refund address.** The Escrow section said "the instructions anyone may send pay the buyer only there". Only `recover_late` and `close_unaccepted` do. `release_by_silence`, which anyone may send, pays the buyer's excess to any token account the buyer owns, as the other endings do.
+  3. **Review.** The handoff said a review points at a deal id and can have no rating. The lexicon requires a rating (1 to 5) and text, and its pointer is `escrow`, the escrow's address. The handoff describes the lexicon, and marks the deal-id pointer and the optional rating as decided, not built.
+  4. **Pay link.** The handoff said it points at the deposit address. `solanaPayUrl` names the escrow's address; the wallet derives the deposit account from it.
+  5. **Not built, and now marked so, not dropped:** a seed from an existing wallet's signature (nothing in `keys/`), and the host giving a random handle at creation (the host takes whatever handle the DID document names).
+- **Also in the handoff, beyond the literal instructions** (each small, each reversible):
+  - **Decisions from this log that had never reached the handoff:**
+    - evidence weighs, it never rejects (session 2);
+    - the first treasury and USDC are program constants, and `init` writes only constants (session 6);
+    - one treasury key both receives the fees and turns the dials, and a mint's fee is never read again at `register` (session 7).
+  - **"Later", not "v1", for the later circuits.** The old handoff called the zero-knowledge aggregate and the one-seed circuit "v1". But the programs' v1 is the launch version, and `CLAUDE.md` puts the cross-profile proof out of scope for v1. "Later" removes the clash without touching `CLAUDE.md`.
+  - **Runs on names places:** Railway, Vercel and Supabase, Solana, Didit, plc.directory and the user's device. "Foundation" and "Theirs" are gone. Names run with the index, since the index serves the page.
+  - **Open** now holds the handoff's list plus the questions for Carlos still open from sessions 7 to 12, grouped by area. Chores went to "Build status and order".
+  - **Don't resurrect** is grouped by area, with the explanations dropped and the rules kept. One line is added: market files that restrict a deal.
+  - **Layout, not wording:** in the Markets section, "Later shapes ... Wellness and health are out." sits under the category bullet, after the three sub-bullets. It is about categories, not buy and sell.
+  - **"How work splits"** opens "Build status and order". The one-test note (the seed identical on iPhone and Mac) moved there.
+  - **Reasons dropped.** The handoff keeps a reason only where a rule makes no sense without one; the rest stay in this log.
+  - **The index's reading rules** from adversarial review 1 are referenced, not stated as decided.
+  - **Hinkal is named without "audited".** Session 12 could not confirm the audit.
+- **Enforcement of market values on a deal, removed:**
+  - `escrow/client`'s `termsFor` refused a mint the market file did not list and an arbiter where `arbiterAllowed` was false. Both checks are gone.
+  - `shapes/`' validator refused a post whose token symbol the market file did not list. That check is gone too.
+  - Nothing else in the repo reads a market file's values against a deal. The programs never read market files, and the registry uses only a market's name.
+- **Chosen, not decided** (the simplest option; each reversible before anything ships):
+  - **Names.**
+    - The post's block is `terms`, with `autoReleaseDays`, `cancellationSteps` and `arbiter`.
+    - The price's token is `price.mint`.
+    - The market keys are `category`, `evidenceTypes` and `suggested` (`{ autoReleaseDays, cancellationSteps }`).
+    - "Auto-release" is the plain word; the program's name for it stays "silence".
+  - **`evidenceTypes` is a list** in place of the single `reviewEvidence` (`escrow` or `none`), because the Markets text says a file lists them. An empty list means none.
+  - **`category` and `evidenceTypes` are any slugs.** No fixed list is checked, because a later category is a file, not code, and the validator checks structure only.
+  - **Whole hours and whole percents.** The AT Protocol data model has no floats, and a market file follows the post. The client's `stepFromOffer` still accepts fractions.
+  - **The arbiter is a key (base58), not a DID.** Parties are keys and the escrow stores a key; a DID would need its profile's declared wallet read at deal time.
+  - **The validator checks every step.** In a post's terms and in a market's suggested values, steps must rise strictly and end by auto-release, the same rule as `checkTerms`, so terms that pass can make an escrow.
+  - **`suggested` must hold both keys**, and its steps may be an empty list. The `online-tutors` fixture suggests 7 days and no steps; its real steps are still open.
+  - **`termsFor` takes no overrides.** The auto-release days, the steps and the arbiter come only from the offer, so `Choices` lost `silenceDays`, `steps` and `arbiter`. A market's values reach a deal only through `suggestedTerms`, which fills a seller's form.
+  - **Renamed:** `stepFromMarket` is now `stepFromOffer`, and `MarketStep` is `OfferStep`. `MarketDefaults` became `OfferTerms` and `MarketSuggestions`. The fixture `lenient-market.json` became `restricting-market.json`: its one fault is the removed `arbiterAllowed` key.
+  - **The handoff's title date** is today's.
+- **Built:**
+  - **`docs/handoff.md`,** rewritten.
+  - **`shapes/`:**
+    - The post lexicon gains `terms` (`#terms`, `#cancellationStep`), and `#price` names `mint` in place of `token`.
+    - The validator has seven market keys.
+    - It checks a post's terms (an offer carries them), `category`, `evidenceTypes` and `suggested`, and no longer checks market tokens.
+    - The examples, both fixtures, the README.
+    - 39 tests (33 before).
+  - **`escrow/client/`:**
+    - `termsFor(offer, choices, now?)`, `suggestedTerms`, `stepFromOffer`, the new types.
+    - Both terms tests rewritten, and the validator test built from offer terms. 17 unit tests, as before.
+    - The README's "What the app decides", choices 3 and 12 and the table row. The package description and the header comment.
+- **Learned:**
+  - **The market file's token list held something up.** Posts named their token by a symbol that only the market file pinned to a mint. Removing the list forced the post's price to name the mint, a third shape change the task had not listed; Carlos chose it in planning.
+  - **The Solana toolchain installs here.** Solana CLI 4.2.2 came from `release.anza.xyz` without trouble. `cargo build-sbf` built the escrow program in 28 seconds, and the escrow client's validator test passed on a local validator in 7 seconds, with terms built from an offer.
+  - **"Fails before":**
+    - Against the old validator and post lexicon, with the new examples, 28 of the 39 shapes tests fail. The 11 that pass cover behaviour this session did not change (the other shapes, extra fields, the command line's usage errors).
+    - Against the old `terms.ts`, the client test file does not load: `stepFromOffer` is not exported.
+- **Open:**
+  1. **`online-tutors`' suggested steps**, and each standard market's suggested values. A `markets` repo decision.
+  2. **What a category file holds.** The Markets text says later shapes are new category files; no category file format exists yet.
+  3. **The index's list of tokens it counts.** It takes over from the market file's token list. Adversarial review 1's index rule 3 ("count a receipt only if its mint is one the market accepts") now points at a list markets no longer carry. The review is a dated report and was left as written.
+  4. **The review shape**, decided and not built: a deal-id pointer, and an optional rating.
+  5. **`CLAUDE.md` was not changed.** No line contradicts the new handoff. The names line session 12 flagged ("chosen names paid") fits v2 auctions, and "refund address fixed at creation" is true of the address; which endings use it is in the handoff's Open.
+  6. **`feepayer/README.md`'s first line** still says the sponsor pays for "any registration that carries a valid proof". Its own body, and the handoff, say only markets in the `markets` repo. Not touched here.
+- **Still standing** (chores; the design questions are in the handoff's Open):
+  - the keys tests on Apple, Android and Windows devices;
+  - the handover's real-phone cases;
+  - how the host's five patches rebase;
+  - `registry/program/trident-tests/`' stale model;
+  - `testsite/dist`'s keys bundle, which predates `centralWallet`;
+  - the registry client's validator test, which needs `--test-force-exit`;
+  - devnet, Kora, a phone, a face check, the paid review and the lawyer pass.
