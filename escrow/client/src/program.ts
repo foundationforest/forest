@@ -26,6 +26,8 @@ export const MAX_STEPS = 4
 /** One hundred percent. */
 export const BPS = 10_000
 export const SECONDS_PER_DAY = 86_400n
+/** How long after the funding is observed an escrow with no steps, never accepted, waits before anyone may send everything back (`close_unaccepted`). */
+export const UNACCEPTED_DAYS = 30n
 /** The escrow account's bytes after Anchor's eight-byte discriminator. */
 export const ESCROW_LEN = 311
 export const ESCROW_SEED = new TextEncoder().encode('escrow')
@@ -153,15 +155,29 @@ export function escrowAddress(buyer: PublicKey, id: bigint, programId: PublicKey
   )[0]
 }
 
+/** An associated token account: the standard address of `owner`'s account for `mint`. */
+export function associatedTokenAddress(owner: PublicKey, mint: PublicKey): PublicKey {
+  return PublicKey.findProgramAddressSync(
+    [owner.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mint.toBuffer()],
+    ASSOCIATED_TOKEN_PROGRAM_ID,
+  )[0]
+}
+
 /**
  * The deposit address: the escrow's associated token account for the mint. The standard
  * derivation, so any wallet that sends this token "to the escrow's address" lands it here.
  */
 export function vaultAddress(escrow: PublicKey, mint: PublicKey): PublicKey {
-  return PublicKey.findProgramAddressSync(
-    [escrow.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mint.toBuffer()],
-    ASSOCIATED_TOKEN_PROGRAM_ID,
-  )[0]
+  return associatedTokenAddress(escrow, mint)
+}
+
+/**
+ * The buyer's refund address: the buyer's associated token account for the mint, computed from
+ * two keys fixed at creation. `recover_late` and `close_unaccepted`, which anyone may send, pay the
+ * buyer here and nowhere else, and make it first, at the sender's cost, if it does not exist.
+ */
+export function refundAddress(buyer: PublicKey, mint: PublicKey): PublicKey {
+  return associatedTokenAddress(buyer, mint)
 }
 
 /**
@@ -285,8 +301,9 @@ export const MAX_UNIX_SECONDS = 10_000_000_000n
  * `accept`, or paying an invoice. The program accepts all of these; nobody means them.
  *
  * - Times in seconds: a service time is unix seconds, below 10^10 (the year 2286), so a
- *   millisecond timestamp is caught; and not already past, because a service time is the clock
- *   start and a past one starts silence before the money lands.
+ *   millisecond timestamp is caught; and not already past, because terms whose service time has
+ *   gone by were written for another day. (Until session 12 a past one also started silence
+ *   before the money landed; the clock now waits for the funding.)
  * - Steps sane: at most four, deadlines strictly rising, refunds 0 to 100%, and none after silence
  *   ends, or the buyer's cancellation and the seller's release are both live and race.
  * - An arbiter only if named: the escrow's arbiter is the one the signer expects, and none if it
@@ -356,7 +373,11 @@ export function acceptIx(args: {
   })
 }
 
-/** `mark_funded`: anyone, once the seller has accepted. Records the moment the deposit account is seen holding the amount. */
+/**
+ * `mark_funded`: anyone, before or after the seller accepts. Records the moment the deposit account
+ * is seen holding the amount: the clock never starts before it, and an escrow nobody accepts counts
+ * its timeout from it.
+ */
 export function markFundedIx(args: { escrow: PublicKey; vault: PublicKey; programId?: PublicKey }): TransactionInstruction {
   return new TransactionInstruction({
     programId: args.programId ?? PROGRAM_ID,
@@ -478,6 +499,78 @@ export function closeUnfundedIx(args: { accounts: RefundAccounts; closer: Public
   return refundIx('close_unfunded', args.accounts, args.closer, args.programId ?? PROGRAM_ID)
 }
 
+/**
+ * `recover_late`: anyone, on an escrow that has ended. Whatever a later payment left at its deposit
+ * address goes to the buyer's refund address (made first at `caller`'s cost if it does not exist);
+ * the deposit account closes again and its rent goes to the buyer. The receipt does not change.
+ * Built only from the escrow account as read from the chain.
+ */
+export function recoverLateIx(args: { account: EscrowAccount; caller: PublicKey; programId?: PublicKey }): TransactionInstruction {
+  const programId = args.programId ?? PROGRAM_ID
+  const a = args.account
+  if (a.status !== 'ended') throw new Error('NotEnded: money above the amount goes back to the buyer when the escrow ends')
+  return new TransactionInstruction({
+    programId,
+    keys: [
+      ro(escrowAddress(a.buyer, a.id, programId)),
+      rw(a.vault),
+      rw(a.buyer),
+      rw(refundAddress(a.buyer, a.mint)),
+      ro(a.mint),
+      rw(args.caller, true),
+      ro(TOKEN_PROGRAM_ID),
+      ro(ASSOCIATED_TOKEN_PROGRAM_ID),
+      ro(SystemProgram.programId),
+    ],
+    data: concat([discriminator('global', 'recover_late')]),
+  })
+}
+
+/**
+ * `sweep_rent`: anyone, on any escrow. What the escrow account holds above its current rent-exempt
+ * minimum goes to the rent payer recorded at creation; the account keeps exactly the minimum and
+ * its bytes. Nobody signs but the transaction's fee payer.
+ */
+export function sweepRentIx(args: { escrow: PublicKey; rentPayer: PublicKey; programId?: PublicKey }): TransactionInstruction {
+  return new TransactionInstruction({
+    programId: args.programId ?? PROGRAM_ID,
+    keys: [rw(args.escrow), rw(args.rentPayer)],
+    data: concat([discriminator('global', 'sweep_rent')]),
+  })
+}
+
+/**
+ * `close_unaccepted`: anyone, on a funded escrow the seller never accepted, after its timeout (the
+ * last cancellation deadline from the later of the service time and the observed funding, or 30
+ * days after the observed funding with no steps; `schedule().closeUnacceptedAt` says when, and the
+ * program checks it). Everything goes to the buyer's refund address (made first at `caller`'s cost
+ * if it does not exist), the deposit account's rent to the rent payer, and the receipt stays with
+ * the outcome `neverAccepted`. Built only from the escrow account as read from the chain.
+ */
+export function closeUnacceptedIx(args: { account: EscrowAccount; caller: PublicKey; programId?: PublicKey }): TransactionInstruction {
+  const programId = args.programId ?? PROGRAM_ID
+  const a = args.account
+  if (a.status === 'ended') throw new Error('Ended: this escrow has ended')
+  if (a.acceptedAt !== null) throw new Error('AlreadyAccepted: the seller has accepted this escrow')
+  if (a.fundedAt === null) throw new Error('FundingNotObserved: send mark_funded first')
+  return new TransactionInstruction({
+    programId,
+    keys: [
+      rw(escrowAddress(a.buyer, a.id, programId)),
+      rw(a.vault),
+      ro(a.buyer),
+      rw(refundAddress(a.buyer, a.mint)),
+      ro(a.mint),
+      rw(a.rentPayer),
+      rw(args.caller, true),
+      ro(TOKEN_PROGRAM_ID),
+      ro(ASSOCIATED_TOKEN_PROGRAM_ID),
+      ro(SystemProgram.programId),
+    ],
+    data: concat([discriminator('global', 'close_unaccepted')]),
+  })
+}
+
 /** `agree`: both keys sign any split, once the seller has accepted and it is funded, locked included. */
 export function agreeIx(args: {
   accounts: SettleAccounts
@@ -519,7 +612,7 @@ export type EscrowAccount = {
   silenceDays: number
   steps: Step[]
   createdAt: bigint
-  /** When the deposit account was first observed holding the amount, or null. */
+  /** When the deposit account was first observed holding the amount, or null. May come before the acceptance. */
   fundedAt: bigint | null
   status: Status
   bump: number
@@ -614,6 +707,8 @@ export type Outcome =
   | 'cancelledByBuyer'
   | 'cancelledBySeller'
   | 'withdrawn'
+  /** The seller never accepted; after the timeout anyone sent everything back to the buyer. */
+  | 'neverAccepted'
 const OUTCOME: Outcome[] = [
   'approved',
   'releasedBySilence',
@@ -622,6 +717,7 @@ const OUTCOME: Outcome[] = [
   'cancelledByBuyer',
   'cancelledBySeller',
   'withdrawn',
+  'neverAccepted',
 ]
 
 export type EscrowEvent =
@@ -668,6 +764,11 @@ export type EscrowEvent =
       rentLamports: bigint
     }
   | { kind: 'closed'; escrow: PublicKey; closedBy: PublicKey; toBuyer: bigint; rentPayer: PublicKey; rentLamports: bigint }
+  | { kind: 'neverAccepted'; escrow: PublicKey; timeout: bigint; toBuyer: bigint }
+  /** Money that came after the end went back to the buyer's refund address; the deposit account's rent to the buyer. */
+  | { kind: 'recoveredLate'; escrow: PublicKey; toBuyer: bigint; rentLamports: bigint }
+  /** Lamports above the minimum went to the rent payer; `left` is the minimum kept. */
+  | { kind: 'rentSwept'; escrow: PublicKey; lamports: bigint; left: bigint }
 
 const EVENT_NAMES: [string, EscrowEvent['kind']][] = [
   ['Created', 'created'],
@@ -683,6 +784,9 @@ const EVENT_NAMES: [string, EscrowEvent['kind']][] = [
   ['Withdrawn', 'withdrawn'],
   ['Ended', 'ended'],
   ['Closed', 'closed'],
+  ['NeverAccepted', 'neverAccepted'],
+  ['RecoveredLate', 'recoveredLate'],
+  ['RentSwept', 'rentSwept'],
 ]
 
 export function decodeEvent(bytes: Uint8Array): EscrowEvent | null {
@@ -780,6 +884,15 @@ export function decodeEvent(bytes: Uint8Array): EscrowEvent | null {
     }
     case 'closed':
       event = { kind, escrow, closedBy: r.key(), toBuyer: r.u64(), rentPayer: r.key(), rentLamports: r.u64() }
+      break
+    case 'neverAccepted':
+      event = { kind, escrow, timeout: r.i64(), toBuyer: r.u64() }
+      break
+    case 'recoveredLate':
+      event = { kind, escrow, toBuyer: r.u64(), rentLamports: r.u64() }
+      break
+    case 'rentSwept':
+      event = { kind, escrow, lamports: r.u64(), left: r.u64() }
       break
   }
   r.done()

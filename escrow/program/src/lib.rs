@@ -7,10 +7,12 @@
 //! the buyer at the end.
 //!
 //! The seller accepts before anything but paying in full can happen: until then the buyer may
-//! approve everything to the seller, which needs nobody's consent, or take everything back. An
-//! escrow the seller opens is accepted from the start. When an escrow that held the amount ends,
-//! its deposit account closes and the escrow account stays, with the outcome and the amounts in
-//! it: its address is a permanent receipt, and never holds a second deal.
+//! approve everything to the seller, which needs nobody's consent, or take everything back, and
+//! after a timeout anyone may send everything back to the buyer. An escrow the seller opens is
+//! accepted from the start. When an escrow that held the amount ends, its deposit account closes
+//! and the escrow account stays, with the outcome and the amounts in it: its address is a
+//! permanent receipt, and never holds a second deal. Money paid to it after the end goes back to
+//! the buyer, and rent above the minimum goes back to whoever paid it; neither changes the receipt.
 //!
 //! This program is sealed per version. The upgrade authority is removed at deploy, so nothing
 //! here can be patched: read `escrow/README.md` for what is sealed and what the app decides.
@@ -166,10 +168,12 @@ pub mod forest_escrow {
     }
 
     /// The seller accepts the escrow as it stands: the amount, the mint, the arbiter, the clock and
-    /// the steps. Only now can anything but a full approval or the buyer's withdrawal happen.
+    /// the steps. Only now can anything but a full approval, the buyer's withdrawal, or
+    /// `close_unaccepted` after the timeout happen.
     ///
-    /// If the deposit account already holds the amount, this is also the observation of funding,
-    /// and the clock starts now when there is no service time.
+    /// If the funding was already observed, the escrow is funded from now on; if it was not and
+    /// the deposit account holds the amount, this is the observation. Either way the clock starts
+    /// no earlier than now.
     pub fn accept(ctx: Context<Accept>) -> Result<()> {
         let escrow = &mut ctx.accounts.escrow;
         require!(!escrow.ended(), EscrowError::Ended);
@@ -179,7 +183,11 @@ pub mod forest_escrow {
         escrow.status = Status::Accepted;
         emit!(Accepted { escrow: escrow.key(), seller: escrow.seller, accepted_at: now });
         let balance = ctx.accounts.vault.amount;
-        if balance >= escrow.amount {
+        if escrow.funded_at != 0 {
+            // Observed before the acceptance. Only this program moves money out of the deposit
+            // account, and only by ending the escrow, so the balance is still at least the amount.
+            escrow.status = Status::Funded;
+        } else if balance >= escrow.amount {
             escrow.funded_at = now;
             escrow.status = Status::Funded;
             emit!(Funded { escrow: escrow.key(), balance, funded_at: now });
@@ -187,17 +195,17 @@ pub mod forest_escrow {
         Ok(())
     }
 
-    /// Record that the deposit account holds the amount. Anyone may send it, once the seller has
-    /// accepted.
+    /// Record that the deposit account holds the amount. Anyone may send it, before or after the
+    /// seller accepts.
     ///
-    /// This is the observation that starts the clock when there is no service time. Every
-    /// instruction that needs funding checks the balance itself, so skipping this blocks nothing
-    /// except silence and a buyer's cancellation, which cannot be counted from a moment nobody
-    /// recorded.
+    /// The clock never starts before this observation, and an escrow the seller never accepts
+    /// counts its timeout from it. Every instruction that needs funding checks the balance itself,
+    /// so skipping this blocks nothing except silence, a buyer's cancellation and
+    /// `close_unaccepted`, which cannot be counted from a moment nobody recorded. Before the seller
+    /// accepts it records the time and nothing else: the escrow stays open.
     pub fn mark_funded(ctx: Context<MarkFunded>) -> Result<()> {
         let escrow = &mut ctx.accounts.escrow;
         require!(!escrow.ended(), EscrowError::Ended);
-        require!(escrow.accepted(), EscrowError::NotAccepted);
         require!(escrow.funded_at == 0, EscrowError::AlreadyFunded);
         let balance = ctx.accounts.vault.amount;
         require!(balance >= escrow.amount, EscrowError::NotFunded);
@@ -390,6 +398,107 @@ pub mod forest_escrow {
         });
         Ok(())
     }
+
+    /// Money that arrives after the end goes back to the buyer. Anyone may send this, on an escrow
+    /// that has ended: whatever sits at its deposit address, which a later payment made again,
+    /// goes to the buyer's refund address, the buyer's associated token account for the mint,
+    /// which the caller makes first, at the caller's cost, if it does not exist. The deposit
+    /// account closes again and its rent goes to the buyer, whose wallet almost always made it.
+    /// The receipt does not change: it says what the deal was, and this was not part of it.
+    pub fn recover_late(ctx: Context<RecoverLate>) -> Result<()> {
+        let escrow = &ctx.accounts.escrow;
+        require!(escrow.ended(), EscrowError::NotEnded);
+        let late = ctx.accounts.vault.amount;
+
+        let id = escrow.id.to_le_bytes();
+        let bump = [escrow.bump];
+        let seeds: &[&[u8]] = &[ESCROW_SEED, escrow.buyer.as_ref(), &id, &bump];
+        let signer: &[&[&[u8]]] = &[seeds];
+        if late > 0 {
+            token::transfer(
+                CpiContext::new_with_signer(
+                    ctx.accounts.token_program.key(),
+                    Transfer {
+                        from: ctx.accounts.vault.to_account_info(),
+                        to: ctx.accounts.refund.to_account_info(),
+                        authority: escrow.to_account_info(),
+                    },
+                    signer,
+                ),
+                late,
+            )?;
+        }
+        let rent = ctx.accounts.vault.to_account_info().lamports();
+        token::close_account(CpiContext::new_with_signer(
+            ctx.accounts.token_program.key(),
+            CloseAccount {
+                account: ctx.accounts.vault.to_account_info(),
+                destination: ctx.accounts.buyer.to_account_info(),
+                authority: escrow.to_account_info(),
+            },
+            signer,
+        ))?;
+        emit!(RecoveredLate { escrow: escrow.key(), to_buyer: late, rent_lamports: rent });
+        Ok(())
+    }
+
+    /// Move the lamports the escrow account holds above the current rent-exempt minimum to the
+    /// rent payer recorded at creation.
+    ///
+    /// Solana is part way through a cut to the rent rate, and receipts are never closed, so each
+    /// one would keep the difference forever: only an instruction in this program can move it.
+    /// Anyone may call it, on an escrow in any state: the only possible destination is the rent
+    /// payer, and the account keeps exactly its minimum. SOL sent to the escrow's address leaves
+    /// the same way.
+    pub fn sweep_rent(ctx: Context<SweepRent>) -> Result<()> {
+        let account = ctx.accounts.escrow.to_account_info();
+
+        // The registry's check, in full, so it can never take more than the excess:
+        //
+        //   rent    = Rent::get()                      read at runtime, every time; never a constant,
+        //                                              because the rate changing is why this exists
+        //   minimum = rent.minimum_balance(data_len)   for this account's own size, which never changes
+        //   excess  = lamports - minimum               saturating, so an account already at or below
+        //                                              the minimum yields zero and the call fails
+        //   require excess > 0
+        //   account.lamports -= excess                 subtract; never assign a computed total
+        //   rent_payer.lamports += excess              the recorded rent payer; never a caller's choice
+        //   assert account.lamports == minimum         still exactly rent exempt
+        //
+        // The account's bytes are not changed, it is never grown, realloc'd or closed, and no
+        // signer is required.
+        let rent = Rent::get()?;
+        let minimum = rent.minimum_balance(account.data_len());
+        let lamports = account.lamports();
+        let excess = lamports.saturating_sub(minimum);
+        require!(excess > 0, EscrowError::NothingToSweep);
+
+        **account.try_borrow_mut_lamports()? -= excess;
+        **ctx.accounts.rent_payer.try_borrow_mut_lamports()? += excess;
+        require_eq!(account.lamports(), minimum, EscrowError::NothingToSweep);
+
+        emit!(RentSwept { escrow: account.key(), lamports: excess, left: minimum });
+        Ok(())
+    }
+
+    /// Send everything back to the buyer from a funded escrow the seller never accepted, after
+    /// its timeout: the last cancellation deadline, measured from the later of the service time
+    /// and the observed funding, or 30 days after the observed funding when there are no steps.
+    /// Anyone may send it, so a sponsor's rent never waits on the buyer coming back. The money
+    /// goes to the buyer's refund address, the buyer's associated token account for the mint,
+    /// which the caller makes first if it does not exist; the deposit account's rent goes to the
+    /// rent payer; the escrow account stays as a receipt whose outcome is `NeverAccepted`.
+    pub fn close_unaccepted(ctx: Context<CloseUnaccepted>) -> Result<()> {
+        let escrow = &ctx.accounts.escrow;
+        require!(!escrow.ended(), EscrowError::Ended);
+        require!(!escrow.accepted(), EscrowError::AlreadyAccepted);
+        let balance = funded_balance(escrow, &ctx.accounts.vault)?;
+        let timeout = escrow.unaccepted_timeout()?.ok_or_else(|| error!(EscrowError::FundingNotObserved))?;
+        let now = Clock::get()?.unix_timestamp;
+        require!(now > timeout, EscrowError::BeforeTimeout);
+        emit!(NeverAccepted { escrow: escrow.key(), timeout, to_buyer: balance });
+        settle(&mut ctx.accounts.ending(), Outcome::NeverAccepted, 0)
+    }
 }
 
 /// The deposit account's balance, which must be at least the amount.
@@ -404,8 +513,8 @@ struct Ending<'a, 'info> {
     escrow: &'a mut Account<'info, Escrow>,
     vault: &'a Account<'info, TokenAccount>,
     buyer_tokens: &'a Account<'info, TokenAccount>,
-    /// `None` for the two exits that pay the seller nothing and do not name the seller's account:
-    /// `withdraw` and `close_unfunded`.
+    /// `None` for the three exits that pay the seller nothing and do not name the seller's
+    /// account: `withdraw`, `close_unfunded` and `close_unaccepted`.
     seller_tokens: Option<&'a Account<'info, TokenAccount>>,
     rent_payer: &'a UncheckedAccount<'info>,
     token_program: &'a Program<'info, Token>,
@@ -647,6 +756,82 @@ pub struct CloseUnfunded<'info> {
     pub closer: Signer<'info>,
 }
 
+/// Late money back to the buyer: `recover_late`. The escrow is read only, because the receipt
+/// does not change.
+#[derive(Accounts)]
+pub struct RecoverLate<'info> {
+    #[account(has_one = vault, has_one = buyer, has_one = mint)]
+    pub escrow: Account<'info, Escrow>,
+    /// The deposit address, made again by a payment that came after the end. If nothing made it
+    /// again, there is nothing to recover and this fails to load.
+    #[account(mut)]
+    pub vault: Account<'info, TokenAccount>,
+    /// CHECK: the buyer recorded at creation, checked by `has_one`. It owns the refund account and
+    /// receives the deposit account's rent.
+    #[account(mut)]
+    pub buyer: UncheckedAccount<'info>,
+    /// The buyer's refund address: its associated token account for the mint, and no other
+    /// account. Made here, at the caller's cost, if it does not exist.
+    #[account(
+        init_if_needed,
+        payer = caller,
+        associated_token::mint = mint,
+        associated_token::authority = buyer,
+        associated_token::token_program = token_program,
+    )]
+    pub refund: Account<'info, TokenAccount>,
+    pub mint: Account<'info, Mint>,
+    /// Anyone. Pays for the refund account if it has to be made.
+    #[account(mut)]
+    pub caller: Signer<'info>,
+    pub token_program: Program<'info, Token>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+    pub system_program: Program<'info, System>,
+}
+
+/// Rent above the minimum back to the rent payer: `sweep_rent`. No signer.
+#[derive(Accounts)]
+pub struct SweepRent<'info> {
+    #[account(mut, has_one = rent_payer)]
+    pub escrow: Account<'info, Escrow>,
+    /// CHECK: the key recorded at creation, checked by `has_one`. It only receives lamports.
+    #[account(mut)]
+    pub rent_payer: UncheckedAccount<'info>,
+}
+
+/// Everything back from an escrow the seller never accepted, after its timeout:
+/// `close_unaccepted`. Like `withdraw`, it names no seller account; unlike it, anyone may send it,
+/// so the buyer is paid only at the refund address.
+#[derive(Accounts)]
+pub struct CloseUnaccepted<'info> {
+    #[account(mut, has_one = vault, has_one = rent_payer, has_one = buyer, has_one = mint)]
+    pub escrow: Account<'info, Escrow>,
+    #[account(mut)]
+    pub vault: Account<'info, TokenAccount>,
+    /// CHECK: the buyer recorded at creation, checked by `has_one`. It owns the refund account.
+    pub buyer: UncheckedAccount<'info>,
+    /// The buyer's refund address: its associated token account for the mint, and no other
+    /// account. Made here, at the caller's cost, if it does not exist.
+    #[account(
+        init_if_needed,
+        payer = caller,
+        associated_token::mint = mint,
+        associated_token::authority = buyer,
+        associated_token::token_program = token_program,
+    )]
+    pub refund: Account<'info, TokenAccount>,
+    pub mint: Account<'info, Mint>,
+    /// CHECK: the key recorded at creation, checked by `has_one`. It only receives lamports.
+    #[account(mut)]
+    pub rent_payer: UncheckedAccount<'info>,
+    /// Anyone. Pays for the refund account if it has to be made.
+    #[account(mut)]
+    pub caller: Signer<'info>,
+    pub token_program: Program<'info, Token>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+    pub system_program: Program<'info, System>,
+}
+
 impl<'info> Settle<'info> {
     fn ending(&mut self) -> Ending<'_, 'info> {
         Ending {
@@ -705,6 +890,19 @@ impl<'info> CloseUnfunded<'info> {
             escrow: &mut self.escrow,
             vault: &self.vault,
             buyer_tokens: &self.buyer_tokens,
+            seller_tokens: None,
+            rent_payer: &self.rent_payer,
+            token_program: &self.token_program,
+        }
+    }
+}
+
+impl<'info> CloseUnaccepted<'info> {
+    fn ending(&mut self) -> Ending<'_, 'info> {
+        Ending {
+            escrow: &mut self.escrow,
+            vault: &self.vault,
+            buyer_tokens: &self.refund,
             seller_tokens: None,
             rent_payer: &self.rent_payer,
             token_program: &self.token_program,
@@ -818,6 +1016,33 @@ pub struct CancelledBySeller {
 pub struct Withdrawn {
     pub escrow: Pubkey,
     pub to_buyer: u64,
+}
+
+/// The seller never accepted, and after the timeout (the moment given) anyone sent everything back
+/// to the buyer's refund address. `Ended` follows, with the outcome `NeverAccepted`.
+#[event]
+pub struct NeverAccepted {
+    pub escrow: Pubkey,
+    pub timeout: i64,
+    pub to_buyer: u64,
+}
+
+/// Money that arrived after the end went back to the buyer's refund address, and the deposit
+/// account closed again with its rent to the buyer. The receipt did not change.
+#[event]
+pub struct RecoveredLate {
+    pub escrow: Pubkey,
+    pub to_buyer: u64,
+    pub rent_lamports: u64,
+}
+
+/// Lamports above the escrow account's rent-exempt minimum went to the rent payer; `left` is the
+/// minimum it still holds.
+#[event]
+pub struct RentSwept {
+    pub escrow: Pubkey,
+    pub lamports: u64,
+    pub left: u64,
 }
 
 /// Every ending of an escrow that held the amount, after its own event. `balance` is what the

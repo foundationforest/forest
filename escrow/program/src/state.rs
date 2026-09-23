@@ -12,6 +12,9 @@ pub const MAX_STEPS: usize = 4;
 /// One hundred percent, in basis points.
 pub const BPS: u16 = 10_000;
 pub const SECONDS_PER_DAY: i64 = 86_400;
+/// How long after the funding was observed an escrow with no steps, which the seller never
+/// accepted, waits before anyone may send everything back to the buyer (`close_unaccepted`).
+pub const UNACCEPTED_DAYS: i64 = 30;
 
 /// One cancellation step: until `offset` seconds from the clock start, the buyer alone can cancel
 /// and gets `refund_bps` of the amount back. Negative offsets are deadlines before the clock start
@@ -27,7 +30,8 @@ pub struct Step {
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Status {
     /// Created by the buyer; the seller has not accepted. The deposit account may already hold
-    /// money: only a full approval or the buyer's withdrawal can end it then.
+    /// money, and its funding may already be observed (`funded_at`): only a full approval, the
+    /// buyer's withdrawal, or `close_unaccepted` after its timeout can end it then.
     Open,
     /// The seller accepted (`accepted_at` is set); the funding has not been observed yet.
     Accepted,
@@ -51,6 +55,9 @@ pub enum Outcome {
     CancelledBySeller,
     /// The buyer took everything back before the seller accepted.
     Withdrawn,
+    /// The seller never accepted, and after its timeout anyone sent everything back to the buyer
+    /// (`close_unaccepted`). Appended in session 12, so every other outcome keeps its byte.
+    NeverAccepted,
 }
 
 /// One escrow. Address: `["escrow", buyer, id]`. Never closed once it has held the amount: when
@@ -81,8 +88,8 @@ pub struct Escrow {
     /// The first `step_count` are the steps, offsets strictly rising. The rest are zero.
     pub steps: [Step; MAX_STEPS],
     pub created_at: i64,
-    /// When the deposit account was first observed holding the amount, or 0. When there is no
-    /// service time, the clock starts here.
+    /// When the deposit account was first observed holding the amount, or 0. It may be observed
+    /// before the seller accepts. The clock never starts before it.
     pub funded_at: i64,
     pub status: Status,
     pub bump: u8,
@@ -124,24 +131,37 @@ impl Escrow {
         self.status == Status::Ended
     }
 
-    /// The clock start: the service time if set, else the observed funding time, but never before
-    /// the seller accepted. `None` until the seller has accepted and there is something to count
-    /// from. Silence and every cancellation deadline are measured from here.
+    /// The clock start: the latest of the service time (if set), the observed funding and the
+    /// seller's acceptance. `None` until the seller has accepted and the funding has been
+    /// observed. Silence and every cancellation deadline are measured from here.
     ///
-    /// A seller who accepts late cannot find the silence already over: the clock starts at the
-    /// acceptance, so the buyer always has the whole silence period after it in which to object.
+    /// Funding always counts, and so does the acceptance: an old invoice paid late, or an escrow a
+    /// seller accepts late, cannot find the silence already over. The buyer always has the whole
+    /// silence period after the money landed and after the seller committed in which to object.
     pub fn clock_start(&self) -> Option<i64> {
-        if !self.accepted() {
+        if !self.accepted() || self.funded_at == 0 {
             return None;
         }
-        let base = if self.service_time != 0 {
-            self.service_time
-        } else if self.funded_at != 0 {
-            self.funded_at
-        } else {
-            return None;
-        };
-        Some(base.max(self.accepted_at))
+        Some(self.service_time.max(self.funded_at).max(self.accepted_at))
+    }
+
+    /// When an escrow the seller never accepted may be sent back to the buyer by anyone
+    /// (`close_unaccepted`): after its last cancellation deadline, measured from the clock start
+    /// as it would stand without the acceptance (the later of the service time and the observed
+    /// funding), or `UNACCEPTED_DAYS` after the observed funding when it has no steps. `None`
+    /// until the funding has been observed.
+    pub fn unaccepted_timeout(&self) -> Result<Option<i64>> {
+        if self.funded_at == 0 {
+            return Ok(None);
+        }
+        match self.last_deadline(self.service_time.max(self.funded_at))? {
+            Some(deadline) => Ok(Some(deadline)),
+            None => Ok(Some(
+                self.funded_at
+                    .checked_add(UNACCEPTED_DAYS * SECONDS_PER_DAY)
+                    .ok_or_else(|| error!(EscrowError::TimeOverflow))?,
+            )),
+        }
     }
 
     /// The reference a never-funded escrow's deadlines are measured from: the service time if
