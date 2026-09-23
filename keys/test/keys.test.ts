@@ -4,7 +4,8 @@ import { readFileSync } from 'node:fs'
 import { hkdf as nobleHkdf } from '@noble/hashes/hkdf.js'
 import { sha256 as nobleSha256 } from '@noble/hashes/sha2.js'
 import { blake512 } from '@noble/hashes/blake1.js'
-import { hex } from '@scure/base'
+import { base58, hex } from '@scure/base'
+import { ed25519 } from '@noble/curves/ed25519.js'
 import { assureValidCreationOp, createOp, validateOperationLog } from '@did-plc/lib'
 import { Base8, mulPointEscalar, subOrder } from '@zk-kit/baby-jubjub'
 import { poseidon2 } from 'poseidon-lite/poseidon2'
@@ -13,6 +14,7 @@ import {
   PRF_INPUT,
   PRF_INPUT_TEXT,
   WORD_COUNT,
+  centralWallet,
   didGenesis,
   exportWords,
   genesisOperation,
@@ -54,7 +56,7 @@ test('a different PRF output gives a different seed', async () => {
 })
 
 test('HKDF agrees with an independent implementation', async () => {
-  for (const info of [INFO.seed, INFO.control(0), INFO.signing(1), INFO.wallet(7), INFO.seedFileKey, INFO.seedFileLabel, INFO.identity]) {
+  for (const info of [INFO.seed, INFO.control(0), INFO.signing(1), INFO.wallet(7), INFO.seedFileKey, INFO.seedFileLabel, INFO.identity, INFO.central]) {
     const ours = await hkdf(prf, info, 32)
     const theirs = nobleHkdf(nobleSha256, prf, undefined, utf8(info), 32)
     assert.equal(hex.encode(ours), hex.encode(theirs), info)
@@ -182,6 +184,40 @@ test('the seed must be 32 bytes', async () => {
   const seed = await seedFromPrf(prf)
   await assert.rejects(identitySecret(seed.subarray(0, 16)), /seed must be 32 bytes/)
   await assert.rejects(humanIdentity(new Uint8Array(33)), /seed must be 32 bytes/)
+})
+
+// The central wallet, one per person
+
+test('the central wallet is the pinned one, one ed25519 key from one HKDF output with no profile index', async () => {
+  const seed = await seedFromPrf(prf)
+  assert.equal(INFO.central, 'forest.foundation/central/v1')
+  for (let round = 0; round < 2; round++) {
+    const wallet = await centralWallet(seed)
+    assert.equal(wallet.address, vectors.central.wallet)
+    assert.equal(wallet.privateKey.length, 32)
+  }
+  // Recomputed without the library: HKDF from a second implementation, then ed25519, then base58.
+  const privateKey = nobleHkdf(nobleSha256, seed, undefined, utf8(INFO.central), 32)
+  assert.equal(base58.encode(ed25519.getPublicKey(privateKey)), vectors.central.wallet)
+})
+
+test('the central wallet is unrelated to every profile key and to the identity secret', async () => {
+  const seed = await seedFromPrf(prf)
+  const central = await centralWallet(seed)
+  for (const n of [0, 1, 2, 3]) {
+    const keys = await profileKeys(seed, n)
+    assert.notEqual(keys.wallet.address, central.address, `profile ${n}'s wallet`)
+    for (const info of [INFO.control(n), INFO.signing(n), INFO.wallet(n)]) {
+      assert.notEqual(hex.encode(await hkdf(seed, info, 32)), hex.encode(central.privateKey), info)
+    }
+  }
+  assert.notEqual(hex.encode(await identitySecret(seed)), hex.encode(central.privateKey))
+  assert.notEqual((await centralWallet(await seedFromPrf(otherPrf))).address, central.address, 'another seed')
+})
+
+test('the central wallet needs a 32-byte seed', async () => {
+  const seed = await seedFromPrf(prf)
+  await assert.rejects(centralWallet(seed.subarray(0, 16)), /seed must be 32 bytes/)
 })
 
 // The name

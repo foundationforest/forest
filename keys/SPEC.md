@@ -1,6 +1,6 @@
 # The keys recipe, version v1
 
-How a passkey's secret becomes a person's seed, and how the seed becomes separate keys and a name for each profile, plus one identity for the person that the registry uses. Everything runs on the device, in memory. Nothing here talks to a server, and nothing here is stored, except the seed file a person chooses to keep for an extra passkey. Any product that follows these steps opens the same seed from the same passkey and gets the same keys, so a person is never locked into one app.
+How a passkey's secret becomes a person's seed, and how the seed becomes separate keys and a name for each profile, plus one identity for the person that the registry uses and one central wallet for the person's money. Everything runs on the device, in memory. Nothing here talks to a server, and nothing here is stored, except the seed file a person chooses to keep for an extra passkey. Any product that follows these steps opens the same seed from the same passkey and gets the same keys, so a person is never locked into one app.
 
 Plain words first, then the exact steps. The library in `src/` implements the steps; `test/vectors.json` pins the answers.
 
@@ -10,9 +10,10 @@ Plain words first, then the exact steps. The library in `src/` implements the st
 2. The secret is stretched into a seed with a standard key derivation function. The seed is the one thing a person must never lose. It is 32 bytes.
 3. Each profile the person opens (profile 0, profile 1, ...) gets three keys from the seed, each derived with its own label: a control key, a signing key, and a wallet key. Knowing one key tells you nothing about the others, and nothing about the seed.
 4. One more secret comes out of the seed and belongs to the person, not to any profile: the one the registry uses to show that a verified human is asking, without saying which one. It is the same for every profile, so the registry can hold one entry per human while the profiles stay apart.
-5. A profile's name is a did:plc. The control key signs the profile's first directory record (the genesis operation), and the name is a hash of that record. The signing key is the one the record names for signing the profile's folder.
-6. A second passkey can open the same seed through a seed file: the seed encrypted under the second passkey's secret, stored under a label the second passkey can recompute. Whoever stores the file learns nothing.
-7. On paper, the seed is 24 English words.
+5. One more wallet belongs to the person, not to any profile: the central wallet, where money enters from a ramp and leaves to one. It has its own label and no profile index, so it is unrelated to every profile's keys.
+6. A profile's name is a did:plc. The control key signs the profile's first directory record (the genesis operation), and the name is a hash of that record. The signing key is the one the record names for signing the profile's folder.
+7. A second passkey can open the same seed through a seed file: the seed encrypted under the second passkey's secret, stored under a label the second passkey can recompute. Whoever stores the file learns nothing.
+8. On paper, the seed is 24 English words.
 
 ## 1. The passkey and its secret
 
@@ -71,7 +72,19 @@ From those 32 bytes the Semaphore library builds the identity and its commitment
 
 The commitment is the only part that ever leaves the device, and it goes to the issuer once, after the face check. The identity itself is rebuilt from the seed whenever a proof is needed; nothing is stored.
 
-## 5. The name
+## 5. The central wallet, one per person
+
+A person has one central wallet besides one wallet per profile. It is where money enters from a ramp and leaves to one; it never pays a seller and never receives from a buyer, so every deal touches only profile wallets and every receipt binds to a profile.
+
+```
+central wallet = HKDF-SHA256(seed, salt = empty, info = "forest.foundation/central/v1", length = 32) as an ed25519 seed
+```
+
+No profile index, like the identity secret: one per seed, whatever profiles the person opens. Otherwise it is a Solana wallet exactly like a profile's (section 3): the 32 bytes are the ed25519 private seed Solana tooling accepts, and the address is the public key in base58. Its own info string makes it one more independent HKDF output, so it cannot be computed from any profile's keys or from the identity secret, and none of them from it.
+
+Nothing links the central wallet to a profile until money moves between them. That move is where profiles can be linked on chain, which is for the app moving the money to handle, not for this recipe.
+
+## 6. The name
 
 A profile's name is a did:plc. Creating it takes one signed record, the genesis operation, and the name is a hash of that record. The recipe builds the record exactly as the directory's own library does, so the same inputs give the same name either way.
 
@@ -96,7 +109,7 @@ Steps:
 
 Building and signing talk to nothing. Sending the operation to the directory is a separate step: `POST <directory>/<did>` with the signed operation as JSON, directory `https://plc.directory`. Creating a name is permanent and public; a product does it when the person asks for the profile, not before.
 
-## 6. The seed file, for extra passkeys
+## 7. The seed file, for extra passkeys
 
 The first passkey needs no file: its seed comes straight from its secret (step 2). Any further passkey opens the same seed through a seed file. Let `PRF2` be the extra passkey's secret, obtained exactly as in step 1.
 
@@ -121,13 +134,13 @@ So a new device finds its own seed file from nothing but its passkey, and the fi
 
 Unwrapping fails, loudly, when the label does not match the passkey, when the ciphertext has the wrong length, and when the tag does not verify, which covers the wrong passkey and any damage.
 
-## 7. Paper export
+## 8. Paper export
 
 The seed is written as a BIP39 mnemonic in the English word list: 32 bytes of entropy plus an 8-bit checksum, 24 words. Import trims and lowercases the text, splits on any whitespace, checks the count and the checksum, and returns the 32 bytes. BIP39's own PBKDF2 "seed" step is not used and not needed: the words encode the seed itself.
 
 The words open everything. They are for paper, never for a screen that syncs, a photo, or a message.
 
-## 8. Fixed strings and encodings
+## 9. Fixed strings and encodings
 
 | Name | Value |
 |---|---|
@@ -136,13 +149,14 @@ The words open everything. They are for paper, never for a screen that syncs, a 
 | Profile key info | `forest.foundation/profile/<n>/control/v1`, `.../signing/v1`, `.../wallet/v1` |
 | Seed file info | `forest.foundation/seed-file/key/v1`, `forest.foundation/seed-file/label/v1` |
 | Identity info | `forest.foundation/identity/v1`, with no profile index |
+| Central wallet info | `forest.foundation/central/v1`, with no profile index |
 | HKDF | SHA-256, empty salt, output 32 bytes everywhere |
 | Cipher | AES-256-GCM, 12-byte nonce, 16-byte tag, label as additional data |
 | Encodings | did:key per the AT Protocol (`z` base58btc multikey); wallet address base58btc; label and ciphertext base64url without padding; DID suffix base32 lowercase without padding |
 
 A change to any value here is a new version with a new suffix. The old version keeps working for the seeds it made.
 
-## 9. What this does not do
+## 10. What this does not do
 
 - No recovery without a passkey or the words. Lose every passkey and the paper, and the seed is gone. Nobody can reset it, because nobody else has it.
 - No way back into the registry once the seed is gone. The identity secret comes from the seed, so losing the seed loses the identity: the badges stay on the chain, nobody else can use them, and the person cannot be put on the list again without another face check.
@@ -152,6 +166,6 @@ A change to any value here is a new version with a new suffix. The old version k
 - No wiping of memory. JavaScript cannot guarantee that bytes are erased; a product closes the tab, not the recipe.
 - No promise about a moved passkey. The design assumes a passkey copied between providers does not keep its PRF secret; such a passkey needs its own seed file.
 
-## 10. Test vectors
+## 11. Test vectors
 
-`test/vectors.json` pins, for one PRF output: the seed, profiles 0 and 1 (control and signing `did:key`, wallet address, did:plc and signature for handle `handle.example` and host `https://host.example`), the identity secret with its secret scalar, public key and commitment, the 24 words, and one seed file made under a second PRF output. `npm test` checks them, checks HKDF against a second implementation, checks the genesis operation against the directory's own library, and recomputes the commitment step by step without the Semaphore wrapper.
+`test/vectors.json` pins, for one PRF output: the seed, profiles 0 and 1 (control and signing `did:key`, wallet address, did:plc and signature for handle `handle.example` and host `https://host.example`), the identity secret with its secret scalar, public key and commitment, the central wallet's address, the 24 words, and one seed file made under a second PRF output. `npm test` checks them, checks HKDF against a second implementation, checks the genesis operation against the directory's own library, and recomputes the commitment step by step without the Semaphore wrapper.
