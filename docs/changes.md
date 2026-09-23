@@ -557,7 +557,10 @@ Log of what was built, learned, and left open, appended at the end of every sess
     - With the timeout check taken out of `close_unaccepted`: 2,184 I11 failures, exit 99.
     - With the session 11 clock put back: I7 failures on `cancel_buyer`, `object` and `release_by_silence`, exit 99.
     - Both restored; the rebuilt program is byte-identical.
-  - **Long run:** 40,000,000 flow calls (500,000 iterations of 80) on four threads, still running at this commit.
+  - **Long runs, every invariant held:**
+    - 40,000,000 flow calls (500,000 iterations of 80) on four threads, 815 seconds, exit 0, seed `aeb99d5a…857b3e`.
+    - That build predates a one-line doc comment on `accept`, and the binaries differ in 75 bytes. Anchor's `error!` records source line numbers, and the comment shifted them by one.
+    - So the same run was repeated on the committed program: 815 seconds, exit 0, seed `d8df6f01…ceee798e`, the binary's hash checked before and after.
   - **Costs:**
     - `close_unaccepted`, making the buyer's refund address: 31,500 to 45,100 compute units (2 to 3%), 579 bytes (47%).
     - `recover_late`, the refund address already there: 11,700 to 16,200 (0.8 to 1.2%), 578 bytes.
