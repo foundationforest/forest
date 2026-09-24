@@ -5,7 +5,8 @@ and the client a device uses to get one.
 
 **Nothing here is shipped.** It has run on a local validator and under LiteSVM, and nowhere else.
 No devnet, no mainnet, no Kora. Its devnet run is built, scripted and rehearsed, and stopped at the
-deploy for lack of test SOL (session 15, `docs/devnet.md`).
+deploy for lack of test SOL (sessions 15 and 18, `docs/devnet.md`). Its devnet keys now come from
+one phrase, so a later session resumes where this one stopped.
 
 A registration is one transaction. It carries the market name, the profile's DID, one Semaphore
 proof with its points compressed, the list root the proof was made against, and the code, and the
@@ -224,10 +225,11 @@ could rewrite is not a registry anyone should stake a name on.
 ## Deploy checklist
 
 In this order, for mainnet. Nothing here has been done there, and nothing is deployed anywhere.
-Devnet rehearses steps 1 to 5 with throwaway keys put into a copy of the source at build time
-(`devnet/build.sh`), and leaves out step 6 on purpose: a devnet program stays upgradeable. How to
-build, deploy and run it there, and what session 15 got done (everything but the deploy, which ran
-out of test SOL), is in `docs/devnet.md`.
+Devnet rehearses steps 1 to 5 with test keys derived from one phrase (`devnet/keys.sh`) and put
+into a copy of the source at build time (`devnet/build.sh`), and leaves out step 6 on purpose: a
+devnet program stays upgradeable. How to derive the keys, build, deploy and run it there, what it
+costs (about 3.53 SOL for both programs), and what sessions 15 and 18 got done (everything but the
+deploy, which ran out of test SOL), is in `docs/devnet.md`.
 
 1. **Replace the placeholder treasury.** `TREASURY` in `program/src/lib.rs` is derived from the
    public seed `REPLACE-BEFORE-DEPLOY-treasury-0` so the tests can sign for it, which means anyone

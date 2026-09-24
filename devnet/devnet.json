@@ -20,5 +20,24 @@
   "testDollar": {
     "mint": "J2QBACfPPb1ys2UyGx3ecXHgCr4hWuHFT3C2Nr6TSVSa",
     "decimals": 6
+  },
+  "airdrops": {
+    "note": "Session 18, 2026-09-24, for the deploy key only, through RPC requestAirdrop. First 12 requests from 15:30 to 15:33 UTC with backoff (2 then 1 SOL, both endpoints), then one 1 SOL request a minute, alternating, until 17:00 UTC: 62 in all, 2 granted, both by Alchemy's public demo endpoint. The rest were refused: api.devnet.solana.com 18 times with \"Internal error\" and 13 times with 429, \"You've either reached your airdrop limit today or the airdrop faucet has run dry\"; Alchemy's endpoint 29 times with HTTP 429 and no body. faucet.solana.com asks for a Cloudflare captcha on every request and was not used from the machine; Carlos could not get SOL from it either. The proof-of-work faucets on devnet (program PoWSNH2hEZogtCg1Zgm51FnkmJperzYDgPK4fvs8taL) are drained. In all: deploy 2.0 SOL, every other key 0.",
+    "granted": [
+      {
+        "key": "deploy",
+        "lamports": 1000000000,
+        "at": "16:25:39",
+        "via": "https://solana-devnet.g.alchemy.com/v2/demo",
+        "signature": "267zeEUrc5KvAosj5qhx2ZJnpj2joDWLkUBGHXhH5dLgdySGgpHZaqDy7ACN4aP9PVqUgieAhVYe34aSqM5f3aKT"
+      },
+      {
+        "key": "deploy",
+        "lamports": 1000000000,
+        "at": "16:27:40",
+        "via": "https://solana-devnet.g.alchemy.com/v2/demo",
+        "signature": "57NwVuvZTr5yf35r3FH6Fvztm79nS3UkhqC8JacidcrZ6GGVoT91nccGq1NK3e4VdqzB2NwLLnRdmDWNiSZUG2YF"
+      }
+    ]
   }
 }
