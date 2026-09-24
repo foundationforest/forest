@@ -59,10 +59,11 @@ fn spl_close_ix(account: Address, destination: Address, owner: Address) -> Instr
 
 
 /// A second, independent buyer with a funded token account for the harness mint.
+/// A fresh buyer whose tokens sit at its standard account, which is also its refund address.
 fn new_buyer(h: &mut Harness, tokens: u64) -> (Keypair, Address) {
     let buyer = Keypair::new();
     h.svm.airdrop(&buyer.pubkey(), 1_000_000_000).unwrap();
-    let t = Address::new_unique();
+    let t = refund_address(&buyer.pubkey(), &h.mint);
     h.svm.set_account(t, spl_token_account(&h.mint, &buyer.pubkey(), tokens)).unwrap();
     (buyer, t)
 }
@@ -131,7 +132,7 @@ fn substitution_payout_accounts_of_the_wrong_mint_owner_or_program_are_refused()
     let mut s = base;
     s.buyer_tokens = wrong_mint;
     let err = h.send(&[cancel_seller_ix(&s, seller.pubkey())], &[&seller]).expect_err("wrong mint");
-    assert!(err.contains("ConstraintTokenMint"), "{err}");
+    assert!(err.contains("ConstraintTokenMint") || err.contains("NotTheRefundAddress"), "{err}");
 
     // The seller puts its own account in the buyer's slot, to catch the buyer's refund: the same
     // account twice is a duplicate, and a second account the seller owns is the wrong owner.
@@ -144,7 +145,7 @@ fn substitution_payout_accounts_of_the_wrong_mint_owner_or_program_are_refused()
     let mut s = base;
     s.buyer_tokens = sellers_second;
     let err = h.send(&[cancel_seller_ix(&s, seller.pubkey())], &[&seller]).expect_err("seller's second account as buyer");
-    assert!(err.contains("ConstraintTokenOwner"), "{err}");
+    assert!(err.contains("NotTheRefundAddress"), "{err}");
 
     // A Token-2022 account laid out like a classic one, owned by the seller.
     let t22 = Address::new_unique();
@@ -517,7 +518,7 @@ fn finding_a_self_minted_token_makes_a_receipt_that_looks_like_real_money() {
     let buyer = h.buyer.insecure_clone();
     let fake = Address::new_unique();
     h.svm.set_account(fake, spl_mint_account(6, TOKEN_PROGRAM)).unwrap();
-    let fake_tokens = Address::new_unique();
+    let fake_tokens = refund_address(&buyer.pubkey(), &fake);
     h.svm.set_account(fake_tokens, spl_token_account(&fake, &buyer.pubkey(), 1_000_000_000_000_000)).unwrap();
     let seller_fake = Address::new_unique();
     h.svm.set_account(seller_fake, spl_token_account(&fake, &h.seller.pubkey(), 0)).unwrap();
@@ -846,7 +847,7 @@ fn late_money_at_a_closed_never_funded_escrow_is_adopted_when_the_buyer_reopens_
     assert!(err.contains("AccountNotInitialized"), "{err}");
     h.create(&t).expect("the buyer reopens the id");
     h.send(&[close_unfunded_ix(&s, buyer.pubkey())], &[&buyer]).expect("and closes it again");
-    assert_eq!(h.balance(&h.buyer_tokens), BUYER_START, "every unit back");
+    assert_eq!(h.buyer_total(), BUYER_START, "every unit back");
     println!("accepted, note: after close_unfunded there is no receipt; the buyer reopening the id adopts what arrived");
 }
 
@@ -1006,4 +1007,144 @@ fn pda_the_two_programs_cannot_share_an_address() {
     // Within the escrow, the seeds are fixed-length after the tag ("escrow", 32, 8), so two
     // different (buyer, id) pairs cannot concatenate to the same bytes.
     println!("rejected as expected: no seed collides across the two programs");
+}
+
+// ---------------------------------------------------------------------------------------------
+// 11. Session 14: every ending pays the buyer at its refund address and nowhere else
+// ---------------------------------------------------------------------------------------------
+
+/// SPL Token `SetAuthority`, `AccountOwner`: hand a token account to another key.
+fn hand_over_ix(account: Address, owner: Address, new_owner: Address) -> Instruction {
+    let mut data = vec![6u8, 2, 1];
+    data.extend_from_slice(new_owner.as_ref());
+    Instruction {
+        program_id: TOKEN_PROGRAM,
+        accounts: vec![AccountMeta::new(account, false), AccountMeta::new_readonly(owner, true)],
+        data,
+    }
+}
+
+#[test]
+fn every_ending_that_pays_the_buyer_pays_only_its_refund_address() {
+    // Before session 14 the endings the buyer does not sign (silence, the arbiter, the seller's
+    // cancellation, a close by the seller or the rent payer) paid the buyer at any token account
+    // it owned, whoever named it. Now every ending takes the refund address only: the buyer's
+    // standard account for the mint, fixed at creation by the buyer's key and the mint.
+    let mut h = Harness::new();
+    let buyer = h.buyer.insecure_clone();
+    let seller = h.seller.insecure_clone();
+    let arbiter = h.arbiter.insecure_clone();
+    let other = h.buyer_tokens; // the buyer owns it, but it is not the standard account
+    let mut t = h.terms(0);
+    t.arbiter = Some(arbiter.pubkey());
+
+    struct Case {
+        name: &'static str,
+        id: u64,
+        signers: Vec<Keypair>,
+    }
+    let cases = [
+        Case { name: "approve", id: 1, signers: vec![buyer.insecure_clone()] },
+        Case { name: "release_by_silence", id: 2, signers: vec![] },
+        Case { name: "agree", id: 3, signers: vec![buyer.insecure_clone(), seller.insecure_clone()] },
+        Case { name: "arbitrate", id: 4, signers: vec![arbiter.insecure_clone()] },
+        Case { name: "cancel_buyer", id: 5, signers: vec![buyer.insecure_clone()] },
+        Case { name: "cancel_seller", id: 6, signers: vec![seller.insecure_clone()] },
+        Case { name: "withdraw", id: 7, signers: vec![buyer.insecure_clone()] },
+        Case { name: "close_unfunded", id: 8, signers: vec![seller.insecure_clone()] },
+    ];
+    let mut paid_elsewhere: Vec<&str> = vec![];
+    for c in cases {
+        h.set_time(T0);
+        let mut t = t.clone();
+        t.id = c.id;
+        let escrow = match c.name {
+            "withdraw" => {
+                let (e, _) = h.create(&t).expect("create");
+                h.fund(&e, AMOUNT + 7);
+                e
+            }
+            "close_unfunded" => {
+                let (e, _) = h.create(&t).expect("create");
+                h.fund(&e, AMOUNT - 1);
+                e
+            }
+            _ => {
+                let e = h.funded(&t);
+                h.fund(&e, 7); // above the amount, so every ending pays the buyer something
+                e
+            }
+        };
+        if c.name == "release_by_silence" {
+            h.set_time(T0 + 7 * DAY + 1);
+        }
+        let right = h.settle_accounts(&escrow);
+        let wrong = SettleAccounts { buyer_tokens: other, ..right };
+        let ix = |s: &SettleAccounts| match c.name {
+            "approve" => approve_ix(s, buyer.pubkey(), 5_000),
+            "release_by_silence" => release_by_silence_ix(s),
+            "agree" => agree_ix(s, buyer.pubkey(), seller.pubkey(), 5_000),
+            "arbitrate" => arbitrate_ix(s, arbiter.pubkey(), 5_000),
+            "cancel_buyer" => cancel_buyer_ix(s, buyer.pubkey()),
+            "cancel_seller" => cancel_seller_ix(s, seller.pubkey()),
+            "withdraw" => withdraw_ix(s, buyer.pubkey()),
+            _ => close_unfunded_ix(s, seller.pubkey()),
+        };
+        let signers: Vec<&Keypair> = c.signers.iter().collect();
+        let other_before = h.balance(&other);
+        match h.send(&[ix(&wrong)], &signers) {
+            Ok(_) => {
+                paid_elsewhere.push(c.name);
+                continue;
+            }
+            Err(err) => assert!(err.contains("NotTheRefundAddress"), "{}: {err}", c.name),
+        }
+        assert_eq!(h.balance(&other), other_before, "{}: nothing moved", c.name);
+        let refund_before = h.balance(&h.refund());
+        h.send(&[ix(&right)], &signers).unwrap_or_else(|e| panic!("{}: {e}", c.name));
+        assert!(h.balance(&h.refund()) > refund_before, "{}: the buyer was paid at its refund address", c.name);
+    }
+    assert!(paid_elsewhere.is_empty(), "these endings paid the buyer at another account: {paid_elsewhere:?}");
+    println!("every ending that pays the buyer refuses any account but its refund address");
+}
+
+#[test]
+fn a_buyer_who_hands_its_refund_address_to_another_key_cannot_block_the_sellers_release() {
+    // The refund address is an address. A classic token account can be handed to another key, so
+    // the endings check where the money goes, not who holds that account now: a buyer who hands
+    // its standard account away cannot stop silence from paying the seller.
+    let mut h = Harness::new();
+    let buyer = h.buyer.insecure_clone();
+    let escrow = h.funded(&h.terms(1));
+    let refund = h.refund();
+    let elsewhere = Keypair::new().pubkey();
+    h.send(&[hand_over_ix(refund, buyer.pubkey(), elsewhere)], &[&buyer]).expect("the buyer hands its account away");
+    assert_eq!(&h.account(&refund).data[32..64], elsewhere.as_ref());
+    h.set_time(T0 + 7 * DAY + 1);
+    let s = h.settle_accounts(&escrow);
+    h.send(&[release_by_silence_ix(&s)], &[]).expect("silence still releases");
+    assert_eq!(h.balance(&h.seller_tokens), AMOUNT, "the seller is paid");
+    println!("a refund address handed to another key blocks nothing: silence still pays the seller");
+}
+
+#[test]
+fn a_missing_refund_address_is_made_in_the_same_transaction_by_whoever_sends_the_ending() {
+    // A buyer may close its empty standard account. The ending then needs it made first, which
+    // anyone can do in the same transaction with the standard idempotent instruction, at its own
+    // cost (and the account and its rent are the buyer's from then on).
+    let mut h = Harness::new();
+    let escrow = h.funded(&h.terms(1));
+    h.drop_refund();
+    h.set_time(T0 + 7 * DAY + 1);
+    let s = h.settle_accounts(&escrow);
+    let stranger = Keypair::new();
+    h.svm.airdrop(&stranger.pubkey(), 1_000_000_000).unwrap();
+    let err = h.send(&[release_by_silence_ix(&s)], &[]).expect_err("no refund address");
+    assert!(err.contains("AccountNotInitialized"), "{err}");
+    let (make, refund) = create_ata_idempotent_ix(stranger.pubkey(), h.buyer.pubkey(), h.mint);
+    assert_eq!(refund, h.refund());
+    h.send(&[make, release_by_silence_ix(&s)], &[&stranger]).expect("made, then released, in one transaction");
+    assert_eq!(h.balance(&h.seller_tokens), AMOUNT);
+    assert_eq!(h.balance(&refund), 0);
+    println!("a missing refund address: made first in the same transaction by whoever sends the ending");
 }

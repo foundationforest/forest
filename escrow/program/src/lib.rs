@@ -484,7 +484,7 @@ pub mod forest_escrow {
     /// Send everything back to the buyer from a funded escrow the seller never accepted, after
     /// its timeout: the last cancellation deadline, measured from the later of the service time
     /// and the observed funding, or 30 days after the observed funding when there are no steps.
-    /// Anyone may send it, so a sponsor's rent never waits on the buyer coming back. The money
+    /// Anyone may send it, so the rent payer's rent never waits on the buyer coming back. The money
     /// goes to the buyer's refund address, the buyer's associated token account for the mint,
     /// which the caller makes first if it does not exist; the deposit account's rent goes to the
     /// rent payer; the escrow account stays as a receipt whose outcome is `NeverAccepted`.
@@ -630,7 +630,7 @@ pub struct Create<'info> {
     /// The buyer, proposing; or the seller, invoicing.
     pub creator: Signer<'info>,
     /// Pays the rent of both accounts. Gets the deposit account's back when the escrow ends, and
-    /// both back if it never held the amount. A sponsor, or either party.
+    /// both back if it never held the amount. Either party, or any key paying for them.
     #[account(mut)]
     pub payer: Signer<'info>,
     /// A classic SPL Token mint. `anchor_spl::token::Mint` is owned by the classic token program
@@ -664,15 +664,17 @@ pub struct Object<'info> {
     pub buyer: Signer<'info>,
 }
 
-/// An ending anyone may send: `release_by_silence`.
+/// An ending anyone may send: `release_by_silence`. Every ending pays the buyer only at its refund
+/// address, the ones anyone may send and the ones a party signs alike.
 #[derive(Accounts)]
 pub struct Settle<'info> {
     #[account(mut, has_one = vault, has_one = rent_payer)]
     pub escrow: Account<'info, Escrow>,
     #[account(mut)]
     pub vault: Account<'info, TokenAccount>,
-    /// Any token account for the mint that the buyer owns.
-    #[account(mut, token::mint = escrow.mint, token::authority = escrow.buyer)]
+    /// The buyer's refund address and no other account: checked by address, not by who holds it
+    /// now, so a buyer who hands that account to another key cannot block the seller's release.
+    #[account(mut, token::mint = escrow.mint, address = escrow.refund_address() @ EscrowError::NotTheRefundAddress)]
     pub buyer_tokens: Account<'info, TokenAccount>,
     /// Any token account for the mint that the seller owns.
     #[account(mut, token::mint = escrow.mint, token::authority = escrow.seller)]
@@ -691,7 +693,8 @@ pub struct SettleAs<'info> {
     pub escrow: Account<'info, Escrow>,
     #[account(mut)]
     pub vault: Account<'info, TokenAccount>,
-    #[account(mut, token::mint = escrow.mint, token::authority = escrow.buyer)]
+    /// The buyer's refund address and no other account.
+    #[account(mut, token::mint = escrow.mint, address = escrow.refund_address() @ EscrowError::NotTheRefundAddress)]
     pub buyer_tokens: Account<'info, TokenAccount>,
     #[account(mut, token::mint = escrow.mint, token::authority = escrow.seller)]
     pub seller_tokens: Account<'info, TokenAccount>,
@@ -709,7 +712,8 @@ pub struct SettleBoth<'info> {
     pub escrow: Account<'info, Escrow>,
     #[account(mut)]
     pub vault: Account<'info, TokenAccount>,
-    #[account(mut, token::mint = escrow.mint, token::authority = escrow.buyer)]
+    /// The buyer's refund address and no other account.
+    #[account(mut, token::mint = escrow.mint, address = escrow.refund_address() @ EscrowError::NotTheRefundAddress)]
     pub buyer_tokens: Account<'info, TokenAccount>,
     #[account(mut, token::mint = escrow.mint, token::authority = escrow.seller)]
     pub seller_tokens: Account<'info, TokenAccount>,
@@ -722,14 +726,16 @@ pub struct SettleBoth<'info> {
 }
 
 /// The buyer's withdrawal before acceptance. It pays the seller nothing, so it does not name the
-/// seller's token account: a buyer never has to make one to get their own money back.
+/// seller's token account: a buyer never has to make one to get their own money back. It pays the
+/// buyer at the refund address, like every ending.
 #[derive(Accounts)]
 pub struct Withdraw<'info> {
     #[account(mut, has_one = vault, has_one = rent_payer, has_one = buyer)]
     pub escrow: Account<'info, Escrow>,
     #[account(mut)]
     pub vault: Account<'info, TokenAccount>,
-    #[account(mut, token::mint = escrow.mint, token::authority = escrow.buyer)]
+    /// The buyer's refund address and no other account.
+    #[account(mut, token::mint = escrow.mint, address = escrow.refund_address() @ EscrowError::NotTheRefundAddress)]
     pub buyer_tokens: Account<'info, TokenAccount>,
     /// CHECK: the key recorded at creation, checked by `has_one`. It only receives lamports.
     #[account(mut)]
@@ -746,7 +752,8 @@ pub struct CloseUnfunded<'info> {
     pub escrow: Account<'info, Escrow>,
     #[account(mut)]
     pub vault: Account<'info, TokenAccount>,
-    #[account(mut, token::mint = escrow.mint, token::authority = escrow.buyer)]
+    /// The buyer's refund address and no other account.
+    #[account(mut, token::mint = escrow.mint, address = escrow.refund_address() @ EscrowError::NotTheRefundAddress)]
     pub buyer_tokens: Account<'info, TokenAccount>,
     /// CHECK: the key recorded at creation, checked by `has_one`. It only receives lamports.
     #[account(mut)]

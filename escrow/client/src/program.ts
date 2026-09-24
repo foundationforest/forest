@@ -173,11 +173,33 @@ export function vaultAddress(escrow: PublicKey, mint: PublicKey): PublicKey {
 
 /**
  * The buyer's refund address: the buyer's associated token account for the mint, computed from
- * two keys fixed at creation. `recover_late` and `close_unaccepted`, which anyone may send, pay the
- * buyer here and nowhere else, and make it first, at the sender's cost, if it does not exist.
+ * two keys fixed at creation. Every ending pays the buyer here and nowhere else (session 14).
+ * `recover_late` and `close_unaccepted` make it first, at the sender's cost, if it does not exist;
+ * for every other ending the sender puts `makeRefundAddressIx` first in the same transaction.
  */
 export function refundAddress(buyer: PublicKey, mint: PublicKey): PublicKey {
   return associatedTokenAddress(buyer, mint)
+}
+
+/**
+ * Make the buyer's refund address if it is missing, and do nothing if it is there: the associated
+ * token program's idempotent create, `payer` paying its rent. Put it before an ending when the
+ * buyer has no standard account for the mint (a buyer may close an empty one). The account, and
+ * its rent, are the buyer's from then on.
+ */
+export function makeRefundAddressIx(args: { payer: PublicKey; buyer: PublicKey; mint: PublicKey }): TransactionInstruction {
+  return new TransactionInstruction({
+    programId: ASSOCIATED_TOKEN_PROGRAM_ID,
+    keys: [
+      rw(args.payer, true),
+      rw(refundAddress(args.buyer, args.mint)),
+      ro(args.buyer),
+      ro(args.mint),
+      ro(SystemProgram.programId),
+      ro(TOKEN_PROGRAM_ID),
+    ],
+    data: Buffer.from([1]),
+  })
 }
 
 /**
@@ -401,19 +423,21 @@ export function objectIx(args: {
 }
 
 /**
- * The accounts every ending touches: the escrow, its deposit account, a token account for the
- * mint that the buyer owns, one the seller owns, and the rent payer recorded at creation.
+ * The accounts every ending touches: the escrow, its deposit account, the buyer's refund address
+ * (named from `buyer` and `mint`, so no other account can be named), a token account for the mint
+ * that the seller owns, and the rent payer recorded at creation.
  */
 export type SettleAccounts = {
   escrow: PublicKey
   vault: PublicKey
-  buyerTokens: PublicKey
+  buyer: PublicKey
+  mint: PublicKey
   sellerTokens: PublicKey
   rentPayer: PublicKey
 }
 
 function settleKeys(s: SettleAccounts): AccountMeta[] {
-  return [rw(s.escrow), rw(s.vault), rw(s.buyerTokens), rw(s.sellerTokens), rw(s.rentPayer), ro(TOKEN_PROGRAM_ID)]
+  return [rw(s.escrow), rw(s.vault), rw(refundAddress(s.buyer, s.mint)), rw(s.sellerTokens), rw(s.rentPayer), ro(TOKEN_PROGRAM_ID)]
 }
 
 /** `release_by_silence`: anyone, after the silence period. All to the seller. */
@@ -481,7 +505,7 @@ export type RefundAccounts = Omit<SettleAccounts, 'sellerTokens'>
 function refundIx(name: 'withdraw' | 'close_unfunded', accounts: RefundAccounts, signer: PublicKey, programId: PublicKey): TransactionInstruction {
   return new TransactionInstruction({
     programId,
-    keys: [rw(accounts.escrow), rw(accounts.vault), rw(accounts.buyerTokens), rw(accounts.rentPayer), ro(TOKEN_PROGRAM_ID), ro(signer, true)],
+    keys: [rw(accounts.escrow), rw(accounts.vault), rw(refundAddress(accounts.buyer, accounts.mint)), rw(accounts.rentPayer), ro(TOKEN_PROGRAM_ID), ro(signer, true)],
     data: concat([discriminator('global', name)]),
   })
 }

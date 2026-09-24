@@ -10,7 +10,7 @@ import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 
 import { getAssociatedTokenAddressSync } from '@solana/spl-token'
-import { Keypair, PublicKey } from '@solana/web3.js'
+import { Keypair, PublicKey, SystemProgram } from '@solana/web3.js'
 
 import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -50,6 +50,7 @@ import {
   randomId,
   recoverLateIx,
   refundAddress,
+  makeRefundAddressIx,
   releaseBySilenceIx,
   schedule,
   share,
@@ -259,11 +260,14 @@ test('the endings share one account list and add their signers after it', () => 
   const accounts = {
     escrow,
     vault: vaultAddress(escrow, mint),
-    buyerTokens: Keypair.generate().publicKey,
+    buyer,
+    mint,
     sellerTokens: Keypair.generate().publicKey,
     rentPayer: payer,
   }
-  const common = [accounts.escrow, accounts.vault, accounts.buyerTokens, accounts.sellerTokens, accounts.rentPayer, TOKEN_PROGRAM_ID].map((k) => k.toBase58())
+  // The buyer's slot is always its refund address: the client cannot name another.
+  const refund = refundAddress(buyer, mint)
+  const common = [accounts.escrow, accounts.vault, refund, accounts.sellerTokens, accounts.rentPayer, TOKEN_PROGRAM_ID].map((k) => k.toBase58())
   const keys = (ix: { keys: { pubkey: PublicKey; isSigner: boolean }[] }) => ix.keys.map((k) => k.pubkey.toBase58())
   const signers = (ix: { keys: { pubkey: PublicKey; isSigner: boolean }[] }) => ix.keys.filter((k) => k.isSigner).map((k) => k.pubkey.toBase58())
 
@@ -293,7 +297,7 @@ test('the endings share one account list and add their signers after it', () => 
     assert.equal(ix.data.length, 8)
   }
   // The two exits that pay the seller nothing name no seller account.
-  const short = [accounts.escrow, accounts.vault, accounts.buyerTokens, accounts.rentPayer, TOKEN_PROGRAM_ID].map((k) => k.toBase58())
+  const short = [accounts.escrow, accounts.vault, refund, accounts.rentPayer, TOKEN_PROGRAM_ID].map((k) => k.toBase58())
   for (const [ix, who, name] of [
     [withdrawIx({ accounts, buyer }), buyer, 'withdraw'],
     [closeUnfundedIx({ accounts, closer: payer }), payer, 'close_unfunded'],
@@ -304,6 +308,13 @@ test('the endings share one account list and add their signers after it', () => 
   }
   assert.deepEqual(keys(markFundedIx({ escrow, vault: accounts.vault })), [escrow.toBase58(), accounts.vault.toBase58()])
   assert.deepEqual(signers(objectIx({ escrow, vault: accounts.vault, buyer })), [buyer.toBase58()])
+
+  // A missing refund address is made first, the standard idempotent way, by whoever sends.
+  const make = makeRefundAddressIx({ payer, buyer, mint })
+  assert.equal(make.programId.toBase58(), ASSOCIATED_TOKEN_PROGRAM_ID.toBase58())
+  assert.deepEqual(keys(make), [payer, refund, buyer, mint, SystemProgram.programId, TOKEN_PROGRAM_ID].map((k) => k.toBase58()))
+  assert.deepEqual(signers(make), [payer.toBase58()])
+  assert.deepEqual([...make.data], [1])
 
   assert.throws(() => approveIx({ accounts, buyer, sellerBps: 10_001 }), /BadSplit/)
   assert.throws(() => agreeIx({ accounts, buyer, seller, sellerBps: -1 }), /BadSplit/)
