@@ -56,4 +56,6 @@ pub enum RegistryError {
     FeeZero,
     #[msg("this list is closed to new members")]
     ListClosed,
+    #[msg("only the list's owner may change its insert keys or close it")]
+    NotTheListOwner,
 }

@@ -39,10 +39,14 @@ import {
 } from '@solana/web3.js'
 
 import {
+  FOUNDATION_ISSUER,
+  FOUNDATION_ISSUER_PLACEHOLDER_SEED,
   PROGRAM_ID,
   TREASURY_PLACEHOLDER_SEED,
   USDC_MINT,
   addIssuerIx,
+  openListIx,
+  type RegisterAccounts,
   buildRegistration,
   codeFor,
   codeTreeAddress,
@@ -192,7 +196,8 @@ test('a registration goes through a real validator', { timeout: 300_000 }, async
 
   // The treasury is the program's placeholder constant, which this seed signs for.
   const treasury = Keypair.fromSeed(TREASURY_PLACEHOLDER_SEED)
-  const issuer = Keypair.generate()
+  // List 0's owner and first insert key is the program's placeholder issuer constant, likewise.
+  const issuer = Keypair.fromSeed(FOUNDATION_ISSUER_PLACEHOLDER_SEED)
   const profileWallet = Keypair.generate()
 
   const airdrop = await connection.requestAirdrop(payer.publicKey, 100 * LAMPORTS_PER_SOL)
@@ -203,8 +208,8 @@ test('a registration goes through a real validator', { timeout: 300_000 }, async
   const usdc = USDC_MINT
   const treasuryTokens = Keypair.generate()
   const profileTokens = Keypair.generate()
-  // The sponsor's own tokens: on the sponsored path the fee payer also pays the fee.
-  const sponsorTokens = Keypair.generate()
+  // The fee payer's own tokens, for the attempts below where it pays the fee for someone else.
+  const payerTokens = Keypair.generate()
   const accountRent = await connection.getMinimumBalanceForRentExemption(ACCOUNT_SIZE)
   const newAccount = (key: PublicKey, space: number, lamports: number) =>
     SystemProgram.createAccount({
@@ -221,19 +226,16 @@ test('a registration goes through a real validator', { timeout: 300_000 }, async
       newAccount(profileTokens.publicKey, ACCOUNT_SIZE, accountRent),
       createInitializeAccount3Instruction(profileTokens.publicKey, usdc, profileWallet.publicKey),
       createMintToInstruction(usdc, profileTokens.publicKey, payer.publicKey, 1_000_000),
-      newAccount(sponsorTokens.publicKey, ACCOUNT_SIZE, accountRent),
-      createInitializeAccount3Instruction(sponsorTokens.publicKey, usdc, payer.publicKey),
-      createMintToInstruction(usdc, sponsorTokens.publicKey, payer.publicKey, 1_000_000),
+      newAccount(payerTokens.publicKey, ACCOUNT_SIZE, accountRent),
+      createInitializeAccount3Instruction(payerTokens.publicKey, usdc, payer.publicKey),
+      createMintToInstruction(usdc, payerTokens.publicKey, payer.publicKey, 1_000_000),
     ],
-    [payer, treasuryTokens, profileTokens, sponsorTokens],
+    [payer, treasuryTokens, profileTokens, payerTokens],
   )
 
   // init carries nothing that chooses anything, and only the payer signs it.
+  // List 0 opens owned by the foundation's issuer key, which inserts at once.
   await send([initIx({ payer: payer.publicKey })], [payer])
-  await send(
-    [addIssuerIx({ treasury: treasury.publicKey, listIndex: 0, issuer: issuer.publicKey })],
-    [payer, treasury],
-  )
 
   const config = decodeConfig(new Uint8Array((await connection.getAccountInfo(configAddress()))!.data))
   assert.equal(config.treasury.toBase58(), treasury.publicKey.toBase58())
@@ -259,18 +261,34 @@ test('a registration goes through a real validator', { timeout: 300_000 }, async
   const list = decodeIdentityList(new Uint8Array((await connection.getAccountInfo(listAddress(0)))!.data))
   assert.equal(list.leafCount, BigInt(leaves.length))
   assert.equal(list.issuers[0].toBase58(), issuer.publicKey.toBase58())
+  assert.equal(list.owner.toBase58(), FOUNDATION_ISSUER.toBase58())
 
-  // Everything above is the foundation's. This is the only part a person's device ever does. The
-  // sponsored path: the fee payer (Kora, in production) pays the network fee, the rent and the
-  // fee; the profile's wallet signs for consent.
-  const sponsored = {
+  // Anyone opens a list of their own, pays its rent, owns it and names its insert keys.
+  const other = Keypair.generate()
+  await confirm(await connection.requestAirdrop(other.publicKey, LAMPORTS_PER_SOL))
+  const helper = Keypair.generate().publicKey
+  await send(
+    [
+      openListIx({ payer: other.publicKey, owner: other.publicKey, newIndex: 1 }),
+      addIssuerIx({ owner: other.publicKey, listIndex: 1, issuer: helper }),
+    ],
+    [payer, other],
+  )
+  const list1 = decodeIdentityList(new Uint8Array((await connection.getAccountInfo(listAddress(1)))!.data))
+  assert.equal(list1.owner.toBase58(), other.publicKey.toBase58())
+  assert.deepEqual(list1.issuers.map((k) => k.toBase58()), [other.publicKey.toBase58(), helper.toBase58()])
+
+  // Everything above is the issuers'. This is the only part a person's device ever does. The fee
+  // payer (Kora, in production) pays the network fee and the code account's rent, and charges the
+  // person for them outside the program; the profile's wallet pays the 25 cents and signs.
+  const accounts = {
     payer: payer.publicKey,
     profileWallet: profileWallet.publicKey,
-    feeAuthority: payer.publicKey,
-    feeTokens: sponsorTokens.publicKey,
+    feeAuthority: profileWallet.publicKey,
+    feeTokens: profileTokens.publicKey,
     treasuryTokens: treasuryTokens.publicKey,
   }
-  const build = async (accounts: typeof sponsored) =>
+  const build = async (accounts: RegisterAccounts) =>
     buildRegistration({
       secret: alice,
       market: MARKET,
@@ -283,14 +301,15 @@ test('a registration goes through a real validator', { timeout: 300_000 }, async
     })
 
   const started = performance.now()
-  const registration = await build(sponsored)
+  const registration = await build(accounts)
   const proveMs = Math.round(performance.now() - started)
 
   assert.equal(registration.code, codeFor(alice, MARKET))
   assert.equal(registration.root, fromBytes32(list.root), 'the proof is against the root on the chain')
 
-  // The sponsor saw the proof first. It tries to land it under its own key as the profile's
-  // wallet: the proof names the profile's wallet, so it does not verify, and the code is not burned.
+  // The fee payer saw the proof first. It tries to land it under its own key as the profile's wallet,
+  // paying the fee itself: the proof names the profile's wallet, so it does not verify, and the code
+  // is not burned.
   const stolen = registerIx({
     market: MARKET,
     did: DID,
@@ -298,7 +317,7 @@ test('a registration goes through a real validator', { timeout: 300_000 }, async
     root: registration.root,
     code: registration.code,
     proof: registration.proof,
-    accounts: { ...sponsored, profileWallet: payer.publicKey },
+    accounts: { ...accounts, profileWallet: payer.publicKey, feeAuthority: payer.publicKey, feeTokens: payerTokens.publicKey },
   })
   const frontRun = new VersionedTransaction(
     new TransactionMessage({
@@ -339,6 +358,7 @@ test('a registration goes through a real validator', { timeout: 300_000 }, async
   assert.equal(entry.did, DID)
   assert.equal(entry.wallet.toBase58(), profileWallet.publicKey.toBase58(), 'the entry names the profile wallet')
   assert.equal(entry.listIndex, 0)
+  assert.equal(entry.listOwner.toBase58(), FOUNDATION_ISSUER.toBase58(), 'and who vouched')
   assert.deepEqual(Buffer.from(entry.code), Buffer.from(registration.codeBytes))
 
   const code = await connection.getAccountInfo(usedCodeAddress(registration.code))
@@ -351,11 +371,11 @@ test('a registration goes through a real validator', { timeout: 300_000 }, async
   assert.equal(tree.count, 1n)
 
   assert.equal((await getAccount(connection, treasuryTokens.publicKey)).amount, QUARTER_USDC)
-  assert.equal((await getAccount(connection, sponsorTokens.publicKey)).amount, 1_000_000n - QUARTER_USDC, 'the sponsor paid the fee')
-  assert.equal((await getAccount(connection, profileTokens.publicKey)).amount, 1_000_000n, 'the profile paid nothing')
+  assert.equal((await getAccount(connection, profileTokens.publicKey)).amount, 1_000_000n - QUARTER_USDC, 'the profile paid the fee')
+  assert.equal((await getAccount(connection, payerTokens.publicKey)).amount, 1_000_000n, 'the fee payer paid no fee')
 
-  // The same badge a second time cannot be bought, on the paid path either.
-  const again = await build({ ...sponsored, feeAuthority: profileWallet.publicKey, feeTokens: profileTokens.publicKey })
+  // The same badge a second time cannot be bought, whoever pays: here another key pays the fee.
+  const again = await build({ ...accounts, feeAuthority: payer.publicKey, feeTokens: payerTokens.publicKey })
   again.transaction.sign([profileWallet])
   again.transaction.sign([payer])
   await assert.rejects(

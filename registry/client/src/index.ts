@@ -42,7 +42,7 @@ export type Registration = MembershipProof & {
   instruction: TransactionInstruction
   /**
    * Unsigned. The profile's wallet signs it for consent, whoever pays; the fee authority signs if it
-   * is someone else (a sponsor paying the fee); the fee payer co-signs for the network fee and sends.
+   * is another key; the fee payer co-signs for the network fee and sends.
    */
   transaction: VersionedTransaction
 }

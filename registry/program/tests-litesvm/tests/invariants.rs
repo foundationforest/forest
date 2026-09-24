@@ -10,9 +10,9 @@
 //!
 //! Random flows: register (the five real proofs, sometimes corrupted, signed by the profile's own
 //! wallet or by another, the fee paid by the profile or by anyone else), insert, propose and accept
-//! a treasury, add a token at a fee of the treasury's choosing, add and remove issuers, open and
-//! close a list, send lamports to a registry account, sweep, and move the rent rate between the
-//! three rates the sweep exists for. The model says whether each must land; after each, the
+//! a treasury, add a token at a fee of the treasury's choosing, open a list as anyone, add and remove
+//! a list's insert keys and close it as its owner or as anyone else, send lamports to a registry
+//! account, sweep, and move the rent rate between the three rates the sweep exists for. The model says whether each must land; after each, the
 //! invariants:
 //!   R1 a code is never recorded twice, and the code tree's count and root are those of the codes
 //!      accepted, in order;
@@ -22,7 +22,10 @@
 //!   R4 each list's ring holds exactly its last 128 roots;
 //!   R5 the program accepts exactly what the rules allow and refuses everything else;
 //!   R6 every registration is signed by the wallet its proof names, and its entry names that
-//!      wallet; each mint's fee never changes once set; a closed list takes no member and stays closed.
+//!      wallet, its list and that list's owner; each mint's fee never changes once set; a closed
+//!      list takes no member and stays closed;
+//!   R7 a list's owner never changes, and only it changes the list's insert keys or closes it
+//!      (session 14: anyone may open a list; the treasury has no say over any).
 //!
 //! `cargo test --release --test invariants -- --nocapture`; `FOREST_FUZZ_ITERATIONS`,
 //! `FOREST_FUZZ_FLOWS` and `FOREST_FUZZ_SEED` size and replay a run.
@@ -90,6 +93,8 @@ struct World {
     leaves: Vec<Vec<[u8; 32]>>,
     rings: Vec<Vec<[u8; 32]>>,
     issuers: Vec<Vec<Address>>,
+    /// Each list's owner, recorded when it opened and never changed.
+    owners: Vec<Address>,
     closed: Vec<bool>,
     codes: Vec<[u8; 32]>,
     used: HashSet<[u8; 32]>,
@@ -104,7 +109,7 @@ struct World {
 impl World {
     fn new(seed: u64) -> Self {
         let f = Fixtures::load();
-        let h = Harness::new(); // init, and the harness issuer added to list 0 by the treasury
+        let h = Harness::new(); // init: list 0 owned by the foundation's issuer key, its first insert key
         let issuer = h.issuer.insecure_clone();
         let mut people = vec![issuer];
         people.extend((1..PEOPLE).map(|_| Keypair::new()));
@@ -129,6 +134,7 @@ impl World {
             leaves: vec![vec![]],
             rings: vec![vec![]],
             issuers: vec![],
+            owners: vec![],
             closed: vec![false],
             codes: vec![],
             used: HashSet::new(),
@@ -147,17 +153,20 @@ impl World {
                 w.h.svm.airdrop(&p.pubkey(), 1_000_000_000_000).unwrap();
             }
         }
-        w.issuers.push(vec![w.people[0].pubkey()]);
+        // List 0 is the foundation issuer's from `init`, and that key is its first insert key.
+        let issuer = w.people[0].pubkey();
+        assert_eq!(issuer, FOUNDATION_ISSUER);
+        w.issuers.push(vec![issuer]);
+        w.owners.push(issuer);
         w.give_token_accounts(USDC_MINT);
-        // List 1, as the fixtures expect, then both lists' real leaves.
+        // List 1, as the fixtures expect, opened by the same key, then both lists' real leaves.
         let payer = w.h.payer.pubkey();
-        assert!(w.send(&[open_list_ix(payer, TREASURY, 1)], "open_list"));
+        assert!(w.send(&[open_list_ix(payer, issuer, 1)], "open_list"));
         w.leaves.push(vec![]);
         w.rings.push(vec![]);
         w.closed.push(false);
-        let issuer = w.people[0].pubkey();
-        assert!(w.send(&[issuer_ix("add_issuer", TREASURY, 1, issuer)], "add_issuer"));
         w.issuers.push(vec![issuer]);
+        w.owners.push(issuer);
         for fl in &f.lists {
             for leaf in &fl.leaves {
                 w.do_insert(fl.index, issuer, dec_to_be32(leaf), true);
@@ -325,6 +334,8 @@ impl World {
         let entries = registered_events(&logs);
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].wallet, profile, "R6 the entry names the wallet that signed");
+        assert_eq!(entries[0].list_index, list, "R6 the entry names the list");
+        assert_eq!(entries[0].list_owner, self.owners[list as usize], "R6 and the list's owner");
         assert_eq!(profile, self.profiles[k].pubkey(), "R6 and it is the wallet the proof names");
         assert_eq!(self.balance(&fee_tokens), balance - fee, "the fee authority paid exactly the fee");
         assert_eq!(self.balance(&treasury_tokens), t_before + fee, "R2 the treasury got exactly the fee");
@@ -337,7 +348,13 @@ impl World {
 
     fn insert(&mut self) {
         let list = self.rng.below(self.leaves.len() + 1) as u32;
-        let signer = if self.rng.below(10) < 7 { self.people[0].pubkey() } else { self.any_key() };
+        // Usually one of the list's own insert keys that this world can sign for, else anyone.
+        let known: Vec<Address> = self
+            .issuers
+            .get(list as usize)
+            .map(|l| l.iter().copied().filter(|k| self.people.iter().chain(self.treasuries.iter()).any(|p| p.pubkey() == *k)).collect())
+            .unwrap_or_default();
+        let signer = if !known.is_empty() && self.rng.below(10) < 7 { known[self.rng.below(known.len())] } else { self.any_key() };
         let commitment = match self.rng.below(30) {
             0 => [0u8; 32],
             1 => plus_r(&[0u8; 32]),
@@ -459,11 +476,20 @@ impl World {
         self.check_config();
     }
 
+    /// Usually the list's owner, sometimes anyone, the treasury included.
+    fn list_signer(&mut self, list: u32) -> Address {
+        match self.owners.get(list as usize) {
+            Some(owner) if self.rng.below(10) < 7 => *owner,
+            _ if self.rng.below(4) == 0 => self.treasury,
+            _ => self.any_key(),
+        }
+    }
+
     fn close_list(&mut self) {
         let list = self.rng.below(self.leaves.len() + 1) as u32;
-        let signer = if self.rng.below(10) < 7 { self.treasury } else { self.any_key() };
+        let signer = self.list_signer(list);
         let exists = (list as usize) < self.leaves.len();
-        let valid = signer == self.treasury && exists && !self.closed[list as usize];
+        let valid = exists && signer == self.owners[list as usize] && !self.closed[list as usize];
         let ok = self.send(&[close_list_ix(signer, list)], "close_list");
         assert_eq!(ok, valid, "R5 close_list: model {valid}, program {ok}");
         if ok {
@@ -474,11 +500,11 @@ impl World {
     fn issuers(&mut self) {
         let add = self.rng.coin();
         let list = self.rng.below(self.leaves.len() + 1) as u32;
-        let signer = if self.rng.below(10) < 7 { self.treasury } else { self.any_key() };
+        let signer = self.list_signer(list);
         let key = if self.rng.coin() { self.a_person() } else { Address::new_unique() };
         let exists = (list as usize) < self.leaves.len();
-        let valid = signer == self.treasury
-            && exists
+        let valid = exists
+            && signer == self.owners[list as usize]
             && if add {
                 !self.issuers[list as usize].contains(&key) && self.issuers[list as usize].len() < 8
             } else {
@@ -501,18 +527,20 @@ impl World {
         if self.leaves.len() >= 6 {
             return;
         }
-        let signer = if self.rng.below(10) < 7 { self.treasury } else { self.any_key() };
-        let valid = signer == self.treasury;
+        // Anyone opens a list and owns it: a person, or a treasury key, which has no more say
+        // over lists than anyone. The rent comes from the harness payer, or from the owner itself
+        // when it is a person (a treasury key paying would break R2's watch, not a rule).
+        let owner = self.any_key();
+        let is_person = self.people.iter().any(|k| k.pubkey() == owner);
+        let payer = if is_person && self.rng.coin() { owner } else { self.h.payer.pubkey() };
         let n = self.leaves.len() as u32;
-        let payer = self.h.payer.pubkey();
-        let ok = self.send(&[open_list_ix(payer, signer, n)], "open_list");
-        assert_eq!(ok, valid, "R5 open_list: model {valid}, program {ok}");
-        if ok {
-            self.leaves.push(vec![]);
-            self.rings.push(vec![]);
-            self.issuers.push(vec![]);
-            self.closed.push(false);
-        }
+        let ok = self.send(&[open_list_ix(payer, owner, n)], "open_list");
+        assert!(ok, "R5 open_list: anyone may open a list, program refused: {}", self.last_error);
+        self.leaves.push(vec![]);
+        self.rings.push(vec![]);
+        self.issuers.push(vec![owner]);
+        self.owners.push(owner);
+        self.closed.push(false);
     }
 
     /// The rent rate moves between the three the sweep was written for, either way.
@@ -599,6 +627,8 @@ impl World {
             let view = self.h.list(i as u32);
             assert_eq!(view.leaf_count, leaves.len() as u64, "R3 leaf count");
             assert_eq!(view.closed, self.closed[i], "R6 a closed list stays closed, an open one open");
+            assert_eq!(view.owner, self.owners[i], "R7 a list's owner never changes");
+            assert_eq!(view.issuers, self.issuers[i], "R7 its insert keys are the ones its owner set");
         }
         for code in &self.codes {
             let a: Account = self.h.svm.get_account(&used_code_address(code)).expect("R1 every code's account stays");

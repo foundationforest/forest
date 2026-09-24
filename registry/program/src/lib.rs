@@ -38,6 +38,15 @@ declare_id!("FoRPzGfMyWjK8uLjMoZfae2yevnviyCsGsHM7AwBwK8B");
 /// which means anyone with this repo can sign for it. A program deployed with it has no treasury.
 pub const TREASURY: Pubkey = pubkey!("F35kGoXPCdZLdanwTGuShYXxAkmkpHP9LWgV7dNvKU5s");
 
+/// The foundation's issuer key: list 0's owner and its first insert key, written by `init`. A
+/// constant for the treasury's reason: whoever sends `init` must not get to choose who vouches for
+/// the first list. Every later list is opened by anyone, who owns it.
+///
+/// PLACEHOLDER. Replace with the foundation's issuer key before the first deploy. This key is
+/// derived from the public seed `REPLACE-BEFORE-DEPLOY-issuer-000` so the tests can sign for it,
+/// which means anyone with this repo can sign for it. Deployed with it, list 0 is anyone's.
+pub const FOUNDATION_ISSUER: Pubkey = pubkey!("H7qXWNAeAvedhwuvhAkBYK2WE2nA3KgbufnRz38zFdzS");
+
 /// USDC. `mints[0]` forever. A constant rather than an argument to `init`, for the same reason
 /// the treasury is: whoever calls `init` first must not get to choose what "USDC" means.
 /// Mainnet by default; `--features devnet` builds the program for devnet's USDC.
@@ -92,8 +101,9 @@ pub mod forest_registry {
     /// Create the registry: the config, the first identity list, and the tree of used codes.
     ///
     /// Anyone may call it, once, and it writes the same bytes whoever does: the treasury is
-    /// `TREASURY`, the first mint is `USDC_MINT` at `USDC_FEE`, and nothing in the instruction
-    /// chooses any of them. A second call fails because the config account already exists.
+    /// `TREASURY`, the first mint is `USDC_MINT` at `USDC_FEE`, list 0's owner and first insert key
+    /// is `FOUNDATION_ISSUER`, and nothing in the instruction chooses any of them. A second call
+    /// fails because the config account already exists.
     pub fn init(ctx: Context<Init>) -> Result<()> {
         // 250,000 base units is 0.25 only at six decimals. The mint is read, not assumed.
         let decimals = ctx.accounts.usdc_mint.decimals;
@@ -112,11 +122,16 @@ pub mod forest_registry {
         let mut list = ctx.accounts.list.load_init()?;
         list.index = 0;
         list.bump = ctx.bumps.list;
+        list.owner = FOUNDATION_ISSUER;
+        list.issuers[0] = FOUNDATION_ISSUER;
+        list.issuer_count = 1;
+        drop(list);
 
         let mut code_tree = ctx.accounts.code_tree.load_init()?;
         code_tree.bump = ctx.bumps.code_tree;
 
         emit!(RegistryOpened { treasury: TREASURY, usdc_mint: USDC_MINT, fee: USDC_FEE });
+        emit!(ListOpened { list_index: 0, owner: FOUNDATION_ISSUER });
         Ok(())
     }
 
@@ -166,39 +181,48 @@ pub mod forest_registry {
         Ok(())
     }
 
-    /// Open another identity list. The treasury signs.
+    /// Open another identity list. Anyone may: the payer pays its rent, and the owner, who signs,
+    /// is recorded as the list's owner and its first insert key. They may be one key.
     ///
-    /// Lists exist so the design can grow without a new program. New joiners are assigned across
-    /// the open lists by the issuer, not by this program: which list a person is in must never
-    /// say when they joined.
+    /// Issuers are open. Whoever opens a list vouches for the humans on it, and only its owner
+    /// changes its insert keys or closes it; the treasury has no say over any list. The program
+    /// checks nothing about who an owner is: every registration's entry names the list and its
+    /// owner, and an index weighs a badge by who vouched. An issuer with several open lists assigns
+    /// its joiners across them itself: which list a person is in must never say when they joined.
     pub fn open_list(ctx: Context<OpenList>) -> Result<()> {
         let index = ctx.accounts.config.list_count;
+        let owner = ctx.accounts.owner.key();
         let mut list = ctx.accounts.list.load_init()?;
         list.index = index;
         list.bump = ctx.bumps.list;
+        list.owner = owner;
+        list.issuers[0] = owner;
+        list.issuer_count = 1;
         drop(list);
 
         ctx.accounts.config.list_count = index + 1;
-        emit!(ListOpened { list_index: index });
+        emit!(ListOpened { list_index: index, owner });
         Ok(())
     }
 
-    /// Close a list to new members. The treasury signs.
+    /// Close a list to new members. The list's owner signs.
     ///
     /// Nothing else about the list changes: its members stay, its root and its last 128 roots
     /// stay, and every proof made against it keeps verifying forever. Nothing reopens a closed
     /// list, and no instruction deletes a list at all.
     pub fn close_list(ctx: Context<ListAdmin>, _list_index: u32) -> Result<()> {
         let mut list = ctx.accounts.list.load_mut()?;
+        require_keys_eq!(list.owner, ctx.accounts.owner.key(), RegistryError::NotTheListOwner);
         require!(!list.is_closed(), RegistryError::ListClosed);
         list.closed = 1;
         emit!(ListClosed { list_index: list.index, leaf_count: list.leaf_count, root: list.root });
         Ok(())
     }
 
-    /// Let a key insert into one list. The treasury signs.
+    /// Let a key insert into one list. The list's owner signs.
     pub fn add_issuer(ctx: Context<ListAdmin>, _list_index: u32, issuer: Pubkey) -> Result<()> {
         let mut list = ctx.accounts.list.load_mut()?;
+        require_keys_eq!(list.owner, ctx.accounts.owner.key(), RegistryError::NotTheListOwner);
         require!(!list.is_issuer(&issuer), RegistryError::IssuerAlreadyAdded);
         let n = list.issuer_count as usize;
         require!(n < MAX_ISSUERS, RegistryError::TooManyIssuers);
@@ -208,11 +232,13 @@ pub mod forest_registry {
         Ok(())
     }
 
-    /// Stop a key from inserting into one list. The treasury signs.
+    /// Stop a key from inserting into one list. The list's owner signs, and may remove its own key
+    /// and stay the owner.
     ///
     /// Removing an issuer never removes an identity. Nobody is ever taken out of a list.
     pub fn remove_issuer(ctx: Context<ListAdmin>, _list_index: u32, issuer: Pubkey) -> Result<()> {
         let mut list = ctx.accounts.list.load_mut()?;
+        require_keys_eq!(list.owner, ctx.accounts.owner.key(), RegistryError::NotTheListOwner);
         let n = list.issuer_count as usize;
         let at = list.issuers[..n]
             .iter()
@@ -260,9 +286,9 @@ pub mod forest_registry {
     ///
     /// The profile's wallet signs, whoever pays: that signature is the profile's consent, and the
     /// proof's message names the same wallet, so a proof cannot be landed under any other. The fee
-    /// comes from a token account the fee authority owns: the profile's own wallet, or a sponsor
-    /// paying under its own policy. The transaction's fee payer covers the network fee and the
-    /// code account's rent.
+    /// comes from a token account the fee authority owns, and the transaction's payer covers the
+    /// network fee and the code account's rent. Everyone is charged; whoever signs to pay, pays,
+    /// and the program neither knows nor needs to know whose behalf that is.
     ///
     /// The order of checks is sealed with everything else. Any failure reverts all of it: there
     /// is no state in which a code is written and the fee is not paid, or the other way round.
@@ -280,18 +306,19 @@ pub mod forest_registry {
         // market name, and from the signing wallet and the DID, and hands them to the verifier as
         // public inputs: a proof made for another market, another profile, or another wallet
         // cannot verify at all. Without the wallet in the message, anyone who saw a proof before
-        // it landed (a relay, a sponsor) could land it under their own wallet and burn the code.
+        // it landed (a relay, a fee payer) could land it under their own wallet and burn the code.
         let wallet = ctx.accounts.profile_wallet.key();
         let scope = field_hash(SCOPE_NS, &[args.market.as_bytes()]);
         let message = field_hash(MESSAGE_NS, &[wallet.as_ref(), args.did.as_bytes()]);
 
         // The root must be one this list actually held, and never the empty tree's zero.
-        {
+        let list_owner = {
             let list = ctx.accounts.list.load()?;
             require!(list.index == args.list_index, RegistryError::WrongList);
             require!(args.root != [0u8; 32], RegistryError::RootNotRecent);
             require!(list.has_recent_root(&args.root), RegistryError::RootNotRecent);
-        }
+            list.owner
+        };
 
         // Semaphore's public signals, in its own order: root, nullifier, message, scope.
         proof::verify(
@@ -353,6 +380,7 @@ pub mod forest_registry {
             wallet,
             code: args.code,
             list_index: args.list_index,
+            list_owner,
         });
         Ok(())
     }
@@ -519,7 +547,8 @@ pub struct AcceptTreasury<'info> {
 
 #[derive(Accounts)]
 pub struct OpenList<'info> {
-    #[account(mut, seeds = [CONFIG_SEED], bump = config.bump, has_one = treasury)]
+    /// Read for the next index and written with the new count. No `has_one`: anyone opens a list.
+    #[account(mut, seeds = [CONFIG_SEED], bump = config.bump)]
     pub config: Account<'info, Config>,
     #[account(
         init,
@@ -529,20 +558,23 @@ pub struct OpenList<'info> {
         bump
     )]
     pub list: AccountLoader<'info, IdentityList>,
+    /// Pays the list's rent. Anyone.
     #[account(mut)]
     pub payer: Signer<'info>,
-    pub treasury: Signer<'info>,
+    /// Recorded as the list's owner and its first insert key. It signs, so no list is ever owned by
+    /// a key that did not agree to it, or that nobody holds.
+    pub owner: Signer<'info>,
     pub system_program: Program<'info, System>,
 }
 
+/// `add_issuer`, `remove_issuer` and `close_list`. The owner is checked against the list in the
+/// handler, so the rule is findable in the program's own text.
 #[derive(Accounts)]
 #[instruction(list_index: u32)]
 pub struct ListAdmin<'info> {
-    #[account(seeds = [CONFIG_SEED], bump = config.bump, has_one = treasury)]
-    pub config: Account<'info, Config>,
     #[account(mut, seeds = [LIST_SEED, &list_index.to_le_bytes()], bump)]
     pub list: AccountLoader<'info, IdentityList>,
-    pub treasury: Signer<'info>,
+    pub owner: Signer<'info>,
 }
 
 #[derive(Accounts)]
@@ -571,13 +603,13 @@ pub struct Register<'info> {
         bump
     )]
     pub used_code: Account<'info, UsedCode>,
-    /// Pays the code account's rent and the network fee. A sponsor, or the person themselves.
+    /// Pays the code account's rent and the network fee. Whoever signs as payer.
     #[account(mut)]
     pub payer: Signer<'info>,
     /// The profile's wallet: the key derived for this profile, which its profile record declares.
-    /// It signs on every path, sponsored or paid, and the proof's message names it.
+    /// It signs whoever pays, and the proof's message names it.
     pub profile_wallet: Signer<'info>,
-    /// Whoever pays the fee: the profile's wallet itself, or a sponsor.
+    /// Whoever pays the fee: the profile's wallet itself, or any other key.
     pub fee_authority: Signer<'info>,
     #[account(mut, token::authority = fee_authority)]
     pub fee_tokens: Account<'info, TokenAccount>,
@@ -629,9 +661,11 @@ pub struct TreasuryChanged {
     pub to: Pubkey,
 }
 
+/// A list opened, and who owns it: `init`'s list 0, or anyone's through `open_list`.
 #[event]
 pub struct ListOpened {
     pub list_index: u32,
+    pub owner: Pubkey,
 }
 
 /// A list closed to new members: how many it holds and its final root, which stays valid forever.
@@ -660,6 +694,8 @@ pub struct IdentityInserted {
 /// One entry per registration, in the transaction log and in no account. This is what an index
 /// reads to build a badge page. `wallet` is the profile's wallet that signed and that the proof
 /// names: a badge counts for a profile only when its profile record declares that wallet.
+/// `list_index` and `list_owner` say which list the proof was made against and who vouches for it,
+/// so an index can weigh a badge by its issuer (`list_owner` appended in session 14).
 #[event]
 pub struct Registered {
     pub market: String,
@@ -667,6 +703,7 @@ pub struct Registered {
     pub wallet: Pubkey,
     pub code: [u8; 32],
     pub list_index: u32,
+    pub list_owner: Pubkey,
 }
 
 /// A mint accepted at a fee in its own base units. `decimals` is read off the mint, for readers.
@@ -686,7 +723,7 @@ pub struct RentSwept {
 
 /// Compile-time proof that the sealed sizes are what this file says they are.
 const _: () = {
-    assert!(IdentityList::LEN == 5456);
+    assert!(IdentityList::LEN == 5488);
     assert!(CodeTree::LEN == 1104);
     assert!(Config::LEN == 710);
     // 0.25 at USDC's six decimals.

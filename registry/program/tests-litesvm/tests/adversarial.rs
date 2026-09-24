@@ -106,8 +106,9 @@ fn add_be(a: &[u8; 32], b: &str) -> [u8; 32] {
 #[test]
 fn finding_the_placeholder_treasury_is_anyones_key() {
     // Deployed exactly as it is, the program's TREASURY is derived from the public string in its
-    // own source. A stranger who reads the repo signs as the treasury: takes the dials, names
-    // itself issuer, adds humans who do not exist, and is paid every fee.
+    // own source. A stranger who reads the repo signs as the treasury: takes the dials and is paid
+    // every fee. (Since session 14 the treasury has no say over any list; the placeholder issuer
+    // key below is the other half of this finding.)
     let (mut h, f) = ready();
     let anyone = Keypair::new_from_array(*b"REPLACE-BEFORE-DEPLOY-treasury-0");
     assert_eq!(anyone.pubkey(), TREASURY, "the public seed is the treasury");
@@ -117,14 +118,8 @@ fn finding_the_placeholder_treasury_is_anyones_key() {
     h.send_signed(&[propose_treasury_ix(anyone.pubkey(), Some(attacker.pubkey()))], &[&anyone]).expect("propose");
     h.send_signed(&[accept_treasury_ix(attacker.pubkey())], &[&attacker]).expect("accept");
     assert_eq!(h.config().treasury, attacker.pubkey());
-    h.send_signed(&[issuer_ix("add_issuer", attacker.pubkey(), 0, attacker.pubkey())], &[&attacker]).expect("self as issuer");
-    for i in 0..3u8 {
-        h.send_signed(&[insert_identity_ix(attacker.pubkey(), 0, [i + 1; 32].map(|b| b & 0x0f))], &[&attacker]).expect("a human who does not exist");
-    }
-    assert_eq!(h.list(0).leaf_count, 5 + 3);
 
-    // And the next registration pays the attacker. (Alice's proof is against the root before the
-    // three fake inserts, which is still in the ring.)
+    // And the next registration pays the attacker.
     let attacker_tokens = h.token_account_for(h.usdc, attacker.pubkey());
     let p = f.proof("alice-tutors");
     let (wallet, tokens) = h.wallet_with(h.usdc, 1_000_000);
@@ -133,7 +128,25 @@ fn finding_the_placeholder_treasury_is_anyones_key() {
     a.treasury_tokens = attacker_tokens;
     h.send_signed(&[r.ix(&a)], &[&r.profile, &wallet]).expect("registration pays the attacker");
     assert_eq!(token_amount(&h.account(&attacker_tokens).data), QUARTER_USDC);
-    println!("FINDING (money and promise, deploy blocker): the placeholder treasury is a public key pair; replace before deploy");
+    println!("FINDING (money, deploy blocker): the placeholder treasury is a public key pair; replace before deploy");
+}
+
+#[test]
+fn finding_the_placeholder_issuer_key_is_anyones_key() {
+    // The same for list 0's owner, the foundation's issuer key: derived from a public string, so a
+    // stranger who reads the repo owns list 0, names its own insert key, and adds humans who do not
+    // exist, whose badges every index would read as vouched for by the foundation.
+    let (mut h, _f) = ready();
+    let anyone = Keypair::new_from_array(*b"REPLACE-BEFORE-DEPLOY-issuer-000");
+    assert_eq!(anyone.pubkey(), FOUNDATION_ISSUER, "the public seed is list 0's owner");
+    let attacker = Keypair::new();
+    h.svm.airdrop(&attacker.pubkey(), 1_000_000_000).unwrap();
+    h.send_signed(&[issuer_ix("add_issuer", anyone.pubkey(), 0, attacker.pubkey())], &[&anyone]).expect("names its own key");
+    for i in 0..3u8 {
+        h.send_signed(&[insert_identity_ix(attacker.pubkey(), 0, [i + 1; 32].map(|b| b & 0x0f))], &[&attacker]).expect("a human who does not exist");
+    }
+    assert_eq!(h.list(0).leaf_count, 5 + 3);
+    println!("FINDING (promise, deploy blocker): the placeholder issuer key is a public key pair; replace before deploy");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -328,21 +341,24 @@ fn substitution_a_token_2022_mint_cannot_be_accepted() {
 #[test]
 fn signers_an_issuer_of_one_list_cannot_insert_into_another() {
     let (mut h, _f) = ready();
-    let (payer, tk) = (h.payer.pubkey(), h.treasury);
-    h.send(&[open_list_ix(payer, tk, 1)], &[Harness::PAYER, Harness::TREASURY]).expect("open_list");
+    let stranger = Keypair::new();
+    h.svm.airdrop(&stranger.pubkey(), 1_000_000_000).unwrap();
+    h.open_list_as(&stranger).expect("open list 1");
     let issuer = h.issuer.pubkey();
     let err = h.send(&[insert_identity_ix(issuer, 1, dec_to_be32("5"))], &[Harness::PAYER, Harness::ISSUER]).expect_err("list 1");
     assert!(err.contains("may not insert"), "{err}");
-    // Nor can an issuer manage issuers.
-    let err = h.send(&[issuer_ix("add_issuer", issuer, 0, Keypair::new().pubkey())], &[Harness::PAYER, Harness::ISSUER]).expect_err("issuer as treasury");
-    assert!(err.contains("ConstraintHasOne") || err.contains("has one"), "{err}");
+    // Nor can an insert key that is not the list's owner manage its keys.
+    let helper = Keypair::new();
+    h.send_signed(&[issuer_ix("add_issuer", stranger.pubkey(), 1, helper.pubkey())], &[&stranger]).expect("the owner adds a helper");
+    let err = h.send_signed(&[issuer_ix("add_issuer", helper.pubkey(), 1, Keypair::new().pubkey())], &[&helper]).expect_err("insert key as owner");
+    assert!(err.contains("only the list's owner"), "{err}");
     // And a commitment outside the field, or zero, is refused whoever inserts it.
     let over = add_be(&[0u8; 32], BN254_R);
     let err = h.send(&[insert_identity_ix(issuer, 0, over)], &[Harness::PAYER, Harness::ISSUER]).expect_err("r itself");
     assert!(err.contains("field element"), "{err}");
     let err = h.send(&[insert_identity_ix(issuer, 0, [0u8; 32])], &[Harness::PAYER, Harness::ISSUER]).expect_err("zero");
     assert!(err.contains("field element"), "{err}");
-    println!("rejected as expected: an issuer outside its list, an issuer turning dials, out-of-field and zero commitments");
+    println!("rejected as expected: an issuer outside its list, an insert key managing keys, out-of-field and zero commitments");
 }
 
 #[test]

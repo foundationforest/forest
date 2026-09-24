@@ -11,7 +11,7 @@ use crate::tree::FRONTIER_LEN;
 /// How many recent roots a list keeps, so a proof made moments before someone else joins
 /// still lands. Nobody is ever removed, so an old root is never a stale membership claim.
 pub const ROOT_HISTORY: usize = 128;
-/// How many issuer keys one list can hold.
+/// How many insert keys one list can hold, its owner's own included.
 pub const MAX_ISSUERS: usize = 8;
 /// How many token mints the registry can ever accept.
 pub const MAX_MINTS: usize = 16;
@@ -20,7 +20,7 @@ pub const MAX_MINTS: usize = 16;
 #[account]
 pub struct Config {
     /// The treasury: where the 0.25 lands, where swept rent goes, and the key that signs
-    /// `open_list`, `add_issuer`, `remove_issuer`, `add_token` and `propose_treasury`. Written
+    /// `add_token` and `propose_treasury`. It has no say over any list. Written
     /// from `crate::TREASURY` at `init`, moved only by `accept_treasury` (signed by the key it
     /// moves to), and touched by nothing else. It can never override or undo a registration. A
     /// wallet, not a token account: the destination token account in `register` must be owned by
@@ -74,7 +74,7 @@ pub struct IdentityList {
     pub index: u32,
     pub issuer_count: u8,
     pub bump: u8,
-    /// 1 once the treasury has closed the list to new members (`close_list`); 0 while open. A
+    /// 1 once the list's owner has closed it to new members (`close_list`); 0 while open. A
     /// closed list keeps its members, its root and its last 128 roots, so every proof against it
     /// still verifies; it only takes no more inserts. Nothing reopens it and nothing deletes it.
     /// It sits in what was padding, so the account's size and every other offset are unchanged.
@@ -87,12 +87,19 @@ pub struct IdentityList {
     /// The last `ROOT_HISTORY` roots, written at `leaf_count % ROOT_HISTORY` before the count
     /// is raised. Unused slots are zero, and zero is never a valid root.
     pub roots: [[u8; 32]; ROOT_HISTORY],
-    /// Keys that may insert into this list.
+    /// Keys that may insert into this list. The owner's is the first, from the moment the list
+    /// opens; the owner may add others and remove any, its own included.
     pub issuers: [Pubkey; MAX_ISSUERS],
+    /// Who opened the list and vouches for its members: the only key that adds or removes its
+    /// insert keys or closes it. Written once, when the list opens (`init` writes the foundation's
+    /// issuer key for list 0), and never changed. Appended (session 14), so every offset before it
+    /// is where sessions 5 to 11 put it.
+    pub owner: Pubkey,
 }
 
 impl IdentityList {
-    pub const LEN: usize = 8 + 4 + 1 + 1 + 1 + 1 + 32 + 32 * FRONTIER_LEN + 32 * ROOT_HISTORY + 32 * MAX_ISSUERS;
+    pub const LEN: usize =
+        8 + 4 + 1 + 1 + 1 + 1 + 32 + 32 * FRONTIER_LEN + 32 * ROOT_HISTORY + 32 * MAX_ISSUERS + 32;
 
     pub fn is_closed(&self) -> bool {
         self.closed != 0
