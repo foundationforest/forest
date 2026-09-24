@@ -185,7 +185,7 @@ pub mod forest_registry {
     /// is recorded as the list's owner and its first insert key. They may be one key.
     ///
     /// Issuers are open. Whoever opens a list vouches for the humans on it, and only its owner
-    /// changes its insert keys or closes it; the treasury has no say over any list. The program
+    /// changes its insert keys, closes it or hands it over; the treasury has no say over any list. The program
     /// checks nothing about who an owner is: every registration's entry names the list and its
     /// owner, and an index weighs a badge by who vouched. An issuer with several open lists assigns
     /// its joiners across them itself: which list a person is in must never say when they joined.
@@ -250,6 +250,56 @@ pub mod forest_registry {
         list.issuers[n - 1] = Pubkey::default();
         list.issuer_count = (n - 1) as u8;
         emit!(IssuerChanged { list_index: list.index, issuer, added: false });
+        Ok(())
+    }
+
+    /// Propose handing a list to another key. The list's owner signs. Step one of two (session 15).
+    ///
+    /// Nothing moves here: the key is only recorded as pending. The current owner still manages the
+    /// insert keys, still may close the list or change this proposal, and still receives its swept
+    /// rent, until the pending key signs `accept_list_owner`. A later proposal overwrites the
+    /// pending key; proposing `None` clears it. The zero key and the current owner are refused. A
+    /// closed list can be handed over too: it still has an owner, whose key its rent pays.
+    ///
+    /// This is how an issuer moves a list to a multisig, or away from a key that leaked, without
+    /// opening a new list its members would have to join again. With both keys at hand, both steps
+    /// fit in one transaction, which leaves no moment between them for anyone else holding the old
+    /// key.
+    pub fn propose_list_owner(
+        ctx: Context<ListAdmin>,
+        _list_index: u32,
+        new_owner: Option<Pubkey>,
+    ) -> Result<()> {
+        let mut list = ctx.accounts.list.load_mut()?;
+        require_keys_eq!(list.owner, ctx.accounts.owner.key(), RegistryError::NotTheListOwner);
+        let proposed = match new_owner {
+            Some(key) => {
+                require_keys_neq!(key, Pubkey::default(), RegistryError::ListOwnerEmpty);
+                require_keys_neq!(key, list.owner, RegistryError::ListOwnerUnchanged);
+                key
+            }
+            None => Pubkey::default(),
+        };
+        list.pending_owner = proposed;
+        emit!(ListOwnerProposed { list_index: list.index, owner: list.owner, proposed });
+        Ok(())
+    }
+
+    /// Accept a proposed handover of a list. The pending key signs. Step two of two.
+    ///
+    /// Only now does the list change owner: who adds and removes its insert keys, closes it, hands
+    /// it on, and receives its swept rent. Ownership moves and nothing else does: the insert keys
+    /// stay as they were, so a new owner that means to drop the old key removes it itself, in the
+    /// same transaction if it likes. The pending slot is cleared.
+    pub fn accept_list_owner(ctx: Context<AcceptListOwner>, _list_index: u32) -> Result<()> {
+        let mut list = ctx.accounts.list.load_mut()?;
+        let to = list.pending_owner;
+        require_keys_neq!(to, Pubkey::default(), RegistryError::NoPendingListOwner);
+        require_keys_eq!(to, ctx.accounts.pending.key(), RegistryError::NotThePendingListOwner);
+        let from = list.owner;
+        list.owner = to;
+        list.pending_owner = Pubkey::default();
+        emit!(ListOwnerChanged { list_index: list.index, from, to });
         Ok(())
     }
 
@@ -409,14 +459,19 @@ pub mod forest_registry {
         Ok(())
     }
 
-    /// Move the lamports an account holds above the current rent-exempt minimum to the treasury.
+    /// Move the lamports an account holds above the current rent-exempt minimum: a list's to the
+    /// list's owner, and the config's, the code tree's and a code account's to the treasury.
     ///
     /// Solana is part way through a five-step cut to the rent rate. Deposits already sitting in
     /// registry accounts stay where they are, and only an instruction in the owning program can
     /// move them, so a sealed program without this one locks the difference away forever. Anyone
     /// may call it: there is no key behind a program-derived address, the only possible
-    /// destination is the sealed treasury, and the foundation must not be a liveness dependency
-    /// for its own money.
+    /// destination is the one the program reads for itself, and nobody must be a liveness
+    /// dependency for anyone else's money. A list's rent goes to its owner (session 15, Carlos's
+    /// decision): whoever paid a list's rent should get it back, the issuer that opens a list is
+    /// the one paying for it (directly, or through a fee payer it pays), and the owner is the key
+    /// the list records. It follows a handover. Where the payer and the owner are two keys, as for
+    /// list 0 (paid by whoever sent `init`), the owner gets it.
     pub fn sweep_rent(ctx: Context<SweepRent>, target: SweepTarget) -> Result<()> {
         let account = &ctx.accounts.target_account;
 
@@ -435,6 +490,22 @@ pub mod forest_registry {
         require_keys_eq!(expected, account.key(), RegistryError::WrongSweepTarget);
         require_keys_eq!(*account.owner, crate::ID, RegistryError::WrongSweepTarget);
 
+        // Where the excess goes is read from the chain, never taken from the caller: a list's
+        // owner, as the list itself records it now, or else the treasury, as the config records it.
+        let recipient = match &target {
+            SweepTarget::List { .. } => {
+                // The same bytes `AccountLoader` reads: the discriminator, then the list itself.
+                let data = account.try_borrow_data()?;
+                require!(
+                    data.len() == 8 + IdentityList::LEN && &data[..8] == IdentityList::DISCRIMINATOR,
+                    RegistryError::WrongSweepTarget
+                );
+                bytemuck::from_bytes::<IdentityList>(&data[8..]).owner
+            }
+            _ => ctx.accounts.config.treasury,
+        };
+        require_keys_eq!(recipient, ctx.accounts.recipient.key(), RegistryError::WrongSweepRecipient);
+
         // The exact check, in full, so it can never take more than the excess:
         //
         //   rent    = Rent::get()                      read at runtime, every time; never a constant,
@@ -445,7 +516,8 @@ pub mod forest_registry {
         //                                              the minimum yields zero and the call fails
         //   require excess > 0
         //   account.lamports -= excess                 subtract; never assign a computed total
-        //   treasury.lamports += excess                the sealed treasury; never a caller's choice
+        //   recipient.lamports += excess               the list's owner or the treasury, as read
+        //                                              above; never a caller's choice
         //   assert account.lamports == minimum         still exactly rent exempt
         //
         // Data is untouched, the account is never grown, realloc'd or closed, and no signer is
@@ -458,7 +530,7 @@ pub mod forest_registry {
         require!(excess > 0, RegistryError::NothingToSweep);
 
         **account.try_borrow_mut_lamports()? -= excess;
-        **ctx.accounts.treasury.try_borrow_mut_lamports()? += excess;
+        **ctx.accounts.recipient.try_borrow_mut_lamports()? += excess;
         require_eq!(account.lamports(), minimum, RegistryError::NothingToSweep);
 
         emit!(RentSwept {
@@ -577,6 +649,17 @@ pub struct ListAdmin<'info> {
     pub owner: Signer<'info>,
 }
 
+/// `accept_list_owner`. The pending key is checked against the list in the handler.
+#[derive(Accounts)]
+#[instruction(list_index: u32)]
+pub struct AcceptListOwner<'info> {
+    #[account(mut, seeds = [LIST_SEED, &list_index.to_le_bytes()], bump)]
+    pub list: AccountLoader<'info, IdentityList>,
+    /// The key the list's owner proposed. It signs, which is the whole point: a key that cannot
+    /// sign cannot own a list.
+    pub pending: Signer<'info>,
+}
+
 #[derive(Accounts)]
 #[instruction(list_index: u32)]
 pub struct InsertIdentity<'info> {
@@ -635,9 +718,10 @@ pub struct SweepRent<'info> {
     /// requires it to match and to be owned by this program. Only its lamports are touched.
     #[account(mut)]
     pub target_account: UncheckedAccount<'info>,
-    /// CHECK: the sealed treasury and nothing else. It only ever receives lamports.
-    #[account(mut, address = config.treasury)]
-    pub treasury: UncheckedAccount<'info>,
+    /// CHECK: checked in the handler against the one key the target pays: a list's owner for a
+    /// list, the treasury for anything else. It only ever receives lamports.
+    #[account(mut)]
+    pub recipient: UncheckedAccount<'info>,
 }
 
 #[event]
@@ -674,6 +758,22 @@ pub struct ListClosed {
     pub list_index: u32,
     pub leaf_count: u64,
     pub root: [u8; 32],
+}
+
+/// A list's handover proposed, or cleared (`proposed` is the zero key then). Session 15.
+#[event]
+pub struct ListOwnerProposed {
+    pub list_index: u32,
+    pub owner: Pubkey,
+    pub proposed: Pubkey,
+}
+
+/// A list's handover accepted: only now has its owner changed. Session 15.
+#[event]
+pub struct ListOwnerChanged {
+    pub list_index: u32,
+    pub from: Pubkey,
+    pub to: Pubkey,
 }
 
 #[event]
@@ -723,7 +823,7 @@ pub struct RentSwept {
 
 /// Compile-time proof that the sealed sizes are what this file says they are.
 const _: () = {
-    assert!(IdentityList::LEN == 5488);
+    assert!(IdentityList::LEN == 5520);
     assert!(CodeTree::LEN == 1104);
     assert!(Config::LEN == 710);
     // 0.25 at USDC's six decimals.

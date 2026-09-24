@@ -65,7 +65,7 @@ impl Config {
 
 /// One list of verified humans: a Semaphore LeanIMT of identity commitments, depth 32.
 ///
-/// Zero-copy, because it is 5,456 bytes and a registration only reads a small part of it.
+/// Zero-copy, because it is 5,520 bytes and a registration only reads a small part of it.
 #[account(zero_copy)]
 #[repr(C)]
 pub struct IdentityList {
@@ -88,18 +88,25 @@ pub struct IdentityList {
     /// is raised. Unused slots are zero, and zero is never a valid root.
     pub roots: [[u8; 32]; ROOT_HISTORY],
     /// Keys that may insert into this list. The owner's is the first, from the moment the list
-    /// opens; the owner may add others and remove any, its own included.
+    /// opens; the owner may add others and remove any, its own included. A handover leaves them as
+    /// they are.
     pub issuers: [Pubkey; MAX_ISSUERS],
-    /// Who opened the list and vouches for its members: the only key that adds or removes its
-    /// insert keys or closes it. Written once, when the list opens (`init` writes the foundation's
-    /// issuer key for list 0), and never changed. Appended (session 14), so every offset before it
-    /// is where sessions 5 to 11 put it.
+    /// Who vouches for the list's members: the only key that adds or removes its insert keys,
+    /// closes it or hands it over, and the key its swept rent goes to. Written when the list opens
+    /// (`init` writes the foundation's issuer key for list 0), and changed only by
+    /// `accept_list_owner`, signed by the key it moves to. Appended (session 14), so every offset
+    /// before it is where sessions 5 to 11 put it.
     pub owner: Pubkey,
+    /// The key the owner has proposed to hand the list to, or zero when nothing is pending.
+    /// Written by `propose_list_owner`, consumed and cleared by `accept_list_owner`. Until the
+    /// pending key accepts, nothing about the list has moved. Appended (session 15), so every
+    /// offset before it stays.
+    pub pending_owner: Pubkey,
 }
 
 impl IdentityList {
     pub const LEN: usize =
-        8 + 4 + 1 + 1 + 1 + 1 + 32 + 32 * FRONTIER_LEN + 32 * ROOT_HISTORY + 32 * MAX_ISSUERS + 32;
+        8 + 4 + 1 + 1 + 1 + 1 + 32 + 32 * FRONTIER_LEN + 32 * ROOT_HISTORY + 32 * MAX_ISSUERS + 32 + 32;
 
     pub fn is_closed(&self) -> bool {
         self.closed != 0

@@ -751,12 +751,13 @@ fn a_sweep_leaves_exactly_the_new_minimum() {
     h.send_tx(tx).expect("a stranger may sweep");
     assert_eq!(h.account(&code_account).lamports, rent_minimum(RENT_FINAL, USED_CODE_LEN));
 
-    // The list account sweeps the same way, and so do the config and the code tree, so nothing
-    // the registry owns can end up holding rent nobody can reach.
+    // The list account sweeps the same way, to its owner (session 15), and the config and the code
+    // tree to the treasury, so nothing the registry owns can end up holding rent nobody can reach.
     for target in [SweepTarget::List(0), SweepTarget::Config, SweepTarget::CodeTree] {
         let address = target.address();
         let before = h.account(&address).lamports;
-        h.send(&[sweep_rent_ix(&target, treasury)], &[Harness::PAYER]).expect("sweep");
+        let to = if matches!(target, SweepTarget::List(_)) { FOUNDATION_ISSUER } else { treasury };
+        h.send(&[sweep_rent_ix(&target, to)], &[Harness::PAYER]).expect("sweep");
         let after = h.account(&address).lamports;
         let expected = rent_minimum(RENT_FINAL, h.account(&address).data.len());
         assert_eq!(after, expected);
@@ -783,11 +784,11 @@ fn a_sweep_cannot_be_pointed_anywhere_else() {
     let err = h.send(&[ix], &[Harness::PAYER]).expect_err("must be rejected");
     assert!(err.contains("not the registry account"), "{err}");
 
-    // The destination is the sealed treasury and nothing else.
+    // A code account's destination is the treasury and nothing else.
     let mut ix = sweep_rent_ix(&SweepTarget::Code(code), treasury);
     ix.accounts[2].pubkey = h.payer.pubkey();
     let err = h.send(&[ix], &[Harness::PAYER]).expect_err("must be rejected");
-    assert!(err.contains("ConstraintAddress") || err.contains("address"), "{err}");
+    assert!(err.contains("WrongSweepRecipient"), "{err}");
 
     // An account this program does not own is not a sweep target either.
     let stranger = Address::new_unique();
@@ -808,6 +809,209 @@ fn a_sweep_cannot_be_pointed_anywhere_else() {
     let err = h.send(&[ix], &[Harness::PAYER]).expect_err("must be rejected");
     assert!(err.contains("not the registry account"), "{err}");
     println!("a sweep aimed at the wrong account, the wrong treasury, or a stranger's: all refused");
+}
+
+// ---------------------------------------------------------------------------------------------
+// A list's spare rent and its handover (session 15, decided by Carlos)
+// ---------------------------------------------------------------------------------------------
+
+/// A funded key that is nothing else: it sends transactions so the balances of the keys under test
+/// move by exactly what the program moves, and not by a network fee.
+fn bystander(h: &mut Harness) -> Keypair {
+    let k = Keypair::new();
+    h.svm.airdrop(&k.pubkey(), 1_000_000_000).unwrap();
+    k
+}
+
+fn sweep_as(h: &mut Harness, sender: &Keypair, target: &SweepTarget, recipient: Address) -> Result<litesvm::types::TransactionMetadata, String> {
+    h.svm.expire_blockhash();
+    let msg = Message::new(&[sweep_rent_ix(target, recipient)], Some(&sender.pubkey()));
+    let tx = Transaction::new(&[sender], msg, h.svm.latest_blockhash());
+    h.send_tx(tx)
+}
+
+#[test]
+fn a_lists_spare_rent_goes_to_its_owner_and_everything_else_to_the_treasury() {
+    let mut h = Harness::new();
+    // Lists open at the higher rate, so the cut leaves something above the minimum.
+    h.svm.set_sysvar(&rent_at(RENT_HIGH));
+    // One key pays, another owns: the rent follows the owner, the key the list records.
+    let owner = Keypair::new();
+    let payer = h.payer.pubkey();
+    h.send_signed(&[open_list_ix(payer, owner.pubkey(), 1)], &[&owner]).expect("open list 1");
+    h.svm.set_sysvar(&rent_at(RENT_TODAY));
+
+    let sender = bystander(&mut h);
+    let list = list_address(1);
+    let created = h.lamports_of(&list);
+    let minimum = rent_minimum(RENT_TODAY, LIST_LEN);
+    assert!(created > minimum);
+    let treasury = h.treasury;
+    let treasury_before = h.lamports_of(&treasury);
+
+    // Not to the treasury.
+    let err = sweep_as(&mut h, &sender, &SweepTarget::List(1), treasury).expect_err("a list's rent is not the treasury's");
+    assert!(err.contains("goes to its owner"), "{err}");
+    // Not to whoever paid for it either, nor to anyone else: to the owner.
+    let err = sweep_as(&mut h, &sender, &SweepTarget::List(1), payer).expect_err("nor the payer's");
+    assert!(err.contains("goes to its owner"), "{err}");
+    assert_eq!(h.lamports_of(&list), created, "nothing moved");
+
+    let owner_before = h.lamports_of(&owner.pubkey());
+    sweep_as(&mut h, &sender, &SweepTarget::List(1), owner.pubkey()).expect("to the list's owner, sent by anyone");
+    assert_eq!(h.lamports_of(&list), minimum, "the list keeps exactly the new minimum");
+    assert_eq!(h.lamports_of(&owner.pubkey()), owner_before + (created - minimum), "its owner gets exactly the excess");
+    assert_eq!(h.lamports_of(&treasury), treasury_before, "and the treasury nothing");
+
+    // List 0 is the foundation issuer's: its rent goes there, although whoever sent `init` paid it.
+    let before = h.lamports_of(&FOUNDATION_ISSUER);
+    let excess = h.lamports_of(&list_address(0)) - rent_minimum(RENT_TODAY, LIST_LEN);
+    let err = sweep_as(&mut h, &sender, &SweepTarget::List(0), treasury).expect_err("not the treasury's");
+    assert!(err.contains("goes to its owner"), "{err}");
+    sweep_as(&mut h, &sender, &SweepTarget::List(0), FOUNDATION_ISSUER).expect("to list 0's owner");
+    assert_eq!(h.lamports_of(&FOUNDATION_ISSUER), before + excess);
+
+    // The config and the code tree still pay the treasury, and only the treasury.
+    for target in [SweepTarget::Config, SweepTarget::CodeTree] {
+        let address = target.address();
+        let err = sweep_as(&mut h, &sender, &target, owner.pubkey()).expect_err("a list owner is not the treasury");
+        assert!(err.contains("goes to its owner"), "{err}");
+        let before = h.lamports_of(&treasury);
+        let excess = h.lamports_of(&address) - rent_minimum(RENT_TODAY, h.account(&address).data.len());
+        sweep_as(&mut h, &sender, &target, treasury).expect("to the treasury");
+        assert_eq!(h.lamports_of(&treasury), before + excess);
+    }
+    println!("list rent swept to each list's owner; config and code tree rent to the treasury; every other destination refused");
+}
+
+#[test]
+fn a_lists_owner_hands_it_over_in_two_steps_and_only_then_does_anything_move() {
+    let (mut h, _f) = ready();
+    h.svm.set_sysvar(&rent_at(RENT_HIGH));
+    let old = h.issuer.insecure_clone();
+    let treasury = h.treasury_signer();
+    let multisig = bystander(&mut h);
+    let helper = Keypair::new().pubkey();
+
+    // Not the zero key, not the current owner, and nobody but the owner proposes.
+    let err = h.send_signed(&[propose_list_owner_ix(old.pubkey(), 0, Some(Address::default()))], &[&old]).expect_err("zero");
+    assert!(err.contains("owner cannot be the zero key"), "{err}");
+    let err = h.send_signed(&[propose_list_owner_ix(old.pubkey(), 0, Some(old.pubkey()))], &[&old]).expect_err("current");
+    assert!(err.contains("already owns this list"), "{err}");
+    for key in [&treasury, &multisig] {
+        let err = h.send_signed(&[propose_list_owner_ix(key.pubkey(), 0, Some(key.pubkey()))], &[key]).expect_err("not the owner");
+        assert!(err.contains("only the list's owner"), "{err}");
+    }
+    assert_eq!(h.list(0).pending_owner, Address::default());
+
+    // Step one. A plain key here; a multisig's vault address works the same way.
+    let meta = h.send_signed(&[propose_list_owner_ix(old.pubkey(), 0, Some(multisig.pubkey()))], &[&old]).expect("propose");
+    assert_eq!(list_owner_proposed_events(&meta.logs), vec![(0, old.pubkey(), multisig.pubkey())]);
+    let list = h.list(0);
+    assert_eq!(list.owner, old.pubkey(), "nothing has moved");
+    assert_eq!(list.pending_owner, multisig.pubkey(), "the proposal is recorded");
+
+    // Between the steps the old owner keeps every power; the proposed key has none yet.
+    let err = h.send_signed(&[issuer_ix("add_issuer", multisig.pubkey(), 0, helper)], &[&multisig]).expect_err("not yet");
+    assert!(err.contains("only the list's owner"), "{err}");
+    h.send_signed(&[issuer_ix("add_issuer", old.pubkey(), 0, helper)], &[&old]).expect("the old owner still manages keys");
+    h.send_signed(&[issuer_ix("remove_issuer", old.pubkey(), 0, helper)], &[&old]).expect("and again");
+
+    // Only the proposed key accepts: not a stranger, not the old owner.
+    let stranger = bystander(&mut h);
+    for key in [&stranger, &old] {
+        let err = h.send_signed(&[accept_list_owner_ix(key.pubkey(), 0)], &[key]).expect_err("not the proposed key");
+        assert!(err.contains("only the proposed owner"), "{err}");
+    }
+    // And only on the list it was proposed for.
+    h.open_list_as(&stranger).expect("open list 1");
+    let err = h.send_signed(&[accept_list_owner_ix(multisig.pubkey(), 1)], &[&multisig]).expect_err("nothing pending on list 1");
+    assert!(err.contains("no handover of this list"), "{err}");
+    assert_eq!(h.list(0).owner, old.pubkey(), "still nothing has moved");
+
+    // Step two.
+    let meta = h.send_signed(&[accept_list_owner_ix(multisig.pubkey(), 0)], &[&multisig]).expect("accept");
+    assert_eq!(list_owner_changed_events(&meta.logs), vec![(0, old.pubkey(), multisig.pubkey())]);
+    let list = h.list(0);
+    assert_eq!(list.owner, multisig.pubkey());
+    assert_eq!(list.pending_owner, Address::default(), "the slot is cleared");
+    assert_eq!(list.issuers, vec![FOUNDATION_ISSUER], "ownership moved, and only ownership: the insert keys are as they were");
+
+    // The old owner has no power left over the list, a handover back to itself included.
+    for (what, ix) in [
+        ("add_issuer", issuer_ix("add_issuer", old.pubkey(), 0, helper)),
+        ("remove_issuer", issuer_ix("remove_issuer", old.pubkey(), 0, FOUNDATION_ISSUER)),
+        ("close_list", close_list_ix(old.pubkey(), 0)),
+        ("propose_list_owner", propose_list_owner_ix(old.pubkey(), 0, Some(old.pubkey()))),
+    ] {
+        let err = h.send_signed(&[ix], &[&old]).expect_err("the old owner");
+        assert!(err.contains("only the list's owner"), "{what}: {err}");
+    }
+
+    // Its insert key stays until the new owner removes it, which is how a leaked key is dropped.
+    h.insert(0, dec_to_be32("777"));
+    h.send_signed(
+        &[issuer_ix("add_issuer", multisig.pubkey(), 0, multisig.pubkey()), issuer_ix("remove_issuer", multisig.pubkey(), 0, FOUNDATION_ISSUER)],
+        &[&multisig],
+    )
+    .expect("the new owner swaps the insert keys");
+    let err = h.send(&[insert_identity_ix(old.pubkey(), 0, dec_to_be32("778"))], &[Harness::PAYER, Harness::ISSUER]).expect_err("removed");
+    assert!(err.contains("may not insert"), "{err}");
+    h.insert_as(&multisig, 0, dec_to_be32("778")).expect("the new owner's key inserts");
+
+    // The list's rent follows its owner.
+    h.svm.set_sysvar(&rent_at(RENT_TODAY));
+    let sender = bystander(&mut h);
+    let err = sweep_as(&mut h, &sender, &SweepTarget::List(0), old.pubkey()).expect_err("not the old owner");
+    assert!(err.contains("goes to its owner"), "{err}");
+    let before = h.lamports_of(&multisig.pubkey());
+    let excess = h.lamports_of(&list_address(0)) - rent_minimum(RENT_TODAY, LIST_LEN);
+    sweep_as(&mut h, &sender, &SweepTarget::List(0), multisig.pubkey()).expect("to the new owner");
+    assert_eq!(h.lamports_of(&multisig.pubkey()), before + excess);
+    println!("list 0 handed over in two steps: nothing moved until the new key signed; its insert keys stayed until the new owner changed them");
+}
+
+#[test]
+fn a_second_list_owner_proposal_overwrites_the_first_nothing_clears_it_and_a_closed_list_hands_over_too() {
+    let (mut h, _f) = ready();
+    let owner = bystander(&mut h);
+    h.open_list_as(&owner).expect("open list 1");
+    let first = bystander(&mut h);
+    let second = bystander(&mut h);
+
+    h.send_signed(&[propose_list_owner_ix(owner.pubkey(), 1, Some(first.pubkey()))], &[&owner]).expect("first");
+    h.send_signed(&[propose_list_owner_ix(owner.pubkey(), 1, Some(second.pubkey()))], &[&owner]).expect("second");
+    assert_eq!(h.list(1).pending_owner, second.pubkey(), "the second proposal replaced the first");
+    let err = h.send_signed(&[accept_list_owner_ix(first.pubkey(), 1)], &[&first]).expect_err("replaced");
+    assert!(err.contains("only the proposed owner"), "{err}");
+
+    // Proposing nothing clears the slot, and then nobody can accept.
+    let meta = h.send_signed(&[propose_list_owner_ix(owner.pubkey(), 1, None)], &[&owner]).expect("clear");
+    assert_eq!(list_owner_proposed_events(&meta.logs), vec![(1, owner.pubkey(), Address::default())]);
+    assert_eq!(h.list(1).pending_owner, Address::default());
+    let err = h.send_signed(&[accept_list_owner_ix(second.pubkey(), 1)], &[&second]).expect_err("cleared");
+    assert!(err.contains("no handover of this list"), "{err}");
+    assert_eq!(h.list(1).owner, owner.pubkey(), "the list never moved");
+
+    // A closed list still has an owner, whose key its rent pays, so it can still be handed over.
+    h.send_signed(&[close_list_ix(owner.pubkey(), 1)], &[&owner]).expect("close");
+    h.send_signed(&[propose_list_owner_ix(owner.pubkey(), 1, Some(second.pubkey()))], &[&owner]).expect("propose on a closed list");
+    h.send_signed(&[accept_list_owner_ix(second.pubkey(), 1)], &[&second]).expect("accept on a closed list");
+    let list = h.list(1);
+    assert!(list.closed, "and it stays closed");
+    assert_eq!(list.owner, second.pubkey());
+
+    // Both steps fit in one transaction when both keys sign it, which leaves no moment between
+    // them for anyone else holding the old key to step in.
+    let third = Keypair::new();
+    h.send_signed(
+        &[propose_list_owner_ix(second.pubkey(), 1, Some(third.pubkey())), accept_list_owner_ix(third.pubkey(), 1)],
+        &[&second, &third],
+    )
+    .expect("propose and accept together");
+    assert_eq!(h.list(1).owner, third.pubkey());
+    assert_eq!(h.list(1).pending_owner, Address::default());
+    println!("a second proposal overwrites the first; proposing nothing clears it; a closed list hands over; both steps fit in one transaction");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1089,7 +1293,7 @@ fn a_handover_is_proposed_then_accepted_and_only_then_does_anything_move() {
     h.svm.set_sysvar(&rent_at(RENT_FINAL));
     let target = SweepTarget::Code(p.code_bytes());
     let err = h.send(&[sweep_rent_ix(&target, old)], &[Harness::PAYER]).expect_err("must be rejected");
-    assert!(err.contains("ConstraintAddress") || err.contains("address"), "{err}");
+    assert!(err.contains("WrongSweepRecipient"), "{err}");
     h.send(&[sweep_rent_ix(&target, multisig.pubkey())], &[Harness::PAYER]).expect("swept to the new treasury");
 
     // The new treasury holds every dial, the handover included, and can hand back the same way.

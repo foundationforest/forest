@@ -56,7 +56,7 @@ pub fn foundation_issuer_keypair() -> Keypair {
 
 pub const ROOT_HISTORY: usize = 128;
 pub const CONFIG_LEN: usize = 8 + 710;
-pub const LIST_LEN: usize = 8 + 5488;
+pub const LIST_LEN: usize = 8 + 5520;
 pub const CODE_TREE_LEN: usize = 8 + 1104;
 pub const USED_CODE_LEN: usize = 8 + 1;
 
@@ -358,6 +358,42 @@ pub fn close_list_ix(owner: Address, list_index: u32) -> Instruction {
     }
 }
 
+/// Step one of a list's handover (session 15): the list's owner signs. `None` clears a pending
+/// proposal. The same `Option` bytes as `propose_treasury`, after the list index.
+pub fn propose_list_owner_ix(owner: Address, list_index: u32, new_owner: Option<Address>) -> Instruction {
+    let mut data = discriminator("global", "propose_list_owner").to_vec();
+    data.extend_from_slice(&list_index.to_le_bytes());
+    match new_owner {
+        Some(key) => {
+            data.push(1);
+            data.extend_from_slice(key.as_ref());
+        }
+        None => data.push(0),
+    }
+    Instruction {
+        program_id: PROGRAM_ID,
+        accounts: vec![
+            AccountMeta::new(list_address(list_index), false),
+            AccountMeta::new_readonly(owner, true),
+        ],
+        data,
+    }
+}
+
+/// Step two: the proposed key signs, and only then does the list change owner.
+pub fn accept_list_owner_ix(pending: Address, list_index: u32) -> Instruction {
+    let mut data = discriminator("global", "accept_list_owner").to_vec();
+    data.extend_from_slice(&list_index.to_le_bytes());
+    Instruction {
+        program_id: PROGRAM_ID,
+        accounts: vec![
+            AccountMeta::new(list_address(list_index), false),
+            AccountMeta::new_readonly(pending, true),
+        ],
+        data,
+    }
+}
+
 pub fn insert_identity_ix(issuer: Address, list_index: u32, commitment: [u8; 32]) -> Instruction {
     let mut data = discriminator("global", "insert_identity").to_vec();
     data.extend_from_slice(&list_index.to_le_bytes());
@@ -421,7 +457,9 @@ impl SweepTarget {
     }
 }
 
-pub fn sweep_rent_ix(target: &SweepTarget, treasury: Address) -> Instruction {
+/// `sweep_rent`: no signer. `recipient` is where the excess goes: a list's owner for a list, the
+/// treasury for anything else (session 15).
+pub fn sweep_rent_ix(target: &SweepTarget, recipient: Address) -> Instruction {
     let mut data = discriminator("global", "sweep_rent").to_vec();
     data.extend_from_slice(&target.bytes());
     Instruction {
@@ -429,7 +467,7 @@ pub fn sweep_rent_ix(target: &SweepTarget, treasury: Address) -> Instruction {
         accounts: vec![
             AccountMeta::new_readonly(config_address(), false),
             AccountMeta::new(target.address(), false),
-            AccountMeta::new(treasury, false),
+            AccountMeta::new(recipient, false),
         ],
         data,
     }
@@ -472,9 +510,12 @@ pub struct ListView {
     pub root: [u8; 32],
     pub roots: Vec<[u8; 32]>,
     pub issuers: Vec<Address>,
-    /// Bytes 5456..5488, appended: who opened the list and alone manages its insert keys. The zero
+    /// Bytes 5456..5488, appended: who owns the list and alone manages its insert keys. The zero
     /// key when the account is too short to hold one, as a list made before session 14 was.
     pub owner: Address,
+    /// Bytes 5488..5520, appended in session 15: the key the owner has proposed to hand the list
+    /// to, or the zero key when none is pending (or the account is too short to hold one).
+    pub pending_owner: Address,
 }
 
 pub fn read_list(data: &[u8]) -> ListView {
@@ -491,6 +532,7 @@ pub fn read_list(data: &[u8]) -> ListView {
             .map(|i| Address::try_from(&b[5200 + i * 32..5232 + i * 32]).unwrap())
             .collect(),
         owner: b.get(5456..5488).map(|o| Address::try_from(o).unwrap()).unwrap_or_default(),
+        pending_owner: b.get(5488..5520).map(|o| Address::try_from(o).unwrap()).unwrap_or_default(),
     }
 }
 
@@ -568,6 +610,34 @@ pub fn list_opened_events(logs: &[String]) -> Vec<(u32, Address)> {
         let index = u32::from_le_bytes(bytes[8..12].try_into().unwrap());
         let owner = bytes.get(12..44).map(|o| Address::try_from(o).unwrap()).unwrap_or_default();
         out.push((index, owner));
+    }
+    out
+}
+
+/// Every `ListOwnerProposed` entry in a log, as (list index, owner, proposed key; zero when a
+/// proposal was cleared). Session 15.
+pub fn list_owner_proposed_events(logs: &[String]) -> Vec<(u32, Address, Address)> {
+    three_field_events(logs, "ListOwnerProposed")
+}
+
+/// Every `ListOwnerChanged` entry in a log, as (list index, from, to). Session 15.
+pub fn list_owner_changed_events(logs: &[String]) -> Vec<(u32, Address, Address)> {
+    three_field_events(logs, "ListOwnerChanged")
+}
+
+fn three_field_events(logs: &[String], name: &str) -> Vec<(u32, Address, Address)> {
+    let want = discriminator("event", name);
+    let mut out = Vec::new();
+    for line in logs {
+        let Some(payload) = line.strip_prefix("Program data: ") else { continue };
+        let Ok(bytes) = base64_decode(payload) else { continue };
+        if bytes.len() != 8 + 4 + 32 + 32 || bytes[..8] != want {
+            continue;
+        }
+        let index = u32::from_le_bytes(bytes[8..12].try_into().unwrap());
+        let a = Address::try_from(&bytes[12..44]).unwrap();
+        let b = Address::try_from(&bytes[44..76]).unwrap();
+        out.push((index, a, b));
     }
     out
 }

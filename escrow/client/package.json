@@ -10,6 +10,7 @@
   "scripts": {
     "test": "node --test test/client.test.ts",
     "test:validator": "node --test test/validator.test.ts",
+    "test:devnet": "FOREST_DEVNET=1 node --test --test-force-exit test/devnet.test.ts",
     "check": "tsc --noEmit",
     "build": "tsc -p tsconfig.build.json"
   },
