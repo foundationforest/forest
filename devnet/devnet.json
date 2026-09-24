@@ -1,64 +1,24 @@
 {
-  "note": "The devnet deploy of both programs (session 15). Public keys, addresses and signatures only; the private keys stayed on the machine that made them and are kept nowhere. Written by devnet/build.sh and the devnet scripts in registry/client and escrow/client; read by their devnet smoke tests. See docs/devnet.md.",
+  "note": "The devnet deploy of both programs. Public keys, addresses and signatures only. Every key is derived from one phrase (devnet/keys.sh), which is kept in no file and nowhere in this repo. Written by devnet/keys.sh, devnet/deploy.sh and the devnet scripts in registry/client and escrow/client; read by their devnet smoke tests. See docs/devnet.md.",
   "cluster": "devnet",
   "rpc": "https://api.devnet.solana.com",
   "keys": {
-    "deploy": "HSnymG2JZfN4WUNmD5TJRtEfpVzcA23WNddqpA2vxrZs",
-    "treasury": "DhM7Pcx2XCQMfaz7v9KydJWdeCiwvYCnuAXzzNMmk6Pa",
-    "foundationIssuer": "HZ6q5ynucXsgT2AojAUY5tGSL3uzjukGzJA5guzBLkjR",
-    "payer": "Au5KL1NfKhMYGi54cT4ifXj1nwssUJ7sv9GS84mgh1fX",
-    "buyer": "DYqRj9VDwFJ3tVjn5Xjr7bT4MyycFhyb6DSJNvPfRXHC",
-    "seller": "91ECaikDr3QUGtNRxGYUsNvzSpXkwsAEBhP1iAgebqkj",
-    "testDollarAuthority": "8ybJZeNkd6FhZDarzff5t9PEXHfo1dUMRAgQJhxt25Ai"
+    "deploy": "2mz33wBK7FKRXoAi7LptGGTwVQJDbrSyrVwbYRCqwP3A",
+    "treasury": "CkzCrVbQEDwex643ncFFnFwAZ3EJ6YHgnarHmrJWo5w9",
+    "foundationIssuer": "7zPD6AZc7RJv4Z15AoHvzJ2ZMCTW57XZTJanMZYsU7U7",
+    "payer": "9CKUm2s7nwT7HrCpjtaffNH3PnUUVyQr2gELjHrWYBUd",
+    "buyer": "4kFff36dwTKhK8tEm4m9QiyRCRcj67aXsYgkKMxwLuqE",
+    "seller": "3Ttfgh6ATW9j5cYMttLiZuVub77hQjkDiZDDhzqyooTf",
+    "testDollarAuthority": "EK6EjtXy1YMDwDSUNQGJv6RVuG4KVRyoJxErZGR2xyzK"
   },
   "registry": {
-    "programId": "EJLh7jhukvT2FJAXiXMkskorfKBcU2H8ZEm63sXLSxQX"
+    "programId": "8sUyd9JXRGEUqf2hYVnLCybi74549VG27dAK6YvbbU3i"
   },
   "escrow": {
-    "programId": "4i1QizMZLXCq6bE7aPDz9tELAKNYnz41WxTSy9JYjw1j"
+    "programId": "3vAVLwiwFkCUG4AHV3gK3t15HoyRSuKNEuBFvvy9CbeR"
   },
   "testDollar": {
-    "mint": "EDz4Jncf8icmJ6g97TLvjCebmSDnzYURozTJMQysbtfn",
+    "mint": "J2QBACfPPb1ys2UyGx3ecXHgCr4hWuHFT3C2Nr6TSVSa",
     "decimals": 6
-  },
-  "airdrops": {
-    "note": "From the devnet faucet through RPC requestAirdrop, on 2026-09-24. First for the deploy, payer, treasury and issuer keys, retried with backoff and shrinking amounts (1, 0.5, 0.2, 0.1 SOL) from 06:12 to 06:40 UTC: 3 of 376 requests granted. Then for the deploy key alone, 1 SOL every 5 minutes from 06:41 to 09:37 UTC: 2 of 72 granted. All five came through Alchemy's public demo endpoint. The rest were refused: api.devnet.solana.com answered 224 times with 429, \"You've either reached your airdrop limit today or the airdrop faucet has run dry\"; Alchemy's endpoint 217 times with HTTP 429 and no body, and twice with \"Internal error\". In all: deploy 3.0 SOL, payer 0.2, treasury 0.1, issuer 0.",
-    "granted": [
-      {
-        "key": "deploy",
-        "lamports": 1000000000,
-        "at": "06:12:10",
-        "via": "https://solana-devnet.g.alchemy.com/v2/demo",
-        "signature": "5TtgYRhj3db8qoSn51aJbMmmWhZKwjZEpEn8e4DigoQ4ZS8ntTCuKiA9qWBWdkD79Zh4MhmG8EqsYseTfvdwGBKR"
-      },
-      {
-        "key": "treasury",
-        "lamports": 100000000,
-        "at": "06:12:13",
-        "via": "https://solana-devnet.g.alchemy.com/v2/demo",
-        "signature": "4jEztRRv9z41VbFq5TqkmfQnfwjA9jxNSqXXiQnp8WJ1xXcGFk2bR5s7RUkjGnfFCTeegjXr7nwo3Pua2ruADdnH"
-      },
-      {
-        "key": "payer",
-        "lamports": 200000000,
-        "at": "06:35:17",
-        "via": "https://solana-devnet.g.alchemy.com/v2/demo",
-        "signature": "akFsshYnpBdBZd9jjuvPLTyJDwt2GWRKjMFcuBUTgga9vTqoK6oxQsrCRRaDp7D9qTrzPwMiGDGmoHugiJRybW8"
-      },
-      {
-        "key": "deploy",
-        "lamports": 1000000000,
-        "at": "07:57:12",
-        "via": "https://solana-devnet.g.alchemy.com/v2/demo",
-        "signature": "2ge7VhWByUB2VmSFH1tcTz2dKnZnMmnWSTaGgddxvMp3xHqZhBZje3Sc89Nu2SHwUAGGtEbjJfKQVbLdJ4abb4rx"
-      },
-      {
-        "key": "deploy",
-        "lamports": 1000000000,
-        "at": "08:07:14",
-        "via": "https://solana-devnet.g.alchemy.com/v2/demo",
-        "signature": "5fDnJWg586243nJDPUHsuHMPtxo4dAahR9NZo6ZqQ3jHkwuFULfYitczssia6KyYFUNvVKGzfKTP7pAFXBkyHeid"
-      }
-    ]
   }
 }
