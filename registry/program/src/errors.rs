@@ -56,6 +56,16 @@ pub enum RegistryError {
     FeeZero,
     #[msg("this list is closed to new members")]
     ListClosed,
-    #[msg("only the list's owner may change its insert keys or close it")]
+    #[msg("only the list's owner may change its insert keys, close it or hand it over")]
     NotTheListOwner,
+    #[msg("a list's owner cannot be the zero key")]
+    ListOwnerEmpty,
+    #[msg("the proposed key already owns this list")]
+    ListOwnerUnchanged,
+    #[msg("no handover of this list has been proposed")]
+    NoPendingListOwner,
+    #[msg("only the proposed owner can accept this list")]
+    NotThePendingListOwner,
+    #[msg("a list's rent goes to its owner, and any other account's to the treasury")]
+    WrongSweepRecipient,
 }

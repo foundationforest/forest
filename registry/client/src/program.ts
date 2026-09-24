@@ -235,6 +235,46 @@ export function closeListIx(args: { owner: PublicKey; listIndex: number; program
   })
 }
 
+/**
+ * Step one of handing a list to another key (session 15): its owner signs and `newOwner` is
+ * recorded as pending. Nothing moves until that key signs `acceptListOwnerIx`. `null` clears a
+ * pending proposal; a later proposal overwrites it. The same `Option<Pubkey>` bytes as
+ * `proposeTreasuryIx`, after the list index.
+ */
+export function proposeListOwnerIx(args: {
+  owner: PublicKey
+  listIndex: number
+  newOwner: PublicKey | null
+  programId?: PublicKey
+}): TransactionInstruction {
+  const programId = args.programId ?? PROGRAM_ID
+  const option =
+    args.newOwner === null ? new Uint8Array([0]) : concat([new Uint8Array([1]), args.newOwner.toBytes()])
+  return new TransactionInstruction({
+    programId,
+    keys: [rw(listAddress(args.listIndex, programId)), ro(args.owner, true)],
+    data: concat([discriminator('global', 'propose_list_owner'), u32le(args.listIndex), option]),
+  })
+}
+
+/**
+ * Step two: the pending key signs, and only then is it the list's owner: the key that manages its
+ * insert keys, closes it, hands it on, and receives its swept rent. The insert keys stay as they
+ * were; the new owner changes them itself, in the same transaction if it likes.
+ */
+export function acceptListOwnerIx(args: {
+  pending: PublicKey
+  listIndex: number
+  programId?: PublicKey
+}): TransactionInstruction {
+  const programId = args.programId ?? PROGRAM_ID
+  return new TransactionInstruction({
+    programId,
+    keys: [rw(listAddress(args.listIndex, programId)), ro(args.pending, true)],
+    data: concat([discriminator('global', 'accept_list_owner'), u32le(args.listIndex)]),
+  })
+}
+
 export function insertIdentityIx(args: {
   issuer: PublicKey
   listIndex: number
@@ -306,9 +346,14 @@ export function sweepTargetAddress(target: SweepTarget, programId: PublicKey = P
   }
 }
 
+/**
+ * Move what a registry account holds above its rent-exempt minimum. Nobody signs. `recipient` is
+ * where it goes, and the program accepts one key only: a list's owner for a list (session 15),
+ * the treasury for the config, the code tree and a code account.
+ */
 export function sweepRentIx(args: {
   target: SweepTarget
-  treasury: PublicKey
+  recipient: PublicKey
   programId?: PublicKey
 }): TransactionInstruction {
   const programId = args.programId ?? PROGRAM_ID
@@ -317,7 +362,7 @@ export function sweepRentIx(args: {
     keys: [
       ro(configAddress(programId)),
       rw(sweepTargetAddress(args.target, programId)),
-      rw(args.treasury),
+      rw(args.recipient),
     ],
     data: concat([discriminator('global', 'sweep_rent'), sweepTargetBytes(args.target)]),
   })
@@ -430,12 +475,22 @@ export type IdentityListAccount = {
   roots: Uint8Array[]
   /** Its insert keys; the owner's is the first when the list opens. */
   issuers: PublicKey[]
-  /** Who opened it and vouches for its members; the only key that changes its insert keys or closes it. */
+  /**
+   * Who vouches for its members: the only key that changes its insert keys, closes it, hands it
+   * on, and receives its swept rent. Its opener, until a handover (session 15).
+   */
   owner: PublicKey
+  /** The key the owner has proposed to hand the list to, or null when none is pending. */
+  pendingOwner: PublicKey | null
 }
 
+/** A list account's size after the discriminator: 5,488 bytes, then the pending owner (session 15). */
+export const IDENTITY_LIST_LEN = 5520
+
 export function decodeIdentityList(data: Uint8Array): IdentityListAccount {
+  if (data.length !== 8 + IDENTITY_LIST_LEN) throw new RangeError(`not a list account: ${data.length} bytes`)
   const b = data.subarray(8)
+  const pending = new PublicKey(b.subarray(5488, 5520))
   const issuerCount = b[12]
   const issuers: PublicKey[] = []
   for (let i = 0; i < issuerCount; i++) {
@@ -452,6 +507,7 @@ export function decodeIdentityList(data: Uint8Array): IdentityListAccount {
     roots,
     issuers,
     owner: new PublicKey(b.subarray(5456, 5488)),
+    pendingOwner: pending.equals(PublicKey.default) ? null : pending,
   }
 }
 
@@ -531,6 +587,39 @@ export function decodeRegisteredEvents(logs: string[], programId: PublicKey = PR
     at += 4
     const listOwner = new PublicKey(bytes.subarray(at, at + 32))
     out.push({ market, did, wallet, code, listIndex, listOwner })
+  }
+  return out
+}
+
+/** One member added to a list: the `IdentityInserted` entry `insert_identity` writes. */
+export type IdentityInsertedEvent = {
+  listIndex: number
+  /** Its position in the list, from 0, in the order the list took them. */
+  leafIndex: bigint
+  commitment: Uint8Array
+  /** The list's root once this member was in. */
+  root: Uint8Array
+}
+
+/**
+ * Every member added in one transaction's log, in order. Only lines the registry itself wrote are
+ * read (`programDataLines`), so a program that writes the same bytes adds no one.
+ */
+export function decodeIdentityInsertedEvents(
+  logs: string[],
+  programId: PublicKey = PROGRAM_ID,
+): IdentityInsertedEvent[] {
+  const want = discriminator('event', 'IdentityInserted')
+  const out: IdentityInsertedEvent[] = []
+  for (const payload of programDataLines(logs, programId)) {
+    const bytes = new Uint8Array(Buffer.from(payload, 'base64'))
+    if (bytes.length !== 8 + 4 + 8 + 32 + 32 || !want.every((v, i) => bytes[i] === v)) continue
+    out.push({
+      listIndex: readU32le(bytes, 8),
+      leafIndex: readU64le(bytes, 12),
+      commitment: bytes.slice(20, 52),
+      root: bytes.slice(52, 84),
+    })
   }
   return out
 }

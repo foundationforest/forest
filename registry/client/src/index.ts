@@ -1,6 +1,7 @@
 // The Forest registry client: everything a device needs to turn an identity secret into one
 // registration, and nothing else. It talks to no network of its own. The caller passes in the
-// list's leaves and a recent blockhash; the caller sends the transaction.
+// list's leaves (or reads them with `fetchListLeaves`, through a connection the caller chooses)
+// and a recent blockhash; the caller sends the transaction.
 //
 // Nothing here is shipped.
 
@@ -27,6 +28,7 @@ export * from './compress.ts'
 export * from './code.ts'
 export * from './program.ts'
 export * from './proof.ts'
+export * from './leaves.ts'
 
 /**
  * A registration measured at about 133,000 compute units under LiteSVM and on a local validator

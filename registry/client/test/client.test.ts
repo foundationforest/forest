@@ -22,6 +22,13 @@ import {
   FOUNDATION_ISSUER_PLACEHOLDER_SEED,
   openListIx,
   addIssuerIx,
+  acceptListOwnerIx,
+  decodeIdentityInsertedEvents,
+  fetchListLeaves,
+  leavesFromEvents,
+  listRoot,
+  proposeListOwnerIx,
+  sweepRentIx,
   TREASURY_PLACEHOLDER_SEED,
   USDC_FEE,
   USDC_MINT,
@@ -186,6 +193,11 @@ test("Anchor's discriminators are what the program answers to", () => {
     'global:add_token': 'edff1a3638304434',
     'global:close_list': 'f340ec553656699b',
     'global:sweep_rent': '11ea3af1fb9487b9',
+    'global:propose_list_owner': 'a0b5eebc58a1f83a',
+    'global:accept_list_owner': 'c437d957a27be027',
+    'event:ListOwnerProposed': '369de90e0e170e93',
+    'event:ListOwnerChanged': '56a2f77af7741c4e',
+    'event:IdentityInserted': '1b77bce435185818',
     'account:UsedCode': 'bf1f2dadd1e22d84',
     'event:Registered': '0bde0a48a06ea5e3',
   }
@@ -291,13 +303,125 @@ test('anyone opens a list; its owner, not the treasury, manages and closes it; t
       'the list and its owner, and no config: the treasury has no say',
     )
   }
-  const list = new Uint8Array(8 + 5488)
+  const list = new Uint8Array(8 + 5520)
   list[8 + 14] = 1
   list.set(owner.toBytes(), 8 + 5456)
   assert.equal(decodeIdentityList(list).closed, true)
   assert.equal(decodeIdentityList(list).owner.toBase58(), owner.toBase58())
+  assert.equal(decodeIdentityList(list).pendingOwner, null, 'the zero key means no handover is pending')
   list[8 + 14] = 0
   assert.equal(decodeIdentityList(list).closed, false)
+  assert.throws(() => decodeIdentityList(new Uint8Array(8 + 5488)), /not a list account/, 'a list laid out before session 15 is refused')
+})
+
+test("a list's handover is two instructions, and the pending owner decodes back out of the list", () => {
+  const [owner, next] = [PublicKey.unique(), PublicKey.unique()]
+  // Propose: discriminator, the list index, then borsh's Option<Pubkey>.
+  const propose = proposeListOwnerIx({ owner, listIndex: 3, newOwner: next })
+  assert.equal(hex(propose.data), hex(discriminator('global', 'propose_list_owner')) + '03000000' + '01' + hex(next.toBytes()))
+  const clear = proposeListOwnerIx({ owner, listIndex: 3, newOwner: null })
+  assert.equal(hex(clear.data), hex(discriminator('global', 'propose_list_owner')) + '03000000' + '00')
+  const accept = acceptListOwnerIx({ pending: next, listIndex: 3 })
+  assert.equal(hex(accept.data), hex(discriminator('global', 'accept_list_owner')) + '03000000')
+  for (const [ix, signer] of [[propose, owner], [clear, owner], [accept, next]] as const) {
+    assert.deepEqual(
+      ix.keys.map((k) => [k.pubkey.toBase58(), k.isSigner, k.isWritable]),
+      [
+        [listAddress(3).toBase58(), false, true],
+        [signer.toBase58(), true, false],
+      ],
+      'the list and the one key that signs: its owner to propose, the proposed key to accept',
+    )
+  }
+  const list = new Uint8Array(8 + 5520)
+  list.set(owner.toBytes(), 8 + 5456)
+  list.set(next.toBytes(), 8 + 5488)
+  assert.equal(decodeIdentityList(list).pendingOwner?.toBase58(), next.toBase58())
+})
+
+test("a sweep names where the rent goes: a list's owner, or the treasury", () => {
+  const owner = PublicKey.unique()
+  const ix = sweepRentIx({ target: { kind: 'list', index: 2 }, recipient: owner })
+  assert.equal(hex(ix.data), hex(discriminator('global', 'sweep_rent')) + '02' + '02000000')
+  assert.deepEqual(
+    ix.keys.map((k) => [k.pubkey.toBase58(), k.isSigner, k.isWritable]),
+    [
+      [configAddressFor(), false, false],
+      [listAddress(2).toBase58(), false, true],
+      [owner.toBase58(), false, true],
+    ],
+    'nobody signs; the recipient only receives',
+  )
+})
+
+/** One `IdentityInserted` entry's bytes, as the program writes them. */
+function inserted(listIndex: number, leafIndex: bigint, commitment: bigint, root: bigint): string {
+  const b = new Uint8Array(84)
+  b.set(discriminator('event', 'IdentityInserted'))
+  const v = new DataView(b.buffer)
+  v.setUint32(8, listIndex, true)
+  v.setBigUint64(12, leafIndex, true)
+  b.set(toBytes32(commitment), 20)
+  b.set(toBytes32(root), 52)
+  return `Program data: ${Buffer.from(b).toString('base64')}`
+}
+
+test("a list's members read back out of the log, in order, checked against its root", () => {
+  const id = PROGRAM_ID.toBase58()
+  const members = [11n, 22n, 33n, 44n, 55n]
+  const roots = members.map((_, i) => listRoot(members.slice(0, i + 1)))
+  const logs = (from: number, to: number, list = 0) => [
+    `Program ${id} invoke [1]`,
+    ...members.slice(from, to).map((m, i) => inserted(list, BigInt(from + i), m, roots[from + i])),
+    `Program ${id} success`,
+  ]
+  const events = decodeIdentityInsertedEvents([...logs(3, 5), ...logs(0, 3), ...logs(0, 2, 1)])
+  assert.equal(events.length, 7)
+  assert.equal(events[0].leafIndex, 3n)
+  assert.deepEqual(leavesFromEvents(events, 0), members, 'in the order the list took them, whatever order the log was read in')
+  assert.deepEqual(leavesFromEvents(events, 1), [11n, 22n], "another list's members kept apart")
+  assert.deepEqual(leavesFromEvents([...events, ...events], 0), members, 'the same entry read twice counts once')
+  assert.throws(() => leavesFromEvents(events.filter((e) => e.leafIndex !== 2n), 0), /no member at position 2/)
+  const clash = { ...events[0], commitment: toBytes32(99n) }
+  assert.throws(() => leavesFromEvents([...events, clash], 0), /two members at position 3/)
+  // Only the registry's own lines: the same bytes from another program add no one.
+  const forger = 'Forger1111111111111111111111111111111111111'
+  assert.deepEqual(decodeIdentityInsertedEvents([`Program ${forger} invoke [1]`, inserted(0, 0n, 1n, 1n), `Program ${forger} success`]), [])
+})
+
+test('a phone reads a list through any connection, and refuses members that do not give its root', async () => {
+  const id = PROGRAM_ID.toBase58()
+  const members = [101n, 202n, 303n]
+  const root = listRoot(members)
+  // Three inserts, one per transaction, plus a registration that only read the list, plus a
+  // failed transaction; listed newest first, the way RPC lists them.
+  const txs: Record<string, string[]> = {
+    s1: [`Program ${id} invoke [1]`, inserted(0, 0n, 101n, listRoot([101n])), `Program ${id} success`],
+    s2: [`Program ${id} invoke [1]`, inserted(0, 1n, 202n, listRoot([101n, 202n])), `Program ${id} success`],
+    s3: [`Program ${id} invoke [1]`, `Program log: Instruction: Register`, `Program ${id} success`],
+    s4: [`Program ${id} invoke [1]`, inserted(0, 2n, 303n, root), `Program ${id} success`],
+  }
+  const account = (count: number, r: bigint) => {
+    const data = new Uint8Array(8 + 5520)
+    new DataView(data.buffer).setBigUint64(8, BigInt(count), true)
+    data.set(toBytes32(r), 8 + 16)
+    return { data: Buffer.from(data), owner: PROGRAM_ID, lamports: 1, executable: false }
+  }
+  const connection = (count: number, r: bigint) => ({
+    getAccountInfo: async () => account(count, r),
+    getSignaturesForAddress: async () =>
+      ['s4', 'bad', 's3', 's2', 's1'].map((signature) => ({ signature, err: signature === 'bad' ? { e: 1 } : null })),
+    getTransaction: async (signature: string) => ({ meta: { logMessages: txs[signature] } }),
+  })
+  const read = await fetchListLeaves(connection(3, root) as never, 0)
+  assert.deepEqual(read.leaves, members)
+  assert.equal(read.root, root)
+  assert.equal(read.transactionsRead, 4, 'every transaction that touched the list and landed, and nothing else')
+  // A member added after the account was read is left out, so the root is still one the list held.
+  const early = await fetchListLeaves(connection(2, listRoot([101n, 202n])) as never, 0)
+  assert.deepEqual(early.leaves, [101n, 202n])
+  await assert.rejects(fetchListLeaves(connection(3, 7n) as never, 0), /do not give its root/)
+  await assert.rejects(fetchListLeaves(connection(4, root) as never, 0), /holds 4 members but the log gave 3/)
 })
 
 test('an entry decodes back out of a log line', () => {

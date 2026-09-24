@@ -426,11 +426,13 @@ fn sweep_nothing_twice_nothing_missing_and_a_rent_rise_freezes_nothing() {
     let err = h.send(&[sweep_rent_ix(&SweepTarget::CodeTree, treasury)], &[Harness::PAYER]).expect_err("nothing yet");
     assert!(err.contains("nothing above"), "{err}");
 
-    // After the cut, once, then nothing.
+    // After the cut, once, then nothing. List 0's rent goes to its owner (session 15), the rest to
+    // the treasury.
     h.svm.set_sysvar(&rent_at(RENT_FINAL));
     for target in [SweepTarget::Config, SweepTarget::CodeTree, SweepTarget::List(0), SweepTarget::Code(alice.code_bytes())] {
-        h.send(&[sweep_rent_ix(&target, treasury)], &[Harness::PAYER]).expect("sweep");
-        let err = h.send(&[sweep_rent_ix(&target, treasury)], &[Harness::PAYER]).expect_err("twice");
+        let to = if matches!(target, SweepTarget::List(_)) { FOUNDATION_ISSUER } else { treasury };
+        h.send(&[sweep_rent_ix(&target, to)], &[Harness::PAYER]).expect("sweep");
+        let err = h.send(&[sweep_rent_ix(&target, to)], &[Harness::PAYER]).expect_err("twice");
         assert!(err.contains("nothing above"), "{err}");
     }
 

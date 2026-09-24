@@ -11,21 +11,26 @@
 //! Random flows: register (the five real proofs, sometimes corrupted, signed by the profile's own
 //! wallet or by another, the fee paid by the profile or by anyone else), insert, propose and accept
 //! a treasury, add a token at a fee of the treasury's choosing, open a list as anyone, add and remove
-//! a list's insert keys and close it as its owner or as anyone else, send lamports to a registry
-//! account, sweep, and move the rent rate between the three rates the sweep exists for. The model says whether each must land; after each, the
-//! invariants:
+//! a list's insert keys and close it as its owner or as anyone else, propose and accept a list's
+//! handover as its owner, the proposed key or anyone else, send lamports to a registry account,
+//! sweep to the right key or any other, and move the rent rate between the three rates the sweep
+//! exists for. The model says whether each must land; after each, the invariants:
 //!   R1 a code is never recorded twice, and the code tree's count and root are those of the codes
 //!      accepted, in order;
 //!   R2 no key that has held the treasury ever loses a lamport or a token unit; it gains exactly
-//!      the fee on a registration and exactly the excess on a sweep;
+//!      the fee on a registration and exactly the excess on a sweep of the config, the code tree
+//!      or a code account; a list's sweep pays exactly its excess to the list's owner of the moment
+//!      and to no one else (session 15);
 //!   R3 each list's identity count only grows, and its root is the LeanIMT root of its leaves;
 //!   R4 each list's ring holds exactly its last 128 roots;
 //!   R5 the program accepts exactly what the rules allow and refuses everything else;
 //!   R6 every registration is signed by the wallet its proof names, and its entry names that
 //!      wallet, its list and that list's owner; each mint's fee never changes once set; a closed
 //!      list takes no member and stays closed;
-//!   R7 a list's owner never changes, and only it changes the list's insert keys or closes it
-//!      (session 14: anyone may open a list; the treasury has no say over any).
+//!   R7 a list's owner changes only when the key its owner proposed signs to accept, and only
+//!      its owner changes the list's insert keys, closes it or proposes a handover; a handover moves
+//!      the owner and nothing else (session 14: anyone may open a list; the treasury has no say
+//!      over any; session 15: handovers).
 //!
 //! `cargo test --release --test invariants -- --nocapture`; `FOREST_FUZZ_ITERATIONS`,
 //! `FOREST_FUZZ_FLOWS` and `FOREST_FUZZ_SEED` size and replay a run.
@@ -93,8 +98,10 @@ struct World {
     leaves: Vec<Vec<[u8; 32]>>,
     rings: Vec<Vec<[u8; 32]>>,
     issuers: Vec<Vec<Address>>,
-    /// Each list's owner, recorded when it opened and never changed.
+    /// Each list's owner: its opener, until a handover is accepted.
     owners: Vec<Address>,
+    /// Each list's pending handover, or the zero key.
+    pending_owners: Vec<Address>,
     closed: Vec<bool>,
     codes: Vec<[u8; 32]>,
     used: HashSet<[u8; 32]>,
@@ -135,6 +142,7 @@ impl World {
             rings: vec![vec![]],
             issuers: vec![],
             owners: vec![],
+            pending_owners: vec![],
             closed: vec![false],
             codes: vec![],
             used: HashSet::new(),
@@ -158,6 +166,7 @@ impl World {
         assert_eq!(issuer, FOUNDATION_ISSUER);
         w.issuers.push(vec![issuer]);
         w.owners.push(issuer);
+        w.pending_owners.push(Address::default());
         w.give_token_accounts(USDC_MINT);
         // List 1, as the fixtures expect, opened by the same key, then both lists' real leaves.
         let payer = w.h.payer.pubkey();
@@ -167,6 +176,7 @@ impl World {
         w.closed.push(false);
         w.issuers.push(vec![issuer]);
         w.owners.push(issuer);
+        w.pending_owners.push(Address::default());
         for fl in &f.lists {
             for leaf in &fl.leaves {
                 w.do_insert(fl.index, issuer, dec_to_be32(leaf), true);
@@ -540,7 +550,82 @@ impl World {
         self.rings.push(vec![]);
         self.issuers.push(vec![owner]);
         self.owners.push(owner);
+        self.pending_owners.push(Address::default());
         self.closed.push(false);
+    }
+
+    /// A list's handover: its owner (or anyone) proposes a key, nothing, the zero key or itself;
+    /// or the proposed key (or anyone) accepts. Sometimes both in one transaction.
+    fn list_handover(&mut self) {
+        // Mostly a list with a handover pending, when there is one, so accepts get exercised.
+        let pending_lists: Vec<u32> =
+            (0..self.pending_owners.len()).filter(|i| self.pending_owners[*i] != Address::default()).map(|i| i as u32).collect();
+        let list = if !pending_lists.is_empty() && self.rng.below(10) < 7 {
+            pending_lists[self.rng.below(pending_lists.len())]
+        } else {
+            self.rng.below(self.leaves.len() + 1) as u32
+        };
+        let exists = (list as usize) < self.leaves.len();
+        let owner = if exists { self.owners[list as usize] } else { Address::default() };
+        let pending = if exists { self.pending_owners[list as usize] } else { Address::default() };
+        match self.rng.below(3) {
+            0 => {
+                let signer = self.list_signer(list);
+                let proposed = match self.rng.below(8) {
+                    0 => None,
+                    1 => Some(Address::default()),
+                    2 => Some(owner),
+                    3 => Some(Address::new_unique()), // a typo: nobody holds it, so nobody accepts
+                    _ => Some(self.any_key()),
+                };
+                let valid = exists
+                    && signer == owner
+                    && match proposed {
+                        None => true,
+                        Some(k) => k != Address::default() && k != owner,
+                    };
+                let ok = self.send(&[propose_list_owner_ix(signer, list, proposed)], "propose_list_owner");
+                assert_eq!(ok, valid, "R5 propose_list_owner: model {valid}, program {ok}\n{}", self.last_error);
+                if ok {
+                    self.pending_owners[list as usize] = proposed.unwrap_or_default();
+                }
+            }
+            1 => {
+                // Usually the pending key, when anyone holds it; otherwise the owner or anyone.
+                let held = pending != Address::default() && self.people.iter().chain(self.treasuries.iter()).any(|k| k.pubkey() == pending);
+                let signer = if held && self.rng.below(10) < 7 {
+                    pending
+                } else if self.rng.coin() && exists {
+                    owner
+                } else {
+                    self.any_key()
+                };
+                let valid = exists && pending != Address::default() && signer == pending;
+                let ok = self.send(&[accept_list_owner_ix(signer, list)], "accept_list_owner");
+                assert_eq!(ok, valid, "R5 accept_list_owner: model {valid}, program {ok}\n{}", self.last_error);
+                if ok {
+                    self.owners[list as usize] = signer;
+                    self.pending_owners[list as usize] = Address::default();
+                }
+            }
+            _ => {
+                // Both steps in one transaction, both keys signing.
+                if !exists {
+                    return;
+                }
+                let to = self.any_key();
+                let valid = to != owner;
+                let ok = self.send(
+                    &[propose_list_owner_ix(owner, list, Some(to)), accept_list_owner_ix(to, list)],
+                    "propose_and_accept",
+                );
+                assert_eq!(ok, valid, "R5 propose_and_accept: model {valid}, program {ok}\n{}", self.last_error);
+                if ok {
+                    self.owners[list as usize] = to;
+                    self.pending_owners[list as usize] = Address::default();
+                }
+            }
+        }
     }
 
     /// The rent rate moves between the three the sweep was written for, either way.
@@ -577,20 +662,25 @@ impl World {
             let ix = Instruction { program_id: SYSTEM, accounts: vec![AccountMeta::new(from, true), AccountMeta::new(address, false)], data };
             self.send(&[ix], "donate"); // lands unless the runtime's rent rules refuse it; either way the chain is the truth
         }
-        let to = if self.rng.below(10) == 0 { self.any_key() } else { self.treasury };
+        // A list's rent goes to its owner of the moment; everything else's to the treasury.
+        let right = match &target {
+            SweepTarget::List(i) if exists => self.owners[*i as usize],
+            _ => self.treasury,
+        };
+        let to = if self.rng.below(10) == 0 { self.any_key() } else { right };
         let (lamports, len) = self.h.svm.get_account(&address).map(|x| (x.lamports, x.data.len())).unwrap_or((0, 0));
         let excess = if exists { lamports.saturating_sub(rent_minimum(self.rate, len)) } else { 0 };
         // The runtime, not the program: an account a transaction credits must end rent exempt, so
-        // a treasury key holding no SOL takes a sweep only if the excess alone covers its own rent.
-        let t_len = self.h.svm.get_account(&self.treasury).map(|x| x.data.len()).unwrap_or(0);
-        let treasury_after = self.lamports(&self.treasury) + excess;
-        let valid = to == self.treasury && exists && excess > 0 && treasury_after >= rent_minimum(self.rate, t_len);
-        let t_before = self.lamports(&self.treasury);
+        // a key holding no SOL takes a sweep only if the excess alone covers its own rent.
+        let to_len = self.h.svm.get_account(&to).map(|x| x.data.len()).unwrap_or(0);
+        let to_after = self.lamports(&to) + excess;
+        let valid = to == right && exists && excess > 0 && to_after >= rent_minimum(self.rate, to_len);
+        let to_before = self.lamports(&to);
         let ok = self.send(&[sweep_rent_ix(&target, to)], "sweep_rent");
         assert_eq!(ok, valid, "R5 sweep_rent: model {valid}, program {ok} (exists {exists}, excess {excess}, rate {}, target {address}, len {len}, lamports {lamports})\n{}", self.rate, self.last_error);
         if ok {
             assert_eq!(self.lamports(&address), rent_minimum(self.rate, len), "R2 exactly the minimum stays");
-            assert_eq!(self.lamports(&self.treasury), t_before + excess, "R2 exactly the excess to the treasury");
+            assert_eq!(self.lamports(&to), to_before + excess, "R2 exactly the excess to the one key the target pays");
         }
     }
 
@@ -627,7 +717,8 @@ impl World {
             let view = self.h.list(i as u32);
             assert_eq!(view.leaf_count, leaves.len() as u64, "R3 leaf count");
             assert_eq!(view.closed, self.closed[i], "R6 a closed list stays closed, an open one open");
-            assert_eq!(view.owner, self.owners[i], "R7 a list's owner never changes");
+            assert_eq!(view.owner, self.owners[i], "R7 a list's owner changes only by an accepted handover");
+            assert_eq!(view.pending_owner, self.pending_owners[i], "R7 the pending handover is the one the owner proposed");
             assert_eq!(view.issuers, self.issuers[i], "R7 its insert keys are the ones its owner set");
         }
         for code in &self.codes {
@@ -639,7 +730,7 @@ impl World {
     }
 
     fn step(&mut self) {
-        match self.rng.below(9) {
+        match self.rng.below(10) {
             0 | 1 => self.register(),
             2 => self.insert(),
             3 => self.propose(),
@@ -651,6 +742,7 @@ impl World {
                 2 => self.close_list(),
                 _ => self.rent_moves(),
             },
+            8 => self.list_handover(),
             _ => self.sweep(),
         }
         self.check_everything();
