@@ -20,5 +20,31 @@
   "testDollar": {
     "mint": "EDz4Jncf8icmJ6g97TLvjCebmSDnzYURozTJMQysbtfn",
     "decimals": 6
+  },
+  "airdrops": {
+    "note": "From the devnet faucet through RPC requestAirdrop, retried with backoff and shrinking amounts (1, 0.5, 0.2, 0.1 SOL) for 28 minutes, 06:12 to 06:40 UTC on 2026-09-24, for the deploy, payer, treasury and issuer keys. 3 of 376 requests were granted, all through Alchemy's public demo endpoint. The rest were refused: api.devnet.solana.com answered 188 times with 429, \"You've either reached your airdrop limit today or the airdrop faucet has run dry\"; Alchemy's endpoint 183 times with HTTP 429 and no body, and twice with \"Internal error\".",
+    "granted": [
+      {
+        "key": "deploy",
+        "lamports": 1000000000,
+        "at": "06:12:10",
+        "via": "https://solana-devnet.g.alchemy.com/v2/demo",
+        "signature": "5TtgYRhj3db8qoSn51aJbMmmWhZKwjZEpEn8e4DigoQ4ZS8ntTCuKiA9qWBWdkD79Zh4MhmG8EqsYseTfvdwGBKR"
+      },
+      {
+        "key": "treasury",
+        "lamports": 100000000,
+        "at": "06:12:13",
+        "via": "https://solana-devnet.g.alchemy.com/v2/demo",
+        "signature": "4jEztRRv9z41VbFq5TqkmfQnfwjA9jxNSqXXiQnp8WJ1xXcGFk2bR5s7RUkjGnfFCTeegjXr7nwo3Pua2ruADdnH"
+      },
+      {
+        "key": "payer",
+        "lamports": 200000000,
+        "at": "06:35:17",
+        "via": "https://solana-devnet.g.alchemy.com/v2/demo",
+        "signature": "akFsshYnpBdBZd9jjuvPLTyJDwt2GWRKjMFcuBUTgga9vTqoK6oxQsrCRRaDp7D9qTrzPwMiGDGmoHugiJRybW8"
+      }
+    ]
   }
 }
