@@ -18,6 +18,8 @@ node bin/validate.js market examples/markets/online-tutors.json
 
 A post carries a `terms` block, required on an offer: `autoReleaseDays` (after the clock starts, the money goes to the seller unless the buyer has objected), up to four `cancellationSteps` of `{ hours, refundPercent }` (hours from the clock start, negative before the service time; deadlines strictly rising, none after auto-release), and an optional `arbiter` key. An escrow is created from these terms, as the seller set them for this offer. The post's `price` names its token by `mint`, the token's address on Solana: any classic token works, and which tokens an index weighs is the index's call.
 
+A review requires only `subject`, the DID it is about (and `createdAt`, as every record has): a review can be as thin as pointing at a person. `rating` (1 to 5), `text` and `dealId` are optional; what is missing weighs less, and nothing is refused for it. `dealId` is the deal the review is about: the escrow's address (base58, 32 bytes) when an escrow exists, else 32 random bytes as lowercase hex, chosen when the deal began. The validator refuses a `dealId` that is neither, since it points at nothing.
+
 A market file has exactly seven keys: `name`, `category`, `roles`, `fields`, `evidenceTypes`, `suggested`, `credentialIssuers`.
 
 - `category` names the deal shape, how money, time and evidence flow: `home-services`, `freelance-work`, `buy-and-sell`. Any slug passes; a later category is a new file in the `markets` repo, not code.
