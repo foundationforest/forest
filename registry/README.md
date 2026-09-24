@@ -4,7 +4,8 @@ The sealed Solana program that gives one verified human one badge per market wit
 and the client a device uses to get one.
 
 **Nothing here is shipped.** It has run on a local validator and under LiteSVM, and nowhere else.
-No devnet, no mainnet, no Kora.
+No devnet, no mainnet, no Kora. Its devnet run is built, scripted and rehearsed, and stopped at the
+deploy for lack of test SOL (session 15, `docs/devnet.md`).
 
 A registration is one transaction. It carries the market name, the profile's DID, one Semaphore
 proof with its points compressed, the list root the proof was made against, and the code, and the
@@ -36,7 +37,11 @@ cd registry/program/tests-litesvm && cargo test -- --nocapture
 cd registry/program/tests-litesvm && FOREST_FUZZ_ITERATIONS=1000 cargo test --release --test invariants -- --nocapture
 cd registry/client    && npm install && npm test          # no chain needed
 cd registry/client    && npm run test:validator           # starts solana-test-validator itself
+cd registry/client    && npm run test:devnet              # read-only, against devnet/devnet.json's deploy
 ```
+
+Devnet has its own build, deploy and run scripts, with keys substituted into a copy of the source
+at build time: `docs/devnet.md`.
 
 `registry/client` also writes the test fixtures: `npm run fixtures` makes five real proofs with the
 pinned artifacts and writes `program/tests-litesvm/fixtures/proofs.json`, each with its profile's
@@ -51,13 +56,14 @@ Measured in session 11, one proof, compressed points, on the program in `program
 | | |
 |---|---|
 | Transaction on the wire | **830 bytes** of the 1,232 limit, 67%, on both paths, each with two signers: the profile paying the fee while a separate fee payer covers the network fee and the code account's rent, or one other key paying everything (legacy, with a compute-budget instruction; the client's v0 form is 832 on a local validator) |
-| Compute units | **133,087** (the profile paying the fee) and **135,528** (another key paying everything) of the 1,400,000 limit, **9.5 to 9.7%**; 133,081 on a local validator |
+| Compute units | **133,093** (the profile paying the fee) and **135,534** (another key paying everything) of the 1,400,000 limit, **9.5 to 9.7%**, under LiteSVM in session 15; 139,075 on a local validator at the devnet build's program id, where the address derivations take other bump seeds |
 | Instruction data | 257 bytes, 11 accounts |
-| Proof on this machine | about 1.8 to 2.6 seconds in Node at depth 32 |
+| Proof on this machine | about 1.8 to 2.8 seconds in Node at depth 32 |
 
 Session 5 measured 829 bytes and 132,302 units before the fee was looked up per mint; session 6,
 133,072 before the config grew a pending-treasury slot; session 11, 133,033 before the entry named
-the list's owner (session 14, 54 units). Before session 11 a registration another key paid for
+the list's owner (session 14, 54 units); session 14, 133,087 before the list account grew a
+pending-owner slot (session 15, 6 units; nothing else `register` touches changed). Before session 11 a registration another key paid for
 carried one signature fewer: the profile's wallet did not have to sign.
 
 No address lookup table, and no need for one. Session 3's figures were for a registration carrying
@@ -217,7 +223,11 @@ could rewrite is not a registry anyone should stake a name on.
 
 ## Deploy checklist
 
-In this order. Nothing here has been done; nothing is deployed.
+In this order, for mainnet. Nothing here has been done there, and nothing is deployed anywhere.
+Devnet rehearses steps 1 to 5 with throwaway keys put into a copy of the source at build time
+(`devnet/build.sh`), and leaves out step 6 on purpose: a devnet program stays upgradeable. How to
+build, deploy and run it there, and what session 15 got done (everything but the deploy, which ran
+out of test SOL), is in `docs/devnet.md`.
 
 1. **Replace the placeholder treasury.** `TREASURY` in `program/src/lib.rs` is derived from the
    public seed `REPLACE-BEFORE-DEPLOY-treasury-0` so the tests can sign for it, which means anyone
@@ -360,7 +370,8 @@ ships, and each is logged in `docs/changes.md`.
 
 ## What this does not do
 
-No devnet, no mainnet, no Kora, no address lookup table, no proof on a phone. The 4.0.0 ceremony
+No devnet deploy yet (`docs/devnet.md`), no mainnet, no Kora, no address lookup table, no proof on
+a phone. The 4.0.0 ceremony
 is pinned but nothing has been confirmed with PSE. The permutation proof the code tree exists for
 has not been built. No paid review has happened, and `docs/handoff.md`'s "Before mainnet" list
 still stands in full.

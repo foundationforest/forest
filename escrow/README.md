@@ -5,7 +5,8 @@ and seller, and releases it by rules the chain reads by itself, signatures and t
 client an app uses to open, fund, watch and end one.
 
 **Nothing here is shipped.** It has run under LiteSVM and on a local validator, and nowhere else.
-No devnet, no mainnet.
+No devnet, no mainnet. Its devnet run is built, scripted and rehearsed, and stopped at the deploy
+for lack of test SOL (session 15, `docs/devnet.md`).
 
 An escrow is one account and one deposit account. The buyer opens it naming the seller, the
 mint, the amount, an optional arbiter, an optional service time, the silence days and up to four
@@ -46,6 +47,7 @@ cd escrow/program/tests-litesvm && cargo test -- --nocapture
 cd escrow/program/trident-tests && TRIDENT_WITH_EXIT_CODE=1 cargo run --release --bin fuzz_escrow   # exit 99 if an invariant broke
 cd escrow/client    && npm install && npm test            # no chain needed
 cd escrow/client    && npm run test:validator             # starts solana-test-validator itself
+cd escrow/client    && npm run test:devnet                # read-only, against devnet/devnet.json's deploy
 ```
 
 ## What one escrow costs
@@ -315,6 +317,11 @@ no first mint and no constant that names anyone. The program id for local work i
 needed, since LiteSVM loads a program at any address and the test validator takes
 `--bpf-program`. Mainnet gets a fresh one.
 
+Devnet gets a throwaway one: `devnet/build.sh` puts its id into `declare_id!` in a copy of the
+source, and `devnet/deploy.sh` deploys it with the upgrade authority kept, since sealing is the
+mainnet step. How to build, deploy and run both deals there, and what session 15 got done
+(everything but the deploy, which ran out of test SOL), is in `docs/devnet.md`.
+
 ## Chosen, not decided
 
 Where the handoff was silent the simplest option was taken. Each is reversible until something
@@ -404,7 +411,7 @@ ships, and each is logged in `docs/changes.md`.
 
 ## What this does not do
 
-No devnet, no mainnet, no Kora. No paid review has happened, and `docs/handoff.md`'s "Before
+No devnet deploy yet (`docs/devnet.md`), no mainnet, no Kora. No paid review has happened, and `docs/handoff.md`'s "Before
 mainnet" list still stands in full. Whether the wallets people use accept a program-derived address as a Solana Pay recipient has not
 been tried on a phone; if one does not, the app sends to the deposit address directly, which the
 client also gives. Tokens of another mint sent to an escrow's address are not recovered: its

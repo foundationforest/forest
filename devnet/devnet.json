@@ -22,7 +22,7 @@
     "decimals": 6
   },
   "airdrops": {
-    "note": "From the devnet faucet through RPC requestAirdrop, retried with backoff and shrinking amounts (1, 0.5, 0.2, 0.1 SOL) for 28 minutes, 06:12 to 06:40 UTC on 2026-09-24, for the deploy, payer, treasury and issuer keys. 3 of 376 requests were granted, all through Alchemy's public demo endpoint. The rest were refused: api.devnet.solana.com answered 188 times with 429, \"You've either reached your airdrop limit today or the airdrop faucet has run dry\"; Alchemy's endpoint 183 times with HTTP 429 and no body, and twice with \"Internal error\".",
+    "note": "From the devnet faucet through RPC requestAirdrop, on 2026-09-24. First for the deploy, payer, treasury and issuer keys, retried with backoff and shrinking amounts (1, 0.5, 0.2, 0.1 SOL) from 06:12 to 06:40 UTC: 3 of 376 requests granted. Then for the deploy key alone, 1 SOL every 5 minutes from 06:41 to 09:37 UTC: 2 of 72 granted. All five came through Alchemy's public demo endpoint. The rest were refused: api.devnet.solana.com answered 224 times with 429, \"You've either reached your airdrop limit today or the airdrop faucet has run dry\"; Alchemy's endpoint 217 times with HTTP 429 and no body, and twice with \"Internal error\". In all: deploy 3.0 SOL, payer 0.2, treasury 0.1, issuer 0.",
     "granted": [
       {
         "key": "deploy",
@@ -44,6 +44,20 @@
         "at": "06:35:17",
         "via": "https://solana-devnet.g.alchemy.com/v2/demo",
         "signature": "akFsshYnpBdBZd9jjuvPLTyJDwt2GWRKjMFcuBUTgga9vTqoK6oxQsrCRRaDp7D9qTrzPwMiGDGmoHugiJRybW8"
+      },
+      {
+        "key": "deploy",
+        "lamports": 1000000000,
+        "at": "07:57:12",
+        "via": "https://solana-devnet.g.alchemy.com/v2/demo",
+        "signature": "2ge7VhWByUB2VmSFH1tcTz2dKnZnMmnWSTaGgddxvMp3xHqZhBZje3Sc89Nu2SHwUAGGtEbjJfKQVbLdJ4abb4rx"
+      },
+      {
+        "key": "deploy",
+        "lamports": 1000000000,
+        "at": "08:07:14",
+        "via": "https://solana-devnet.g.alchemy.com/v2/demo",
+        "signature": "5fDnJWg586243nJDPUHsuHMPtxo4dAahR9NZo6ZqQ3jHkwuFULfYitczssia6KyYFUNvVKGzfKTP7pAFXBkyHeid"
       }
     ]
   }
