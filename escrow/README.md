@@ -16,11 +16,12 @@ holds at least the amount.
 The seller accepts before anything but paying in full can happen. Until then a funded escrow can
 only be approved in full (paying in full never needs the seller's consent) or withdrawn by the
 buyer, everything back; and once its timeout has passed, anyone may send everything back to the
-buyer, so a sponsor's rent never waits on the buyer coming back. An invoice is accepted from
+buyer, so the rent payer's rent never waits on the buyer coming back. An invoice is accepted from
 creation. Once accepted, it ends by the buyer's approval, by silence, by both keys agreeing a
 split, by the arbiter, by the buyer cancelling on a step, or by the seller cancelling.
 
-Every ending pays out, returns anything above the amount to the buyer, closes the deposit account,
+Every ending pays out, returns anything above the amount to the buyer at its refund address (its
+standard token account for the mint, and no other account), closes the deposit account,
 returns its rent to whoever paid it, and writes what happened to the log. The escrow account is
 never closed once it has held the amount: it stays, with its final state, amounts and outcome, so
 its address is a permanent receipt and can never hold another deal. Only an escrow that never held
@@ -33,7 +34,7 @@ admin, no config account, no pause and no fee.
 | | |
 |---|---|
 | `program/` | the program. Anchor, Rust, `cargo build-sbf`. |
-| `program/tests-litesvm/` | 64 LiteSVM tests with the clock moved by hand, and the wire format written out a second time: `escrow.rs` (32), `adversarial.rs` (30, session 10's attacks as sessions 11 and 12 left them, and session 12's) and `one_tap.rs` (2, the one-tap payment, its receipt, and a second payment to its link) (`docs/decisions/adversarial-review-1.md`). |
+| `program/tests-litesvm/` | 67 LiteSVM tests with the clock moved by hand, and the wire format written out a second time: `escrow.rs` (32), `adversarial.rs` (33, session 10's attacks as sessions 11, 12 and 14 left them, and sessions 12's and 14's own) and `one_tap.rs` (2, the one-tap payment, its receipt, and a second payment to its link) (`docs/decisions/adversarial-review-1.md`). |
 | `program/trident-tests/` | a Trident fuzzer: random flows against the built program, a model of every escrow beside it, eleven invariants checked after every step and at the end of every run. |
 | `client/` | TypeScript, browser and Node: every instruction, the terms checked before signing, the invoice, the terms from an offer, the clock and the deadlines, the deposit address and its pay link, the account and the events decoded. |
 
@@ -49,30 +50,35 @@ cd escrow/client    && npm run test:validator             # starts solana-test-v
 
 ## What one escrow costs
 
-Measured in session 12 under LiteSVM, legacy transactions with a compute-budget instruction:
+Measured in session 14 under LiteSVM, twelve runs with fresh keys, legacy transactions with a
+compute-budget instruction:
 
 | | Compute units | Of 1,400,000 | Bytes on the wire | Of 1,232 |
 |---|---|---|---|---|
-| `create`, fullest terms (arbiter, service time, four steps) | 31,400 to 41,900 | 2 to 3% | 682 | 55% |
+| `create`, fullest terms (arbiter, service time, four steps) | 31,400 to 55,400 | 2 to 4% | 682 | 55% |
 | `accept` | 4,944 | 0.4% | 380 | 31% |
-| `approve`, split | 15,331 | 1.1% | 482 | 39% |
-| `release_by_silence` | 13,306 | 1.0% | 383 | 31% |
-| `cancel_buyer` | 15,560 | 1.1% | 480 | 39% |
-| `withdraw` | 10,840 | 0.8% | 447 | 36% |
-| `close_unfunded` | 7,594 | 0.5% | 447 | 36% |
-| `close_unaccepted`, making the buyer's refund address | 31,500 to 45,100 | 2 to 3% | 579 | 47% |
-| `recover_late`, the refund address already there | 11,700 to 16,200 | 0.8 to 1.2% | 578 | 47% |
+| `approve`, split | 17,000 to 23,000 | 1.2 to 1.6% | 482 | 39% |
+| `release_by_silence` | 14,900 to 20,900 | 1.1 to 1.5% | 383 | 31% |
+| `cancel_buyer` | 17,200 to 23,200 | 1.2 to 1.7% | 480 | 39% |
+| `withdraw` | 12,500 to 18,500 | 0.9 to 1.3% | 447 | 36% |
+| `close_unfunded` | 9,200 to 15,200 | 0.7 to 1.1% | 447 | 36% |
+| `close_unaccepted`, making the buyer's refund address | 31,500 to 49,600 | 2 to 4% | 579 | 47% |
+| `recover_late`, the refund address already there | 11,700 to 17,700 | 0.8 to 1.3% | 578 | 47% |
 | `sweep_rent` | 4,290 | 0.3% | 251 | 20% |
-| one tap: `create`, a plain transfer in, `approve`, in one transaction | 45,800 to 71,400 | 3 to 5% | 700 | 57% |
-| the same, the seller's token account made first in it | 57,900 to 72,900 | 4 to 5% | 742 | 60% |
-| the same, fullest terms | 44,900 to 49,400 | 3 to 4% | 781 | 63% |
+| one tap: `create`, a plain transfer in, `approve`, in one transaction | 46,000 to 59,500 | 3 to 4% | 732 | 59% |
+| the same, the seller's token account made first in it | 59,500 to 73,000 | 4 to 5% | 774 | 63% |
+| the same, fullest terms | 46,500 to 66,000 | 3 to 5% | 813 | 66% |
 
 `create` varies because it derives two addresses, the escrow's and the deposit account's, and a
 derivation tries bump seeds until one lands off the curve at 1,500 units a try; the keys decide
 how many tries, and a one-tap transaction derives the deposit account several times over (the
-associated token program's own checks included), so its spread is wider. The endings that pay the
-recorded accounts derive nothing and are fixed; `close_unaccepted` and `recover_late` derive the
-buyer's refund address, so they vary the same way.
+associated token program's own checks included), so its spread is wider. Since session 14 every
+ending derives the buyer's refund address too, so every ending varies the same way; session 12
+measured the ones that then took any buyer account at a fixed 15,331 (`approve`), 13,306
+(`release_by_silence`), 15,560 (`cancel_buyer`), 10,840 (`withdraw`) and 7,594 (`close_unfunded`).
+The one-tap rows are 32 bytes more than session 12's 700, 742 and 781 because the test's buyer pays
+from one account and is refunded at its standard one, two keys in the transaction; a buyer paying
+from its standard account, as a wallet does, names one.
 
 Rent, at the 5,080 lamports per byte session 3 read from mainnet and the 696 the current cuts end
 at (SOL at $100.24). The deposit account's rent comes back at every ending. The escrow account's
@@ -140,10 +146,14 @@ These cannot change after v1 deploys.
   and the creator in its signer slot. `withdraw`, `close_unfunded` and `close_unaccepted` name no
   seller token account.
 - **The buyer's refund address.** The buyer's associated token account for the mint, computed from
-  the buyer and the mint, both fixed at creation, so nothing more is stored. `recover_late` and
-  `close_unaccepted`, which anyone may send, pay the buyer there and at no other account, and the
-  sender makes it first, at its own cost, inside the same instruction, if it does not exist. The
-  endings a party signs take any token account the buyer owns, as before.
+  the buyer and the mint, both fixed at creation, so nothing more is stored. Every ending pays the
+  buyer there and at no other account (session 14), the ones anyone may send and the ones a party
+  signs alike. The endings check it by address, not by who holds the account now: a classic token
+  account can be handed to another key, and a check on its holder would let a buyer who hands it
+  away block the seller's release for good. `recover_late` and `close_unaccepted` make it first, at
+  the sender's cost, inside the same instruction, if it does not exist (Anchor's create-if-missing
+  there also checks that the buyer still holds it); for every other ending the sender makes it
+  first in the same transaction, the standard idempotent way.
 - **What a Token-2022 mint gets.** Refused at `create`: the mint account must be owned by the
   classic token program. A transfer fee, a permanent delegate or a transfer hook would change
   what "hold X, release X" means, and this cannot be patched.
@@ -186,25 +196,26 @@ work, and no market file is read when an escrow is made.
   that moment, and an escrow nobody accepts counts its timeout from it. Nobody needs to sign it.
   Skipping it blocks nothing except silence, a buyer's cancellation and `close_unaccepted`, which
   all need that moment; the app can put `mark_funded` in the same transaction. If the money is
-  already there when the seller accepts, `accept` is the observation. A sponsor that wants its rent
-  back from an escrow nobody accepted sends `mark_funded` itself, then waits out the timeout.
-- **Which token accounts get paid.** Every ending that can pay the seller names a token account
-  the buyer owns and one the seller owns, for the mint. The program checks the owner and the mint
-  and nothing else, so the caller of `release_by_silence`, who can be anyone, can only send the
-  seller's money to the seller. `withdraw` and `close_unfunded` pay the seller nothing and name no
-  seller account, so nobody has to make one to get the buyer's money back. `recover_late` and
-  `close_unaccepted` pay the buyer only at the refund address (`refundAddress` in the client), and
-  whoever sends them pays to make it if the buyer has none: about the same rent as the deposit
-  account's that `close_unaccepted` returns, so a sponsor ending such an escrow for a buyer with no
-  standard token account gets nothing back net.
-- **Who pays the rent.** Whoever signs `create` as the payer: a sponsor, or either party. The same
-  key gets the deposit account's rent back at the end, whoever sends the ending. The escrow
-  account's rent stays in the receipt, unless the escrow never held the amount, in which case
-  `close_unfunded` returns both. A sponsor's policy has to live with that: every funded escrow it
-  sponsors keeps one receipt's rent-exempt minimum for good, and `sweep_rent` returns what the cuts
-  free above it. A funded escrow nobody accepts no longer waits on the buyer (`close_unaccepted`),
-  but its timeout is its terms: a last deadline a century away is a century's wait, so the policy
-  should cap the deadlines it sponsors.
+  already there when the seller accepts, `accept` is the observation. A rent payer that wants its
+  rent back from an escrow nobody accepted sends `mark_funded` itself, then waits out the timeout.
+- **Which token accounts get paid.** Every ending pays the buyer only at its refund address
+  (`refundAddress` in the client; the builders name it themselves from the buyer and the mint, so
+  a caller cannot name another). Every ending that can pay the seller also names a token account
+  the seller owns, for the mint, checked by owner and mint; so the caller of `release_by_silence`,
+  who can be anyone, can only send the seller's money to the seller and the buyer's to the buyer.
+  `withdraw` and `close_unfunded` pay the seller nothing and name no seller account, so nobody has
+  to make one to get the buyer's money back. Whoever sends an ending pays to make the refund
+  address if the buyer has none (`makeRefundAddressIx` first in the same transaction, or inside
+  `recover_late` and `close_unaccepted`): about the same rent as the deposit account's that the
+  ending returns, so a rent payer ending such an escrow for a buyer with no standard token account
+  gets nothing back net.
+- **Who pays the rent.** Whoever signs `create` as the payer: either party, or any key paying for
+  them; the program cannot tell. The same key gets the deposit account's rent back at the end,
+  whoever sends the ending. The escrow account's rent stays in the receipt, unless the escrow never
+  held the amount, in which case `close_unfunded` returns both. Every funded escrow keeps one
+  receipt's rent-exempt minimum for good, and `sweep_rent` returns what the cuts free above it. A
+  funded escrow nobody accepts no longer waits on the buyer (`close_unaccepted`), but its timeout
+  is its terms: a last deadline a century away is a century's wait for whoever paid the rent.
 - **The pay link.** `solanaPayUrl` names the escrow's address as the recipient with the mint and
   the amount, and the escrow's address as the reference, so the funding transfer can be found by
   looking up that address. Whatever arrives counts, link or not. A pay link is one-time: the client
@@ -253,7 +264,8 @@ an ending, and neither changes the receipt. An unresolved lock is an account who
 
 ## How a review points at an escrow
 
-A review's `escrow` field is the escrow account's address, base58. Once the escrow has held the
+A review's `dealId` is the escrow account's address, base58, when an escrow exists (session 14;
+the field was `escrow` before, and a deal with no escrow now carries 32 random bytes as hex there). Once the escrow has held the
 amount, that address is a permanent receipt: the account is never closed, and it holds the
 parties, the mint, the amount, the terms, when it was created, funded, accepted and ended, how it
 ended, and what each party was paid. An index reads the account; the events (`Created`,
@@ -381,6 +393,14 @@ ships, and each is logged in `docs/changes.md`.
 23. **"Open" for a pay link means open or accepted, with the funding not yet observed** (session 12,
     the client's rule). Status `open` alone would have refused the invoice, which is accepted from
     creation and still waiting for its money.
+24. **Every ending's buyer account is checked by address alone** (session 14; Carlos decided that
+    every ending pays only the refund address, and the address-only check was chosen here). The
+    eight endings that took "any token account the buyer owns" now take the account at the refund
+    address, with its mint checked and its holder not, so a buyer who hands that account to another
+    key cannot block silence. The address is derived at each ending rather than stored, as
+    `recover_late` already did, which is why every ending now costs a few thousand units more and
+    varies with the keys. `NotTheRefundAddress` is appended to the errors. `recover_late` and
+    `close_unaccepted` were left as they were.
 
 ## What this does not do
 

@@ -1,1 +1,1 @@
-Will hold the issuer flow: face check result to identity commitment to list insert, run by the foundation as the first issuer.
+Will hold the issuer flow: face check result to identity commitment to list insert, run by the foundation as the first issuer, on list 0, which it owns. Issuers are open: anyone may open a list of their own in the registry and run the same flow, or another, on it.

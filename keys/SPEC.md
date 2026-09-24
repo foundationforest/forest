@@ -13,7 +13,7 @@ Plain words first, then the exact steps. The library in `src/` implements the st
 5. One more wallet belongs to the person, not to any profile: the central wallet, where money enters from a ramp and leaves to one. It has its own label and no profile index, so it is unrelated to every profile's keys.
 6. A profile's name is a did:plc. The control key signs the profile's first directory record (the genesis operation), and the name is a hash of that record. The signing key is the one the record names for signing the profile's folder.
 7. A second passkey can open the same seed through a seed file: the seed encrypted under the second passkey's secret, stored under a label the second passkey can recompute. Whoever stores the file learns nothing.
-8. On paper, the seed is 24 English words.
+8. The seed can also be written as 24 English words: the optional backup, and the way to carry the seed anywhere. They are a backup, not a login: the one way in is a passkey.
 
 ## 1. The passkey and its secret
 
@@ -88,7 +88,7 @@ Nothing links the central wallet to a profile until money moves between them. Th
 
 A profile's name is a did:plc. Creating it takes one signed record, the genesis operation, and the name is a hash of that record. The recipe builds the record exactly as the directory's own library does, so the same inputs give the same name either way.
 
-Parameters, both left to the caller: `handle` (the profile's handle, for example `k7m2q.forest.foundation`) and `pds` (the host that stores the profile's folder, an https URL).
+Parameters, both left to the caller: `handle` (the profile's handle: at creation, the random name the app gives the folder under its own domain, for example `k7m2q.app.example`) and `pds` (the host that stores the profile's folder, an https URL).
 
 Steps:
 
@@ -134,7 +134,9 @@ So a new device finds its own seed file from nothing but its passkey, and the fi
 
 Unwrapping fails, loudly, when the label does not match the passkey, when the ciphertext has the wrong length, and when the tag does not verify, which covers the wrong passkey and any damage.
 
-## 8. Paper export
+## 8. The 24 words, a backup
+
+The words are a backup, not a login. There is one way in: a passkey makes the seed (step 2) or opens it (step 7). The words are optional, and they are how the seed travels anywhere: typed into a device, they restore the seed there, and the app then writes a seed file under that device's passkey (step 7), so from then on the passkey opens it and nobody types the words again.
 
 The seed is written as a BIP39 mnemonic in the English word list: 32 bytes of entropy plus an 8-bit checksum, 24 words. Import trims and lowercases the text, splits on any whitespace, checks the count and the checksum, and returns the 32 bytes. BIP39's own PBKDF2 "seed" step is not used and not needed: the words encode the seed itself.
 
