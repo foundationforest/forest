@@ -821,3 +821,33 @@ Log of what was built, learned, and left open, appended at the end of every sess
   - `registry/program/trident-tests/`' stale model, and `testsite/dist`'s keys bundle, as before;
   - the keys tests on Apple, Android and Windows devices; the handover's real-phone cases; how the host's five patches rebase;
   - the devnet deploy and run, Kora, a phone, a face check, the paid review and the lawyer pass.
+
+## 2026-09-24: session 18, devnet keys from one phrase; the deploy still unfunded
+
+- **Build order:** step 1 of the handoff's "Next" (the devnet deploy), asked for by Carlos: keys that survive the machine, funding with a person in the loop, then the whole run as session 15 rehearsed it. The first part is done. The deploy did not happen: after 90 minutes the deploy key held 2.0 SOL, and Carlos could not get SOL from faucet.solana.com. Nothing is deployed anywhere.
+- **Decided (by Carlos; built here):** every devnet key is derived from one phrase, `FOREST_DEVNET_SEED`, by a standard key stretch with one label per key, so any later session with the same phrase gets the same keys. If the phrase is missing, stop. Wait up to 90 minutes for funding, then commit what exists and stop.
+- **Chosen, not decided** (the simplest option; each reversible, since devnet holds nothing yet):
+  - **PBKDF2-HMAC-SHA256, 600,000 iterations, salt `forest-devnet:<label>`, 32 bytes, as the ed25519 seed.** The phrase is NFKD-normalised, trimmed, and its whitespace collapsed. Standard in every language, and one primitive, so anyone can reproduce it without this repo.
+  - **Four labels beyond the six asked for** (`registry-program`, `escrow-program`, `test-dollar-mint`, `test-dollar-authority`), because the program ids and the test dollar must come out the same too.
+  - **Key files in `~/.forest-devnet/keys` by default,** outside the repo. A file there that holds another key is refused, not overwritten, since it may hold test SOL.
+  - **`keys.sh` keeps `devnet/devnet.json` as it is** when it already names the derived keys, so a rerun never drops a deploy's record.
+- **Built:**
+  - **`devnet/keys.sh`,** rewritten to derive rather than generate. It uses Node's crypto only, and no longer needs `solana-keygen`. It prints public keys only. Two runs gave the same keys, and `solana-keygen pubkey` reads the files and agrees.
+  - **`devnet/devnet.json`:** the derived keys and this session's faucet record (`airdrops`). No deploy yet.
+  - **Both devnet builds,** on session 15's toolchain (Solana CLI 4.2.2, `cargo-build-sbf` 4.1.0, platform-tools v1.54). Same sizes as session 15; new hashes, because the keys are new. They are in `docs/devnet.md`.
+  - **Text:** `docs/devnet.md` rewritten for what is on devnet now (keys, cost, faucet, builds, how to rerun, what differs from mainnet); `registry/README.md` and `escrow/README.md` (status and devnet pointers); `docs/handoff.md` (build status, Next 1).
+- **Learned:**
+  - **The deploy costs one copy of each program, not two: about 3.53 SOL for both, not 5.37.** Solana CLI 4.2.2 funds the upload buffer with the program data's rent and checks only that plus fees. The loader hands the buffer's SOL back to the payer before it funds the program data (`cli/src/program.rs`, `do_process_program_deploy`). Session 15 counted the buffer and the program data both. This comes from reading the source; no devnet deploy has shown it yet.
+  - **The faucet: 2 of 62 requests granted, 2.0 SOL, both through Alchemy's public demo endpoint** (16:25 and 16:27 UTC). `api.devnet.solana.com` answered "Internal error" 18 times, then 429 ("airdrop limit … or run dry") 13 times; Alchemy answered 429 29 times.
+  - **Every other route is closed to a machine.** faucet.solana.com needs a Cloudflare captcha on every request, which was not attempted. Ankr and Helius need an API key; dRPC has no free devnet; publicnode has no devnet. The devnet proof-of-work faucets (`PoWSNH2hEZogtCg1Zgm51FnkmJperzYDgPK4fvs8taL`, 22 of them) are drained: the two with anything left hold 0.02 SOL or less.
+  - **SIMD-0500 is not active on devnet:** its feature account (`B8JJXCy5amZyWG9r7EnUYLwzXSXTxG7GZ1qZ1qggo83g`) does not exist there, so the SBPF v0 builds still deploy.
+  - **The toolchain installs here in under a minute,** and both devnet builds take 2.5 minutes.
+- **Open:**
+  1. **Funding: about 1.8 SOL more to the deploy key** (`2mz33wBK7FKRXoAi7LptGGTwVQJDbrSyrVwbYRCqwP3A`). The 2.0 SOL already there stay usable, since the key comes back from the phrase. Three ways, each needing a person:
+     - faucet.solana.com, signed in with GitHub, which raises its limit;
+     - anyone who holds devnet SOL;
+     - a free Helius or Ankr API key given to the session, whose faucets grant small amounts.
+  2. **Anyone who holds the phrase holds the devnet programs' upgrade authority** and every devnet key. That is fine for devnet. The phrase must never be reused for anything on mainnet.
+  3. **Whether the devnet builds are byte for byte reproducible** on another machine with the same toolchain: the next session's hashes will say.
+  4. Session 15's open 2 to 5 stand.
+- **Still standing:** as session 15 listed, with the devnet deploy and run still not done.

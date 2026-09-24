@@ -195,12 +195,12 @@ A market file holds its standard name, its category, its roles, extra fields, th
 
 How work splits: a chat with Carlos decides (stress tests, searches, anything that isn't code). Claude Code builds: one task per session, plan mode first; "should we" questions go to `docs/changes.md` as open items, not decisions. Carlos does what only he can: accounts, passwords, money, the entity, the first sellers. At the end of every session `docs/changes.md` gets three lists, built, learned and open; this file never marks design as done.
 
-**Built and tested locally, nowhere else.** Nothing is deployed: no devnet, no mainnet, no Kora, no Railway, no real face check, no proof on a phone. The devnet run of both programs is built, scripted and rehearsed on a local validator, and stopped at the deploy for lack of test SOL (`docs/devnet.md`).
+**Built and tested locally, nowhere else.** Nothing is deployed: no devnet, no mainnet, no Kora, no Railway, no real face check, no proof on a phone. The devnet run of both programs is built, scripted and rehearsed on a local validator, and stopped at the deploy for lack of test SOL in sessions 15 and 18 (`docs/devnet.md`). Its keys now come from one phrase, so the next session resumes with the same keys and the 2.0 SOL already on the deploy key.
 
 - `shapes/`: the four lexicons, the market template, the validator and its command line, one example of each.
 - `keys/`: the recipe spec and library with pinned test vectors. A passkey-derived seed came out identical on iPhone and Mac; the library's tests on Apple, Android and Windows devices are not run.
 - `registry/`: the program, the client, the pinned ceremony files; tests under LiteSVM and on a local validator, and a property test.
-- `devnet/`: the devnet build (keys put into a copy of the source), deploy and key scripts, and the public record; the run itself is in the two clients' `scripts/devnet.ts`, with read-only smoke tests (`npm run test:devnet`).
+- `devnet/`: the devnet build (keys put into a copy of the source), deploy script, key script (every key derived from one phrase), and the public record; the run itself is in the two clients' `scripts/devnet.ts`, with read-only smoke tests (`npm run test:devnet`).
 - `escrow/`: the program and the client; tests under LiteSVM and on a local validator, and a fuzzer.
 - `host/`: the fork, with end-to-end tests against a local directory and two local hosts.
 - `testsite/`: a static site for trying the keys page and a handover experiment on real phones; not online yet.
@@ -208,7 +208,7 @@ How work splits: a chat with Carlos decides (stress tests, searches, anything th
 
 **Next, one session each, in order:**
 
-1. Devnet deploy of both programs: prepared in session 15, not done. A session with a funded deploy key (about 5.4 SOL) runs `docs/devnet.md` from fresh keys. Before mainnet, a real treasury key and the foundation's issuer key still replace the registry's two placeholders, which anyone with this repo can sign for.
+1. Devnet deploy of both programs: prepared in session 15, keys made lasting in session 18, not done. The deploy key needs about 1.8 SOL more (about 3.53 for both deploys and 0.2 for the payer, less the 2.0 it holds); then a session with `FOREST_DEVNET_SEED` runs `docs/devnet.md`. Before mainnet, a real treasury key and the foundation's issuer key still replace the registry's two placeholders, which anyone with this repo can sign for.
 2. The issuer flow.
 3. The fee payer's config.
 4. The carrier's config.

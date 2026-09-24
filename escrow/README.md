@@ -6,7 +6,8 @@ client an app uses to open, fund, watch and end one.
 
 **Nothing here is shipped.** It has run under LiteSVM and on a local validator, and nowhere else.
 No devnet, no mainnet. Its devnet run is built, scripted and rehearsed, and stopped at the deploy
-for lack of test SOL (session 15, `docs/devnet.md`).
+for lack of test SOL (sessions 15 and 18, `docs/devnet.md`). Its devnet keys now come from one
+phrase, so a later session resumes where this one stopped.
 
 An escrow is one account and one deposit account. The buyer opens it naming the seller, the
 mint, the amount, an optional arbiter, an optional service time, the silence days and up to four
@@ -317,10 +318,11 @@ no first mint and no constant that names anyone. The program id for local work i
 needed, since LiteSVM loads a program at any address and the test validator takes
 `--bpf-program`. Mainnet gets a fresh one.
 
-Devnet gets a throwaway one: `devnet/build.sh` puts its id into `declare_id!` in a copy of the
-source, and `devnet/deploy.sh` deploys it with the upgrade authority kept, since sealing is the
-mainnet step. How to build, deploy and run both deals there, and what session 15 got done
-(everything but the deploy, which ran out of test SOL), is in `docs/devnet.md`.
+Devnet gets a test one, derived from one phrase with every other devnet key (`devnet/keys.sh`):
+`devnet/build.sh` puts its id into `declare_id!` in a copy of the source, and `devnet/deploy.sh`
+deploys it with the upgrade authority kept, since sealing is the mainnet step. How to derive the
+keys, build, deploy and run both deals there, and what sessions 15 and 18 got done (everything
+but the deploy, which ran out of test SOL), is in `docs/devnet.md`.
 
 ## Chosen, not decided
 
