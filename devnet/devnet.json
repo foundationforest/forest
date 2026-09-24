@@ -1,0 +1,24 @@
+{
+  "note": "The devnet deploy of both programs (session 15). Public keys, addresses and signatures only; the private keys stayed on the machine that made them and are kept nowhere. Written by devnet/build.sh and the devnet scripts in registry/client and escrow/client; read by their devnet smoke tests. See docs/devnet.md.",
+  "cluster": "devnet",
+  "rpc": "https://api.devnet.solana.com",
+  "keys": {
+    "deploy": "HSnymG2JZfN4WUNmD5TJRtEfpVzcA23WNddqpA2vxrZs",
+    "treasury": "DhM7Pcx2XCQMfaz7v9KydJWdeCiwvYCnuAXzzNMmk6Pa",
+    "foundationIssuer": "HZ6q5ynucXsgT2AojAUY5tGSL3uzjukGzJA5guzBLkjR",
+    "payer": "Au5KL1NfKhMYGi54cT4ifXj1nwssUJ7sv9GS84mgh1fX",
+    "buyer": "DYqRj9VDwFJ3tVjn5Xjr7bT4MyycFhyb6DSJNvPfRXHC",
+    "seller": "91ECaikDr3QUGtNRxGYUsNvzSpXkwsAEBhP1iAgebqkj",
+    "testDollarAuthority": "8ybJZeNkd6FhZDarzff5t9PEXHfo1dUMRAgQJhxt25Ai"
+  },
+  "registry": {
+    "programId": "EJLh7jhukvT2FJAXiXMkskorfKBcU2H8ZEm63sXLSxQX"
+  },
+  "escrow": {
+    "programId": "4i1QizMZLXCq6bE7aPDz9tELAKNYnz41WxTSy9JYjw1j"
+  },
+  "testDollar": {
+    "mint": "EDz4Jncf8icmJ6g97TLvjCebmSDnzYURozTJMQysbtfn",
+    "decimals": 6
+  }
+}

@@ -19,7 +19,7 @@ of it.
 | | |
 |---|---|
 | `program/` | the program. Anchor, Rust, `cargo build-sbf`. |
-| `program/tests-litesvm/` | 44 LiteSVM tests against real proofs, with the wire format written out a second time by hand: `registry.rs` (27), `adversarial.rs` (16, session 10's attacks as sessions 11 and 14 left them) and `invariants.rs` (the property test) (`docs/decisions/adversarial-review-1.md`). |
+| `program/tests-litesvm/` | 47 LiteSVM tests against real proofs, with the wire format written out a second time by hand: `registry.rs` (30), `adversarial.rs` (16, session 10's attacks as sessions 11, 14 and 15 left them) and `invariants.rs` (the property test) (`docs/decisions/adversarial-review-1.md`). |
 | `program/trident-tests/` | the Trident fuzzer, kept as the record of why it cannot run: Trident 0.12 never registers the Poseidon and alt_bn128 syscalls. Its model is still session 10's wire format; `invariants.rs` runs the same model under LiteSVM and is the one kept current. |
 | `client/` | TypeScript, browser and Node: the code, the Merkle path, the proof, the compressed points, the transaction. |
 | `artifacts/` | Semaphore's setup files, pinned. The verification key is committed; the 7.7 MB of proving artifacts are pinned by hash. |
@@ -69,7 +69,7 @@ ends at (SOL at $100.24):
 | Account | Bytes | Today | After the cuts | How many |
 |---|---|---|---|---|
 | used code | 9 | $0.0698 | $0.0096 | one per badge, forever |
-| identity list | 5,496 | $2.86 | $0.39 | one per list, paid by whoever opens it |
+| identity list | 5,528 | $2.88 | $0.39 | one per list, paid by whoever opens it; what the cuts free goes back to its owner |
 | code tree | 1,112 | $0.63 | $0.087 | one, ever |
 | config | 718 | $0.43 | $0.059 | one, ever |
 
@@ -105,9 +105,11 @@ These cannot change after v1 deploys. A change breaks every existing proof, code
   mint, in its own base units, which nothing changes afterwards. The fee comes from a token account
   the fee authority owns (usually the profile's wallet; any key may pay for it) and goes to one the
   treasury owns. The order of checks in `register`. Anyone opens a list; its owner, written when it
-  opens and never changed, is its first insert key and the only key that adds or removes its insert
-  keys or closes it. A closed list takes no member and every proof against it stays valid; nothing
-  reopens or deletes a list. One entry per registration, naming the market, the DID, the profile's
+  opens, is its first insert key and the only key that adds or removes its insert keys, closes it or
+  hands it over, and it moves only in two steps, the second signed by the key it moves to. A
+  closed list takes no member and every proof against it stays valid; nothing reopens or deletes a
+  list. A list's swept rent goes to its owner; the config's, the code tree's and a code account's
+  to the treasury. One entry per registration, naming the market, the DID, the profile's
   wallet, the code, the list and the list's owner, in the transaction log and in no account.
 - **What `init` writes.** The treasury is a program constant, the first mint is a program
   constant and its fee is a program constant, and list 0's owner and first insert key is a program
@@ -121,8 +123,8 @@ These cannot change after v1 deploys. A change breaks every existing proof, code
 
 ## What is a dial
 
-The treasury can turn these, and every rent sweep pays it. Nothing else is a dial: each list is its
-owner's (below).
+The treasury can turn these, and every rent sweep but a list's pays it. Nothing else is a dial:
+each list is its owner's (below).
 
 - Which mints are accepted beyond USDC, and at what fee (`add_token`). Only classic SPL Token
   mints, each at a fee above zero in its own base units, meant to be worth 25 cents and set once:
@@ -142,7 +144,8 @@ owner's (below).
   never accepted, and the treasury stays where it was. The zero key and the current key are
   refused as proposals. A new treasury key must hold a little SOL before it can receive a small
   sweep; see the deploy checklist.
-- Where `sweep_rent` pays: the treasury, whoever sends it.
+- Where `sweep_rent` pays for the config, the code tree and every code account: the treasury,
+  whoever sends it. A list's excess goes to the list's owner instead (below).
 
 ## Lists and their owners
 
@@ -150,10 +153,33 @@ Issuers are open (session 14). Anyone opens a list (`open_list`): the payer pays
 owner, who signs, is recorded in the list and becomes its first insert key; the two may be one key.
 Only a list's owner adds or removes its insert keys, up to eight (`add_issuer`, `remove_issuer`), or
 closes it to new members for good (`close_list`). The owner may remove its own insert key and stay
-the owner; nothing moves a list to another owner. Removing an insert key never removes an identity:
-nobody is ever taken out of a list. A closed list keeps its members, its root and its last 128
-roots, so every proof against it stays valid forever; nothing reopens a list and no instruction
-deletes one. `init` opens list 0, owned by `FOUNDATION_ISSUER`, the foundation's issuer key.
+the owner. Removing an insert key never removes an identity: nobody is ever taken out of a list. A
+closed list keeps its members, its root and its last 128 roots, so every proof against it stays
+valid forever; nothing reopens a list and no instruction deletes one. `init` opens list 0, owned by
+`FOUNDATION_ISSUER`, the foundation's issuer key.
+
+**A list's rent goes to its owner** (session 15, Carlos's decision). `sweep_rent` on a list pays
+what it holds above its rent-exempt minimum to the list's owner, read from the list at the moment
+of the sweep, and to no other key; the config, the code tree and code accounts still pay the
+treasury. Because whoever paid the rent should get it back, and the issuer opening a list is the
+one paying for it, directly or through a fee payer it pays. The program records the owner, not the
+payer, so where the two are different keys the owner gets it: list 0's rent is paid by whoever
+sends `init` and goes to `FOUNDATION_ISSUER`. A list owner's key must hold a little SOL before it
+can take a small sweep, like the treasury's (deploy checklist, step 4).
+
+**A list's owner can hand over** (session 15, Carlos's decision), in two steps like the treasury.
+The owner proposes a key (`propose_list_owner`), and nothing moves: it still manages the insert
+keys, may close the list, is swept its rent, and may change the proposal. A later proposal
+overwrites the pending key; proposing nothing clears it; the zero key and the current owner are
+refused. When the proposed key signs `accept_list_owner`, it is the owner, and the old key has no
+say over the list at all. Ownership moves and nothing else does: the insert keys stay as they were,
+the old owner's included, so a new owner that means to drop the old key removes it itself
+(`remove_issuer`), in the same transaction if it likes. A closed list can be handed over too; it
+still has an owner, whose key its rent pays. This is how an issuer moves a list to a multisig, or
+away from a key that leaked, without opening a new list its members would have to join again. With
+both keys at hand, propose and accept fit in one transaction, which leaves no moment between them
+for anyone else holding a leaked key; a leaked owner key can otherwise race the handover, since
+until the accept it is still the owner.
 
 The program checks nothing about who an owner is. Every `Registered` entry names the list the proof
 was made against and that list's owner, so an index weighs a badge by who vouched, and a market
@@ -165,8 +191,9 @@ lists, made with the badge's market as scope so they show the badge's code, and 
 them against those lists' roots (not built).
 
 Two things are deliberately nobody's dial. `sweep_rent` takes no key at all, because there is no
-key behind a program-derived address, the only possible destination is the sealed treasury, and the
-foundation must not be a liveness dependency for its own money. And there is no pause, no upgrade
+key behind a program-derived address, the only possible destination is the one the program reads
+for itself (the list's owner, or else the treasury), and nobody must be a liveness dependency for
+anyone else's money. And there is no pause, no upgrade
 and no way for anyone, treasury included, to undo, override or take back a registration.
 
 ## The upgrade authority, and how it is removed
@@ -211,7 +238,8 @@ In this order. Nothing here has been done; nothing is deployed.
    minimum, so a sweep into a treasury holding no SOL fails whole unless the swept excess alone
    covers an empty account's rent (890,880 lamports at the old rate, 650,240 today, 89,088 after
    the cuts). Nothing is lost; the sweep can be sent again once the treasury holds SOL. Do the same
-   for every key the treasury is handed over to, before it accepts. No one-line program change
+   for every key the treasury is handed over to, before it accepts, and for `FOUNDATION_ISSUER`
+   and every list owner, whose key a list's sweep pays (session 15). No one-line program change
    fixes this: the rule is the runtime's, not the program's
    (`finding_a_sweep_into_a_treasury_holding_no_sol_fails_until_someone_funds_it`).
 5. **Deploy, then send `init`**, from anyone. It writes the constants and nothing else, and a
@@ -315,9 +343,20 @@ ships, and each is logged in `docs/changes.md`.
     field before it stays. `add_issuer`, `remove_issuer` and `close_list` no longer take the config,
     and check the owner in the handler (`NotTheListOwner`, appended). `init` logs `ListOpened` for
     list 0 too, so every list's opening and owner is in the log.
-21. **A list's owner never changes.** No instruction moves it: an issuer that moves to a multisig
-    opens a new list and closes the old one. A handover like the treasury's would be one more
-    instruction in a sealed program; the question is in `docs/changes.md`.
+21. **A list's owner can hand over, and a list's rent goes to its owner** (session 15; Carlos
+    decided both, replacing session 14's "a list's owner never changes" and a list's rent swept to
+    the treasury). Chosen here: `pending_owner` is appended to the list account (5,488 bytes after
+    the discriminator become 5,520), so every offset before it stays; `propose_list_owner` reuses
+    `add_issuer`'s accounts and checks the owner in the handler; the new events and errors are
+    appended (`ListOwnerProposed`, `ListOwnerChanged`; `ListOwnerEmpty`, `ListOwnerUnchanged`,
+    `NoPendingListOwner`, `NotThePendingListOwner`, `WrongSweepRecipient`). Decided in planning by
+    Carlos: the handover moves ownership only, never the insert keys. Chosen: a closed list can be
+    handed over, since its rent still pays its owner.
+22. **`sweep_rent`'s third account is the recipient, checked in the handler** (session 15), since it
+    is one of two keys depending on the target: the list's owner, read from the list's own bytes
+    after the address and program checks, or the config's treasury. A wrong one fails with
+    `WrongSweepRecipient` where it used to fail with Anchor's `ConstraintAddress`. `RentSwept` is
+    unchanged: the recipient is in the transaction, and the rule decides it.
 
 ## What this does not do
 
