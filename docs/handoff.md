@@ -4,7 +4,7 @@ The plan for the `forest` repo, as the design stands in the code today. Claude C
 
 ## What Forest is
 
-Forest is an open environment where a person owns their profile, their offers and their reputation, and deals with strangers with no platform in the middle. Each person is checked once, by face, to be one real human. A profile is a free folder of signed records, and a person may hold many. A market is a text file anyone can read. Any AI can read the records and, through one connection, act in them.
+Forest is an open environment where a person owns their profile, their offers and their reputation, and deals with strangers with no platform in the middle. Each person is checked once, by face, to be one real human. A profile is a free folder of signed records, and a person may hold many. A market is a name anyone can use. Any AI can read the records and, through one connection, act in them.
 
 One sentence: one human, one record, any market, no one in between.
 
@@ -14,7 +14,7 @@ Why now: four things became cheap in about three years, and Forest needs all fou
 
 ## The shape
 
-A passkey on your phone unlocks a secret seed that never leaves the device. From the seed come all your keys: for each profile, the keys that sign its records and its own wallet, and for you as a person, one identity for the registry and one central wallet. Each profile is a folder of signed records kept by a host, which stores but never signs. A carrier passes the records to indexes; an index ranks them and serves pages that people and AIs read. On Solana, a registry gives one verified human one badge per market without saying who, and an escrow holds money between strangers until the deal's own rules release it. The DID is the identity; readable names are a later feature. Products are thin apps on top; the first is Roots.
+A passkey on your phone unlocks a secret seed that never leaves the device. From the seed come all your keys: for each profile, the keys that sign its records and its own wallet, and for you as a person, one identity for the registry and one central wallet. Each profile is a folder of signed records kept by a host, which stores but never signs. A carrier passes the records to indexes; an index ranks them and serves pages that people and AIs read. On Solana, a registry gives one verified human one badge per market without saying who, and an escrow holds money between strangers and lets it out only when the two sides agree. The DID is the identity; readable names are a later feature. Products are thin apps on top; the first is Roots.
 
 ## Keys, profiles, badges
 
@@ -33,10 +33,10 @@ Three rungs of one ladder. There are no accounts anywhere.
 | Host | Stores folders and serves the live feed; accepts only commits signed on the device; holds no signing key; keeps no address logs | Bluesky's reference PDS at a pinned commit, with its write path forked by five patches (`host/`) | Railway, plain SQLite files |
 | Directory | Public cards: name, current key, current host | did:plc, run independently; the foundation keeps a replica | plc.directory |
 | Carrier | Subscribes to hosts, verifies signatures, carries registered profiles and Forest record types only | AT Protocol relay, configured | Railway |
-| Index | Reads the carrier; scores; serves category pages, profile pages and a machine endpoint; publishes the read skill; signs scores | Ours | Vercel and Supabase, at forest.foundation |
+| Index | Reads the carrier; scores with an open ranking; serves the same data two ways on the same open pages, no login: pages for people, and for machines schema.org data on every page, a JSON twin of every page, a sitemap, `llms.txt` and the read skill; signs scores | Ours | Vercel and Supabase, at forest.foundation |
 | Registry | Sealed program: lists of verified humans that anyone may open and vouch for, one code per human per market, 25 cents per registration, the profile's wallet signing | Ours; Semaphore's circuit unchanged, groth16-solana, the Poseidon syscall | Solana |
 | Fee payer | Co-signs a person's transaction and charges its network fee in their dollar token, so nobody needs SOL; holds none of their keys and decides nothing | Kora, configured, no custom code | Railway |
-| Escrow | Sealed program: an amount of a classic token held between two keys, released by rules the chain reads by itself | Ours | Solana |
+| Escrow | Sealed program: an amount of a classic token held between two keys, out only when they agree; any option is off unless the creator turns it on | Ours | Solana |
 | Face check | Once: passive liveness plus deduplication. Didit holds the faces | Didit | Didit |
 | Issuer flow | The foundation's issuer: face check result to identity commitment to an insert into its own list, in batches | Ours, small | Railway |
 | Names (later) | Readable names under forest.foundation, paid, random or chosen by auction; built after Roots | Ours, small | Vercel and Supabase, with the index |
@@ -61,7 +61,7 @@ Four slots are open to anyone: issuers, indexes, evidence types and apps. The fo
 | Badge and pay link on forest.foundation | Ramp: exchange instructions and a prefilled ramp page in v0; Crossmint (self-serve on staging; production once they accept a sole proprietor) or Onramper |
 | | The door: an MCP server that holds no keys and forwards signing to the app |
 
-Repos: `foundationforest/forest` (all foundation code, Apache 2.0) and `foundationforest/markets` (market and category files, CC0). The product org holds `roots`. Forest lives at forest.foundation; Roots at Roots' own domain (not bought yet).
+Repos: `foundationforest/forest` (all foundation code, Apache 2.0) and `foundationforest/markets` (the directory: market files in category folders, CC0). The product org holds `roots`. Forest lives at forest.foundation; Roots at Roots' own domain (not bought yet).
 
 ## Keys
 
@@ -86,7 +86,7 @@ A sealed Solana program that gives one verified human one badge per market, with
 - **A registration** is one transaction: the market name, the profile's DID, one proof whose scope is the market name, the list root the proof is made against, the code, and the fee. The code is the proof's nullifier: the same for one human in one market, unguessable for anyone else. An account at an address derived from the code is what makes it once per human per market.
 - **The fee.** One rule: 25 cents in USDC, always; other accepted tokens at the fee set for them. USDC's address and its 0.25 fee are program constants that nothing can change or remove. The treasury may accept up to fifteen more classic tokens, each at a fee above zero set once in that token's own units and meant to be worth 25 cents; nothing changes a token's fee and nothing removes a token. There are no free slots, no numbered codes and no vouchers in the program.
 - **The profile signs.** The profile's wallet signs every registration, whoever pays, and the proof's message names that wallet and the DID, so a proof counts for one market, one profile and one wallet. The entry in the log names the wallet; a badge counts for a profile only when its profile record declares that wallet. A human who holds another profile's wallet can still badge it; the later circuit under "Open" closes that.
-- **Names are hashed.** The scope is a hash of the namespaced market name, and the message a hash of the wallet and the namespaced DID, so a name or a DID can be any length. The program recomputes both. It accepts any scope; only names in the `markets` repo count in indexes and badges. Whether a scope is a market ("online-tutors") or a market and role ("online-tutors:seller") is a `markets` repo decision.
+- **Names are hashed.** The scope is a hash of the namespaced market name, and the message a hash of the wallet and the namespaced DID, so a name or a DID can be any length. The program recomputes both. It accepts any scope. The recommended scope is `market/role`, such as `plumbing/seller` (see "Markets").
 - **Everyone pays.** The program charges everyone: the 25 cents come from the fee authority's tokens, and the network fee and the storage deposit from the transaction's payer, while the profile's wallet signs. Whoever signs to pay, pays. A payer may pay for someone else; the program cannot tell and never needs to. Nothing in the foundation is built to pay on anyone's behalf.
 - **The treasury.** The first treasury is a program constant, and `init` writes only constants, whoever sends it. One treasury key receives every fee and every sweep but a list's, and turns every dial. It moves in two steps: the current treasury proposes a key, and nothing moves until that key signs to accept; until then the old key keeps everything and may change or clear the proposal. A treasury key, and a list owner's, holds a little SOL before it can receive a small sweep.
 - **The dials.** The treasury accepts a token at a fee and hands itself over, and every rent sweep but a list's pays it. Nothing else: each list is its owner's. Proofs against a closed list stay valid forever, and nothing deletes a list.
@@ -99,30 +99,22 @@ A sealed Solana program that gives one verified human one badge per market, with
 
 ## Escrow
 
-A sealed Solana program that holds an amount of a classic token between two keys, buyer and seller, and releases it by rules the chain reads by itself: signatures and time, never events. One shape for every category: a category changes what the service time means and which evidence applies, never the program.
+Money in, and out only when the two sides agree. Every option is off unless the creator turns it on.
 
-- **Parties are keys.** A profile's wallet is a key; any wallet is a key. The program never knows about DIDs. An optional arbiter key may be named at creation, and it may not be a party.
-- **Terms.** An escrow is created from the offer's terms (see "Record shapes"): the auto-release days, up to four cancellation steps and an optional arbiter; plus the amount, the token and an optional service time. Per hour or per job is the app multiplying before creation. One escrow per payment.
-- **Deposit address.** Each escrow has its own token account: the escrow address's standard account for its token. Money arrives by plain transfer from anywhere: the app, a pay link, a friend, an AI. The escrow counts as funded when the balance reaches the amount; anything above the amount goes back to the buyer at the end.
-- **Refund address.** The buyer's standard token account for the escrow's token, fixed at creation by the buyer's key and the token. Every ending that returns money to the buyer pays it there and nowhere else, the ones anyone may send included. The two returns anyone may send (late money and the unaccepted timeout) make it first if it is missing; for any other ending, whoever sends it makes it first in the same transaction. The endings check the address, not who holds that account now, so a buyer who hands it to another key cannot block the seller's release.
-- **Acceptance.** The seller accepts the escrow as it stands before anything but paying in full can happen. An escrow the seller opens is an invoice, accepted from creation. Before acceptance, a funded escrow ends only three ways: the buyer approves everything to the seller, the buyer withdraws everything, or, once it times out, anyone sends everything back to the buyer. It times out after its last cancellation deadline, or 30 days after its funding if it has no steps; its receipt then says "never accepted" and the deposit account's rent goes back to whoever paid it.
-- **The clock** starts at the latest of the service time (if set), the funding and the seller's acceptance, and never before the last two have happened. Anyone may record the funding.
-- **Release.** The buyer approves: all to the seller, or a split with the rest back to the buyer. Or auto-release: after the auto-release days from the clock start, anyone may release to the seller (the program calls it silence). Or agreement: both keys sign any split. Or the arbiter, if named, decides any split. The seller's share rounds down in every split.
-- **Objection.** Before auto-release, the buyer may object: the escrow locks, and only agreement, the arbiter or the seller giving everything back can end it. An unresolved lock marks both, in the log.
-- **Cancellation, by time only.** Up to four steps of (deadline, refund percent), deadlines rising. The buyer cancels alone before a deadline and gets at least that step's percent; after the last deadline, not alone. The seller cancels at any time after accepting and before release: the buyer gets everything back, and the log marks the seller.
-- **Permanent receipts.** When an escrow that held the amount ends, its deposit account closes and that rent goes back to whoever paid it, but the escrow account stays for good, with its terms, times, outcome and what each party got. Its address is a permanent receipt and the deal id, and it never holds another deal. An escrow that never held the amount is closed, both rents returned, by the buyer or the seller at any time, or by the rent payer after its last deadline (at any time with no steps).
-- **Late money.** A payment that lands at an ended escrow's deposit address goes back to the buyer's refund address. Anyone may send it; the receipt does not change. Pay links are one-time: the client builds one only for an escrow still waiting for its money.
-- **Rent.** Whoever pays the creation rent is recorded. Anyone may sweep what the escrow account holds above its rent-exempt minimum back to that payer; the sweep never goes below the minimum or touches anything else.
-- **Tokens.** Classic SPL Token mints only, and not wrapped SOL; both are checked at creation.
-- **One tap.** Create, a plain transfer in and approve fit in one transaction, so "Pay" is one tap.
-- **The log.** Every state change is emitted with its amounts: created, accepted, funded, approved, released by silence, objected, agreed, arbitrated, cancelled by buyer, cancelled by seller, withdrawn, never accepted, ended, and closed (never funded); and, outside any ending, late money returned and rent swept. The ending is in the account too.
-- **Sealed per version.** No upgrade, no pause, no admin, no fee. New deals use the newest version; old deals finish on theirs.
+- Either party creates the escrow, naming both keys, the token and the amount. A seller-created escrow is an invoice.
+- Money arrives by plain transfer to the escrow's own deposit address; anyone may mark it funded once the balance covers the amount.
+- Once funded, three ways out: the buyer releases everything to the seller; the seller releases everything to the buyer; or both sign a split. Receiving in full never needs a signature, so each side alone can give, and only together can they divide.
+- Optional, chosen at creation, off by default: an arbiter key that may decide any split; a timer that after N days from funding sends everything to one named side. No other clock exists in the program.
+- Cancellation and refund are not features: they are the seller releasing to the buyer, or a split. Anything about when or why lives in the offer, in the market's conventions, and in reviews.
+- A finished escrow stays as a permanent receipt at its address. Money sent to it after the end can be forwarded to the buyer by anyone. Rent above the current minimum can be swept back to whoever paid it. A never-funded escrow can be closed by either party or its rent payer.
+- Parties are keys; the program never knows about profiles. Classic SPL tokens only; wrapped SOL refused. Sealed per version; new deals use the newest.
+- Every state change is emitted so indexes can read outcomes.
 
 ## Wallets
 
 A person has one central wallet and one wallet per profile. The central wallet is where money enters from a ramp and leaves to one; it never pays a seller and never receives from a buyer. Every deal touches only profile wallets, so receipts bind to profiles.
 
-Moves between the central wallet and a profile wallet are where profiles could be linked on chain, going in and above all coming out, since every seller cashes out to one place. A privacy pool and a ramp are features an app offers and a user chooses; any app may offer any provider. Hinkal is the first pool candidate and Crossmint the first ramp. Nothing about either is built into the foundation: no code, no embed. An app that moves money through a pool moves round amounts after a random wait; a move the user makes without one is direct, and its button says it connects the two on chain.
+Moves between the central wallet and a profile wallet are where profiles could be linked on chain, going in and above all coming out, since every seller cashes out to one place. A privacy pool and a ramp are features an app offers and a user chooses; any app may offer any provider. Hinkal is the first pool candidate and Crossmint the first ramp. Forest never builds either: no code, no embed. An app that moves money through a pool moves round amounts after a random wait; a move the user makes without one is direct, and its button says it connects the two on chain.
 
 ## Deals and evidence
 
@@ -130,7 +122,7 @@ Moves between the central wallet and a profile wallet are where profiles could b
 - **A review is a signed claim** by one profile about another, usually about one deal. A review can be as thin as pointing at a person; what is missing weighs less; nothing is refused. Two reviews across one deal id are the two sides' receipts; no other record is needed for that.
 - **Evidence** shows a deal happened beyond the parties' word. There is one evidence type so far: the escrow's permanent receipt. A market file lists the evidence types that apply. Evidence weighs, it never rejects: a review without it is valid and weighs near zero.
 - **Indexes weigh, programs never interpret.** An index weighs a review by the reviewer's own trust and by the evidence under its deal, and decides which tokens it counts.
-- **Who said yes.** An index weighs a deal by who agreed to it. Both (the buyer paid, and the seller accepted or invoiced) counts in full. A one-tap payment with no acceptance is a real payment but one-sided until the seller reviews the same deal id. An escrow nobody accepted and nobody paid in full counts for nothing.
+- **Who said yes.** An index weighs a receipt by who agreed to the deal. It counts fully when the seller created the escrow or reviewed the deal. A one-sided payment is a real receipt, but one-sided. Anything else counts for nothing.
 - **No co-presence proof.** No evidence proves two people met in person: two people who agree to lie can relay their devices from anywhere, and no phone signs a physical measurement. Collusion is bounded by identity (one badge per human per market) and by reviewer trust.
 - **Every payment can have a receipt.** A product may make every payment an escrow, even one released in the same second, so each payment has an address a review can point at. That is a product default, not a program rule.
 
@@ -145,23 +137,19 @@ Moves between the central wallet and a profile wallet are where profiles could b
 Four shapes, shared by every market, as AT Protocol lexicons in `shapes/`. Market files add fields, never new shapes.
 
 - **Profile:** name, photo, contact, what I do, declared wallet. One per folder.
-- **Post:** direction (offer or request), market, role, description, price (an amount, the token named by its mint, and per hour, day or job), terms, availability, remote or a location, and an optional expiry. The terms are the seller's, set per offer: the auto-release days, up to four cancellation steps (hours from the clock start, a refund percent) and an optional arbiter. An offer must carry them; an escrow is created from them.
+- **Post:** direction (offer or request), market, role, description, price (an amount, the token named by its mint, and per hour, day or job), optional terms, availability, remote or a location, and an optional expiry. The terms hold only the escrow's two options, each off unless set: an arbiter key, and a timer (days from funding, and whether it pays the seller or the buyer).
 - **Review:** about whom (a DID), the one required field; and, all optional, a rating from 1 to 5, text, and a deal id (`dealId`): the escrow's address when an escrow exists, else 32 random bytes as hex. A review can be as thin as pointing at a person; what is missing weighs less; nothing is refused.
 - **Credential:** a W3C verifiable credential with its issuer's DID, one copy per profile. Nobody issues credentials yet; the shape exists so nothing changes when they arrive.
 
-A market file holds its standard name, its category, its roles, extra fields, the evidence types that apply, suggested starting terms (auto-release days, cancellation steps) and the credential issuers it recognizes. Records are validated on the device before they are written.
+A market file holds its name, its category, an optional one-line description, its roles (seller and buyer unless it names others), extra fields, the evidence types that apply and the credential issuers it recognizes. It says nothing about money or time. Records are validated on the device before they are written.
 
 ## Markets
 
-- A category is a deal shape: how money, time and evidence flow. Three at launch:
-  - Home services: a visit. The seller comes to you. The service time is the appointment, and the clock runs from the visit.
-  - Freelance work: a deliverable. Money waits for a thing to be delivered. The service time is the due date; early delivery is released by the buyer's approval.
-  - Buy and sell: a handover or a shipment. Money waits for the thing to change hands. The service time is the meeting or the expected delivery; the buyer confirms at handover; shipment tracking is a later evidence type.
-
-  Later shapes (rides, stays, property sales, tickets) are new category files, not code. Wellness and health are out.
-- A market is a trade or a kind inside a category: plumbing, tutoring, used phones. A badge is per market.
-- A market file describes the shape, lists the evidence types that apply, and suggests starting values (auto-release days, cancellation steps). It restricts nothing: the arbiter is always available, any accepted token works, and auto-release days and cancellation steps are set per offer by the seller. No code enforces a market file's values on a deal; the validator checks a file's structure only.
-- Standard names live in the `markets` repo; only those count in indexes and badges. Anyone can write another file; it carries no weight.
+- Anyone can make any market. A market is a name; a badge is a code made from your secret and that name; the registry accepts any name. Nothing is excluded, prohibited or approved by the foundation.
+- The `markets` repo is the foundation's directory: the spellings it recommends so one trade doesn't split into ten names, grouped in categories for reading. Indexes group aliases of the same trade.
+- The recommended scope for a badge is `market/role`, for example `plumbing/seller` and `plumbing/buyer`, so a person can hold two profiles in one market, one per side.
+- A market file names the market, its category, its description, the evidence types that apply, and the extra fields an offer in it usually carries. It suggests nothing about money or time; those are the seller's per offer.
+- Categories are folders and pages, never a program concept. Later shapes are new folders.
 
 ## Names
 
@@ -175,7 +163,7 @@ A market file holds its standard name, its category, its roles, extra fields, th
 
 **Carrier (planned).** An AT Protocol relay, configured: it subscribes to hosts, verifies every commit against its DID document, and carries only registered profiles and Forest record types.
 
-**Index (planned).** Reads the carrier, scores with an open algorithm, and serves category pages (published once a category is dense enough), profile pages, the badge, the pay link and a machine endpoint. Reading is public HTTP with no keys: stable URLs, JSON, no session. The read skill, a plain text file teaching any AI where the endpoints are and how to read them, is published at forest.foundation and in `index/`. Writing needs the user's keys, so it goes through the door in Roots. It counts a badge only when the entry's wallet is the profile's declared wallet, weighs a badge by the list owner the entry names, weighs deals by who said yes, and decides which tokens it counts. The reading rules adversarial review 1 found (only log entries the programs themselves wrote, market names compared byte for byte, its own archive of the logs) are in `docs/decisions/adversarial-review-1.md`. The pay link is a one-time Solana Pay link naming the escrow's address, from which the wallet finds the deposit account.
+**Index (planned).** Reads the carrier, scores with an open algorithm, and serves two views of the same data, one for people and one for machines, on the same open pages with no login: category, market and profile pages, the badge and the pay link. Every category, market and profile page carries structured data (schema.org: LocalBusiness or Service, Review, AggregateRating), so search engines and shopping AIs read it natively. Every page has a JSON twin, and there is a sitemap. For AI agents, an `llms.txt` and the read skill (a plain text file teaching any AI where everything is and how to read it) are published at forest.foundation, the skill also in `index/`. The ranking is open and the same for both views. Reading is public HTTP with no keys: stable URLs, no session. Writing needs the user's keys, so it goes through the door in Roots. It counts a badge only when the entry's wallet is the profile's declared wallet, weighs a badge by the list owner the entry names, weighs deals by who said yes, and decides which tokens it counts. The reading rules adversarial review 1 found (only log entries the programs themselves wrote, market names compared byte for byte, its own archive of the logs) are in `docs/decisions/adversarial-review-1.md`. The pay link is a one-time Solana Pay link naming the escrow's address, from which the wallet finds the deposit account.
 
 **Fee payer (planned).** Kora, configured, with no custom code: a service that co-signs a person's transaction and charges their network fee in their dollar token, so people never need SOL. It holds none of the person's keys and decides nothing. In a registration it is the transaction's payer, of the network fee and the code account's storage deposit, while the profile's wallet pays the 25 cents and signs. Nothing it sees lets it take a badge. See `feepayer/README.md`.
 
@@ -189,7 +177,6 @@ A market file holds its standard name, its category, its roles, extra fields, th
 - Money follows "Wallets": ramp links pay into and out of the central wallet only; every deal is paid from and to profile wallets only.
 - Roots waits a random interval, minutes to hours, between a person joining the list and their first registration, and the issuer inserts identities in batches, so a badge cannot be matched to a face check by timing.
 - A write from Roots needs only the seed unlocked for the session, never a passkey gesture per write.
-- When a seller writes an offer, Roots starts its terms from the market file's suggested values; the seller sets them.
 
 ## Build status and order
 
@@ -201,21 +188,22 @@ How work splits: a chat with Carlos decides (stress tests, searches, anything th
 - `keys/`: the recipe spec and library with pinned test vectors. A passkey-derived seed came out identical on iPhone and Mac; the library's tests on Apple, Android and Windows devices are not run.
 - `registry/`: the program, the client, the pinned ceremony files; tests under LiteSVM and on a local validator, and a property test.
 - `devnet/`: the devnet build (keys put into a copy of the source), deploy script, key script (every key derived from one phrase), and the public record; the run itself is in the two clients' `scripts/devnet.ts`, with read-only smoke tests (`npm run test:devnet`).
-- `escrow/`: the program and the client; tests under LiteSVM and on a local validator, and a fuzzer.
+- `escrow/`: the program and the client of the design before "Escrow" above was rewritten; tests under LiteSVM and on a local validator, and a fuzzer.
 - `host/`: the fork, with end-to-end tests against a local directory and two local hosts.
 - `testsite/`: a static site for trying the keys page and a handover experiment on real phones; not online yet.
 - Reports: `registry/FEASIBILITY.md` and `docs/decisions/` (used-code storage, the host, adversarial review 1 of both programs).
 
-**Next, one session each, in order:**
+**Next.** Five sessions in parallel now (see "Building in parallel"), then one consolidation session:
 
-1. Devnet deploy of both programs: prepared in session 15, keys made lasting in session 18, not done. The deploy key needs about 1.8 SOL more (about 3.53 for both deploys and 0.2 for the payer, less the 2.0 it holds); then a session with `FOREST_DEVNET_SEED` runs `docs/devnet.md`. Before mainnet, a real treasury key and the foundation's issuer key still replace the registry's two placeholders, which anyone with this repo can sign for.
-2. The issuer flow.
-3. The fee payer's config.
-4. The carrier's config.
-5. The index, with the badge, the pay link and the read skill.
-6. The `markets` repo: the market template and its validator, category files, the directory, the first market files.
+- The escrow, rewritten to "Escrow" above, with its client.
+- The issuer flow.
+- The fee payer's and the carrier's config.
+- The index, with the badge, the pay link, the read skill and `llms.txt`.
+- The `markets` repo: the directory, its category folders and the first market files, on `shapes/`' market template.
 
-Meeting points, in order: the issuer flow (face check to registry entry); the carrier and index with badge and link; escrow with auto-release; the door (in Roots).
+Also waiting: the devnet deploy, prepared in session 15, keys made lasting in session 18, not done. The deploy key needs about 1.8 SOL more (about 3.53 for both deploys and 0.2 for the payer, less the 2.0 it holds); then a session with `FOREST_DEVNET_SEED` runs `docs/devnet.md`. Its escrow half deploys the program as it stands, which the escrow session is rewriting. Before mainnet, a real treasury key and the foundation's issuer key still replace the registry's two placeholders, which anyone with this repo can sign for.
+
+Meeting points, in order: the issuer flow (face check to registry entry); the carrier and index with badge and link; escrow; the door (in Roots).
 
 **Then Roots.** Names come after Roots.
 
@@ -223,12 +211,19 @@ Meeting points, in order: the issuer flow (face check to registry entry); the ca
 
 Done when one stranger, with their own USDC, completes verify, register, post, get found, get paid, get reviewed, alone.
 
+## Building in parallel
+
+- Sessions may run at once when they own different folders.
+- Each such session writes its built, learned and open only to its own log, `docs/changes/<topic>.md`, and never edits `docs/handoff.md` or `docs/changes.md`. No parallel session owns `shapes/`, so none edits it; a change one needs goes in its log as an open question.
+- Afterward, a consolidation session folds the logs into this file and `docs/changes.md`.
+- Running in parallel now: escrow (`escrow/`), issuer (`issuer/`), fee payer and carrier (`feepayer/`, `carrier/`), index (`index/`), and markets (the `markets` repo).
+
 ## Open
 
-- **Markets.** Which three markets launch first, and each standard market file's suggested auto-release days and cancellation steps. What a category file holds. Whether scopes are per market or per market and role. Whether a review also points at the post it is about. Whether the `markets` validator reuses `shapes/`' validator.
+- **Markets.** Which three markets launch first. What a category folder's page holds. Whether a review also points at the post it is about. Whether the `markets` validator reuses `shapes/`' validator. The registry takes a market name of at most 64 bytes, while a market file allows a name and a role of 64 characters each, so a long `market/role` pair can never be registered: whether the validator refuses such a pair, or the registry's bound rises before deploy. Whether a market file keeps `credentialIssuers` (the template decision named the other keys only).
 - **Money.** Whether one stablecoin holds for EU users. Which ramps accept a prefilled link with no partner account. Whether Crossmint or Onramper accepts a sole proprietor for production, and whether Crossmint's bank rails cover the first sellers' countries. Which wallet holds a pool's compliance attestation: on the central wallet it adds to what the ramp already knows; on a profile wallet it would put a person next to a profile. Whether an app offering a pool needs its own lawyer pass. Whether Kora's price counts the storage deposit the fee payer puts down inside a program call (a registration's code account, an escrow's accounts); if it does not, the fee payer pays that on the person's behalf. Who runs the fee payer: this file has Roots run an instance, since operations are paid in products.
 - **Registry.** Confirm the wallet in the proof's message and the index rule on the declared wallet. Whether the Semaphore team publishes a transcript for the later artifacts. The per-market completeness circuit and its ceremony (the ceremony needs real independent contributors, so it waits for a public), and the proof that a sorted list matches the program's code tree, not built or costed. A later circuit proving the profile's key and the identity secret come from one seed, which closes badge selling entirely. When the foundation opens a second list of its own. A code account's rent above its minimum sweeps to the treasury, though whoever registered paid it; sweeping it to whoever paid would mean recording the payer, a program change possible only before deploy. How the index reads extra vouches from a folder, and how a market names the issuers it counts. Whether the registry also emits an attestation other Solana apps can read (parked). The treasury can accept a token it mints itself, a voucher by another name; only its own discipline, a multisig and a public policy stand against that. Whether a mainnet build should refuse to compile with the placeholder treasury and issuer key. How long Roots' random wait before a first registration is, sized from real joining rates. Both programs build as SBPF v0, which deploys today on devnet and mainnet; once SIMD-0500 (no more v0 to v2 deploys) activates, a sealed v1 must be deployed first or rebuilt for a later SBPF version, which nobody has tried with these programs.
-- **Escrow** (each a program change, possible only before deploy). SOL sent to an escrow's address goes to the rent payer, not to whoever sent it. Tokens of another mint sent to an escrow's address are not recovered. An escrow funded after its own last deadline can be sent back at once, before the seller could accept. A frozen refund address (the token's freeze authority can freeze it) now blocks every ending that pays the buyer anything, not only the two anyone may send, until it is unfrozen; an ending that pays the buyer nothing still runs. `recover_late` and `close_unaccepted` also check who holds the refund address, so a buyer who hands it to another key blocks its own late money and the rent payer's deposit rent there, and nothing else. Whoever pays an escrow's rent waits out its last deadline, however far. Whether the wallets people use accept a program-derived address as a Solana Pay recipient (not tried on a phone).
+- **Escrow** (each a program change, possible only before deploy). Where money "to the buyer" lands: the rule no longer fixes a refund address at creation. Whether the arbiter may be one of the parties. Where money above the amount goes. Who may send the timer's payout once it is due. SOL sent to an escrow's address goes to the rent payer, not to whoever sent it. Tokens of another mint sent to an escrow's address are not recovered. A frozen buyer's token account (the token's freeze authority can freeze it) blocks every ending that pays the buyer anything until it is unfrozen. Whether the wallets people use accept a program-derived address as a Solana Pay recipient (not tried on a phone).
 - **Keys and host.** Whether a moved passkey keeps its PRF secret (the design assumes not). Whether a product also writes a seed file under the first passkey. Whether the host refuses an imported export whose root does not verify; whether it validates Forest records itself; how a move tells the old host and the carrier; whether an owner can deactivate or delete a folder without a session.
 - **Names (later).** How the auction runs: its format, whether a name is held for good or renewed, and where the money goes.
 

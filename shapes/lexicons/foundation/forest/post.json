@@ -91,42 +91,35 @@
     },
     "terms": {
       "type": "object",
-      "description": "The terms every deal made from this post is created on, set by the poster per post. Required on an offer, where they are the seller's; a request's terms come from the seller who answers it. A market file only suggests starting values.",
-      "required": ["autoReleaseDays"],
+      "description": "Optional. The options an escrow made from this post is created with, each off unless set. Absent or empty: no arbiter and no timer.",
       "properties": {
-        "autoReleaseDays": {
-          "type": "integer",
-          "description": "Days after the clock starts when the money goes to the seller unless the buyer has objected.",
-          "minimum": 1,
-          "maximum": 65535
-        },
-        "cancellationSteps": {
-          "type": "array",
-          "description": "Up to four steps, deadlines strictly rising, none after auto-release. Absent: the buyer cannot cancel alone once the seller has accepted.",
-          "items": { "type": "ref", "ref": "#cancellationStep" },
-          "maxLength": 4
-        },
         "arbiter": {
           "type": "string",
-          "description": "Optional. The key that may decide any split once the seller has accepted, base58. Absent: no arbiter.",
+          "description": "Optional. A Solana key, base58, that may decide any split. Absent: no arbiter.",
           "minLength": 32,
           "maxLength": 44
+        },
+        "timer": {
+          "type": "ref",
+          "ref": "#timer"
         }
       }
     },
-    "cancellationStep": {
+    "timer": {
       "type": "object",
-      "description": "Before this deadline the buyer may cancel alone and get this percent back; the rest goes to the seller.",
-      "required": ["hours", "refundPercent"],
+      "description": "Optional. This many days after funding, everything goes to the named side. The only clock an escrow has.",
+      "required": ["days", "to"],
       "properties": {
-        "hours": {
+        "days": {
           "type": "integer",
-          "description": "The deadline, in hours from the clock start. Negative: before the service time."
+          "description": "Whole days from funding.",
+          "minimum": 1,
+          "maximum": 65535
         },
-        "refundPercent": {
-          "type": "integer",
-          "minimum": 0,
-          "maximum": 100
+        "to": {
+          "type": "string",
+          "description": "The side that gets everything when the timer ends.",
+          "enum": ["seller", "buyer"]
         }
       }
     }

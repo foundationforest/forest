@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { SHAPES, loadLexiconDocs, shapeId, validateMarket, validateRecord } from '../src/validate.js'
+import { DEFAULT_ROLES, SHAPES, loadLexiconDocs, rolesOf, shapeId, validateMarket, validateRecord } from '../src/validate.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const root = join(here, '..')
@@ -68,38 +68,38 @@ test('a post names its token by mint, not by symbol', () => {
   assertRejected(validateRecord(post), /price must have the property "mint"/)
 })
 
-test('an offer carries terms; a request need not', () => {
+const ARBITER = 'FKmToEDEJAXW8Pc72r9VnkxfzyE1Z6BbhHSJGfS132ud'
+
+test('terms are optional on an offer and on a request, and every option is off unless set', () => {
   const offer = example('post')
-  delete offer.terms
-  assertRejected(validateRecord(offer), /an offer carries the seller's terms/)
-  const request = { ...offer, direction: 'request' }
-  assert.deepEqual(validateRecord(request), { ok: true, shape: 'post', errors: [] })
-  const bare = example('post')
-  bare.terms = { autoReleaseDays: 3 }
-  assert.deepEqual(validateRecord(bare), { ok: true, shape: 'post', errors: [] }, 'no steps and no arbiter is fine')
-  bare.terms.arbiter = 'FKmToEDEJAXW8Pc72r9VnkxfzyE1Z6BbhHSJGfS132ud'
-  assert.deepEqual(validateRecord(bare), { ok: true, shape: 'post', errors: [] }, 'an arbiter is always allowed')
+  assert.equal(offer.terms, undefined, 'the example offer turns on no option')
+  assert.deepEqual(validateRecord(offer), { ok: true, shape: 'post', errors: [] })
+  assert.deepEqual(validateRecord({ ...offer, direction: 'request' }), { ok: true, shape: 'post', errors: [] })
+  for (const terms of [
+    {},
+    { arbiter: ARBITER },
+    { timer: { days: 7, to: 'seller' } },
+    { timer: { days: 30, to: 'buyer' } },
+    { arbiter: ARBITER, timer: { days: 1, to: 'seller' } },
+  ]) {
+    assert.deepEqual(validateRecord({ ...offer, terms }), { ok: true, shape: 'post', errors: [] }, JSON.stringify(terms))
+  }
 })
 
-test("an offer's terms are ones an escrow can be created on", () => {
+test('terms hold an arbiter key and a timer of whole days to one named side', () => {
   const cases = [
-    [(t) => (t.autoReleaseDays = 0), /autoReleaseDays can not be less than 1/],
-    [(t) => (t.autoReleaseDays = 65536), /autoReleaseDays can not be greater than 65535/],
-    [(t) => (t.cancellationSteps[1].refundPercent = 101), /refundPercent can not be greater than 100/],
-    [(t) => (t.cancellationSteps[1].hours = 1.5), /hours must be an integer/],
-    [(t) => t.cancellationSteps.push({ hours: 1, refundPercent: 0 }, { hours: 2, refundPercent: 0 }, { hours: 3, refundPercent: 0 }), /cancellationSteps must not have more than 4 elements/],
-    [(t) => (t.cancellationSteps[1].hours = -24), /cancellationSteps\/1: deadlines must strictly rise/],
-    [(t) => (t.cancellationSteps[1].hours = 7 * 24 + 1), /cancellationSteps\/1: a deadline 169 hours out outlasts auto-release at 168/],
-    [(t) => (t.arbiter = 'bob'), /arbiter must not be shorter than 32 characters/],
+    [{ arbiter: 'bob' }, /arbiter must not be shorter than 32 characters/],
+    [{ timer: { days: 0, to: 'seller' } }, /timer\/days can not be less than 1/],
+    [{ timer: { days: 65536, to: 'seller' } }, /timer\/days can not be greater than 65535/],
+    [{ timer: { days: 1.5, to: 'seller' } }, /timer\/days must be an integer/],
+    [{ timer: { days: 7, to: 'arbiter' } }, /timer\/to must be one of \(seller\|buyer\)/],
+    [{ timer: { days: 7 } }, /timer must have the property "to"/],
+    [{ timer: { to: 'seller' } }, /timer must have the property "days"/],
+    [{ timer: 7 }, /timer must be an object/],
   ]
-  for (const [spoil, pattern] of cases) {
-    const post = example('post')
-    spoil(post.terms)
-    assertRejected(validateRecord(post), pattern)
+  for (const [terms, pattern] of cases) {
+    assertRejected(validateRecord({ ...example('post'), terms }), pattern)
   }
-  const edge = example('post')
-  edge.terms.cancellationSteps[1].hours = 7 * 24
-  assert.deepEqual(validateRecord(edge), { ok: true, shape: 'post', errors: [] }, 'a step on the last hour of auto-release is fine')
 })
 
 test('a review rated 6 is rejected', () => {
@@ -215,32 +215,68 @@ test('a market file cannot require a field it did not add', () => {
   assertRejected(validateMarket(m), /"nope" is not one of this market's post fields/)
 })
 
-test('a market file has exactly seven keys', () => {
+test('a market file has five required keys, two optional ones, and nothing else', () => {
   const extra = market()
   extra.pricing = 'hourly'
   assertRejected(validateMarket(extra), /unknown key "pricing"/)
-  const missing = market()
-  delete missing.suggested
-  assertRejected(validateMarket(missing), /missing "suggested"/)
+  for (const key of ['name', 'category', 'fields', 'evidenceTypes', 'credentialIssuers']) {
+    const missing = market()
+    delete missing[key]
+    assertRejected(validateMarket(missing), new RegExp(`missing "${key}"`))
+  }
+  const bare = market()
+  delete bare.description
+  delete bare.roles
+  assert.deepEqual(validateMarket(bare), { ok: true, errors: [] }, 'no description and no roles')
 })
 
-test('a market file restricts no deal: no arbiter rule, no token list, no fixed silence', () => {
+test('a market file says nothing about money or time, and restricts no deal', () => {
   for (const [key, value] of [
+    ['suggested', { autoReleaseDays: 7, cancellationSteps: [] }],
+    ['autoReleaseDays', 7],
+    ['silenceDays', 7],
     ['arbiterAllowed', false],
     ['tokens', [{ symbol: 'USDC', mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', chain: 'solana' }]],
-    ['silenceDays', 7],
     ['reviewEvidence', 'escrow'],
   ]) {
     const m = market()
     m[key] = value
     assertRejected(validateMarket(m), new RegExp(`unknown key "${key}"`))
   }
-  const m = market()
-  m.suggested.arbiter = 'FKmToEDEJAXW8Pc72r9VnkxfzyE1Z6BbhHSJGfS132ud'
-  assertRejected(validateMarket(m), /suggested: unknown key "arbiter"; a market suggests only autoReleaseDays and cancellationSteps, and restricts nothing/)
 })
 
-test('a category is any slug: a later one is a new file, not code', () => {
+test('roles default to seller and buyer; a market file may name its own', () => {
+  const m = market()
+  assert.equal(m.roles, undefined)
+  assert.deepEqual(rolesOf(m), ['seller', 'buyer'])
+  assert.deepEqual([...DEFAULT_ROLES], ['seller', 'buyer'])
+  for (const role of ['seller', 'buyer']) {
+    assert.deepEqual(validateRecord({ ...example('post'), role }, { market: m }), { ok: true, shape: 'post', errors: [] }, role)
+  }
+  assertRejected(validateRecord({ ...example('post'), role: 'tutor' }, { market: m }), /role must be one of \(seller\|buyer\), got "tutor"/)
+
+  const own = { ...market(), roles: ['tutor', 'student'] }
+  assert.deepEqual(validateMarket(own), { ok: true, errors: [] })
+  assert.deepEqual(validateRecord({ ...example('post'), role: 'tutor' }, { market: own }), { ok: true, shape: 'post', errors: [] })
+  assertRejected(validateRecord(example('post'), { market: own }), /role must be one of \(tutor\|student\), got "seller"/)
+
+  for (const [roles, pattern] of [
+    [[], /roles must be a non-empty array of slugs; leave it out for seller and buyer/],
+    [['Seller'], /roles: "Seller" must be a lowercase slug/],
+    [['seller', 'seller'], /roles must be distinct/],
+  ]) {
+    assertRejected(validateMarket({ ...market(), roles }), pattern)
+  }
+})
+
+test('a description is optional, and one line', () => {
+  assert.deepEqual(validateMarket({ ...market(), description: 'x'.repeat(300) }), { ok: true, errors: [] })
+  for (const description of ['', '   ', 'two\nlines', 'a\rb', 'x'.repeat(301), 42, null]) {
+    assertRejected(validateMarket({ ...market(), description }), /description must be one line of text, at most 300 characters/)
+  }
+})
+
+test('a category is any slug: a folder and a page, never code', () => {
   for (const category of ['home-services', 'freelance-work', 'buy-and-sell', 'rides']) {
     const m = market()
     m.category = category
@@ -264,32 +300,6 @@ test('market scalars are checked', () => {
   assert.deepEqual(validateMarket(none), { ok: true, errors: [] }, 'no evidence types is a valid list')
 })
 
-test('suggested values are ones an escrow can hold', () => {
-  const cases = [
-    [(s) => (s.autoReleaseDays = 0), /suggested\/autoReleaseDays must be a whole number of days, 1 to 65535/],
-    [(s) => (s.autoReleaseDays = 1.5), /suggested\/autoReleaseDays must be a whole number/],
-    [(s) => (s.cancellationSteps = 'none'), /suggested\/cancellationSteps must be an array/],
-    [(s) => (s.cancellationSteps = [{ hours: -24 }]), /cancellationSteps\/0: a step has exactly "hours" and "refundPercent"/],
-    [(s) => (s.cancellationSteps = [{ hours: 0, refundPercent: 50.5 }]), /cancellationSteps\/0\/refundPercent must be a whole percent, 0 to 100/],
-    [(s) => (s.cancellationSteps = [{ hours: 0, refundPercent: 100 }, { hours: 0, refundPercent: 50 }]), /cancellationSteps\/1: deadlines must strictly rise/],
-    [(s) => (s.cancellationSteps = [{ hours: 169, refundPercent: 100 }]), /outlasts auto-release at 168/],
-    [(s) => (s.cancellationSteps = [1, 2, 3, 4, 5].map((hours) => ({ hours, refundPercent: 0 }))), /at most 4 steps/],
-    [(s) => delete s.cancellationSteps, /suggested: missing "cancellationSteps"/],
-  ]
-  for (const [spoil, pattern] of cases) {
-    const m = market()
-    spoil(m.suggested)
-    assertRejected(validateMarket(m), pattern)
-  }
-  const m = market()
-  m.suggested.cancellationSteps = [
-    { hours: -24, refundPercent: 100 },
-    { hours: 0, refundPercent: 50 },
-    { hours: 168, refundPercent: 0 },
-  ]
-  assert.deepEqual(validateMarket(m), { ok: true, errors: [] })
-})
-
 // Records against their lexicon plus a market file
 
 for (const shape of SHAPES) {
@@ -304,13 +314,13 @@ test('a post must use the market name and one of its roles', () => {
   post.role = 'chef'
   const result = validateRecord(post, { market: market() })
   assertRejected(result, /market must be "online-tutors", got "plumbers"/)
-  assertRejected(result, /role must be one of \(tutor\|student\), got "chef"/)
+  assertRejected(result, /role must be one of \(seller\|buyer\), got "chef"/)
 })
 
 test("a market file limits no offer's token or terms", () => {
   const post = example('post')
   post.price.mint = 'HzwqbKZw8HxMN6bF2yFZNrht3c2iXXzpKcFu7uBEDKtr' // a mint no market file names
-  post.terms = { autoReleaseDays: 30, arbiter: 'FKmToEDEJAXW8Pc72r9VnkxfzyE1Z6BbhHSJGfS132ud' } // not the market's 7 days
+  post.terms = { arbiter: ARBITER, timer: { days: 30, to: 'buyer' } }
   assert.deepEqual(validateRecord(post, { market: market() }), { ok: true, shape: 'post', errors: [] })
 })
 

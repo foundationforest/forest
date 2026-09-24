@@ -851,3 +851,38 @@ Log of what was built, learned, and left open, appended at the end of every sess
   3. **Whether the devnet builds are byte for byte reproducible** on another machine with the same toolchain: the next session's hashes will say.
   4. Session 15's open 2 to 5 stand.
 - **Still standing:** as session 15 listed, with the devnet deploy and run still not done.
+
+## 2026-09-24: plan update, no-clock escrow, open markets, AI-first index, parallel sessions
+
+- **Build order:** asked for by Carlos so five sessions can start in parallel from one plan and one schema: docs, `shapes/` and one skill install. No program code. `escrow/`, `index/` and `registry/` untouched.
+- **Decided (by Carlos; written here):**
+  - **The escrow has no clock.** Money comes out only when the two sides agree: the buyer releases to the seller, the seller releases to the buyer, or both sign a split. An arbiter and a timer (N days from funding, to one named side) exist only if the creator turns them on. Acceptance, service time, silence, auto-release, objection and cancellation steps are gone; cancellation and refund are the seller releasing, or a split. Reason: the no-clock escrow is what a person expects of holding money.
+  - **Anyone can make any market.** A market is a name; the `markets` repo is the directory of recommended spellings, grouped in categories for reading; indexes group aliases; the recommended badge scope is `market/role`. Reason: nothing in the foundation gates a market.
+  - With these, and with no reason given beyond them: receipt weighting (a receipt counts fully when the seller created the escrow or reviewed the deal; a one-sided payment is a real receipt, but one-sided; anything else counts for nothing); the AI-first index (the same open pages for people and machines, schema.org data, a JSON twin per page, a sitemap, `llms.txt` and the read skill, one open ranking); sessions in parallel when they own different folders, each logging to `docs/changes/<topic>.md`, then a consolidation session; the safe-solana-builder skill for any change to a Solana program.
+- **Chosen, not decided** (the simplest option; each reversible before anything ships):
+  - **`timer.days` is a whole number from 1 to 65,535,** the same sixteen-bit bound the old escrow held for its days. The escrow session may change the program's bound; the lexicon then follows.
+  - **A market file's `description` is one line of at most 300 characters.**
+  - **`credentialIssuers` stays in the market template, required and possibly empty.** The decision named what to keep (name, category, evidence types, extra fields) and what to remove (`suggested`, money, time); `credentialIssuers` was in neither list. Removing it is one line.
+  - **`roles` is optional; absent, a market's roles are `seller` and `buyer`** (`rolesOf`, `DEFAULT_ROLES`). A market file may still name its own.
+  - **The example post turns on no option,** since every option is off by default, and takes the role `seller`. The example market file names no roles.
+  - **Terms stay open, like every record:** a leftover `autoReleaseDays` in an old post passes and means nothing.
+  - **No parallel session owns `shapes/`,** so none edits it (added to "Building in parallel", since every session builds on the same schema).
+  - **`CLAUDE.md`'s market rule drops "only directory names count in indexes and badges"**, which contradicts "nothing is excluded" and "indexes group aliases"; its intro now says "A market is a name"; and its last line sends a parallel session's log to `docs/changes/<topic>.md`, or it would tell the five sessions to do what "Building in parallel" forbids.
+  - **The skill's source is recorded in `.claude/skills/safe-solana-builder/SOURCE.md`:** the repository has no license file and states MIT only in its README, and MIT asks that the notice travel with copies.
+  - **The wallets line** ("every profile has its own wallet, plus one central wallet ...; Forest never builds one") went into "Wallets", which already said the rest, not into "Escrow".
+- **Built:**
+  - **`docs/handoff.md`:** "Escrow" and "Markets" replaced with the decided text; "Who said yes", the post and market file in "Record shapes", the Index row and paragraph, "The shape", "What Forest is", the Registry's scope line, the Layers escrow row, "Wallets", "What Roots needs", build status and "Next" (five in parallel, then consolidation; the devnet deploy still waiting); new "Building in parallel"; Open rewritten for markets and escrow. No mention of acceptance, service time, silence, auto-release, cancellation steps, done marks, unaccepted timeouts or seller consent remains, and nothing says a market is gated, excluded, drafted or activated.
+  - **`CLAUDE.md`:** the escrow and market rules, the intro, the skill line, the parallel log line. **`docs/README.md`:** `changes/`.
+  - **`shapes/`:** the post's `terms` hold only `arbiter` and `timer` (`{ days, to }`, `to` is `seller` or `buyer`), all optional, on an offer or a request; `cancellationStep` is gone. The market template drops `suggested`, adds an optional one-line `description`, and makes `roles` optional (`seller`, `buyer` by default). The validator checks structure only; everything about steps, auto-release days and "an offer carries terms" is removed. Examples, the fixture, 42 tests (41 before) and `shapes/README.md` updated.
+  - **`.claude/skills/safe-solana-builder/`:** `SKILL.md` and `references/` from github.com/Frankcastleauditor/safe-solana-builder at commit `9e94436`, unchanged, without `.git` and `examples/`; plus `SOURCE.md`.
+- **Learned:**
+  - **A badge scope `market/role` can outgrow the registry.** The registry takes a market name of at most 64 bytes (`MAX_MARKET_NAME`); a market file allows a 64-character name and 64-character roles, so a long pair can never be registered. Nothing refuses it yet.
+  - **The escrow client reads what `shapes/` no longer has:** `escrow/client/src/terms.ts` has `suggestedTerms(market.suggested)` and `OfferTerms.autoReleaseDays`. It does not import `shapes/`, so nothing breaks now; the escrow session updates it. `host/`' tests write `shapes/examples/*.json` without validating them, so the new examples change nothing there.
+  - **The skill's `SKILL.md` points at `examples/`,** which was not copied; a session using it finds none. It also asks which framework and test tool to use; in this repo both are settled (Anchor 1.2, LiteSVM).
+  - `docs/decisions/adversarial-review-1.md` still describes the old escrow (acceptance, silence, cancellation). It is a dated report of what was reviewed and was left as it is.
+- **Open:**
+  1. **The 64-byte scope:** the market validator refuses a `market/role` pair over 64 bytes, or the registry's bound rises before deploy.
+  2. **Escrow gaps the new text leaves** (in the handoff's Open): where money "to the buyer" lands, now that the rule no longer fixes a refund address at creation; whether the arbiter may be a party; where money above the amount goes; who may send the timer's payout.
+  3. **Whether a market file keeps `credentialIssuers`.**
+  4. **`escrow/README.md` and `index/README.md` describe the old design;** their sessions own them.
+- **Still standing:** as session 18 listed, with the devnet deploy and run still not done.
