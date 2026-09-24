@@ -51,7 +51,7 @@ fn create_fund_and_approve_ride_in_one_transaction() {
     let buyer = h.buyer.insecure_clone();
     println!("\n== one tap: create, a plain transfer into the deposit account, approve, in one transaction ==");
 
-    // A sponsor (the transaction's fee payer) pays the rent; the buyer signs create, the transfer
+    // Another key (the transaction's fee payer) pays the rent; the buyer signs create, the transfer
     // and the approval. Market defaults: seven silence days, no steps, no arbiter, no service time.
     let mut t = h.terms(1);
     t.steps = vec![];
@@ -95,7 +95,7 @@ fn create_fund_and_approve_ride_in_one_transaction() {
     let (ata_ix, seller2_tokens) = create_ata_idempotent_ix(h.payer.pubkey(), seller2.pubkey(), h.mint);
     let escrow2 = escrow_address(&buyer.pubkey(), t2.id);
     let vault2 = vault_address(&escrow2, &h.mint);
-    let s2 = SettleAccounts { escrow: escrow2, vault: vault2, buyer_tokens: h.buyer_tokens, seller_tokens: seller2_tokens, rent_payer: h.payer.pubkey() };
+    let s2 = SettleAccounts { escrow: escrow2, vault: vault2, buyer_tokens: h.refund(), seller_tokens: seller2_tokens, rent_payer: h.payer.pubkey() };
     let ixs = vec![
         ata_ix,
         create_ix(&t2, &h.create_accounts()),
@@ -207,7 +207,7 @@ fn a_second_payment_to_a_one_tap_link_goes_back_to_the_buyer() {
     let stranger = Keypair::new();
     h.svm.airdrop(&stranger.pubkey(), 1_000_000_000).unwrap();
     let refund = h.refund();
-    assert!(!h.exists(&refund));
+    h.drop_refund();
     let meta = h.recover_late(&escrow, &stranger).expect("recover_late");
     let names: Vec<_> = events(&meta.logs).iter().map(|e| e.name()).collect();
     assert_eq!(names, ["RecoveredLate"]);

@@ -94,7 +94,9 @@ export function loadLexiconDocs() {
 /**
  * Check one record. Returns { ok, shape, errors }.
  * A post is also checked against its own terms: an offer carries them, and
- * its cancellation steps rise and end by auto-release, as an escrow needs.
+ * its cancellation steps rise and end by auto-release, as an escrow needs. A
+ * review's deal id, when it has one, must be an escrow address or 32 bytes of
+ * hex.
  * With a market file, the record is checked against the shape plus that
  * market's extra fields, and against the market's name and roles. Nothing in
  * a market file limits a post's terms or token, and evidence is not checked:
@@ -122,7 +124,7 @@ export function validateRecord(record, { market } = {}) {
     return fail(shape, [e.message])
   }
 
-  const errors = shape === 'post' ? postRules(record) : []
+  const errors = shape === 'post' ? postRules(record) : shape === 'review' ? reviewRules(record) : []
   if (market !== undefined) errors.push(...marketRules(shape, record, market))
   return errors.length ? fail(shape, errors) : { ok: true, shape, errors: [] }
 }
@@ -357,6 +359,38 @@ function postRules(record) {
 // Cross-checks a post against the market file it is meant for: its name and
 // its roles. Nothing in a market file limits a post's terms or its token, and
 // evidence is never checked: it weighs, it never rejects.
+// A review's deal id, when it has one: the escrow's address when an escrow
+// exists (base58, 32 bytes), else 32 random bytes as lowercase hex. Anything
+// else points at nothing, so it is refused; a review with no deal id is fine.
+function reviewRules(record) {
+  if (record.dealId === undefined) return []
+  const id = record.dealId
+  if (/^[0-9a-f]{64}$/.test(id) || base58Length(id) === 32) return []
+  return [`dealId must be the escrow's address (base58, 32 bytes) or 32 random bytes as lowercase hex, got ${JSON.stringify(id)}`]
+}
+
+const BASE58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+
+/** How many bytes a base58 string decodes to, or -1 if it is not base58. */
+function base58Length(s) {
+  let n = 0n
+  for (const c of s) {
+    const digit = BASE58.indexOf(c)
+    if (digit === -1) return -1
+    n = n * 58n + BigInt(digit)
+  }
+  let bytes = 0
+  while (n > 0n) {
+    n /= 256n
+    bytes++
+  }
+  for (const c of s) {
+    if (c !== '1') break
+    bytes++
+  }
+  return bytes
+}
+
 function marketRules(shape, record, market) {
   const errors = []
   if (shape === 'post') {

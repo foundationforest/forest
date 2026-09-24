@@ -11,7 +11,8 @@
 //! Invariants, from `docs/decisions/adversarial-review-1.md`, with session 11's rules (the seller's
 //! acceptance, permanent receipts, `withdraw`, `close_unfunded`, wrapped SOL refused) and session
 //! 12's (`recover_late`, `sweep_rent`, `close_unaccepted`, the clock that waits for the funding,
-//! `mark_funded` before acceptance):
+//! `mark_funded` before acceptance) and session 14's (every ending pays the buyer only at its
+//! refund address, checked by address, whoever holds that account):
 //!   I1 every deposit account holds exactly what was sent to it;
 //!   I2 no ending pays out more, or less, than the deposit account held;
 //!   I3 rent goes back to the recorded rent payer, to the lamport, and to nobody else: the deposit
@@ -177,8 +178,10 @@ struct FuzzTest {
     trident: Trident,
     people: Vec<Pubkey>,
     tokens: Vec<Pubkey>,
-    /// Each person's refund address: their associated token account for the mint. Made by
-    /// `recover_late` or `close_unaccepted` when a buyer is paid there first.
+    /// Each person's refund address: their associated token account for the mint. Most people
+    /// start with one; the rest get it from `make_refund`, or from `recover_late` or
+    /// `close_unaccepted` when a buyer is paid there first. Every ending pays the buyer here and
+    /// nowhere else.
     refunds: Vec<Pubkey>,
     /// An escrow account's rent-exempt minimum: what `create` put in the first one. Trident's rent
     /// rate never changes, and every escrow account has the same size.
@@ -229,7 +232,11 @@ impl FuzzTest {
             self.trident.set_account_custom(&t, &token_account(&mint, &p, START_TOKENS));
             self.people.push(p);
             self.tokens.push(t);
-            self.refunds.push(ata(&p, &mint));
+            let refund = ata(&p, &mint);
+            if self.pick(4) != 0 {
+                self.trident.set_account_custom(&refund, &token_account(&mint, &p, 0));
+            }
+            self.refunds.push(refund);
         }
         self.total_tokens = u128::from(START_TOKENS) * PEOPLE as u128;
     }
@@ -471,6 +478,28 @@ impl FuzzTest {
         // was closed keeps it until the same buyer reopens the id, which adopts it.
         let latest = self.latest_at(&d.escrow);
         self.deals[latest].deposited += amount;
+    }
+
+    /// Anyone makes someone's refund address, the standard idempotent way: what the sender of an
+    /// ending does first when the buyer has none.
+    #[flow]
+    fn make_refund(&mut self) {
+        let owner_i = self.pick(PEOPLE);
+        let payer_i = self.pick(PEOPLE);
+        let ix = Instruction {
+            program_id: ATA_PROGRAM,
+            accounts: vec![
+                AccountMeta::new(self.people[payer_i], true),
+                AccountMeta::new(self.refunds[owner_i], false),
+                AccountMeta::new_readonly(self.people[owner_i], false),
+                AccountMeta::new_readonly(self.mint, false),
+                AccountMeta::new_readonly(SYSTEM_PROGRAM, false),
+                AccountMeta::new_readonly(TOKEN_PROGRAM, false),
+            ],
+            data: vec![1],
+        };
+        let ok = self.send(&[ix], "make_refund");
+        assert!(ok, "making a standard token account, or finding it there, must land");
     }
 
     /// What a buyer's app does: send exactly what is missing and record it, in one transaction.
@@ -827,16 +856,26 @@ impl FuzzTest {
         let buyer_i = self.people.iter().position(|p| *p == d.buyer).unwrap();
         let seller_i = self.people.iter().position(|p| *p == d.seller).unwrap();
         let payer_i = self.people.iter().position(|p| *p == d.rent_payer).unwrap();
-        let bt_i = if self.pick(20) == 0 { self.pick(PEOPLE) } else { buyer_i };
+        // The buyer's slot: its refund address, or now and then another account the buyer owns, or
+        // anyone's. Only the refund address is right (session 14), and it must exist.
+        let buyer_account = match self.pick(20) {
+            0 => self.tokens[buyer_i],
+            1 => {
+                let k = self.pick(PEOPLE);
+                if self.coin() { self.refunds[k] } else { self.tokens[k] }
+            }
+            _ => self.refunds[buyer_i],
+        };
         let st_i = if !refund && self.pick(20) == 0 { self.pick(PEOPLE) } else { seller_i };
         let rp_i = if self.pick(20) == 0 { self.pick(PEOPLE) } else { payer_i };
-        let accounts_right = bt_i == buyer_i && st_i == seller_i && rp_i == payer_i;
+        let accounts_right = buyer_account == self.refunds[buyer_i] && st_i == seller_i && rp_i == payer_i;
+        let refund_exists = self.lamports(&self.refunds[buyer_i].clone()) > 0;
         let vault_exists = self.trident.get_account(&d.vault).lamports() > 0;
 
         let funded = balance >= d.amount;
         let accepted = d.accepted();
         // (valid, to_seller)
-        let expect: (bool, u64) = if !d.live() || !accounts_right || !vault_exists {
+        let expect: (bool, u64) = if !d.live() || !accounts_right || !refund_exists || !vault_exists {
             (false, 0)
         } else {
             match name {
@@ -887,7 +926,7 @@ impl FuzzTest {
         let mut metas = vec![
             AccountMeta::new(d.escrow, false),
             AccountMeta::new(d.vault, false),
-            AccountMeta::new(self.tokens[bt_i], false),
+            AccountMeta::new(buyer_account, false),
         ];
         if !refund {
             metas.push(AccountMeta::new(self.tokens[st_i], false));
@@ -908,7 +947,7 @@ impl FuzzTest {
             }
             _ => metas.push(AccountMeta::new_readonly(actor, true)),
         }
-        let before_b = self.token_balance(&self.tokens[buyer_i].clone());
+        let before_b = self.token_balance(&self.refunds[buyer_i].clone());
         let before_s = self.token_balance(&self.tokens[seller_i].clone());
         let escrow_rent = self.lamports(&d.escrow);
         let vault_rent = self.lamports(&d.vault);
@@ -921,7 +960,7 @@ impl FuzzTest {
             return;
         }
         let got_s = self.token_balance(&self.tokens[seller_i].clone()) - before_s;
-        let got_b = self.token_balance(&self.tokens[buyer_i].clone()) - before_b;
+        let got_b = self.token_balance(&self.refunds[buyer_i].clone()) - before_b;
         assert_eq!(got_s, to_seller, "{name}: the seller's share");
         assert_eq!(got_b + got_s, balance, "I2 {name}: every unit the deposit account held, and no more");
         assert_eq!(balance, d.deposited, "I1 {name}: the deposit account held exactly what was sent");

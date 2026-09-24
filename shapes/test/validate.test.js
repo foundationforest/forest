@@ -114,6 +114,39 @@ test('a review of something that is not a DID is rejected', () => {
   assertRejected(validateRecord(review), /subject must be a valid did/)
 })
 
+test('the thinnest review points at a person and says nothing else, and is valid', () => {
+  // Everything but who it is about is optional: no rating, no text, no deal. What is missing
+  // weighs less; nothing is refused.
+  const thin = { $type: 'foundation.forest.review', subject: 'did:plc:abcdefghijklmnopqrstuvwx', createdAt: '2026-11-02T18:30:00Z' }
+  assert.deepEqual(validateRecord(thin), { ok: true, shape: 'review', errors: [] })
+  for (const keep of ['rating', 'text', 'dealId']) {
+    const review = { ...thin, [keep]: example('review')[keep] }
+    assert.deepEqual(validateRecord(review), { ok: true, shape: 'review', errors: [] }, `with only ${keep}`)
+  }
+  const nobody = { ...thin }
+  delete nobody.subject
+  assertRejected(validateRecord(nobody), /must have the property "subject"/)
+})
+
+test("a review's deal id is the escrow's address, or 32 random bytes as hex", () => {
+  const review = example('review')
+  assert.equal(review.dealId, 'FKmToEDEJAXW8Pc72r9VnkxfzyE1Z6BbhHSJGfS132ud')
+  assert.deepEqual(validateRecord(review), { ok: true, shape: 'review', errors: [] }, 'an escrow address')
+  review.dealId = '9f3c'.repeat(16)
+  assert.deepEqual(validateRecord(review), { ok: true, shape: 'review', errors: [] }, '32 bytes as hex, for a deal with no escrow')
+  for (const bad of [
+    'not-a-deal-id-at-all-not-a-deal-id',
+    '9f3c'.repeat(16).toUpperCase(),
+    '9f3c'.repeat(16).slice(1),
+    '11111111111111111111111111111111111', // base58, but 35 zero bytes
+    '3cpvoZKJ28f1CDBboEmfEXMVVMcSQzBhTEMtecGWQ6v', // base58, but 31 bytes
+    'szpHvMPBKt4t9PagDS68oqS8dUc1gZTUPFV5p9Wgh4rF4', // base58, but 33 bytes
+  ]) {
+    review.dealId = bad
+    assertRejected(validateRecord(review), /dealId/)
+  }
+})
+
 test('a profile with a bad photo reference or a bad date is rejected', () => {
   const profile = example('profile')
   profile.photo.ref.$link = 'not-a-cid'
@@ -292,7 +325,7 @@ test("a post must carry the market's required extra field, typed as the market s
 
 test('evidence weighs, never rejects: a review without an escrow is valid in an escrow market', () => {
   const review = example('review')
-  delete review.escrow
+  delete review.dealId
   const withEscrow = market()
   assert.deepEqual(withEscrow.evidenceTypes, ['escrow'])
   assert.deepEqual(validateRecord(review, { market: withEscrow }), { ok: true, shape: 'review', errors: [] })

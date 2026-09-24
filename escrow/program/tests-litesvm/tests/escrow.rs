@@ -39,7 +39,7 @@ fn assert_ended(h: &Harness, escrow: &Address, buyer_tokens: u64, seller_tokens:
     let e = h.escrow(escrow);
     assert_eq!(e.status, Status::Ended, "the escrow account stays, ended");
     assert!(e.outcome.is_some() && e.ended_at != 0, "and says how and when");
-    assert_eq!(h.balance(&h.buyer_tokens), buyer_tokens, "buyer's tokens");
+    assert_eq!(h.buyer_total(), buyer_tokens, "buyer's tokens, across its two accounts");
     assert_eq!(h.balance(&h.seller_tokens), seller_tokens, "seller's tokens");
 }
 
@@ -265,7 +265,7 @@ fn the_clock_starts_at_the_service_time_when_one_is_set() {
     }
     // Three deals: seller got 1.00 + 0 + 0.50; buyer paid 3.00 and got 1.00 + 0.50 back.
     assert_eq!(h.balance(&h.seller_tokens), 1_500_000);
-    assert_eq!(h.balance(&h.buyer_tokens), BUYER_START - 3 * AMOUNT + 1_500_000);
+    assert_eq!(h.buyer_total(), BUYER_START - 3 * AMOUNT + 1_500_000);
     println!("service time set: silence and both steps measured from it, not from funding");
 }
 
@@ -384,7 +384,7 @@ fn the_buyer_cancels_at_each_step_with_the_steps_refund() {
         assert_eq!(h.escrow(&escrow).status, Status::Ended);
     }
     // Buyer paid 3 × 1.000001 and got back 1.000001 + 0.500001 + 0.500001.
-    assert_eq!(h.balance(&h.buyer_tokens), BUYER_START - 3_000_003 + 2_000_003);
+    assert_eq!(h.buyer_total(), BUYER_START - 3_000_003 + 2_000_003);
     assert_eq!(h.balance(&h.seller_tokens), 1_000_000);
     println!("cancelled at day 1 minus a second (all back), day 1 (half), day 3 minus a second (half)");
 }
@@ -448,7 +448,7 @@ fn a_never_funded_escrow_is_closed_by_either_party_any_time_or_by_the_rent_payer
         [Event::Closed { escrow, closed_by: seller.pubkey(), to_buyer: 400_000, rent_payer: sponsor.pubkey(), rent_lamports: held }]
     );
     assert!(!h.exists(&escrow) && !h.exists(&s.vault), "never funded: no receipt, both accounts gone");
-    assert_eq!(h.balance(&h.buyer_tokens), BUYER_START);
+    assert_eq!(h.buyer_total(), BUYER_START);
     assert_eq!(h.lamports(&sponsor.pubkey()), sponsor_start, "both rents back");
 
     // The buyer, at any time too, accepted or not.
@@ -1023,7 +1023,7 @@ fn an_ended_escrow_is_a_permanent_receipt_and_accepts_nothing() {
     // back to the buyer, and there is no rent above the minimum to sweep at today's rate.
     let meta = h.recover_late(&escrow, &buyer).expect("recover_late");
     assert_eq!(names(&events(&meta.logs)), ["RecoveredLate"]);
-    assert_eq!(h.balance(&h.refund()), 1);
+    assert_eq!(h.balance(&h.refund()), 300_000 + 1, "the buyer's share of the split, then the one late unit");
     let err = h.sweep(&escrow).expect_err("nothing to sweep");
     assert!(err.contains("NothingToSweep"), "{err}");
     assert_eq!(h.account(&escrow).data, receipt.data, "the receipt's bytes never change");
@@ -1149,7 +1149,7 @@ fn late_money_at_an_ended_escrow_goes_back_to_the_buyer_whoever_sends_it() {
     // A stranger sends it back. The buyer's refund address does not exist yet: the stranger makes
     // it and pays its rent (the harness key pays the fee).
     let refund = h.refund();
-    assert!(!h.exists(&refund));
+    h.drop_refund();
     let stranger_sol = h.lamports(&stranger.pubkey());
     let meta = h.recover_late(&escrow, &stranger).expect("recover_late");
     assert_eq!(events(&meta.logs), [Event::RecoveredLate { escrow, to_buyer: 400_000, rent_lamports: vault_rent }]);
@@ -1506,6 +1506,10 @@ fn what_each_step_costs() {
     h.mark_funded(&escrow6).expect("mark_funded");
     h.advance(UNACCEPTED_DAYS * DAY + 1);
     let vault6 = vault_address(&escrow6, &h.mint);
+    // The buyer's refund address holds what the endings above paid it; here it is gone, as if the
+    // buyer had emptied and closed it, so the stranger has to make it.
+    let refund = h.refund();
+    h.svm.set_account(refund, solana_account::Account::default()).unwrap();
     let ix = close_unaccepted_ix(escrow6, vault6, buyer.pubkey(), h.mint, h.payer.pubkey(), stranger.pubkey());
     measure(&mut h, "close_unaccepted", ix, &[&stranger]);
     let (ata_ix, _) = create_ata_idempotent_ix(buyer.pubkey(), escrow6, h.mint);

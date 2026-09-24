@@ -131,6 +131,13 @@ impl Escrow {
         self.status == Status::Ended
     }
 
+    /// The buyer's refund address: the buyer's associated token account for the mint, the one
+    /// account every ending pays the buyer at. Computed from two keys fixed at creation, so nothing
+    /// more is stored, and nobody who sends an ending can name another.
+    pub fn refund_address(&self) -> Pubkey {
+        anchor_spl::associated_token::get_associated_token_address(&self.buyer, &self.mint)
+    }
+
     /// The clock start: the latest of the service time (if set), the observed funding and the
     /// seller's acceptance. `None` until the seller has accepted and the funding has been
     /// observed. Silence and every cancellation deadline are measured from here.

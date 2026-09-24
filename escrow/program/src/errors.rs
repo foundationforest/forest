@@ -71,4 +71,7 @@ pub enum EscrowError {
     FundingNotObserved,
     #[msg("an escrow the seller never accepted can be sent back only after its last cancellation deadline, or 30 days after its funding when it has no steps")]
     BeforeTimeout,
+    // Session 14, appended.
+    #[msg("the buyer is paid only at its refund address: its standard token account for the escrow's mint")]
+    NotTheRefundAddress,
 }

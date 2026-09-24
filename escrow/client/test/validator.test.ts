@@ -50,6 +50,7 @@ import {
   payout,
   recoverLateIx,
   refundAddress,
+  makeRefundAddressIx,
   schedule,
   solanaPayUrl,
   sweepRentIx,
@@ -134,7 +135,7 @@ test('two deals go through a real validator: a proposal the seller accepts, and 
   if (why) return t.skip(why)
   if (!validator) return t.skip('solana-test-validator did not start (is it on the PATH?)')
 
-  // The fee payer and rent payer; a sponsor in production. Buyer and seller are two keys.
+  // The fee payer and rent payer (a fee payer service in production). Buyer and seller are two keys.
   const payer = Keypair.generate()
   const buyer = Keypair.generate()
   const seller = Keypair.generate()
@@ -218,10 +219,20 @@ test('two deals go through a real validator: a proposal the seller accepts, and 
   assert.equal(s.silenceReleasesAt, inTenDays + 7n * 86_400n + 1n)
   assert.equal(s.buyerCanCancel, true)
 
-  // The buyer approves 70/30. Balances, rent and events, exact.
+  // The buyer approves 70/30. Balances, rent and events, exact. The buyer's share goes to its
+  // refund address, its standard account for the mint, and nowhere else; this buyer holds its
+  // tokens in another account and has none yet, so it is made first in the same transaction.
   const expected = payout(terms.amount, 1_500_000n, 7_000)
-  const accounts = { escrow, vault, buyerTokens: buyerTokens.publicKey, sellerTokens: sellerTokens.publicKey, rentPayer: payer.publicKey }
-  const approved = await send([approveIx({ accounts, buyer: buyer.publicKey, sellerBps: 7_000 })], [payer, buyer])
+  const refund = refundAddress(buyer.publicKey, mint.publicKey)
+  assert.equal(await connection.getAccountInfo(refund), null, 'no refund address yet')
+  const accounts = { escrow, vault, buyer: buyer.publicKey, mint: mint.publicKey, sellerTokens: sellerTokens.publicKey, rentPayer: payer.publicKey }
+  const approved = await send(
+    [
+      makeRefundAddressIx({ payer: payer.publicKey, buyer: buyer.publicKey, mint: mint.publicKey }),
+      approveIx({ accounts, buyer: buyer.publicKey, sellerBps: 7_000 }),
+    ],
+    [payer, buyer],
+  )
   const events = decodeEvents(await logsOf(approved))
   assert.deepEqual(
     events.map((ev) => ev.kind),
@@ -237,7 +248,9 @@ test('two deals go through a real validator: a proposal the seller accepts, and 
     assert.deepEqual(events[1].rentPayer, payer.publicKey)
   }
   assert.equal((await getAccount(connection, sellerTokens.publicKey)).amount, expected.toSeller)
-  assert.equal((await getAccount(connection, buyerTokens.publicKey)).amount, 10_000_000n - 1_500_000n + expected.toBuyer)
+  assert.equal((await getAccount(connection, buyerTokens.publicKey)).amount, 10_000_000n - 1_500_000n, 'nothing back here')
+  assert.equal((await getAccount(connection, refund)).amount, expected.toBuyer, "the buyer's share, at its refund address")
+  const refundRent = await connection.getBalance(refund)
   assert.equal(await connection.getAccountInfo(vault), null, 'the deposit account is closed')
   // The escrow account stays: the receipt, with how it ended and who got what.
   const receipt = decodeEscrow(new Uint8Array((await connection.getAccountInfo(escrow))!.data))
@@ -246,8 +259,8 @@ test('two deals go through a real validator: a proposal the seller accepts, and 
   // The rent payer paid the transaction fees and the receipt's rent, and got the deposit account's back.
   const fees = 10 * 5_000 // generously: five transactions of at most two signatures
   const payerAfter = await connection.getBalance(payer.publicKey)
-  const spent = payerBefore - payerAfter - escrowRent
-  assert.ok(spent > 0 && spent <= fees, `only fees and the receipt's rent left the payer: ${payerBefore - payerAfter} lamports`)
+  const spent = payerBefore - payerAfter - escrowRent - refundRent
+  assert.ok(spent > 0 && spent <= fees, `only fees, the receipt's rent and the refund address's left the payer: ${payerBefore - payerAfter} lamports`)
 
   // An invoice: the seller opens it naming the buyer, accepted from creation; the buyer reads it,
   // checks its terms, and pays and approves in one tap.
@@ -257,7 +270,7 @@ test('two deals go through a real validator: a proposal the seller accepts, and 
   assert.deepEqual(decodeEvents(await logsOf(invoiced)).map((ev) => ev.kind), ['created', 'accepted'])
   const onChain = decodeEscrow(new Uint8Array((await connection.getAccountInfo(inv.escrow))!.data))
   checkTerms(onChain, { arbiter: null })
-  const invoiceAccounts = { escrow: inv.escrow, vault: inv.deposit, buyerTokens: buyerTokens.publicKey, sellerTokens: sellerTokens.publicKey, rentPayer: payer.publicKey }
+  const invoiceAccounts = { escrow: inv.escrow, vault: inv.deposit, buyer: buyer.publicKey, mint: mint.publicKey, sellerTokens: sellerTokens.publicKey, rentPayer: payer.publicKey }
   const paid = await send(
     [createTransferInstruction(buyerTokens.publicKey, inv.deposit, buyer.publicKey, 2_000_000), approveIx({ accounts: invoiceAccounts, buyer: buyer.publicKey })],
     [payer, buyer],
@@ -269,8 +282,8 @@ test('two deals go through a real validator: a proposal the seller accepts, and 
 
   // The invoice's link is paid again, after the end: the deposit account is made again (here the
   // app pays for it; the buyer holds no SOL in this test) and the buyer sends. A stranger sends it
-  // back to the buyer's refund address, which does not exist yet, so the stranger makes it; the
-  // deposit account's rent goes to the buyer.
+  // back to the buyer's refund address, where the first deal's share already sits; the deposit
+  // account's rent goes to the buyer.
   await send(
     [
       createAssociatedTokenAccountIdempotentInstruction(payer.publicKey, inv.deposit, inv.escrow, mint.publicKey),
@@ -286,7 +299,7 @@ test('two deals go through a real validator: a proposal the seller accepts, and 
   const [late] = decodeEvents(await logsOf(recovered))
   assert.equal(late.kind, 'recoveredLate')
   assert.equal(late.kind === 'recoveredLate' && late.toBuyer, 300_000n)
-  assert.equal((await getAccount(connection, refundAddress(buyer.publicKey, mint.publicKey))).amount, 300_000n, "at the buyer's refund address")
+  assert.equal((await getAccount(connection, refund)).amount, expected.toBuyer + 300_000n, "at the buyer's refund address")
   assert.equal(await connection.getAccountInfo(inv.deposit), null, 'the deposit account is closed again')
   assert.deepEqual((await connection.getAccountInfo(inv.escrow))!.data, receiptBytes, 'the receipt does not change')
 

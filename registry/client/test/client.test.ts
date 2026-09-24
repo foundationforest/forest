@@ -10,7 +10,7 @@ import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 
 import { Identity } from '@semaphore-protocol/identity'
-import { Keypair, PublicKey } from '@solana/web3.js'
+import { Keypair, PublicKey, SystemProgram } from '@solana/web3.js'
 
 import {
   BN254_R,
@@ -18,6 +18,10 @@ import {
   PROGRAM_ID,
   SCOPE_NS,
   TREASURY,
+  FOUNDATION_ISSUER,
+  FOUNDATION_ISSUER_PLACEHOLDER_SEED,
+  openListIx,
+  addIssuerIx,
   TREASURY_PLACEHOLDER_SEED,
   USDC_FEE,
   USDC_MINT,
@@ -67,6 +71,13 @@ test('the treasury and USDC constants are the ones the program bakes in', () => 
   // The placeholder is derived from a public seed so tests can sign for it. That is also why it
   // must be replaced before the first deploy: anyone can.
   assert.equal(Keypair.fromSeed(TREASURY_PLACEHOLDER_SEED).publicKey.toBase58(), TREASURY.toBase58())
+})
+
+test("the foundation's issuer key is the one the program writes as list 0's owner", () => {
+  const lib = readFileSync(join(here, '../../program/src/lib.rs'), 'utf8')
+  assert.ok(lib.includes(`pub const FOUNDATION_ISSUER: Pubkey = pubkey!("${FOUNDATION_ISSUER.toBase58()}")`), 'the issuer key must match the program')
+  // A placeholder for the same reason as the treasury's, and to be replaced for the same reason.
+  assert.equal(Keypair.fromSeed(FOUNDATION_ISSUER_PLACEHOLDER_SEED).publicKey.toBase58(), FOUNDATION_ISSUER.toBase58())
 })
 
 test('USDC pays its constant 0.25; every other mint pays the fee the treasury set for it', () => {
@@ -252,21 +263,39 @@ test('a registration instruction is the bytes the program reads', () => {
   assert.ok(ix.keys[7].isWritable && !ix.keys[7].isSigner, 'the fee comes from slot 7')
 })
 
-test('a list is closed by the treasury, and the flag decodes back out', () => {
-  const treasury = PublicKey.unique()
-  const ix = closeListIx({ treasury, listIndex: 3 })
-  assert.equal(hex(ix.data), hex(discriminator('global', 'close_list')) + '03000000')
+test('anyone opens a list; its owner, not the treasury, manages and closes it; the owner decodes back out', () => {
+  const [payer, owner, issuer] = [PublicKey.unique(), PublicKey.unique(), PublicKey.unique()]
+  const open = openListIx({ payer, owner, newIndex: 3 })
+  assert.equal(hex(open.data), hex(discriminator('global', 'open_list')))
   assert.deepEqual(
-    ix.keys.map((k) => [k.pubkey.toBase58(), k.isSigner, k.isWritable]),
+    open.keys.map((k) => [k.pubkey.toBase58(), k.isSigner, k.isWritable]),
     [
-      [configAddressFor(), false, false],
+      [configAddressFor(), false, true],
       [listAddress(3).toBase58(), false, true],
-      [treasury.toBase58(), true, false],
+      [payer.toBase58(), true, true],
+      [owner.toBase58(), true, false],
+      [SystemProgram.programId.toBase58(), false, false],
     ],
   )
-  const list = new Uint8Array(8 + 5456)
+  const add = addIssuerIx({ owner, listIndex: 3, issuer })
+  assert.equal(hex(add.data), hex(discriminator('global', 'add_issuer')) + '03000000' + hex(issuer.toBytes()))
+  const close = closeListIx({ owner, listIndex: 3 })
+  assert.equal(hex(close.data), hex(discriminator('global', 'close_list')) + '03000000')
+  for (const ix of [add, close]) {
+    assert.deepEqual(
+      ix.keys.map((k) => [k.pubkey.toBase58(), k.isSigner, k.isWritable]),
+      [
+        [listAddress(3).toBase58(), false, true],
+        [owner.toBase58(), true, false],
+      ],
+      'the list and its owner, and no config: the treasury has no say',
+    )
+  }
+  const list = new Uint8Array(8 + 5488)
   list[8 + 14] = 1
+  list.set(owner.toBytes(), 8 + 5456)
   assert.equal(decodeIdentityList(list).closed, true)
+  assert.equal(decodeIdentityList(list).owner.toBase58(), owner.toBase58())
   list[8 + 14] = 0
   assert.equal(decodeIdentityList(list).closed, false)
 })
@@ -286,6 +315,7 @@ test('an entry decodes back out of a log line', () => {
     wallet.toBytes(),
     new Uint8Array(Buffer.from(fixtures.proofs[0].code, 'hex')),
     new Uint8Array(new Uint32Array([7]).buffer),
+    FOUNDATION_ISSUER.toBytes(),
   ]
   const bytes = Buffer.concat(parts.map((p) => Buffer.from(p)))
   const id = PROGRAM_ID.toBase58()
@@ -295,6 +325,7 @@ test('an entry decodes back out of a log line', () => {
   assert.equal(event.did, did)
   assert.equal(event.wallet.toBase58(), wallet.toBase58())
   assert.equal(event.listIndex, 7)
+  assert.equal(event.listOwner.toBase58(), FOUNDATION_ISSUER.toBase58(), 'the entry names who vouched')
   assert.equal(hex(event.code), fixtures.proofs[0].code)
 
   // Any program can write those same bytes. An index that took them would badge any DID it was

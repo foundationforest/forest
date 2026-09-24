@@ -42,9 +42,21 @@ pub fn treasury_keypair() -> Keypair {
     kp
 }
 
+/// The placeholder foundation issuer key, and the public seed it is derived from so these tests can
+/// sign for it: list 0's owner and its first insert key, written at `init`. Replaced with the
+/// foundation's issuer key before the first deploy.
+pub const FOUNDATION_ISSUER_SEED: [u8; 32] = *b"REPLACE-BEFORE-DEPLOY-issuer-000";
+pub const FOUNDATION_ISSUER: Address = solana_address::address!("H7qXWNAeAvedhwuvhAkBYK2WE2nA3KgbufnRz38zFdzS");
+
+pub fn foundation_issuer_keypair() -> Keypair {
+    let kp = Keypair::new_from_array(FOUNDATION_ISSUER_SEED);
+    assert_eq!(kp.pubkey(), FOUNDATION_ISSUER, "the placeholder seed must derive the program's constant");
+    kp
+}
+
 pub const ROOT_HISTORY: usize = 128;
 pub const CONFIG_LEN: usize = 8 + 710;
-pub const LIST_LEN: usize = 8 + 5456;
+pub const LIST_LEN: usize = 8 + 5488;
 pub const CODE_TREE_LEN: usize = 8 + 1104;
 pub const USED_CODE_LEN: usize = 8 + 1;
 
@@ -213,7 +225,7 @@ pub struct RegisterArgs<'a> {
 
 /// The payer (network fee and the code account's rent), the profile's wallet (consent, named in
 /// the proof), and the fee authority with the token account the fee comes from (the profile's
-/// wallet itself, or a sponsor).
+/// wallet itself, or any other key paying for it).
 pub struct RegisterAccounts {
     pub payer: Address,
     pub profile_wallet: Address,
@@ -301,45 +313,46 @@ pub fn accept_treasury_ix(pending: Address) -> Instruction {
     }
 }
 
-pub fn open_list_ix(payer: Address, treasury: Address, new_index: u32) -> Instruction {
+/// `open_list`: anyone. `payer` pays the list's rent; `owner` signs and is recorded as the list's
+/// owner and its first insert key. They may be the same key.
+pub fn open_list_ix(payer: Address, owner: Address, new_index: u32) -> Instruction {
     Instruction {
         program_id: PROGRAM_ID,
         accounts: vec![
             AccountMeta::new(config_address(), false),
             AccountMeta::new(list_address(new_index), false),
             AccountMeta::new(payer, true),
-            AccountMeta::new_readonly(treasury, true),
+            AccountMeta::new_readonly(owner, true),
             AccountMeta::new_readonly(solana_system_interface::program::ID, false),
         ],
         data: discriminator("global", "open_list").to_vec(),
     }
 }
 
-pub fn issuer_ix(name: &str, treasury: Address, list_index: u32, issuer: Address) -> Instruction {
+/// `add_issuer` or `remove_issuer`: the list's owner signs. No config: the treasury has no say.
+pub fn issuer_ix(name: &str, owner: Address, list_index: u32, issuer: Address) -> Instruction {
     let mut data = discriminator("global", name).to_vec();
     data.extend_from_slice(&list_index.to_le_bytes());
     data.extend_from_slice(issuer.as_ref());
     Instruction {
         program_id: PROGRAM_ID,
         accounts: vec![
-            AccountMeta::new_readonly(config_address(), false),
             AccountMeta::new(list_address(list_index), false),
-            AccountMeta::new_readonly(treasury, true),
+            AccountMeta::new_readonly(owner, true),
         ],
         data,
     }
 }
 
-/// `close_list`: the same accounts as the issuer dials, and the list index.
-pub fn close_list_ix(treasury: Address, list_index: u32) -> Instruction {
+/// `close_list`: the same accounts as the issuer instructions, and the list index.
+pub fn close_list_ix(owner: Address, list_index: u32) -> Instruction {
     let mut data = discriminator("global", "close_list").to_vec();
     data.extend_from_slice(&list_index.to_le_bytes());
     Instruction {
         program_id: PROGRAM_ID,
         accounts: vec![
-            AccountMeta::new_readonly(config_address(), false),
             AccountMeta::new(list_address(list_index), false),
-            AccountMeta::new_readonly(treasury, true),
+            AccountMeta::new_readonly(owner, true),
         ],
         data,
     }
@@ -459,6 +472,9 @@ pub struct ListView {
     pub root: [u8; 32],
     pub roots: Vec<[u8; 32]>,
     pub issuers: Vec<Address>,
+    /// Bytes 5456..5488, appended: who opened the list and alone manages its insert keys. The zero
+    /// key when the account is too short to hold one, as a list made before session 14 was.
+    pub owner: Address,
 }
 
 pub fn read_list(data: &[u8]) -> ListView {
@@ -474,6 +490,7 @@ pub fn read_list(data: &[u8]) -> ListView {
         issuers: (0..issuer_count as usize)
             .map(|i| Address::try_from(&b[5200 + i * 32..5232 + i * 32]).unwrap())
             .collect(),
+        owner: b.get(5456..5488).map(|o| Address::try_from(o).unwrap()).unwrap_or_default(),
     }
 }
 
@@ -501,6 +518,9 @@ pub struct RegisteredEvent {
     pub wallet: Address,
     pub code: [u8; 32],
     pub list_index: u32,
+    /// The owner of the list the proof was made against, appended in session 14. The zero key if
+    /// the entry is too short to hold one.
+    pub list_owner: Address,
 }
 
 pub fn registered_events(logs: &[String]) -> Vec<RegisteredEvent> {
@@ -526,13 +546,28 @@ pub fn registered_events(logs: &[String]) -> Vec<RegisteredEvent> {
         at += 32;
         let code: [u8; 32] = bytes[at..at + 32].try_into().unwrap();
         at += 32;
-        out.push(RegisteredEvent {
-            market,
-            did,
-            wallet,
-            code,
-            list_index: u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap()),
-        });
+        let list_index = u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+        at += 4;
+        let list_owner = bytes.get(at..at + 32).map(|o| Address::try_from(o).unwrap()).unwrap_or_default();
+        out.push(RegisteredEvent { market, did, wallet, code, list_index, list_owner });
+    }
+    out
+}
+
+/// Every `ListOpened` entry in a log, as (list index, owner). The owner is the zero key when the
+/// entry is too short to hold one, as before session 14.
+pub fn list_opened_events(logs: &[String]) -> Vec<(u32, Address)> {
+    let want = discriminator("event", "ListOpened");
+    let mut out = Vec::new();
+    for line in logs {
+        let Some(payload) = line.strip_prefix("Program data: ") else { continue };
+        let Ok(bytes) = base64_decode(payload) else { continue };
+        if bytes.len() < 12 || bytes[..8] != want {
+            continue;
+        }
+        let index = u32::from_le_bytes(bytes[8..12].try_into().unwrap());
+        let owner = bytes.get(12..44).map(|o| Address::try_from(o).unwrap()).unwrap_or_default();
+        out.push((index, owner));
     }
     out
 }
@@ -568,6 +603,8 @@ pub struct Harness {
     /// Where the fee and swept rent go, and the key that turns every dial.
     pub treasury_key: Keypair,
     pub treasury: Address,
+    /// The foundation's issuer key: the placeholder the program writes at `init` as list 0's owner
+    /// and first insert key, held here so tests can sign for it.
     pub issuer: Keypair,
     /// The mint at the program's `USDC_MINT` constant.
     pub usdc: Address,
@@ -622,7 +659,7 @@ impl Harness {
         let payer = Keypair::new();
         let treasury_key = treasury_keypair();
         let treasury = treasury_key.pubkey();
-        let issuer = Keypair::new();
+        let issuer = foundation_issuer_keypair();
         svm.airdrop(&payer.pubkey(), 100_000_000_000).unwrap();
         svm.airdrop(&treasury, 1_000_000).unwrap();
 
@@ -635,16 +672,15 @@ impl Harness {
         Harness { svm, payer, treasury_key, treasury, issuer, usdc, treasury_tokens }
     }
 
-    /// A registry with one list, one issuer, USDC accepted, and the treasury ready to be paid.
-    /// `init` is sent by the payer alone: nothing about the treasury is in the instruction.
+    /// A registry with one list, USDC accepted, and the treasury ready to be paid. `init` is sent
+    /// by the payer alone: nothing about the treasury or the list's owner is in the instruction.
+    /// List 0 opens owned by the foundation's issuer key, which is also its first insert key, so
+    /// nothing else is needed before `insert`.
     pub fn new() -> Self {
         let mut h = Harness::bare();
         let payer_key = h.payer.pubkey();
-        let tk = h.treasury;
         let usdc = h.usdc;
         h.send(&[init_ix(payer_key, usdc)], &[Harness::PAYER]).expect("init");
-        h.send(&[issuer_ix("add_issuer", tk, 0, h.issuer.pubkey())], &[Harness::PAYER, Harness::TREASURY])
-            .expect("add_issuer");
         h
     }
 
@@ -702,6 +738,18 @@ impl Harness {
             .expect("insert_identity");
     }
 
+    /// `insert_identity` signed by any insert key, such as the owner of a list a stranger opened.
+    pub fn insert_as(&mut self, issuer: &Keypair, list_index: u32, commitment: [u8; 32]) -> Result<litesvm::types::TransactionMetadata, String> {
+        self.send_signed(&[insert_identity_ix(issuer.pubkey(), list_index, commitment)], &[issuer])
+    }
+
+    /// Anyone opens the next list: `owner` pays its rent and owns it. Returns the new index.
+    pub fn open_list_as(&mut self, owner: &Keypair) -> Result<(u32, litesvm::types::TransactionMetadata), String> {
+        let index = self.config().list_count;
+        let meta = self.send_signed(&[open_list_ix(owner.pubkey(), owner.pubkey(), index)], &[owner])?;
+        Ok((index, meta))
+    }
+
     pub fn account(&self, address: &Address) -> Account {
         self.svm.get_account(address).unwrap_or_else(|| panic!("no account at {address}"))
     }
@@ -714,6 +762,10 @@ impl Harness {
     }
     pub fn code_tree(&self) -> CodeTreeView {
         read_code_tree(&self.account(&code_tree_address()).data)
+    }
+
+    pub fn lamports_of(&self, address: &Address) -> u64 {
+        self.svm.get_account(address).map(|a| a.lamports).unwrap_or(0)
     }
 
     /// The treasury's own key, so a test can make it sign outside `send`.

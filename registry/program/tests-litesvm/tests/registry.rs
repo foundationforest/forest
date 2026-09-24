@@ -30,8 +30,8 @@ fn ready() -> (Harness, Fixtures) {
 }
 
 /// A registration: the profile's own wallet (from the fixture) signs, and `fee_wallet` pays the fee
-/// from `tokens`. When `fee_wallet` is the profile's wallet that is the paid path; otherwise it is a
-/// sponsor paying under its own policy.
+/// from `tokens`. When `fee_wallet` is the profile's wallet that is the paid path; otherwise another
+/// key pays for it, which the program cannot tell apart.
 fn register(
     h: &mut Harness,
     p: &FixtureProof,
@@ -106,6 +106,7 @@ fn two_humans_register_in_two_markets_each() {
         assert_eq!(events[0].wallet.to_string(), p.wallet, "the entry names the profile's wallet");
         assert_eq!(events[0].code, p.code_bytes());
         assert_eq!(events[0].list_index, 0);
+        assert_eq!(events[0].list_owner, FOUNDATION_ISSUER, "and the owner of the list that vouched");
 
         // One account per code: nine bytes, owned by the registry, holding only its bump.
         let account = h.account(&used_code_address(&p.code_bytes()));
@@ -137,11 +138,10 @@ fn two_humans_register_in_two_markets_each() {
 fn a_second_list_is_opened_and_a_proof_against_it_is_accepted() {
     let (mut h, f) = ready();
 
-    let (payer, tk) = (h.payer.pubkey(), h.treasury_key.pubkey());
-    h.send(&[open_list_ix(payer, tk, 1)], &[Harness::PAYER, Harness::TREASURY]).expect("open_list");
+    // The foundation's issuer opens a second list of its own: it owns it and inserts at once.
+    let (payer, issuer) = (h.payer.pubkey(), h.issuer.pubkey());
+    h.send(&[open_list_ix(payer, issuer, 1)], &[Harness::PAYER, Harness::ISSUER]).expect("open_list");
     assert_eq!(h.config().list_count, 2);
-    let issuer = h.issuer.pubkey();
-    h.send(&[issuer_ix("add_issuer", tk, 1, issuer)], &[Harness::PAYER, Harness::TREASURY]).expect("add_issuer");
     for leaf in &f.list(1).leaves {
         h.insert(1, dec_to_be32(leaf));
     }
@@ -151,7 +151,7 @@ fn a_second_list_is_opened_and_a_proof_against_it_is_accepted() {
     let (wallet, tokens) = h.wallet_with(h.usdc, 1_000_000);
     register(&mut h, p, TUTORS, 1, &wallet, tokens).expect("a proof against list 1");
     assert_eq!(h.code_tree().count, 1);
-    println!("list 1 opened, its own issuer added, and a proof against it accepted");
+    println!("list 1 opened by its owner, who inserts into it, and a proof against it accepted");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -217,10 +217,8 @@ fn a_code_cannot_be_used_twice() {
 #[test]
 fn a_proof_for_one_list_is_rejected_against_another() {
     let (mut h, f) = ready();
-    let (payer, tk) = (h.payer.pubkey(), h.treasury_key.pubkey());
-    h.send(&[open_list_ix(payer, tk, 1)], &[Harness::PAYER, Harness::TREASURY]).expect("open_list");
-    let issuer = h.issuer.pubkey();
-    h.send(&[issuer_ix("add_issuer", tk, 1, issuer)], &[Harness::PAYER, Harness::TREASURY]).expect("add_issuer");
+    let (payer, issuer) = (h.payer.pubkey(), h.issuer.pubkey());
+    h.send(&[open_list_ix(payer, issuer, 1)], &[Harness::PAYER, Harness::ISSUER]).expect("open_list");
     for leaf in &f.list(1).leaves {
         h.insert(1, dec_to_be32(leaf));
     }
@@ -289,10 +287,11 @@ fn an_unauthorised_key_cannot_insert() {
     let err = h.send_signed(&[ix], &[&stranger]).expect_err("must be rejected");
     assert!(err.contains("may not insert"), "{err}");
 
-    // And once the treasury key removes an issuer, that key cannot insert either.
-    let tk = h.treasury_key.pubkey();
+    // And once the list's owner removes an insert key, that key cannot insert either: here the
+    // owner removes its own, and stays the owner.
     let issuer = h.issuer.pubkey();
-    h.send(&[issuer_ix("remove_issuer", tk, 0, issuer)], &[Harness::PAYER, Harness::TREASURY]).expect("remove_issuer");
+    h.send(&[issuer_ix("remove_issuer", issuer, 0, issuer)], &[Harness::PAYER, Harness::ISSUER]).expect("remove_issuer");
+    assert_eq!(h.list(0).owner, issuer, "removing its own insert key leaves the owner the owner");
     assert_eq!(h.list(0).issuer_count, 0);
     let before = h.list(0).leaf_count;
     let err = h
@@ -307,15 +306,10 @@ fn an_unauthorised_key_cannot_insert() {
 fn only_the_treasury_changes_settings() {
     let (mut h, _f) = ready();
     let stranger = Keypair::new();
-    let payer = h.payer.pubkey();
-    let issuer = h.issuer.pubkey();
 
+    // The treasury's dials are the accepted tokens and the handover. Nothing else is one.
     for (what, ix) in [
-        ("open_list", open_list_ix(payer, stranger.pubkey(), 1)),
-        ("add_issuer", issuer_ix("add_issuer", stranger.pubkey(), 0, stranger.pubkey())),
-        ("remove_issuer", issuer_ix("remove_issuer", stranger.pubkey(), 0, issuer)),
         ("add_token", add_token_ix(stranger.pubkey(), h.usdc, QUARTER_USDC)),
-        ("close_list", close_list_ix(stranger.pubkey(), 0)),
         ("propose_treasury", propose_treasury_ix(stranger.pubkey(), Some(stranger.pubkey()))),
     ] {
         let err = h.send_signed(&[ix], &[&stranger]).expect_err("must be rejected");
@@ -327,8 +321,8 @@ fn only_the_treasury_changes_settings() {
     let config = h.config();
     assert_eq!(config.treasury, TREASURY, "and the treasury is still the constant");
     assert_eq!(config.pending_treasury, Address::default(), "and nothing is pending");
-    assert!(!h.list(0).closed, "and list 0 is still open");
-    println!("a stranger cannot open or close a list, add or remove an issuer, add a token, or take the treasury");
+    assert_eq!(config.mints, vec![USDC_MINT], "and no token was added");
+    println!("a stranger cannot add a token or take the treasury");
 }
 
 #[test]
@@ -550,10 +544,9 @@ fn the_profiles_wallet_signs_on_the_paid_and_the_sponsored_path() {
 #[test]
 fn a_closed_list_takes_no_new_members_and_every_proof_against_it_stays_valid() {
     let (mut h, f) = ready();
-    let tk = h.treasury;
     let issuer = h.issuer.pubkey();
     let before = h.list(0);
-    let meta = h.send(&[close_list_ix(tk, 0)], &[Harness::PAYER, Harness::TREASURY]).expect("close_list");
+    let meta = h.send(&[close_list_ix(issuer, 0)], &[Harness::PAYER, Harness::ISSUER]).expect("close_list");
     assert!(meta.logs.iter().any(|l| l.starts_with("Program data: ")), "an entry in the log");
     let after = h.list(0);
     assert!(after.closed);
@@ -565,7 +558,7 @@ fn a_closed_list_takes_no_new_members_and_every_proof_against_it_stays_valid() {
         .expect_err("closed");
     assert!(err.contains("ListClosed") || err.contains("closed to new members"), "{err}");
     // Closed once, for good: no second close, and no instruction reopens or deletes it.
-    let err = h.send(&[close_list_ix(tk, 0)], &[Harness::PAYER, Harness::TREASURY]).expect_err("twice");
+    let err = h.send(&[close_list_ix(issuer, 0)], &[Harness::PAYER, Harness::ISSUER]).expect_err("twice");
     assert!(err.contains("ListClosed") || err.contains("closed to new members"), "{err}");
 
     // The members already in it register as before, against the roots it kept.
@@ -577,12 +570,133 @@ fn a_closed_list_takes_no_new_members_and_every_proof_against_it_stays_valid() {
 
     // New joiners go to a new list; closing one list does not touch another.
     let payer = h.payer.pubkey();
-    h.send(&[open_list_ix(payer, tk, 1)], &[Harness::PAYER, Harness::TREASURY]).expect("open_list");
-    h.send(&[issuer_ix("add_issuer", tk, 1, issuer)], &[Harness::PAYER, Harness::TREASURY]).expect("add_issuer");
+    h.send(&[open_list_ix(payer, issuer, 1)], &[Harness::PAYER, Harness::ISSUER]).expect("open_list");
     h.insert(1, dec_to_be32("12345"));
     assert!(!h.list(1).closed);
     assert!(h.list(0).closed);
     println!("list 0 closed: no inserts, no second close; its members still register; list 1 takes new joiners");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Lists and their owners (session 14: issuers are open)
+// ---------------------------------------------------------------------------------------------
+
+#[test]
+fn list_0_opens_at_init_owned_by_the_foundations_issuer_key_which_is_its_first_insert_key() {
+    let mut h = Harness::bare();
+    let (payer, usdc) = (h.payer.pubkey(), h.usdc);
+    let meta = h.send(&[init_ix(payer, usdc)], &[Harness::PAYER]).expect("init");
+    let list = h.list(0);
+    assert_eq!(list.owner, FOUNDATION_ISSUER, "list 0 is the foundation issuer's, a program constant");
+    assert_eq!(list.issuers, vec![FOUNDATION_ISSUER], "and that key is its first insert key");
+    assert_eq!(list_opened_events(&meta.logs), vec![(0, FOUNDATION_ISSUER)], "init logs list 0's opening and owner");
+    // It inserts at once, with no other step.
+    h.insert(0, dec_to_be32("12345"));
+    assert_eq!(h.list(0).leaf_count, 1);
+    println!("init opens list 0 owned by the foundation's issuer key, which inserts at once");
+}
+
+#[test]
+fn anyone_opens_a_list_pays_its_rent_owns_it_and_inserts_at_once() {
+    let (mut h, _f) = ready();
+    let stranger = Keypair::new();
+    h.svm.airdrop(&stranger.pubkey(), 1_000_000_000).unwrap();
+    let before = h.lamports_of(&stranger.pubkey());
+    let (index, meta) = h.open_list_as(&stranger).expect("anyone may open a list; the treasury signs nothing");
+    assert_eq!(index, 1);
+    assert_eq!(h.config().list_count, 2);
+    let rent = h.svm.minimum_balance_for_rent_exemption(LIST_LEN);
+    assert_eq!(h.lamports_of(&stranger.pubkey()), before - rent, "the opener paid the list's rent, and only that");
+    assert_eq!(h.account(&list_address(1)).data.len(), LIST_LEN);
+    let list = h.list(1);
+    assert_eq!(list.owner, stranger.pubkey(), "the list records its owner");
+    assert_eq!(list.issuers, vec![stranger.pubkey()], "who is its first insert key");
+    assert_eq!(list_opened_events(&meta.logs), vec![(1, stranger.pubkey())], "the log names the owner");
+    h.insert_as(&stranger, 1, dec_to_be32("12345")).expect("the owner inserts at once");
+    assert_eq!(h.list(1).leaf_count, 1);
+
+    // The payer and the owner may be two keys; the owner must sign, so a list is never recorded
+    // as owned by a key that did not agree to it.
+    let owner = Keypair::new();
+    let payer = h.payer.pubkey();
+    h.svm.expire_blockhash();
+    let msg = Message::new(&[open_list_ix(payer, owner.pubkey(), 2)], Some(&payer));
+    let mut tx = Transaction::new_unsigned(msg);
+    tx.partial_sign(&[&h.payer], h.svm.latest_blockhash());
+    let err = h.send_tx(tx).expect_err("the owner did not sign");
+    assert!(err.contains("Signature"), "{err}");
+    assert_eq!(h.config().list_count, 2, "and no list opened");
+    h.send_signed(&[open_list_ix(payer, owner.pubkey(), 2)], &[&owner]).expect("paid by one key, owned by another");
+    assert_eq!(h.list(2).owner, owner.pubkey());
+    println!("a stranger opened list 1, paid its rent, owns it and inserted; list 2 paid by one key and owned by another");
+}
+
+#[test]
+fn only_a_lists_owner_adds_or_removes_its_insert_keys_or_closes_it() {
+    let (mut h, _f) = ready();
+    let stranger = Keypair::new();
+    h.svm.airdrop(&stranger.pubkey(), 1_000_000_000).unwrap();
+    h.open_list_as(&stranger).expect("open list 1");
+    let treasury = h.treasury_signer();
+    let foundation = h.issuer.insecure_clone();
+    let helper = Keypair::new().pubkey();
+
+    // Nobody but a list's owner touches its keys or closes it: not the treasury, not the owner of
+    // another list.
+    for (who, key, list) in [("the treasury", &treasury, 0u32), ("the treasury", &treasury, 1), ("list 1's owner", &stranger, 0), ("list 0's owner", &foundation, 1)] {
+        let owner_key = h.list(list).owner;
+        for (what, ix) in [
+            ("add_issuer", issuer_ix("add_issuer", key.pubkey(), list, helper)),
+            ("remove_issuer", issuer_ix("remove_issuer", key.pubkey(), list, owner_key)),
+            ("close_list", close_list_ix(key.pubkey(), list)),
+        ] {
+            let err = h.send_signed(&[ix], &[key]).expect_err("must be rejected");
+            assert!(err.contains("only the list's owner"), "{who} {what} on list {list}: {err}");
+        }
+    }
+    for list in [0, 1] {
+        let l = h.list(list);
+        assert!(!l.closed && l.issuers == vec![l.owner], "list {list} untouched");
+    }
+
+    // Its owner does all three.
+    h.send_signed(&[issuer_ix("add_issuer", stranger.pubkey(), 1, helper)], &[&stranger]).expect("add");
+    assert_eq!(h.list(1).issuers, vec![stranger.pubkey(), helper]);
+    h.send_signed(&[issuer_ix("remove_issuer", stranger.pubkey(), 1, stranger.pubkey())], &[&stranger]).expect("remove its own");
+    assert_eq!(h.list(1).issuers, vec![helper]);
+    assert_eq!(h.list(1).owner, stranger.pubkey(), "and stays the owner");
+    h.send_signed(&[close_list_ix(stranger.pubkey(), 1)], &[&stranger]).expect("close");
+    assert!(h.list(1).closed);
+    h.send_signed(&[issuer_ix("add_issuer", foundation.pubkey(), 0, helper)], &[&foundation]).expect("list 0's owner, on list 0");
+    assert_eq!(h.list(0).issuers, vec![FOUNDATION_ISSUER, helper]);
+    println!("the treasury and other lists' owners are refused; each list's owner manages its keys and closes it");
+}
+
+#[test]
+fn the_entry_names_the_list_and_its_owner() {
+    let (mut h, f) = ready();
+    // A stranger opens list 1 and vouches for its humans.
+    let stranger = Keypair::new();
+    h.svm.airdrop(&stranger.pubkey(), 1_000_000_000).unwrap();
+    h.open_list_as(&stranger).expect("open list 1");
+    for leaf in &f.list(1).leaves {
+        h.insert_as(&stranger, 1, dec_to_be32(leaf)).expect("insert");
+    }
+    let p = f.proof("carol-tutors-list1");
+    let (wallet, tokens) = h.wallet_with(h.usdc, 1_000_000);
+    let meta = register(&mut h, p, TUTORS, 1, &wallet, tokens).expect("a proof against list 1");
+    let events = registered_events(&meta.logs);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].list_index, 1, "the entry names the list");
+    assert_eq!(events[0].list_owner, stranger.pubkey(), "and its owner, so an index can weigh who vouched");
+
+    // And against list 0, the foundation's issuer key.
+    let p = f.proof("alice-tutors");
+    let (wallet, tokens) = h.profile_with(p, h.usdc, 1_000_000);
+    let meta = register(&mut h, p, TUTORS, 0, &wallet, tokens).expect("a proof against list 0");
+    let events = registered_events(&meta.logs);
+    assert_eq!((events[0].list_index, events[0].list_owner), (0, FOUNDATION_ISSUER));
+    println!("each entry names its list and the list's owner");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -705,18 +819,18 @@ fn what_a_registration_costs() {
     let (mut h, f) = ready();
     println!("\n== one registration, one proof, compressed points ==");
     // The paid path: the profile's wallet signs and pays the fee; a fee payer covers the rest.
-    // The sponsored path: the sponsor is the fee payer and pays the fee from its own tokens, and
-    // the profile's wallet signs for consent.
+    // The other path: one key pays everything for someone else, and the profile's wallet signs
+    // for consent. The program cannot tell the two apart and does not need to.
     let payer = h.payer.insecure_clone();
-    let sponsor_tokens = h.token_account_for(h.usdc, payer.pubkey());
-    h.svm.set_account(sponsor_tokens, spl_token_account(&h.usdc, &payer.pubkey(), 1_000_000)).unwrap();
-    for (name, path) in [("alice-tutors", "paid"), ("bob-tutors", "sponsored")] {
+    let payer_tokens = h.token_account_for(h.usdc, payer.pubkey());
+    h.svm.set_account(payer_tokens, spl_token_account(&h.usdc, &payer.pubkey(), 1_000_000)).unwrap();
+    for (name, path) in [("alice-tutors", "paid"), ("bob-tutors", "paid for by another key")] {
         let p = f.proof(name);
         let profile = p.wallet_keypair();
         let (fee_authority, fee_tokens) = if path == "paid" {
             h.profile_with(p, h.usdc, 1_000_000)
         } else {
-            (payer.insecure_clone(), sponsor_tokens)
+            (payer.insecure_clone(), payer_tokens)
         };
         let accounts = RegisterAccounts {
             payer: payer.pubkey(),
@@ -882,17 +996,11 @@ fn init_runs_once_and_writes_only_the_constants() {
     println!("init by a stranger writes the constants; a second init: {}", err.lines().next().unwrap());
 }
 
-/// Every dial, tried from one key: the ones that must pass `has_one = treasury`.
+/// Every dial, tried from one key: the ones that must pass `has_one = treasury`. The lists are not
+/// among them: a list is its owner's.
 fn dials(h: &Harness, key: Address) -> Vec<(&'static str, Instruction)> {
-    let payer = h.payer.pubkey();
-    let issuer = h.issuer.pubkey();
-    let next_list = h.config().list_count;
     vec![
-        ("open_list", open_list_ix(payer, key, next_list)),
-        ("add_issuer", issuer_ix("add_issuer", key, 0, key)),
-        ("remove_issuer", issuer_ix("remove_issuer", key, 0, issuer)),
         ("add_token", add_token_ix(key, h.usdc, USDC_FEE)),
-        ("close_list", close_list_ix(key, 0)),
         ("propose_treasury", propose_treasury_ix(key, Some(key))),
     ]
 }
@@ -909,7 +1017,6 @@ fn a_handover_is_proposed_then_accepted_and_only_then_does_anything_move() {
     let (mut h, f) = ready();
     let old = h.treasury;
     let old_key = h.treasury_signer();
-    let payer = h.payer.pubkey();
     let usdc = h.usdc;
 
     // Not the zero key, and not the current key.
@@ -936,7 +1043,6 @@ fn a_handover_is_proposed_then_accepted_and_only_then_does_anything_move() {
     // swept. The pending key can do nothing yet.
     h.send(&[add_token_ix(old, usdc, USDC_FEE)], &[Harness::PAYER, Harness::TREASURY])
         .expect_err("USDC is already accepted: past has_one, refused on the merits");
-    h.send(&[open_list_ix(payer, old, 1)], &[Harness::PAYER, Harness::TREASURY]).expect("the old key still opens a list");
     let p = f.proof("alice-tutors");
     let (wallet, tokens) = h.wallet_with(usdc, 1_000_000);
     register(&mut h, p, TUTORS, 0, &wallet, tokens).expect("paid to the old treasury while a proposal is pending");
@@ -987,7 +1093,6 @@ fn a_handover_is_proposed_then_accepted_and_only_then_does_anything_move() {
     h.send(&[sweep_rent_ix(&target, multisig.pubkey())], &[Harness::PAYER]).expect("swept to the new treasury");
 
     // The new treasury holds every dial, the handover included, and can hand back the same way.
-    h.send_signed(&[open_list_ix(payer, multisig.pubkey(), 2)], &[&multisig]).expect("the new treasury opens a list");
     h.send_signed(&[propose_treasury_ix(multisig.pubkey(), Some(old))], &[&multisig]).expect("and proposes again");
     h.send_signed(&[accept_treasury_ix(old)], &[&old_key]).expect("and the old key accepts");
     assert_eq!(h.config().treasury, old);
@@ -1023,8 +1128,9 @@ fn a_second_proposal_overwrites_the_first_and_proposing_nothing_clears_it() {
     let nobody = Address::new_unique();
     h.send(&[propose_treasury_ix(old, Some(nobody))], &[Harness::PAYER, Harness::TREASURY]).expect("propose a typo");
     assert_eq!(h.config().pending_treasury, nobody);
-    h.send(&[open_list_ix(h.payer.pubkey(), old, 1)], &[Harness::PAYER, Harness::TREASURY])
-        .expect("and the treasury still turns every dial");
+    let usdc = h.usdc;
+    let err = h.send(&[add_token_ix(old, usdc, USDC_FEE)], &[Harness::PAYER, Harness::TREASURY]).expect_err("already accepted");
+    assert!(err.contains("already accepts this mint"), "past has_one, so the treasury still holds its dials: {err}");
     h.send(&[propose_treasury_ix(old, Some(second.pubkey()))], &[Harness::PAYER, Harness::TREASURY]).expect("and corrects it");
     h.send_signed(&[accept_treasury_ix(second.pubkey())], &[&second]).expect("accepted by the corrected key");
     assert_eq!(h.config().treasury, second.pubkey());

@@ -63,7 +63,8 @@ pub fn vault_address(escrow: &Address, mint: &Address) -> Address {
 }
 
 /// The buyer's refund address: the buyer's associated token account for the mint. The only
-/// account `recover_late` and `close_unaccepted` pay the buyer at.
+/// account any ending, `recover_late` and `close_unaccepted` pay the buyer at (session 14: every
+/// ending, not only the two anyone may send).
 pub fn refund_address(buyer: &Address, mint: &Address) -> Address {
     ata_address(buyer, mint)
 }
@@ -194,7 +195,8 @@ pub fn object_ix(escrow: Address, vault: Address, buyer: Address) -> Instruction
 }
 
 /// The accounts every ending touches, in order: escrow, vault, buyer_tokens, seller_tokens,
-/// rent_payer, token program. Signers, if any, follow.
+/// rent_payer, token program. Signers, if any, follow. `buyer_tokens` must be the buyer's refund
+/// address; tests put other accounts there to see them refused.
 #[derive(Clone, Copy)]
 pub struct SettleAccounts {
     pub escrow: Address,
@@ -813,6 +815,8 @@ pub struct Harness {
     pub arbiter: Keypair,
     /// A six-decimal classic SPL Token mint.
     pub mint: Address,
+    /// The account the buyer pays from: one it owns, but not its standard account. Endings never
+    /// pay here; they pay the refund address (`refund()`), which the harness makes empty.
     pub buyer_tokens: Address,
     pub seller_tokens: Address,
 }
@@ -838,6 +842,8 @@ impl Harness {
         svm.set_account(mint, spl_mint_account(6, TOKEN_PROGRAM)).unwrap();
         let buyer_tokens = Address::new_unique();
         svm.set_account(buyer_tokens, spl_token_account(&mint, &buyer.pubkey(), BUYER_START)).unwrap();
+        // The buyer's refund address, its standard account for the mint, empty and ready.
+        svm.set_account(refund_address(&buyer.pubkey(), &mint), spl_token_account(&mint, &buyer.pubkey(), 0)).unwrap();
         let seller_tokens = Address::new_unique();
         svm.set_account(seller_tokens, spl_token_account(&mint, &seller.pubkey(), 0)).unwrap();
 
@@ -953,6 +959,20 @@ impl Harness {
         refund_address(&self.buyer.pubkey(), &self.mint)
     }
 
+    /// What the buyer holds across the account it pays from and its refund address.
+    pub fn buyer_total(&self) -> u64 {
+        self.balance(&self.buyer_tokens) + if self.exists(&self.refund()) { self.balance(&self.refund()) } else { 0 }
+    }
+
+    /// Take away the buyer's (empty) refund address, as a buyer who closed it would, so a test can
+    /// see it made again.
+    pub fn drop_refund(&mut self) {
+        let refund = self.refund();
+        assert_eq!(self.balance(&refund), 0, "only an empty account can be closed");
+        self.svm.set_account(refund, Account::default()).unwrap();
+        assert!(!self.exists(&refund));
+    }
+
     /// `recover_late`, sent and paid for by `caller`.
     pub fn recover_late(&mut self, escrow: &Address, caller: &Keypair) -> Result<litesvm::types::TransactionMetadata, String> {
         let ix = recover_late_ix(*escrow, vault_address(escrow, &self.mint), self.buyer.pubkey(), self.mint, caller.pubkey());
@@ -982,7 +1002,7 @@ impl Harness {
         SettleAccounts {
             escrow: *escrow,
             vault: vault_address(escrow, &self.mint),
-            buyer_tokens: self.buyer_tokens,
+            buyer_tokens: self.refund(),
             seller_tokens: self.seller_tokens,
             rent_payer: self.payer.pubkey(),
         }

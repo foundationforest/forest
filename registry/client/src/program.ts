@@ -27,6 +27,13 @@ export const TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9
  */
 export const TREASURY_PLACEHOLDER_SEED = new TextEncoder().encode('REPLACE-BEFORE-DEPLOY-treasury-0')
 export const TREASURY = new PublicKey('F35kGoXPCdZLdanwTGuShYXxAkmkpHP9LWgV7dNvKU5s')
+/**
+ * The foundation's issuer key: list 0's owner and its first insert key, written at `init`. Every
+ * other list is opened by anyone, who owns it. PLACEHOLDER: derived from the public seed below so
+ * tests can sign for it; replaced with the foundation's issuer key before the first deploy.
+ */
+export const FOUNDATION_ISSUER_PLACEHOLDER_SEED = new TextEncoder().encode('REPLACE-BEFORE-DEPLOY-issuer-000')
+export const FOUNDATION_ISSUER = new PublicKey('H7qXWNAeAvedhwuvhAkBYK2WE2nA3KgbufnRz38zFdzS')
 /** USDC, `mints[0]` forever. The program names the mainnet address; a devnet build names the other. */
 export const USDC_MINT = new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v')
 export const USDC_MINT_DEVNET = new PublicKey('4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU')
@@ -173,9 +180,14 @@ export function acceptTreasuryIx(args: {
   })
 }
 
+/**
+ * Open the next list. Anyone may: `payer` pays its rent, and `owner` signs and is recorded as the
+ * list's owner and its first insert key (they may be one key). `newIndex` is the config's
+ * `listCount` as read just before. The treasury has no say.
+ */
 export function openListIx(args: {
   payer: PublicKey
-  treasury: PublicKey
+  owner: PublicKey
   newIndex: number
   programId?: PublicKey
 }): TransactionInstruction {
@@ -186,7 +198,7 @@ export function openListIx(args: {
       rw(configAddress(programId)),
       rw(listAddress(args.newIndex, programId)),
       rw(args.payer, true),
-      ro(args.treasury, true),
+      ro(args.owner, true),
       ro(SystemProgram.programId),
     ],
     data: concat([discriminator('global', 'open_list')]),
@@ -195,32 +207,30 @@ export function openListIx(args: {
 
 function issuerIx(
   name: 'add_issuer' | 'remove_issuer',
-  args: { treasury: PublicKey; listIndex: number; issuer: PublicKey; programId?: PublicKey },
+  args: { owner: PublicKey; listIndex: number; issuer: PublicKey; programId?: PublicKey },
 ): TransactionInstruction {
   const programId = args.programId ?? PROGRAM_ID
   return new TransactionInstruction({
     programId,
-    keys: [
-      ro(configAddress(programId)),
-      rw(listAddress(args.listIndex, programId)),
-      ro(args.treasury, true),
-    ],
+    keys: [rw(listAddress(args.listIndex, programId)), ro(args.owner, true)],
     data: concat([discriminator('global', name), u32le(args.listIndex), args.issuer.toBytes()]),
   })
 }
 
+/** Let `issuer` insert into the list. The list's owner signs. */
 export const addIssuerIx = (args: Parameters<typeof issuerIx>[1]) => issuerIx('add_issuer', args)
+/** Stop `issuer` inserting into the list; nobody already in it is removed. The list's owner signs. */
 export const removeIssuerIx = (args: Parameters<typeof issuerIx>[1]) => issuerIx('remove_issuer', args)
 
 /**
- * Close a list to new members, for good. The treasury signs. Its members, its root and its last
+ * Close a list to new members, for good. The list's owner signs. Its members, its root and its last
  * 128 roots stay: every proof against it still verifies.
  */
-export function closeListIx(args: { treasury: PublicKey; listIndex: number; programId?: PublicKey }): TransactionInstruction {
+export function closeListIx(args: { owner: PublicKey; listIndex: number; programId?: PublicKey }): TransactionInstruction {
   const programId = args.programId ?? PROGRAM_ID
   return new TransactionInstruction({
     programId,
-    keys: [ro(configAddress(programId)), rw(listAddress(args.listIndex, programId)), ro(args.treasury, true)],
+    keys: [rw(listAddress(args.listIndex, programId)), ro(args.owner, true)],
     data: concat([discriminator('global', 'close_list'), u32le(args.listIndex)]),
   })
 }
@@ -315,9 +325,9 @@ export function sweepRentIx(args: {
 
 /**
  * Who signs a registration, and what pays. The payer covers the network fee and the code account's
- * rent (the fee payer, a sponsor). The profile's wallet signs for consent on every path, and the
- * proof names it. The fee authority owns `feeTokens`, which the fee comes from: the profile's
- * wallet itself on the paid path, or a sponsor.
+ * rent (a fee payer service, or the person). The profile's wallet signs for consent whoever pays,
+ * and the proof names it. The fee authority owns `feeTokens`, which the fee comes from: usually the
+ * profile's wallet itself. Any key may pay for another; the program cannot tell.
  */
 export type RegisterAccounts = {
   payer: PublicKey
@@ -414,11 +424,14 @@ export type IdentityListAccount = {
   leafCount: bigint
   index: number
   bump: number
-  /** Closed to new members by the treasury, for good. Proofs against it still verify. */
+  /** Closed to new members by its owner, for good. Proofs against it still verify. */
   closed: boolean
   root: Uint8Array
   roots: Uint8Array[]
+  /** Its insert keys; the owner's is the first when the list opens. */
   issuers: PublicKey[]
+  /** Who opened it and vouches for its members; the only key that changes its insert keys or closes it. */
+  owner: PublicKey
 }
 
 export function decodeIdentityList(data: Uint8Array): IdentityListAccount {
@@ -438,6 +451,7 @@ export function decodeIdentityList(data: Uint8Array): IdentityListAccount {
     root: b.subarray(16, 48),
     roots,
     issuers,
+    owner: new PublicKey(b.subarray(5456, 5488)),
   }
 }
 
@@ -455,6 +469,8 @@ export type RegisteredEvent = {
   wallet: PublicKey
   code: Uint8Array
   listIndex: number
+  /** The owner of the list the proof was made against: who vouched. An index weighs a badge by it. */
+  listOwner: PublicKey
 }
 
 /**
@@ -511,7 +527,10 @@ export function decodeRegisteredEvents(logs: string[], programId: PublicKey = PR
     at += 32
     const code = bytes.slice(at, at + 32)
     at += 32
-    out.push({ market, did, wallet, code, listIndex: readU32le(bytes, at) })
+    const listIndex = readU32le(bytes, at)
+    at += 4
+    const listOwner = new PublicKey(bytes.subarray(at, at + 32))
+    out.push({ market, did, wallet, code, listIndex, listOwner })
   }
   return out
 }

@@ -4,11 +4,11 @@
   "defs": {
     "main": {
       "type": "record",
-      "description": "A review of another profile, kept in the reviewer's own folder.",
+      "description": "A review of another profile, kept in the reviewer's own folder. Only who it is about is required: a review can be as thin as pointing at a person. What is missing weighs less; nothing is refused.",
       "key": "tid",
       "record": {
         "type": "object",
-        "required": ["subject", "rating", "text", "createdAt"],
+        "required": ["subject", "createdAt"],
         "properties": {
           "subject": {
             "type": "string",
@@ -25,11 +25,11 @@
             "maxGraphemes": 3000,
             "maxLength": 30000
           },
-          "escrow": {
+          "dealId": {
             "type": "string",
-            "description": "Escrow pointer: the escrow account's address, base58. Optional everywhere; a market's review evidence rule tells indexes to weigh a review without it near zero.",
+            "description": "The deal this review is about: the escrow account's address (base58) when an escrow exists, else 32 random bytes as lowercase hex, chosen when the deal began. Two reviews across one deal id are the two sides' receipts. Optional; an index weighs a review without one, or without evidence under it, near zero.",
             "minLength": 32,
-            "maxLength": 44
+            "maxLength": 64
           },
           "createdAt": {
             "type": "string",

@@ -702,3 +702,76 @@ Log of what was built, learned, and left open, appended at the end of every sess
   - `testsite/dist`'s keys bundle, which predates `centralWallet`;
   - the registry client's validator test, which needs `--test-force-exit`;
   - devnet, Kora, a phone, a face check, the paid review and the lawyer pass.
+
+## 2026-09-24: session 14, Roots, open issuers, no sponsorship in the foundation, reviews optional
+
+- **Build order:** outside the numbered list; asked for by Carlos in five parts. Both sealed programs changed, locally only. Nothing deployed anywhere.
+- **Decided (by Carlos; built or written here), one reason each:**
+  - **The app is Roots**, renamed from Soil; where a domain is named, "Roots' own domain". Because that is the product's name.
+  - **Issuers are open.** Anyone opens a list, pays its rent, owns it, and alone adds or removes its insert keys or closes it; the treasury gates no list and no issuer; lists are never deleted; `init` still opens list 0 with the foundation's issuer key. Because who vouches for a human is a slot anyone must be able to fill, like indexes and apps.
+  - **The entry names the list and its owner.** Because an index weighs a badge by who vouched.
+  - **Extra vouches ride in the folder**, with no program change: proofs of the same secret against other issuers' lists, checked against their roots on chain. One badge per market per issuer; the market weighs which issuers count. Because the lists' roots are already public, so nothing on chain needs to know.
+  - **Nothing in the foundation is built for sponsorship.** The program charges everyone; a sponsor is only a payer who pays for someone else, which the program cannot tell and never needs to. Because Forest builds for people who pay; anything paid on someone's behalf is an outside layer, never in the foundation.
+  - **The fee payer is Kora, configured:** it co-signs a person's transaction and charges the network fee in their dollar token. Because people should never need SOL.
+  - **The treasury's dials are the accepted tokens and their fees, the handover, and where the rent sweep pays.** Because lists are now their owners'.
+  - **Every ending that returns money to the buyer pays only the buyer's standard token account for the mint**, the endings anyone may trigger included. Because then "refund address fixed at creation" is fully true: no ending can send the buyer's money anywhere else.
+  - **A review requires only whom it is about;** rating, text and `dealId` (the escrow's address, else 32 random bytes as hex) are optional. Because a review can be as thin as pointing at a person; what is missing weighs less; nothing is refused.
+  - **Names are a later feature, not core.** At creation the app gives a folder the random name the folder software requires, under its own domain, and nobody sees it; readable names under forest.foundation come later, paid, random or chosen by auction, after Roots. Because core stays minimal; a name is convenience, not identity; the DID is the identity.
+  - **Bring your own key is dropped.** One way in: the passkey makes the seed; the 24 words are the optional backup and the way to carry the seed anywhere, a backup, not a login. Because the words already carry the seed anywhere, so a second way in adds a path to build and secure and nothing a person needs.
+  - **Settled in this session's planning (Carlos):**
+    - list 0's owner is a new program constant, `FOUNDATION_ISSUER`, not the treasury, so the treasury touches no list;
+    - a list's owner is also its first insert key, so an opener inserts at once;
+    - `CLAUDE.md`'s three lines are reworded in Carlos's words: Kora as the fee payer service (no sponsorship built in); "the program charges everyone; any payer may pay for someone else; the program cannot tell and never needs to"; "names are a later feature, not core; the DID is the identity";
+    - a review's `createdAt` stays required, as on every shape, since the app writes it and the reviewer says nothing by it.
+- **Closed by the above:**
+  - session 12's open 6 (the endings the buyer does not sign paid any account the buyer owns) and 8 (`CLAUDE.md`'s names rule);
+  - session 12's open 10, third question (whether a badged profile's handle moves to forest.foundation by default): no, readable names are later and paid;
+  - session 13's open 4 (the review shape, now built), 5 (`CLAUDE.md` unchanged, now changed) and 6 (`feepayer/README.md`'s first line, now rewritten);
+  - session 10's standing chore: the review lexicon calling its pointer `escrow`;
+  - the handoff's "what handle a new profile carries at genesis": the app's random name under its own domain;
+  - session 13's "a seed from an existing wallet's signature, not built": dropped, and in "Don't resurrect".
+- **Chosen, not decided** (the simplest option; each reversible before anything ships):
+  - **A new list's payer and owner are two account slots, and the owner signs.** Like `register`'s roles; the signature means no list is recorded as owned by a key that did not agree, or that nobody holds.
+  - **The owner is appended** to the list account (5,456 bytes after the discriminator become 5,488), to `ListOpened` and to `Registered`, so every earlier offset and field stays. `add_issuer`, `remove_issuer` and `close_list` no longer take the config and check the owner in the handler (`NotTheListOwner`, appended). `init` logs `ListOpened` for list 0 too.
+  - **The placeholder issuer key** is derived from the public seed `REPLACE-BEFORE-DEPLOY-issuer-000`, like the treasury's, and is a second deploy blocker (`finding_the_placeholder_issuer_key_is_anyones_key`, deploy checklist step 2).
+  - **The endings check the buyer's account by address alone,** not by who holds it. A classic token account can be handed to another key; with its holder checked, a buyer could hand its account away and block the seller's release by silence forever (`a_buyer_who_hands_its_refund_address_to_another_key_cannot_block_the_sellers_release`). `NotTheRefundAddress` is appended. `recover_late` and `close_unaccepted` were left as they were.
+  - **A missing refund address is made by whoever sends the ending,** first in the same transaction, the standard idempotent way (`makeRefundAddressIx` in the client). The program makes it itself only in the two instructions that already did.
+  - **The escrow client's ending builders take `buyer` and `mint`** in place of `buyerTokens`, and name the refund address themselves, so a caller cannot name another account.
+  - **A malformed `dealId` is refused** by the validator (neither base58 of 32 bytes nor 64 lowercase hex): a pointer that points at nothing is broken, not thin.
+  - **Roots runs the fee payer instance** in the handoff's foundation-and-product table, because operations are paid in products; the foundation keeps the configuration. The old table had the foundation run a registration fee payer only to sponsor.
+  - **`feepayer/README.md` says "none of the person's keys"** where Carlos wrote "holds no keys": Kora signs as the payer, so it holds one key, its own.
+  - **`docs/decisions/` still say Soil.** They are dated reports, left as written, as session 13 left adversarial review 1.
+- **Built:**
+  - **`registry/program/`:** `open_list` for anyone, a list owner, owner-only `add_issuer`, `remove_issuer` and `close_list`, list 0 owned by `FOUNDATION_ISSUER` at `init`, `list_owner` in the entry, `owner` in `ListOpened`. The comments say nothing of sponsors.
+  - **`registry/program/tests-litesvm/`:** the harness writes the new format; 44 tests (39 before): five new, `list_0_opens_at_init_owned_by_the_foundations_issuer_key_which_is_its_first_insert_key`, `anyone_opens_a_list_pays_its_rent_owns_it_and_inserts_at_once`, `only_a_lists_owner_adds_or_removes_its_insert_keys_or_closes_it`, `the_entry_names_the_list_and_its_owner`, `finding_the_placeholder_issuer_key_is_anyones_key`; the treasury-dial tests narrowed to the tokens and the handover. The property test's model: anyone opens a list; per-list owners; a new invariant R7 (a list's owner never changes, and only it changes the list's keys or closes it); R6 checks the entry's list and owner.
+  - **`registry/client/`:** `openListIx({ payer, owner })`, owner-signed `addIssuerIx`, `removeIssuerIx` and `closeListIx`, `decodeIdentityList().owner`, `RegisteredEvent.listOwner`, `FOUNDATION_ISSUER` and a test that it matches the program; 16 unit tests (15 before). The validator test opens a second list as a stranger, and registers with the fee payer paying SOL and the profile paying the 25 cents.
+  - **`escrow/program/`:** `Escrow::refund_address()`; `Settle`, `SettleAs`, `SettleBoth`, `Withdraw` and `CloseUnfunded` take only the refund address as the buyer's account.
+  - **`escrow/program/tests-litesvm/`:** the harness gives the buyer an empty standard account and pays every ending there; 67 tests (64 before): `every_ending_that_pays_the_buyer_pays_only_its_refund_address`, `a_buyer_who_hands_its_refund_address_to_another_key_cannot_block_the_sellers_release`, `a_missing_refund_address_is_made_in_the_same_transaction_by_whoever_sends_the_ending`.
+  - **`escrow/program/trident-tests/`:** the model accepts an ending only when it names the buyer's refund address and that account exists; most people start with one; a new flow, `make_refund`, makes one the idempotent way.
+  - **`escrow/client/`:** the builders above and `makeRefundAddressIx`; 17 unit tests, as before; the validator test makes the refund address in the approval's own transaction.
+  - **`shapes/`:** the review lexicon (`subject` and `createdAt` required; `rating`, `text`, `dealId` optional), the `dealId` check, the example, the README; 41 tests (39 before).
+  - **Text:** `CLAUDE.md` (three lines, Carlos's words), `docs/handoff.md` (Roots, open issuers, "Everyone pays", the dials, the refund address, reviews, names, keys, build order, Open, Don't resurrect), `feepayer/README.md` (from scratch), `names/README.md`, `registry/README.md`, `escrow/README.md`, `shapes/README.md`, `issuer/README.md`, the root `README.md`, `keys/SPEC.md` (the words are a backup, not a login; the handle example).
+- **Learned:**
+  - **"Fails before", against the programs as session 13 left them:**
+    - registry: `list_0_opens_at_init...` finds list 0 with no owner (the zero key); `anyone_opens_a_list...`, `only_a_lists_owner...` and `the_entry_names_the_list...` stop where a stranger opens a list (`ConstraintHasOne`, the treasury); `two_humans_register...` finds no owner in the entry; `finding_the_placeholder_issuer_key...` stops at the old `add_issuer`, which wants the config first. Without a temporary shim that adds the issuer the old way, every test using list 0 fails earlier still: the old `init` gave list 0 no insert key (`NotAnIssuer`).
+    - escrow: `every_ending_that_pays_the_buyer...` shows all eight (`approve`, `release_by_silence`, `agree`, `arbitrate`, `cancel_buyer`, `cancel_seller`, `withdraw`, `close_unfunded`) paying the buyer at another account it owns; `a_buyer_who_hands...` is refused with `ConstraintTokenOwner`, the block the old holder check allowed. `a_missing_refund_address...` passes before and after: it documents the client path, and no program change stands behind it.
+    - shapes: the thinnest review is refused (rating and text were required); a malformed `dealId` passes (an unknown field was not checked).
+  - **Everything green after:** registry 44 LiteSVM tests and its client's 16 plus the validator test; escrow 67 LiteSVM tests and its client's 17 plus the validator test; shapes 41. The registry property test: 1,000 iterations of 40 flows, 40,000 flows in 39 seconds, every invariant held. The escrow fuzzer: 1,000 iterations of 80 flows, then 20,000 of 80, both ending with exit code 0 under `TRIDENT_WITH_EXIT_CODE=1`.
+  - **Costs.** A registration: 830 bytes (legacy; 832 as the client's v0 on a local validator), 133,087 units with the profile paying the fee and 135,528 with another key paying (133,081 on a local validator): 54 units more for the owner in the entry. An identity list is 5,496 bytes: $2.86 of rent today, $0.39 after the cuts, paid by whoever opens it. Every escrow ending now derives the refund address, so it costs about 1,600 to 7,600 units more than session 12's fixed figures and varies with the keys: `approve` with a split 17,000 to 23,000, `release_by_silence` 14,900 to 20,900 (twelve runs each).
+  - **An open list is only as honest as its owner.** A list owner can add commitments it made itself and badge them; the registry cannot tell. What stops it counting is the index weighing the entry's list owner, which is why the entry now names it.
+  - **The fee payer is also a storage-deposit payer.** In a registration and an escrow's creation the transaction's payer puts down storage deposits, not only the network fee. Unless its price counts them, the fee payer pays them on the person's behalf, which is sponsorship by another name.
+- **Open:**
+  1. **A list's rent above its minimum sweeps to the treasury,** though now an outside issuer paid it (a code account's already did, though whoever registered paid it). Sweeping to whoever paid means recording the payer: a program change, possible only before deploy.
+  2. **A list's owner never changes.** An issuer that moves to a multisig opens a new list and closes the old; its old members stay on the old one. A handover like the treasury's would be one more sealed instruction.
+  3. **A frozen refund address now blocks every ending that pays the buyer anything,** not only `recover_late` and `close_unaccepted`, until the token's freeze authority unfreezes it. An ending that pays the buyer nothing (silence with no excess, a full approval with no excess) still runs.
+  4. **`recover_late` and `close_unaccepted` still check who holds the refund address** (Anchor's create-if-missing does), unlike the other endings. A buyer who hands it away blocks only its own late money and, in `close_unaccepted`, the rent payer's deposit rent. Making them address-only is a program change.
+  5. **Whether Kora's price counts the storage deposit it puts down inside a program call.** Not checked; for the fee payer session.
+  6. **Who runs the fee payer instance:** this session's handoff says Roots; Carlos to confirm.
+  7. **How an index reads extra vouches from a folder, and how a market file names the issuers it counts.** Neither exists; the market template has no issuers key for badges (only `credentialIssuers`).
+  8. **Anyone can open lists without limit,** each costing its opener a list's rent; indexes grow by list. Nothing but the rent bounds it.
+- **Still standing** (chores; the design questions are in the handoff's Open):
+  - `keys/src/words.ts`, `keys/test-page` and `testsite/` still call the words a "paper export" in an error message and a heading;
+  - `host/`' tests were not rerun: the example review they write changed only a field name, and the host does not validate Forest records;
+  - `registry/program/trident-tests/`' stale model, and `testsite/dist`'s keys bundle, as before;
+  - the keys tests on Apple, Android and Windows devices; the handover's real-phone cases; how the host's five patches rebase;
+  - devnet, Kora, a phone, a face check, the paid review and the lawyer pass.
