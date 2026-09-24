@@ -16,17 +16,19 @@ node bin/validate.js record examples/post.json --market examples/markets/online-
 node bin/validate.js market examples/markets/online-tutors.json
 ```
 
-A post carries a `terms` block, required on an offer: `autoReleaseDays` (after the clock starts, the money goes to the seller unless the buyer has objected), up to four `cancellationSteps` of `{ hours, refundPercent }` (hours from the clock start, negative before the service time; deadlines strictly rising, none after auto-release), and an optional `arbiter` key. An escrow is created from these terms, as the seller set them for this offer. The post's `price` names its token by `mint`, the token's address on Solana: any classic token works, and which tokens an index weighs is the index's call.
+A post may carry a `terms` block, fully optional, on an offer or a request. It holds only the options an escrow made from the post is created with, each off unless set: `arbiter`, a Solana key that may decide any split, and `timer`, `{ days, to }`: that many whole days after funding, everything goes to `to`, which is `seller` or `buyer`. With no terms, the only ways out of an escrow are the ones the two sides sign. The post's `price` names its token by `mint`, the token's address on Solana: any classic token works, and which tokens an index weighs is the index's call.
 
 A review requires only `subject`, the DID it is about (and `createdAt`, as every record has): a review can be as thin as pointing at a person. `rating` (1 to 5), `text` and `dealId` are optional; what is missing weighs less, and nothing is refused for it. `dealId` is the deal the review is about: the escrow's address (base58, 32 bytes) when an escrow exists, else 32 random bytes as lowercase hex, chosen when the deal began. The validator refuses a `dealId` that is neither, since it points at nothing.
 
-A market file has exactly seven keys: `name`, `category`, `roles`, `fields`, `evidenceTypes`, `suggested`, `credentialIssuers`.
+A market file has five required keys, `name`, `category`, `fields`, `evidenceTypes`, `credentialIssuers`, and two optional ones, `description` and `roles`. Nothing else belongs in one.
 
-- `category` names the deal shape, how money, time and evidence flow: `home-services`, `freelance-work`, `buy-and-sell`. Any slug passes; a later category is a new file in the `markets` repo, not code.
+- `name` is the market's spelling, a lowercase slug. Anyone can use any market name; the `markets` repo lists the spellings the foundation recommends.
+- `category` groups markets for reading, as a folder and a page in the `markets` repo. Any slug passes; categories are never a program concept.
+- `description`, optional, is one line of text, at most 300 characters.
+- `roles`, optional, are the sides a post in the market can take. Absent, they are `seller` and `buyer`. The recommended badge scope is `market/role`, such as `online-tutors/seller`.
 - `evidenceTypes` lists the evidence that applies to deals in this market (`escrow` is the one defined so far). It is metadata for indexes, which weigh a deal by the evidence under it; it never makes a record invalid.
-- `suggested` holds starting values for an offer's terms, `{ autoReleaseDays, cancellationSteps }`, which an app offers a seller and the seller changes freely.
 - Under `fields` it may add flat fields (string, integer, boolean, or an array of those) to `profile`, `post`, or `review`, in lexicon field syntax, and may mark its own fields required. It cannot add a shape, add to a credential, nest anything, or redefine a base field.
 
-A market file restricts no deal. There is no arbiter rule, no token list and no fixed auto-release: the arbiter is always available, any token works, and the auto-release days and cancellation steps are the seller's, per offer. With a market file the validator checks only that a post uses the market's name and one of its roles. It checks a market file's structure, and nothing enforces a market file's values on a deal.
+A market file says nothing about money or time and restricts no deal: the arbiter, the timer and the token are the seller's, per offer. With a market file the validator checks only that a post uses the market's name and one of its roles, and that it carries the market's extra fields. It checks a market file's structure, nothing more.
 
 Design choices made here without a decision behind them are logged in `docs/changes.md` as "chosen, not decided".

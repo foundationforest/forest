@@ -1,10 +1,9 @@
 // Forest record shapes.
 //
 // Two checks, nothing else:
-//   validateRecord(record, { market })  a record against its lexicon (a post
-//                                       also against its own terms), and
+//   validateRecord(record, { market })  a record against its lexicon, and
 //                                       optionally against one market file
-//   validateMarket(market)              a market file against the rule
+//   validateMarket(market)              a market file's structure, and the rule
 //                                       "market files add fields, never new shapes"
 //
 // The lexicon library is @atproto/lexicon, used unchanged. Nothing here talks
@@ -29,33 +28,20 @@ export const SHAPES = ['profile', 'post', 'review', 'credential']
 export const MARKET_FIELD_PLACES = ['profile', 'post', 'review']
 
 /**
- * The seven keys of a market file, and nothing else. A market file describes
- * a deal shape and suggests starting values; it restricts no deal. The
- * arbiter, the token, the auto-release days and the cancellation steps are
- * the seller's, per offer, in the post's terms.
+ * The keys a market file must have. A market file describes a market; it says
+ * nothing about money or time, which are the seller's, per offer, and it
+ * restricts no deal.
  */
-export const MARKET_KEYS = [
-  'name',
-  'category',
-  'roles',
-  'fields',
-  'evidenceTypes',
-  'suggested',
-  'credentialIssuers',
-]
+export const MARKET_REQUIRED_KEYS = ['name', 'category', 'fields', 'evidenceTypes', 'credentialIssuers']
 
-/**
- * The keys of a market file's `suggested` block: the starting values an app
- * offers a seller writing an offer's terms. Suggestions only; nothing
- * enforces them on a deal.
- */
-export const SUGGESTED_KEYS = ['autoReleaseDays', 'cancellationSteps']
+/** The keys a market file may have. Nothing else belongs in one. */
+export const MARKET_KEYS = [...MARKET_REQUIRED_KEYS, 'description', 'roles']
 
-/** An escrow holds at most four cancellation steps. */
-export const MAX_STEPS = 4
+/** A market's roles when its file names none. */
+export const DEFAULT_ROLES = Object.freeze(['seller', 'buyer'])
 
-/** The largest auto-release days an escrow holds (sixteen bits). */
-export const MAX_AUTO_RELEASE_DAYS = 65535
+/** A market file's description is one line, at most this long. */
+export const MAX_DESCRIPTION = 300
 
 // A market field is flat data. Anything structured would be a new shape.
 const EXTRA_FIELD_TYPES = ['string', 'integer', 'boolean', 'array']
@@ -93,10 +79,8 @@ export function loadLexiconDocs() {
 
 /**
  * Check one record. Returns { ok, shape, errors }.
- * A post is also checked against its own terms: an offer carries them, and
- * its cancellation steps rise and end by auto-release, as an escrow needs. A
- * review's deal id, when it has one, must be an escrow address or 32 bytes of
- * hex.
+ * A review's deal id, when it has one, must be an escrow address or 32 bytes
+ * of hex. A post's terms are optional and checked by the lexicon alone.
  * With a market file, the record is checked against the shape plus that
  * market's extra fields, and against the market's name and roles. Nothing in
  * a market file limits a post's terms or token, and evidence is not checked:
@@ -124,22 +108,26 @@ export function validateRecord(record, { market } = {}) {
     return fail(shape, [e.message])
   }
 
-  const errors = shape === 'post' ? postRules(record) : shape === 'review' ? reviewRules(record) : []
+  const errors = shape === 'review' ? reviewRules(record) : []
   if (market !== undefined) errors.push(...marketRules(shape, record, market))
   return errors.length ? fail(shape, errors) : { ok: true, shape, errors: [] }
 }
 
-/** Check a market file. Returns { ok, errors }. */
+/**
+ * Check a market file's structure. Returns { ok, errors }.
+ * Required: name, category, fields, evidenceTypes, credentialIssuers.
+ * Optional: a one-line description, and roles (seller and buyer when absent).
+ */
 export function validateMarket(market) {
   if (!isPlainObject(market)) return { ok: false, errors: ['market file must be a JSON object'] }
   const errors = []
 
-  for (const key of MARKET_KEYS) {
+  for (const key of MARKET_REQUIRED_KEYS) {
     if (!(key in market)) errors.push(`missing "${key}"`)
   }
   for (const key of Object.keys(market)) {
     if (!MARKET_KEYS.includes(key)) {
-      errors.push(`unknown key "${key}"; a market file has exactly: ${MARKET_KEYS.join(', ')}`)
+      errors.push(`unknown key "${key}"; a market file has only: ${MARKET_KEYS.join(', ')}`)
     }
   }
   if (errors.length) return { ok: false, errors }
@@ -148,19 +136,28 @@ export function validateMarket(market) {
     errors.push('name must be a lowercase slug (letters, digits, hyphens), at most 64 characters')
   }
 
-  if (!Array.isArray(market.roles) || market.roles.length === 0) {
-    errors.push('roles must be a non-empty array of slugs')
-  } else {
-    for (const role of market.roles) {
-      if (typeof role !== 'string' || !SLUG.test(role) || role.length > 64) {
-        errors.push(`roles: ${JSON.stringify(role)} must be a lowercase slug, at most 64 characters`)
-      }
+  if ('description' in market) {
+    const d = market.description
+    if (typeof d !== 'string' || d.trim() === '' || /[\r\n]/.test(d) || d.length > MAX_DESCRIPTION) {
+      errors.push(`description must be one line of text, at most ${MAX_DESCRIPTION} characters`)
     }
-    if (new Set(market.roles).size !== market.roles.length) errors.push('roles must be distinct')
+  }
+
+  if ('roles' in market) {
+    if (!Array.isArray(market.roles) || market.roles.length === 0) {
+      errors.push(`roles must be a non-empty array of slugs; leave it out for ${DEFAULT_ROLES.join(' and ')}`)
+    } else {
+      for (const role of market.roles) {
+        if (typeof role !== 'string' || !SLUG.test(role) || role.length > 64) {
+          errors.push(`roles: ${JSON.stringify(role)} must be a lowercase slug, at most 64 characters`)
+        }
+      }
+      if (new Set(market.roles).size !== market.roles.length) errors.push('roles must be distinct')
+    }
   }
 
   if (typeof market.category !== 'string' || !SLUG.test(market.category) || market.category.length > 64) {
-    errors.push('category must be a lowercase slug naming a deal shape (home-services, freelance-work, buy-and-sell, or a later one), at most 64 characters')
+    errors.push('category must be a lowercase slug, at most 64 characters')
   }
 
   if (!Array.isArray(market.evidenceTypes)) {
@@ -174,8 +171,6 @@ export function validateMarket(market) {
     if (new Set(market.evidenceTypes).size !== market.evidenceTypes.length) errors.push('evidenceTypes must be distinct')
   }
 
-  errors.push(...checkSuggested(market.suggested))
-
   if (!Array.isArray(market.credentialIssuers)) {
     errors.push('credentialIssuers must be an array of DIDs (empty until issuers exist)')
   } else {
@@ -187,6 +182,11 @@ export function validateMarket(market) {
   errors.push(...checkFields(market.fields))
 
   return errors.length ? { ok: false, errors } : { ok: true, errors: [] }
+}
+
+/** A market's roles: the ones its file names, or seller and buyer. */
+export function rolesOf(market) {
+  return market.roles ?? DEFAULT_ROLES
 }
 
 /**
@@ -282,83 +282,6 @@ function checkFields(fields) {
   return errors
 }
 
-// A market file's suggested starting values: exactly autoReleaseDays and
-// cancellationSteps, each one an escrow could hold. Suggestions only.
-function checkSuggested(suggested) {
-  if (!isPlainObject(suggested)) {
-    return [`suggested must be an object with exactly: ${SUGGESTED_KEYS.join(', ')}`]
-  }
-  const errors = []
-  for (const key of SUGGESTED_KEYS) {
-    if (!(key in suggested)) errors.push(`suggested: missing "${key}"`)
-  }
-  for (const key of Object.keys(suggested)) {
-    if (!SUGGESTED_KEYS.includes(key)) {
-      errors.push(`suggested: unknown key "${key}"; a market suggests only ${SUGGESTED_KEYS.join(' and ')}, and restricts nothing`)
-    }
-  }
-  if (errors.length) return errors
-  const days = suggested.autoReleaseDays
-  if (!Number.isInteger(days) || days < 1 || days > MAX_AUTO_RELEASE_DAYS) {
-    errors.push(`suggested/autoReleaseDays must be a whole number of days, 1 to ${MAX_AUTO_RELEASE_DAYS}`)
-  }
-  errors.push(...checkSteps(suggested.cancellationSteps, days, 'suggested/cancellationSteps', { strict: true }))
-  return errors
-}
-
-// The rules an escrow holds cancellation steps to, so steps that pass here are
-// steps an escrow can be created with: at most four, whole hours from the clock
-// start, whole percents, deadlines strictly rising, and none after auto-release
-// (or the buyer's cancellation and the seller's release race; the escrow
-// client's `checkTerms` refuses the same). `strict` refuses keys beyond the two,
-// as a market file does; records are open, so a post's steps are not strict.
-function checkSteps(steps, autoReleaseDays, path, { strict }) {
-  if (!Array.isArray(steps)) return [`${path} must be an array of { hours, refundPercent }`]
-  const errors = []
-  if (steps.length > MAX_STEPS) errors.push(`${path}: at most ${MAX_STEPS} steps`)
-  let previous
-  steps.forEach((step, i) => {
-    const at = `${path}/${i}`
-    if (!isPlainObject(step)) {
-      errors.push(`${at} must be { hours, refundPercent }`)
-      return
-    }
-    if (strict && Object.keys(step).sort().join(',') !== 'hours,refundPercent') {
-      errors.push(`${at}: a step has exactly "hours" and "refundPercent"`)
-    }
-    if (!Number.isInteger(step.refundPercent) || step.refundPercent < 0 || step.refundPercent > 100) {
-      errors.push(`${at}/refundPercent must be a whole percent, 0 to 100`)
-    }
-    if (!Number.isInteger(step.hours)) {
-      errors.push(`${at}/hours must be a whole number of hours from the clock start`)
-      return
-    }
-    if (previous !== undefined && step.hours <= previous) errors.push(`${at}: deadlines must strictly rise`)
-    if (Number.isInteger(autoReleaseDays) && step.hours > autoReleaseDays * 24) {
-      errors.push(
-        `${at}: a deadline ${step.hours} hours out outlasts auto-release at ${autoReleaseDays * 24}; the buyer's cancellation and the seller's release would race`,
-      )
-    }
-    previous = step.hours
-  })
-  return errors
-}
-
-// A post's own rules, with or without a market file: an offer carries the
-// seller's terms, and its steps are ones an escrow can be created with.
-function postRules(record) {
-  const terms = record.terms
-  if (terms === undefined) {
-    return record.direction === 'offer'
-      ? ["Record/terms: an offer carries the seller's terms (autoReleaseDays, and optional cancellationSteps and arbiter)"]
-      : []
-  }
-  return checkSteps(terms.cancellationSteps ?? [], terms.autoReleaseDays, 'Record/terms/cancellationSteps', { strict: false })
-}
-
-// Cross-checks a post against the market file it is meant for: its name and
-// its roles. Nothing in a market file limits a post's terms or its token, and
-// evidence is never checked: it weighs, it never rejects.
 // A review's deal id, when it has one: the escrow's address when an escrow
 // exists (base58, 32 bytes), else 32 random bytes as lowercase hex. Anything
 // else points at nothing, so it is refused; a review with no deal id is fine.
@@ -391,14 +314,18 @@ function base58Length(s) {
   return bytes
 }
 
+// Cross-checks a post against the market file it is meant for: its name and
+// its roles. Nothing in a market file limits a post's terms or its token, and
+// evidence is never checked: it weighs, it never rejects.
 function marketRules(shape, record, market) {
   const errors = []
   if (shape === 'post') {
     if (record.market !== market.name) {
       errors.push(`Record/market must be "${market.name}", got ${JSON.stringify(record.market)}`)
     }
-    if (!market.roles.includes(record.role)) {
-      errors.push(`Record/role must be one of (${market.roles.join('|')}), got ${JSON.stringify(record.role)}`)
+    const roles = rolesOf(market)
+    if (!roles.includes(record.role)) {
+      errors.push(`Record/role must be one of (${roles.join('|')}), got ${JSON.stringify(record.role)}`)
     }
   }
   return errors

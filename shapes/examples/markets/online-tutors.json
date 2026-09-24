@@ -1,7 +1,7 @@
 {
   "name": "online-tutors",
   "category": "freelance-work",
-  "roles": ["tutor", "student"],
+  "description": "Lessons and tutoring held online, one to one.",
   "fields": {
     "post": {
       "properties": {
@@ -23,6 +23,5 @@
     }
   },
   "evidenceTypes": ["escrow"],
-  "suggested": { "autoReleaseDays": 7, "cancellationSteps": [] },
   "credentialIssuers": []
 }
