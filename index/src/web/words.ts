@@ -102,6 +102,8 @@ export function badgeWhyNot(why: string | null): string {
       return 'Not counted: this profile doesn’t name the key the badge was registered with.'
     case 'notInDirectory':
       return 'Not counted: registered under a name that isn’t a market in this index’s directory.'
+    case 'noRole':
+      return 'Not counted: registered for the market without a side, such as seller or buyer.'
     default:
       return 'Not counted.'
   }

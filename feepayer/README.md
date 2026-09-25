@@ -51,15 +51,16 @@ someone else is just another payer, and the programs cannot tell and never need 
 
 ## Measured, on a local validator
 
-`test/feepayer.test.ts`, below. A wallet that never held a lamport registers once and pays for two
-escrows, all in a test dollar. Rent here is 6,960 lamports a byte, the validator's default.
+`test/feepayer.test.ts`, below. A wallet that never held a lamport registers once, pays for two
+escrows and closes a third that was never funded, all in a test dollar. Rent here is 6,960
+lamports a byte, the validator's default.
 
 | Transaction | Size | Units | Fee payer spent | Charged | Of which deposits |
 |---|---|---|---|---|---|
 | Registration | 839 bytes | 133,013 | 963,520 | 963,570 | code account 953,520 |
-| Escrow, pay (deposit address, create, money in) | 695 | 33,709 | 5,160,400 | 5,160,450 | escrow 3,111,120, deposit address 2,039,280 |
-| Escrow, release (approve) | 491 | 15,103 | **−2,029,280** (it got 2,039,280 back) | 10,050 | none |
-| Escrow in one tap (all of the above in one) | 747 | 48,736 | 3,121,120 | 5,160,450 | escrow 3,111,120, deposit address 2,039,280 |
+| Escrow, pay (deposit address, create, money in) | 661 | 32,676 | 4,777,600 | 4,777,650 | escrow 2,728,320, deposit address 2,039,280 |
+| Escrow, release | 488 | 12,791 | 10,000 | 10,050 | none; the deposit address's 2,039,280 go back to the person |
+| Escrow in one tap (all of the above in one) | 710 | 42,390 | 4,777,600 | 4,777,650 | the same two; the deposit address's comes back to the person in the same transaction |
 
 All amounts are in lamports. Under Kora's mock price, one base unit of the test dollar buys one
 lamport. The network fee was 10,000 lamports each time: two signatures, no priority fee.
@@ -70,10 +71,10 @@ cuts) and $100 a SOL:
 | | Today | After the cuts |
 |---|---|---|
 | Registration: network fee + code account | $0.071 (plus the 0.25 registry fee) | $0.011 |
-| Escrow, pay: network fee + both accounts | $0.38 | $0.053 |
+| Escrow, pay: network fee + both accounts | $0.35, of which $0.15 comes back at the end | $0.049, of which $0.020 comes back |
 | Escrow, release | $0.001 | $0.001 |
 
-## The deposit, answered: counted, and never given back
+## The deposit: charged once, and given back to the person
 
 **Can Kora's price count the deposit?** Yes. The test shows it:
 - The registration's charge is exactly the network fee plus the code account the registry program
@@ -84,28 +85,23 @@ cuts) and $100 a SOL:
 
 The fee payer never pays for anyone.
 
-**What it cannot do is count a deposit coming back to it.** Kora 2.0.5 prices what leaves the fee
-payer's key, not what returns. The escrow records whoever paid its rent (here the fee payer) and
-returns rent only to that key:
+**Every deposit that comes back comes back to the person, never to the fee payer.** The escrow
+records its creator as the key its rent goes back to, whoever fronted it (`escrow/README.md`):
 
 - **Pay, then release.** The person pays for the deposit address when the escrow is made. When it
-  ends, the escrow closes the address and its rent goes to the fee payer. The release is charged its
+  ends, the escrow closes the address and its rent goes to the person. The release is charged its
   network fee only.
-  - Here: 2,039,280 lamports per escrow, paid by the person and kept by the fee payer.
-  - On mainnet: $0.149 today, $0.020 after the cuts.
-- **One tap.** The deposit address is made and closed in the same transaction, so it costs the fee
-  payer nothing. Kora still charges it: 2,039,280 lamports more than the transaction cost the fee
-  payer (tested to the lamport).
+- **One tap.** The deposit address is made and closed in the same transaction, and its rent goes to
+  the person there. The charge is what the fee payer spent, plus 50 lamports.
 - **The receipt.** The escrow account stays forever as the deal's receipt, with its rent. As Solana
-  cuts rent, anyone may sweep what the account holds above the new minimum to the rent payer: the
-  fee payer. After the cuts that is 1,959,648 lamports per escrow on mainnet, $0.196.
-- **The registration** has no gap to the fee payer: a code account never closes. Its rent above
-  the minimum sweeps to the treasury (the registry's open item, not this one's).
+  cuts rent, anyone may sweep what it holds above the new minimum, and it goes to the person.
+- **Never funded.** Closing an escrow that never held the amount sends both rents to the person.
+- **The registration.** A code account never closes. Its rent above the minimum sweeps to the
+  treasury (the registry's open item, not this one's).
 
-So per escrow, up to about $0.35 of the person's deposits ends with whoever runs the fee payer. That
-is not the fee payer paying for anyone. It is the fee payer being paid twice, which the rule
-"nothing inside charges anything" does not allow. Fixing it is an escrow program change, or an
-outside refund. Either way it is open, in `docs/changes/services.md`.
+In the local run the person got 9,846,160 lamports back (three deposit rents, one escrow rent and a
+swept tip) and the fee payer none. They arrive as SOL in a wallet that otherwise holds none; what
+an app does with them is open (`docs/handoff.md`, Open).
 
 ## What it refuses
 
@@ -119,7 +115,7 @@ Tested, each with nothing landing and nothing moving:
 | The payment taken back out of the fee payer's token account, under the signature it adds | `Fee payer cannot be used for 'SPL Token Transfer'` |
 | No payment | `Insufficient token payment. Required 10050 lamports` |
 | A registration paying the network fee but not the deposit | `Insufficient token payment. Required 963520 lamports` |
-| An escrow whose deposit address only the escrow program makes (below) | `Account 4qUA… not found` |
+| An escrow whose deposit address only the escrow program makes (below) | `Account 9HHg… not found` |
 
 Also enforced by the config, not provoked here:
 - more than 0.01 SOL of deposits in one transaction (`max_allowed_lamports`);
@@ -137,13 +133,15 @@ does not exist yet only when the same transaction creates it with a top-level as
 instruction (`token/token.rs`, `find_ata_creation_for_destination`). An account a program creates
 inside its own call is invisible to it.
 
-The escrow's "Pay" (create, then a transfer into the deposit address) is refused as it stands.
-Putting `CreateIdempotent` for the deposit address, paid by the fee payer, before `create` fixes it:
+An escrow's "Pay" that leaves the deposit address to `create` (create, then a transfer into it) is
+refused. Putting `CreateIdempotent` for the deposit address, paid by the fee payer, before `create`
+fixes it:
 - the escrow's `init_if_needed` finds the account made;
 - Kora counts its rent;
 - the transaction grows by about 10 bytes.
 
-The test does this. The escrow client's one-tap path does not yet (open item 2 in the log).
+The escrow client does this in every builder that funds in the same transaction (`createAndFund`,
+`payInOneTap`, with `makeDepositAddressIx`), and the test pays through them.
 
 ## Files
 
@@ -245,8 +243,7 @@ deployed, and each is in `docs/changes/services.md`.
 ## What is not done
 
 - **Devnet, mainnet, Railway.** Nothing deployed. Jupiter's price was not called.
-- **The refund gap** above: open.
-- **Kora 2.2.** Its price also counts a closed account's rent coming back to the fee payer, which may
-  close the one-tap half of the gap. It was read, not run.
+- **Kora 2.2.** It hardens the fee payer against being drained and no longer reads the key from a
+  path. It was read, not run.
 - **Load, rate limits, several fee payer keys**, and the operations loop that turns collected
   dollars back into SOL.

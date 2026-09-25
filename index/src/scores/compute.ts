@@ -10,7 +10,7 @@
 // with everyone starting at zero would leave every score at zero forever.
 
 import type { IssuerConfig, ScoringConfig } from '../config.ts'
-import type { Directory } from '../markets.ts'
+import { type Directory, splitScope } from '../markets.ts'
 
 export type ProfileIn = { did: string; wallet: string | null }
 export type BadgeIn = { did: string; wallet: string; scope: string; listOwner: string }
@@ -54,17 +54,20 @@ export type Settings = {
 // ---------------------------------------------------------------------------------------------
 
 export type BadgeStatus =
-  | { counted: true; market: string; role: string | null }
-  | { counted: false; why: 'notInDirectory' | 'walletNotDeclared' }
+  | { counted: true; market: string; role: string }
+  | { counted: false; why: 'notInDirectory' | 'noRole' | 'walletNotDeclared' }
 
 /**
- * A badge counts for its profile only when its scope names a directory market byte for byte (and
- * a role of that market, if it names one), and the profile's own record declares the wallet the
- * registry's entry names.
+ * A badge counts for its profile only when its scope is `market/role`, the market a directory
+ * market byte for byte and the role one of that market's roles, and the profile's own record
+ * declares the wallet the registry's entry names. A plain `market` scope counts for nothing.
  */
 export function badgeStatus(badge: BadgeIn, declaredWallet: string | null, directory: Directory): BadgeStatus {
   const scope = directory.badgeScope(badge.scope)
-  if (!scope) return { counted: false, why: 'notInDirectory' }
+  if (!scope) {
+    const { market, role } = splitScope(badge.scope)
+    return { counted: false, why: role === null && directory.markets.has(market) ? 'noRole' : 'notInDirectory' }
+  }
   if (declaredWallet === null || declaredWallet !== badge.wallet) return { counted: false, why: 'walletNotDeclared' }
   return { counted: true, ...scope }
 }
@@ -78,7 +81,7 @@ export type Uniqueness = {
   did: string
   scope: string
   market: string
-  role: string | null
+  role: string
   value: number
   issuers: { owner: string; name: string | null; weight: number }[]
 }
@@ -90,7 +93,7 @@ export type Uniqueness = {
  */
 export function uniqueness(inputs: Pick<Inputs, 'profiles' | 'badges'>, settings: Settings): Uniqueness[] {
   const wallets = new Map(inputs.profiles.map((p) => [p.did, p.wallet]))
-  const groups = new Map<string, { did: string; scope: string; market: string; role: string | null; owners: Set<string> }>()
+  const groups = new Map<string, { did: string; scope: string; market: string; role: string; owners: Set<string> }>()
   for (const b of inputs.badges) {
     if (!wallets.has(b.did)) continue
     const status = badgeStatus(b, wallets.get(b.did) ?? null, settings.directory)
@@ -119,8 +122,9 @@ export function uniqueness(inputs: Pick<Inputs, 'profiles' | 'badges'>, settings
 
 /**
  * What stands under a review's deal id (the handoff's "who said yes": a receipt counts fully when
- * the seller created the escrow or reviewed the deal).
- *   both                paid, and the seller created the escrow (an invoice)
+ * the seller signed for it: created the escrow, signed its ending, or reviewed the deal).
+ *   both                paid, and the seller signed: created the escrow (an invoice), or signed
+ *                       its ending (a split, or a release back to the buyer)
  *   oneSidedConfirmed   paid, the buyer created it, and the seller reviewed the same deal
  *   oneSided            paid, the buyer created it, and the seller has not reviewed it
  *   none                no receipt this index counts, with the reason in `note`
@@ -162,12 +166,15 @@ export function evidenceFor(
   }
   if (!ctx.scoring.countedMints.includes(r.mint)) return none('tokenNotCounted')
   if (!paid(r)) return none('notPaid')
-  if (r.creator === 'seller') return { kind: 'both', weight: w.both }
+  if (r.creator === 'seller' || (r.outcome !== null && SELLER_SIGNS.has(r.outcome))) return { kind: 'both', weight: w.both }
   const sellerReviewed = ctx.reviews.some(
     (v) => v.dealId === r.escrow && ctx.wallets.get(v.reviewer) === r.seller && ctx.wallets.get(v.subject) === r.buyer,
   )
   return sellerReviewed ? { kind: 'oneSidedConfirmed', weight: w.both } : { kind: 'oneSided', weight: w.oneSided }
 }
+
+/** The endings the seller signs: a split (both sign) and a release back to the buyer (a refund). */
+const SELLER_SIGNS = new Set(['split', 'releasedToBuyer'])
 
 /** The reviewer and the subject are the escrow's two parties, by their declared wallets, either way round. */
 function partiesMatch(r: ReceiptIn, reviewerWallet: string | null, subjectWallet: string | null): boolean {

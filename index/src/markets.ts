@@ -1,20 +1,21 @@
-// The market directory, as this index reads it: the market files in one folder (the `markets`
-// repo's, once it exists), each checked with shapes/' validator, plus the index's own aliases.
+// The market directory, as this index reads it: the `markets` repo itself, fetched over HTTPS from
+// MARKETS_URL, never copied. Its `directory.md` names each market with a link to its file,
+// `<category>/<name>.json`, which is checked with shapes/' validator; its Aliases table groups other
+// spellings under a market.
 //
 // Two different questions, answered by two functions:
 //   postMarket(name)   which directory market a post belongs to, through the aliases
-//   badgeScope(scope)  whether a registry scope counts as a badge: the directory name, byte for
-//                      byte, never through an alias, since a second spelling is a second scope
-//                      and would be a second badge for the same human in the same market. A
-//                      scope is `market` or `market/role` (CLAUDE.md's recommended scope).
-
-import { readFileSync, readdirSync } from 'node:fs'
-import { join } from 'node:path'
+//   badgeScope(scope)  whether a registry scope counts as a badge: `market/role` only, the market a
+//                      directory name byte for byte, never through an alias, since a second
+//                      spelling is a second scope and would be a second badge for the same human
+//                      in the same market, and the role one of that market's roles. A plain
+//                      `market` counts for nothing.
 
 // @ts-expect-error shapes/ is plain JavaScript with no type declarations
 import { rolesOf, validateMarket } from '../../shapes/src/validate.js'
 
-import type { AliasConfig } from './config.ts'
+/** A directory market's name, and the other spellings the markets repo groups under it. */
+export type Aliases = Record<string, string[]>
 
 export type MarketFile = {
   name: string
@@ -32,10 +33,10 @@ export class Directory {
   readonly markets = new Map<string, MarketFile>()
   /** spelling → directory name, for posts and URLs only. */
   readonly aliasOf = new Map<string, string>()
-  /** Files in the folder that failed the validator, with why. They count for nothing. */
+  /** Market files the directory lists that are not valid at their own path, with why. They count for nothing. */
   readonly refused: { file: string; errors: string[] }[] = []
 
-  constructor(files: { file: string; market: unknown }[], aliases: AliasConfig) {
+  constructor(files: { file: string; market: unknown }[], aliases: Aliases) {
     for (const { file, market } of files) {
       const checked = validateMarket(market) as { ok: boolean; errors: string[] }
       if (!checked.ok) {
@@ -51,12 +52,40 @@ export class Directory {
     }
   }
 
-  static load(dir: string, aliases: AliasConfig): Directory {
-    const files = readdirSync(dir)
-      .filter((f) => f.endsWith('.json'))
-      .sort()
-      .map((f) => ({ file: f, market: JSON.parse(readFileSync(join(dir, f), 'utf8')) }))
-    return new Directory(files, aliases)
+  /**
+   * The directory, read from a copy of the markets repo served over HTTP(S): `base` is the folder
+   * that holds `directory.md`, such as `https://raw.githubusercontent.com/foundationforest/markets/main`.
+   * A file that can't be fetched stops the load, so a network failure never drops a market
+   * quietly; a file that fetches but is not a valid market file at its own path is refused.
+   */
+  static async fetch(base: string, get: typeof fetch = fetch): Promise<Directory> {
+    const read = async (path: string): Promise<string> => {
+      const res = await get(`${base}/${path}`)
+      if (!res.ok) throw new Error(`the market directory: ${base}/${path} answered ${res.status}`)
+      return res.text()
+    }
+    const { links, aliases } = parseDirectory(await read('directory.md'))
+    const files: { file: string; market: unknown }[] = []
+    const refused: { file: string; errors: string[] }[] = []
+    for (const { name, path } of links) {
+      let market: unknown
+      try {
+        market = JSON.parse(await read(path))
+      } catch (err) {
+        if (!(err instanceof SyntaxError)) throw err
+        refused.push({ file: path, errors: ['not JSON'] })
+        continue
+      }
+      const m = market as { name?: unknown; category?: unknown }
+      if (m.name !== name || path !== `${m.category}/${m.name}.json`) {
+        refused.push({ file: path, errors: [`listed as ${name}, but the file names ${String(m.name)} in ${String(m.category)}`] })
+        continue
+      }
+      files.push({ file: path, market })
+    }
+    const directory = new Directory(files, aliases)
+    directory.refused.push(...refused)
+    return directory
   }
 
   /** The directory market a post's `market` belongs to: itself, or through an alias. */
@@ -71,15 +100,14 @@ export class Directory {
   }
 
   /**
-   * Whether a registry scope is a badge this index counts: its market part, before the first
-   * slash, is a directory name byte for byte, and its role part, if any, is one of that market's
-   * roles.
+   * Whether a registry scope is a badge this index counts: `market/role`, its market part a
+   * directory name byte for byte and its role one of that market's roles. A scope with no role
+   * counts for nothing.
    */
-  badgeScope(scope: string): { market: string; role: string | null } | null {
+  badgeScope(scope: string): { market: string; role: string } | null {
     const { market, role } = splitScope(scope)
     const file = this.markets.get(market)
-    if (!file) return null
-    if (role !== null && !file.roles.includes(role)) return null
+    if (!file || role === null || !file.roles.includes(role)) return null
     return { market, role }
   }
 
@@ -101,4 +129,22 @@ export class Directory {
 export function splitScope(scope: string): { market: string; role: string | null } {
   const at = scope.indexOf('/')
   return at === -1 ? { market: scope, role: null } : { market: scope.slice(0, at), role: scope.slice(at + 1) }
+}
+
+/**
+ * What the index takes from the markets repo's `directory.md`: each market's line,
+ * ``- [`name`](category/name.json): …``, and the rows of the table under "## Aliases",
+ * ``| `market` | `alias`, `alias` |``, read the way that repo's own `check.sh` reads them.
+ */
+export function parseDirectory(md: string): { links: { name: string; path: string }[]; aliases: Aliases } {
+  const links = [...md.matchAll(/^- \[`([^`]+)`\]\(([^)\s]+\.json)\)/gm)].map(([, name, path]) => ({ name, path }))
+  const aliases: Aliases = {}
+  const table = (md.split(/^## Aliases *$/m)[1] ?? '').split(/^## /m)[0]
+  for (const row of table.split('\n')) {
+    const cells = row.split('|').slice(1, -1)
+    const listed = cells[0]?.match(/`([^`]+)`/)?.[1]
+    if (!listed || cells.length < 2) continue // not a row, or the header and its rule
+    aliases[listed] = [...cells[1].matchAll(/`([^`]+)`/g)].map(([, alias]) => alias)
+  }
+  return { links, aliases }
 }

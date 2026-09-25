@@ -55,6 +55,14 @@ test('a post without its price is rejected', () => {
   assertRejected(validateRecord(post), /must have the property "price"/)
 })
 
+test('a post may leave out remote, with or without a location', () => {
+  const post = example('post')
+  delete post.remote
+  assert.equal(validateRecord(post).ok, true)
+  post.location = 'Lisbon'
+  assert.equal(validateRecord(post).ok, true)
+})
+
 test('a post priced per week is rejected', () => {
   const post = example('post')
   post.price.per = 'week'

@@ -1,0 +1,277 @@
+# Every package's checks, run together, so a merge that breaks a neighbour shows at once.
+#
+# On every pull request and every push to main, nothing running but the tests:
+#   node       each Node package's type-check and its tests that need no chain and no host
+#   index      the index's type-check, its unit tests and its page tests, on a Postgres service
+#   programs   both programs built with cargo build-sbf, and their LiteSVM tests
+#
+# Nightly, and by hand from the Actions tab, because they are slow or need a validator:
+#   validator  the registry client's, the escrow client's and the issuer's tests on a local validator
+#   fuzz       the registry's property test at 1,000 iterations; the escrow's fuzzer at 50,000
+#   end-to-end the host's tests, the carrier and the fee payer run locally, and the index end to end
+#
+# A test that finds a piece missing skips instead of failing. Here a skip fails the step: the TAP
+# summary must say "# skipped 0", so a missing piece never passes as green.
+
+name: checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '23 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '22'
+  SOLANA_VERSION: '4.2.2'
+  DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  node:
+    name: ${{ matrix.package }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: shapes
+            install: shapes
+          - package: keys
+            install: keys
+          - package: registry/client
+            install: keys registry/client
+          - package: escrow/client
+            install: escrow/client
+          - package: issuer
+            install: registry/client issuer
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Install
+        run: for dir in ${{ matrix.install }}; do (cd "$dir" && npm ci --no-audit --no-fund); done
+      - name: Type-check
+        if: matrix.package != 'shapes'
+        working-directory: ${{ matrix.package }}
+        run: npm run check
+      - name: Test
+        working-directory: ${{ matrix.package }}
+        run: |
+          npm test | tee "$RUNNER_TEMP/tap"
+          grep -qx '# skipped 0' "$RUNNER_TEMP/tap"
+
+  index:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Install
+        run: for dir in shapes keys registry/client escrow/client index; do (cd "$dir" && npm ci --no-audit --no-fund); done
+      - name: Type-check
+        working-directory: index
+        run: npm run check
+      - name: Test (everything but the end-to-end test)
+        working-directory: index
+        run: |
+          node --test --test-force-exit test/markets.test.ts test/scoring.test.ts test/sign.test.ts test/pages.test.ts | tee "$RUNNER_TEMP/tap"
+          grep -qx '# skipped 0' "$RUNNER_TEMP/tap"
+
+  programs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - name: Solana CLI, cached
+        id: solana
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.local/share/solana
+            ~/.cache/solana
+          key: solana-${{ env.SOLANA_VERSION }}
+      - name: Solana CLI, installed
+        if: steps.solana.outputs.cache-hit != 'true'
+        run: sh -c "$(curl -sSfL "https://release.anza.xyz/v$SOLANA_VERSION/install")"
+      - run: echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            registry/program
+            registry/program/tests-litesvm
+            escrow/program
+            escrow/program/tests-litesvm
+      - name: Build both programs
+        run: |
+          (cd registry/program && cargo build-sbf)
+          (cd escrow/program && cargo build-sbf)
+          sha256sum registry/program/target/deploy/*.so escrow/program/target/deploy/*.so
+      - name: Registry, LiteSVM
+        working-directory: registry/program/tests-litesvm
+        run: cargo test
+      - name: Escrow, LiteSVM
+        working-directory: escrow/program/tests-litesvm
+        run: cargo test
+      - uses: actions/upload-artifact@v7
+        with:
+          name: programs
+          path: |
+            registry/program/target/deploy/*.so
+            escrow/program/target/deploy/*.so
+
+  validator:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    needs: programs
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Solana CLI, cached
+        id: solana
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.local/share/solana
+            ~/.cache/solana
+          key: solana-${{ env.SOLANA_VERSION }}
+      - name: Solana CLI, installed
+        if: steps.solana.outputs.cache-hit != 'true'
+        run: sh -c "$(curl -sSfL "https://release.anza.xyz/v$SOLANA_VERSION/install")"
+      - run: echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+      - uses: actions/download-artifact@v8
+        with:
+          name: programs
+      - name: Install, and the registry's proving files
+        run: |
+          for dir in keys registry/artifacts registry/client escrow/client issuer; do (cd "$dir" && npm ci --no-audit --no-fund); done
+          (cd registry/artifacts && npm run fetch)
+      - name: Registry client
+        working-directory: registry/client
+        run: |
+          npm run test:validator | tee "$RUNNER_TEMP/tap"
+          grep -qx '# skipped 0' "$RUNNER_TEMP/tap"
+      - name: Escrow client
+        working-directory: escrow/client
+        run: |
+          npm run test:validator | tee "$RUNNER_TEMP/tap"
+          grep -qx '# skipped 0' "$RUNNER_TEMP/tap"
+      - name: Issuer
+        working-directory: issuer
+        run: |
+          npm run test:validator | tee "$RUNNER_TEMP/tap"
+          grep -qx '# skipped 0' "$RUNNER_TEMP/tap"
+
+  fuzz:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    needs: programs
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: programs
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            registry/program/tests-litesvm
+            escrow/program/trident-tests
+      - name: Registry, property test, 1,000 iterations
+        working-directory: registry/program/tests-litesvm
+        run: FOREST_FUZZ_ITERATIONS=1000 cargo test --release --test invariants -- --nocapture
+      - name: Escrow, fuzzer, 50,000 iterations (exit 99 if an invariant broke)
+        working-directory: escrow/program/trident-tests
+        run: TRIDENT_WITH_EXIT_CODE=1 FOREST_FUZZ_ITERATIONS=50000 cargo run --release --bin fuzz_escrow
+
+  end-to-end:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    needs: programs
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          cache: false
+      - name: Solana CLI, cached
+        id: solana
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.local/share/solana
+            ~/.cache/solana
+          key: solana-${{ env.SOLANA_VERSION }}
+      - name: Solana CLI, installed
+        if: steps.solana.outputs.cache-hit != 'true'
+        run: sh -c "$(curl -sSfL "https://release.anza.xyz/v$SOLANA_VERSION/install")"
+      - run: echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+      - uses: actions/download-artifact@v8
+        with:
+          name: programs
+      - name: Kora, cached
+        uses: actions/cache@v6
+        with:
+          path: feepayer/.kora
+          key: kora-${{ hashFiles('feepayer/KORA') }}
+      - name: Build the host, the carrier and Kora
+        run: |
+          corepack enable
+          host/build.sh
+          carrier/build.sh
+          feepayer/build.sh
+      - name: Install, and the registry's proving files
+        run: |
+          for dir in shapes keys registry/artifacts registry/client escrow/client feepayer index; do (cd "$dir" && npm ci --no-audit --no-fund); done
+          (cd registry/artifacts && npm run fetch)
+      - name: Host
+        working-directory: host
+        run: ./test.sh
+      - name: Carrier
+        working-directory: carrier
+        run: |
+          npm run test:local | tee "$RUNNER_TEMP/tap"
+          grep -qx '# skipped 0' "$RUNNER_TEMP/tap"
+      - name: Fee payer
+        working-directory: feepayer
+        run: |
+          npm run test:local | tee "$RUNNER_TEMP/tap"
+          grep -qx '# skipped 0' "$RUNNER_TEMP/tap"
+      - name: Index, end to end
+        working-directory: index
+        run: |
+          npm test | tee "$RUNNER_TEMP/tap"
+          grep -qx '# skipped 0' "$RUNNER_TEMP/tap"

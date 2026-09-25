@@ -29,8 +29,8 @@ type Opts = {
   onRecord?: (uri: string, outcome: Outcome) => void
 }
 
-function loadDirectory(config: Config, onError: (err: unknown) => void): Directory {
-  const directory = Directory.load(config.marketsDir, config.aliases)
+async function loadDirectory(config: Config, onError: (err: unknown) => void): Promise<Directory> {
+  const directory = await Directory.fetch(config.marketsUrl)
   for (const r of directory.refused) onError(new Error(`market file ${r.file} refused: ${r.errors.join('; ')}`))
   return directory
 }
@@ -42,7 +42,7 @@ export async function startReaders(db: Db, config: Config, opts: Opts = {}): Pro
   const onError = opts.onError ?? ((err: unknown) => console.error(err))
   if (!config.signingSeed) throw new Error('the readers sign scores: INDEX_SIGNING_SEED is required')
   await migrate(db)
-  const directory = loadDirectory(config, onError)
+  const directory = await loadDirectory(config, onError)
   const keys = indexKeys(config.signingSeed)
   await db.query(
     `insert into index_meta (key, value) values ('publicKeys', $1)
@@ -91,7 +91,7 @@ export async function startReaders(db: Db, config: Config, opts: Opts = {}): Pro
 
 /** The pages on `db`, served on `config.port` unless `listen` is false. Reads only. */
 export async function startWeb(db: Db, config: Config, opts: Opts & { listen?: boolean } = {}): Promise<{ web: Web; server: Server | null }> {
-  const directory = loadDirectory(config, opts.onError ?? ((err: unknown) => console.error(err)))
+  const directory = await loadDirectory(config, opts.onError ?? ((err: unknown) => console.error(err)))
   const web = createWeb({ db, directory, config })
   const server = opts.listen === false ? null : await serve(web, config.port)
   return { web, server }

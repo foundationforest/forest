@@ -8,7 +8,7 @@ keys="$site/../keys"
 dist="$site/dist"
 
 rm -rf "$dist"
-mkdir -p "$dist/keys/dist" "$dist/handover"
+mkdir -p "$dist/keys/dist"
 
 # The keys page: the library bundled by keys' own esbuild, with the entry and
 # flags of its `build:page` script plus --minify. page.js is copied as is, so
@@ -20,9 +20,6 @@ fi
   --outfile="$dist/keys/dist/forest-keys.js")
 cp "$keys/test-page/page.js" "$dist/keys/page.js"
 cp "$site/keys/index.html" "$dist/keys/index.html"
-
-# The handover page needs no build.
-cp "$site/handover/index.html" "$site/handover/handover.js" "$dist/handover/"
 
 # The site index, and Vercel's config, which Vercel reads from the root
 # directory it is given: testsite/dist.

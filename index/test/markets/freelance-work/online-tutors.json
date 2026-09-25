@@ -1,0 +1,27 @@
+{
+  "name": "online-tutors",
+  "category": "freelance-work",
+  "description": "Lessons and tutoring held online, one to one.",
+  "fields": {
+    "post": {
+      "properties": {
+        "subjects": {
+          "type": "array",
+          "description": "What is taught or sought.",
+          "items": { "type": "string", "maxLength": 64 },
+          "minLength": 1,
+          "maxLength": 10
+        },
+        "languages": {
+          "type": "array",
+          "description": "Languages a session can be held in, as BCP 47 tags.",
+          "items": { "type": "string", "format": "language" },
+          "maxLength": 10
+        }
+      },
+      "required": ["subjects"]
+    }
+  },
+  "evidenceTypes": ["escrow"],
+  "credentialIssuers": []
+}

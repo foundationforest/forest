@@ -44,7 +44,7 @@ function offerOut(ctx: Ctx, row: any) {
     price: r.price as PayLink['price'],
     terms: (r.terms ?? null) as PayLink['terms'],
     availability: (r.availability ?? null) as string | null,
-    remote: row.remote as boolean,
+    remote: (row.remote ?? null) as boolean | null,
     location: (row.location ?? null) as string | null,
     expires: iso(row.expires),
     createdAt: iso(row.created_at),

@@ -6,7 +6,6 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test } from 'node:test'
 
-import { INDEX_ROOT } from '../src/config.ts'
 import { Directory } from '../src/markets.ts'
 import {
   type BadgeIn,
@@ -19,9 +18,10 @@ import {
   reviewerWeight,
   uniqueness,
 } from '../src/scores/compute.ts'
+import { MARKETS_FOLDER } from './markets-repo.ts'
 
-const tutors = JSON.parse(readFileSync(join(INDEX_ROOT, '../shapes/examples/markets/online-tutors.json'), 'utf8'))
-const directory = new Directory([{ file: 'online-tutors.json', market: tutors }], { 'online-tutors': ['online-tutor'] })
+const tutors = JSON.parse(readFileSync(join(MARKETS_FOLDER, 'freelance-work/online-tutors.json'), 'utf8'))
+const directory = new Directory([{ file: 'freelance-work/online-tutors.json', market: tutors }], { 'online-tutors': ['online-tutor'] })
 const USDC = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'
 const FOUNDATION = 'H7qXWNAeAvedhwuvhAkBYK2WE2nA3KgbufnRz38zFdzS'
 const OTHER_ISSUER = 'Other1ssuer11111111111111111111111111111111'
@@ -37,7 +37,7 @@ const settings = { directory, issuers: { [FOUNDATION]: { name: 'Forest Foundatio
 const ana = { did: 'did:plc:ana', wallet: 'AnaWallet' }
 const ben = { did: 'did:plc:ben', wallet: 'BenWallet' }
 const cleo = { did: 'did:plc:cleo', wallet: 'CleoDeclared' }
-const badge = (did: string, wallet: string, scope = 'online-tutors', listOwner = FOUNDATION): BadgeIn => ({ did, wallet, scope, listOwner })
+const badge = (did: string, wallet: string, scope = 'online-tutors/seller', listOwner = FOUNDATION): BadgeIn => ({ did, wallet, scope, listOwner })
 // Ana invoiced Ben (the seller created it), and Ben paid in one tap: no funding mark, released.
 const receipt = (over: Partial<ReceiptIn> = {}): ReceiptIn => ({
   escrow: 'Deal1111111111111111111111111111111111111111',
@@ -82,7 +82,20 @@ test('evidence: the seller created it (an invoice) and it was paid: full, howeve
   }
 })
 
+test('evidence: the buyer created it and the seller signed its ending (a split, a refund): full', () => {
+  for (const outcome of ['split', 'releasedToBuyer']) {
+    const r = receipt({ creator: 'buyer', outcome })
+    assert.deepEqual(evidence(review(ben.did, ana.did, { dealId: r.escrow }), [r]), { kind: 'both', weight: 1 }, outcome)
+  }
+})
+
 test('evidence: the buyer created it: one-sided until the seller reviews the same deal', () => {
+  for (const outcome of ['arbitrated', 'timerReleased']) {
+    const r = receipt({ creator: 'buyer', outcome })
+    assert.deepEqual(evidence(review(ben.did, ana.did, { dealId: r.escrow }), [r]), { kind: 'oneSided', weight: 0.5 }, `the seller signed nothing: ${outcome}`)
+  }
+  const marked = receipt({ creator: 'buyer', funded: true, outcome: null })
+  assert.equal(evidence(review(ben.did, ana.did, { dealId: marked.escrow }), [marked]).kind, 'oneSided', 'paid, not ended')
   const r = receipt({ creator: 'buyer' })
   const byBuyer = review(ben.did, ana.did, { dealId: r.escrow })
   assert.deepEqual(evidence(byBuyer, [r]), { kind: 'oneSided', weight: 0.5 })
@@ -101,14 +114,16 @@ test('evidence: what counts little', () => {
   assert.equal(evidence(review(ben.did, ana.did, { dealId: r.escrow }), [receipt({ closed: true, funded: false, outcome: null })]).note, 'noReceipt', 'closed, never funded')
 })
 
-test('a badge counts only under a directory name, and only for the wallet the profile declares', () => {
-  assert.deepEqual(badgeStatus(badge(ana.did, ana.wallet), ana.wallet, directory), { counted: true, market: 'online-tutors', role: null })
-  assert.deepEqual(badgeStatus(badge(ana.did, ana.wallet, 'online-tutors/seller'), ana.wallet, directory), { counted: true, market: 'online-tutors', role: 'seller' }, 'market/role; a file with no roles has seller and buyer')
+test('a badge counts only as market/role under a directory name, and only for the wallet the profile declares', () => {
+  assert.deepEqual(badgeStatus(badge(ana.did, ana.wallet), ana.wallet, directory), { counted: true, market: 'online-tutors', role: 'seller' }, 'market/role; a file with no roles has seller and buyer')
+  assert.deepEqual(badgeStatus(badge(ana.did, ana.wallet, 'online-tutors/buyer'), ana.wallet, directory), { counted: true, market: 'online-tutors', role: 'buyer' })
+  assert.deepEqual(badgeStatus(badge(ana.did, ana.wallet, 'online-tutors'), ana.wallet, directory), { counted: false, why: 'noRole' }, 'a plain market counts for nothing')
   assert.deepEqual(badgeStatus(badge(ana.did, ana.wallet, 'online-tutors:seller'), ana.wallet, directory), { counted: false, why: 'notInDirectory' }, 'only the slash separates a role')
   assert.deepEqual(badgeStatus(badge(ana.did, 'NotDeclared'), ana.wallet, directory), { counted: false, why: 'walletNotDeclared' })
   assert.deepEqual(badgeStatus(badge(ana.did, ana.wallet), null, directory), { counted: false, why: 'walletNotDeclared' })
-  assert.deepEqual(badgeStatus(badge(ana.did, ana.wallet, 'online-tutor'), ana.wallet, directory), { counted: false, why: 'notInDirectory' }, 'an alias never counts for a badge')
-  assert.deepEqual(badgeStatus(badge(ana.did, ana.wallet, 'Online-Tutors'), ana.wallet, directory), { counted: false, why: 'notInDirectory' }, 'byte for byte')
+  assert.deepEqual(badgeStatus(badge(ana.did, ana.wallet, 'online-tutor/seller'), ana.wallet, directory), { counted: false, why: 'notInDirectory' }, 'an alias never counts for a badge')
+  assert.deepEqual(badgeStatus(badge(ana.did, ana.wallet, 'plumbing/seller'), ana.wallet, directory), { counted: false, why: 'notInDirectory' }, 'a name the directory does not list')
+  assert.deepEqual(badgeStatus(badge(ana.did, ana.wallet, 'Online-Tutors/seller'), ana.wallet, directory), { counted: false, why: 'notInDirectory' }, 'byte for byte')
   assert.deepEqual(badgeStatus(badge(ana.did, ana.wallet, 'online-tutors/plumber'), ana.wallet, directory), { counted: false, why: 'notInDirectory' }, 'a role the market does not have')
 })
 
@@ -118,12 +133,12 @@ test('uniqueness: issuers combine, an issuer at 0 adds nothing', () => {
   assert.equal(one[0].value, 1)
   assert.deepEqual(one[0].issuers, [{ owner: FOUNDATION, name: 'Forest Foundation', weight: 1 }])
 
-  const unknown = uniqueness({ profiles: [ana], badges: [badge(ana.did, ana.wallet, 'online-tutors', OTHER_ISSUER)] }, settings)
+  const unknown = uniqueness({ profiles: [ana], badges: [badge(ana.did, ana.wallet, 'online-tutors/seller', OTHER_ISSUER)] }, settings)
   assert.equal(unknown[0].value, 0, 'others start at 0')
 
   const halves = { ...settings, issuers: { [FOUNDATION]: { name: 'F', weight: 0.5 }, [OTHER_ISSUER]: { name: 'O', weight: 0.5 } } }
   const two = uniqueness(
-    { profiles: [ana], badges: [badge(ana.did, ana.wallet), badge(ana.did, ana.wallet, 'online-tutors', OTHER_ISSUER)] },
+    { profiles: [ana], badges: [badge(ana.did, ana.wallet), badge(ana.did, ana.wallet, 'online-tutors/seller', OTHER_ISSUER)] },
     halves,
   )
   assert.equal(two[0].value, 0.75, 'two issuers at 0.5: 1 − 0.5 × 0.5')

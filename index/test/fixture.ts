@@ -10,18 +10,21 @@
 // The ids are fixed, so the read skill (index/skill.md) can use them as its examples.
 
 import { randomBytes } from 'node:crypto'
-import { join } from 'node:path'
 
 import pg from 'pg'
 
-import { INDEX_ROOT, type Config, loadConfig } from '../src/config.ts'
+import { type Config, loadConfig } from '../src/config.ts'
 import { type Db, createPool } from '../src/db.ts'
 import { startReaders } from '../src/main.ts'
+import { serveMarkets } from './markets-repo.ts'
 import { applyRecordOp } from '../src/records/store.ts'
 
 export const USDC = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'
 export const FOUNDATION_ISSUER = 'H7qXWNAeAvedhwuvhAkBYK2WE2nA3KgbufnRz38zFdzS'
 export const MARKET = 'online-tutors'
+/** Badges count only as `market/role`: Ana and Cleo sell, Ben buys. */
+export const SELLER_SCOPE = `${MARKET}/seller`
+export const BUYER_SCOPE = `${MARKET}/buyer`
 export const CATEGORY = 'freelance-work'
 
 export const ana = { did: 'did:plc:exampleana22222222222222', wallet: '7v54NWdBtkjuAFJrLGsS2SXnuk8nKam81mZJeeYxVFi9', name: 'Ana Ribeiro' }
@@ -41,7 +44,6 @@ export const OFFERS = {
   spanish: { rkey: '3kzq2vrffxb2d', cid: 'bafyreiexampleanaspanish2222222', uri: `at://${ana.did}/foundation.forest.post/3kzq2vrffxb2d` },
 }
 export const SIGNING_SEED = '09'.repeat(32)
-export const MARKETS_DIR = join(INDEX_ROOT, '../shapes/examples/markets')
 
 const day = (d: number) => `2026-09-${String(d).padStart(2, '0')}T10:00:00.000Z`
 
@@ -55,7 +57,8 @@ export async function makeFixture(adminUrl: string): Promise<Fixture> {
   await admin.query(`create database ${name}`)
   const url = new URL(adminUrl)
   url.pathname = `/${name}`
-  const env = { DATABASE_URL: url.toString(), MARKETS_DIR, INDEX_SIGNING_SEED: SIGNING_SEED }
+  const markets = await serveMarkets()
+  const env = { DATABASE_URL: url.toString(), MARKETS_URL: markets.url, INDEX_SIGNING_SEED: SIGNING_SEED }
   const config = (more: Record<string, string> = {}) => loadConfig({ ...env, ...more })
   const db = createPool(url.toString())
 
@@ -93,12 +96,13 @@ export async function makeFixture(adminUrl: string): Promise<Fixture> {
   })
   await put(ana.did, 'foundation.forest.post', OFFERS.portuguese.rkey, OFFERS.portuguese.cid,
     offer(MARKET, 'Portuguese conversation for adults, A1 to B2.', '25', { availability: 'Weekday evenings, Lisbon time.', subjects: ['portuguese'] }))
-  // Written under an alias of the market's name, with a timer: grouped under the directory name.
-  await put(ana.did, 'foundation.forest.post', OFFERS.spanish.rkey, OFFERS.spanish.cid,
-    offer('online-tutor', 'Spanish grammar, one hour, homework optional.', '12.50', { terms: { timer: { days: 7, to: 'seller' } }, subjects: ['spanish'] }))
+  // Written under an alias of the market's name, with a timer, and saying nothing of where (`remote`
+  // is optional): grouped under the directory name.
+  const { remote: _, ...spanish } = offer('online-tutor', 'Spanish grammar, one hour, homework optional.', '12.50', { terms: { timer: { days: 7, to: 'seller' } }, subjects: ['spanish'] })
+  await put(ana.did, 'foundation.forest.post', OFFERS.spanish.rkey, OFFERS.spanish.cid, spanish)
 
   // Three badges on list 0, vouched for by the foundation's issuer; Cleo's for a key her profile does not declare.
-  const badge = async (i: number, did: string, wallet: string) => {
+  const badge = async (i: number, did: string, wallet: string, scope: string) => {
     const signature = `ExampleRegistration${i}`.padEnd(88, '1')
     await db.query(
       `insert into chain_transactions (signature, program_id, slot, block_time, logs) values ($1, 'registry', $2, $3, '[]')`,
@@ -106,13 +110,13 @@ export async function makeFixture(adminUrl: string): Promise<Fixture> {
     )
     await db.query(
       `insert into badges (signature, ix, scope, market, role, did, wallet, code, list_index, list_owner, slot, block_time)
-       values ($1, 0, $2, $2, null, $3, $4, $5, 0, $6, $7, $8)`,
-      [signature, MARKET, did, wallet, String(i).repeat(64), FOUNDATION_ISSUER, 100 + i, day(5)],
+       values ($1, 0, $2, $3, $4, $5, $6, $7, 0, $8, $9, $10)`,
+      [signature, scope, MARKET, scope.slice(MARKET.length + 1), did, wallet, String(i).repeat(64), FOUNDATION_ISSUER, 100 + i, day(5)],
     )
   }
-  await badge(1, ana.did, ana.wallet)
-  await badge(2, ben.did, ben.wallet)
-  await badge(3, cleo.did, cleo.badgeWallet)
+  await badge(1, ana.did, ana.wallet, SELLER_SCOPE)
+  await badge(2, ben.did, ben.wallet, BUYER_SCOPE)
+  await badge(3, cleo.did, cleo.badgeWallet, SELLER_SCOPE)
 
   // The receipt: $25 from Ben to Ana, which she asked for, released to her.
   await db.query(
@@ -151,6 +155,7 @@ export async function makeFixture(adminUrl: string): Promise<Fixture> {
       }
       await admin.query(`drop database if exists ${name} with (force)`)
       await admin.end()
+      await markets.close()
     },
   }
 }

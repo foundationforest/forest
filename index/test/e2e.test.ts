@@ -5,13 +5,15 @@
 // The story:
 //   Ana tutors; Ben is her student; Cleo is a stranger. Each makes a profile on the host, declaring
 //   a wallet. The foundation's issuer puts all three on list 0; each registers a badge in
-//   online-tutors. Cleo registers hers with a wallet her profile does not declare, so it must not
-//   count. Ana posts two offers, one under an alias of the market's name. Ana invoices Ben through
+//   online-tutors, Ana and Cleo as sellers and Ben as a buyer. Cleo registers hers with a wallet
+//   her profile does not declare, so it must not count. Ana posts two offers, one under an alias of the market's name. Ana invoices Ben through
 //   an escrow; Ben pays it and releases it to her in one transaction; both review each other on
 //   that deal. Cleo reviews Ana with a made-up deal id. Then a forged commit claiming to be Ana's
 //   arrives on a second firehose and must be refused. Last, every page and twin answers.
 //
 //   DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/postgres npm test
+//
+// The market directory comes from a stand-in for the markets repo served locally (test/markets/).
 //
 // Needs: DATABASE_URL (a Postgres the test may create and drop a database in), host/ built
 // (`./build.sh`), both programs built (`cargo build-sbf`), the proving files fetched
@@ -56,6 +58,7 @@ import {
   decodeEscrow,
   invoice,
   keysOf,
+  makeStandardAccountIx,
   releaseToSellerIx,
   termsFor,
   transferIx,
@@ -67,16 +70,19 @@ import { startIndex } from '../src/main.ts'
 import { startRecordReader } from '../src/records/firehose.ts'
 import type { Outcome } from '../src/records/store.ts'
 import { verify } from '../src/scores/sign.ts'
+import { serveMarkets } from './markets-repo.ts'
 
 const REPO = join(INDEX_ROOT, '..')
 const UPSTREAM = join(REPO, 'host/upstream/packages')
 const REGISTRY_SO = join(REPO, 'registry/program/target/deploy/forest_registry.so')
 const ESCROW_SO = join(REPO, 'escrow/program/target/deploy/forest_escrow.so')
 const ARTIFACTS = { wasm: join(REPO, 'registry/artifacts/semaphore-32.wasm'), zkey: join(REPO, 'registry/artifacts/semaphore-32.zkey') }
-const MARKETS_DIR = join(REPO, 'shapes/examples/markets')
 const RPC_PORT = 18899
 const RPC = `http://127.0.0.1:${RPC_PORT}`
 const MARKET = 'online-tutors'
+/** Badges count only as `market/role`: Ana and Cleo sell, Ben buys. */
+const SELLER = `${MARKET}/seller`
+const BUYER = `${MARKET}/buyer`
 const SIGNING_SEED = '09'.repeat(32)
 
 function missing(): string | null {
@@ -228,9 +234,11 @@ test('the index, end to end', { timeout: 600_000 }, async (t) => {
     const cleoDeclared = (await profileKeys(cleo.seed, 1)).wallet.address
 
     // --- The index, reading both from the start ------------------------------------------------
+    const markets = await serveMarkets()
+    cleanups.push(() => markets.close())
     const config = loadConfig({
       DATABASE_URL: dbUrl.toString(),
-      MARKETS_DIR,
+      MARKETS_URL: markets.url,
       FIREHOSE_URL: pds.url.replace(/^http/, 'ws'),
       PLC_URL: plc.url,
       SOLANA_RPC_URL: RPC,
@@ -329,7 +337,7 @@ test('the index, end to end', { timeout: 600_000 }, async (t) => {
       for (const p of [ana, ben, cleo]) {
         const reg = await buildRegistration({
           secret: p.secret,
-          market: MARKET,
+          market: p === ben ? BUYER : SELLER,
           did: p.did,
           listIndex: 0,
           leaves,
@@ -349,7 +357,7 @@ test('the index, end to end', { timeout: 600_000 }, async (t) => {
       await waitFor(async () => (await count('select count(*) n from badges')) === 3, 60_000, 'three badges')
       const { rows } = await index.db.query('select did, wallet, scope, list_owner from badges order by did')
       for (const b of rows) {
-        assert.equal(b.scope, MARKET)
+        assert.equal(b.scope, b.did === ben.did ? BUYER : SELLER)
         assert.equal(b.list_owner, FOUNDATION_ISSUER.toBase58(), 'who vouched')
       }
       assert.equal(rows.find((b) => b.did === cleo.did).wallet, cleo.wallet.publicKey.toBase58())
@@ -362,10 +370,12 @@ test('the index, end to end', { timeout: 600_000 }, async (t) => {
       escrow = inv.escrow
       await send([inv.instruction], [payer, ana.wallet])
       const keys = keysOf(decodeEscrow(new Uint8Array((await connection.getAccountInfo(escrow))!.data)))
+      // The escrow pays the seller only at her standard account for the mint; she has none yet.
       await send(
         [
+          makeStandardAccountIx({ payer: payer.publicKey, owner: ana.wallet.publicKey, mint: USDC_MINT }),
           transferIx({ from: tokens.get(ben.did)!.kp.publicKey, to: inv.deposit, owner: ben.wallet.publicKey, amount: 25_000_000n }),
-          releaseToSellerIx({ keys, sellerTokens: tokens.get(ana.did)!.kp.publicKey }),
+          releaseToSellerIx({ keys }),
         ],
         [payer, ben.wallet],
       )
@@ -460,8 +470,8 @@ test('the index, end to end', { timeout: 600_000 }, async (t) => {
       const b = (await get(`/profiles/${ben.did}.json`)).body
       const c = (await get(`/profiles/${cleo.did}.json`)).body
 
-      assert.deepEqual(a.scores.uniqueness.map((u: any) => [u.scope, u.value]), [[MARKET, 1]], "Ana's badge, vouched for by the foundation")
-      assert.deepEqual(b.scores.uniqueness.map((u: any) => [u.scope, u.value]), [[MARKET, 1]])
+      assert.deepEqual(a.scores.uniqueness.map((u: any) => [u.scope, u.value]), [[SELLER, 1]], "Ana's badge, vouched for by the foundation")
+      assert.deepEqual(b.scores.uniqueness.map((u: any) => [u.scope, u.value]), [[BUYER, 1]])
       assert.deepEqual(c.scores.uniqueness, [], "Cleo's badge does not count: her profile declares another wallet")
       assert.deepEqual(c.badges.map((x: any) => [x.counted, x.why]), [[false, 'walletNotDeclared']])
 

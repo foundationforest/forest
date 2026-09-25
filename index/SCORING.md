@@ -7,9 +7,10 @@ starts at zero. A badge means real and accountable, not good.
 - **Trust**: what the people this profile dealt with said about it, weighed by who said it and by
   what backs it up.
 
-These are this index's opinion, not the foundation's rule. The weights live in three files anyone
-can change on their own copy: `config/issuers.json`, `config/scoring.json` and
-`config/aliases.json`. Another index may weigh everything differently. The code is
+These are this index's opinion, not the foundation's rule. The weights live in two files anyone
+can change on their own copy, `config/issuers.json` and `config/scoring.json`; the market names and
+their other spellings come from the `markets` repo (`MARKETS_URL`). Another index may weigh
+everything differently. The code is
 `src/scores/compute.ts`, and it must say the same as this page.
 
 ## Badges: which ones count
@@ -17,11 +18,12 @@ can change on their own copy: `config/issuers.json`, `config/scoring.json` and
 A badge is one `Registered` entry the registry program itself wrote. It counts for a profile only
 if all three are true:
 
-1. **Its name is in the directory, byte for byte.** A scope is `market` or `market/role`, such as
-   `online-tutors/seller`. The name before the first slash must be a market file's name exactly: no
-   other case, no alias. If a role follows the slash, it must be one of that market's roles (seller
-   and buyer when the file names none). Aliases and other separators never apply to badges. If they
-   did, one person could register under two spellings and hold two badges in one market.
+1. **It is `market/role`, and its market is in the directory, byte for byte.** Such as
+   `tutoring/seller`. The name before the slash must be the name of a market the `markets` repo's
+   directory lists, exactly: no other case, no alias. The role after it must be one of that
+   market's roles (seller and buyer when the file names none). A plain `market`, with no role,
+   counts for nothing. Aliases and other separators never apply to badges. If they did, one person
+   could register under two spellings and hold two badges in one market.
 2. **The profile declares its wallet.** The entry names the wallet that signed the registration.
    The profile's own record must name the same wallet. Change the record's wallet and the badge
    stops counting at once.
@@ -29,7 +31,7 @@ if all three are true:
 
 ## Uniqueness
 
-For each counted badge (one market, or one market and role), take the owners of the lists that
+For each counted badge (one market and role), take the owners of the lists that
 vouch for it: the list owner each entry names. Each owner has a weight from 0 to 1 in
 `config/issuers.json`. The foundation's issuer starts at 1; every other key is 0 until someone
 sets it.
@@ -56,20 +58,21 @@ The receipt counts only if:
   mainnet and on devnet).
 
 If it counts, the index asks who said yes. The escrow has no accept step: the seller says yes by
-creating the escrow (an invoice), or by reviewing the deal.
+signing for the deal. That is creating the escrow (an invoice), signing its ending (a split, which
+both sign, or a release back to the buyer, a refund), or reviewing the deal.
 
 | What the receipt shows | Evidence | Weight |
 |---|---|---|
 | Paid, and the seller created it (an invoice) | both | 1 |
+| Paid, the buyer created it, and the seller signed its ending (a split, or a refund) | both | 1 |
 | Paid, the buyer created it, and the seller reviewed the same deal id | one-sided, confirmed | 1 |
-| Paid, the buyer created it, and the seller has not reviewed it | one-sided | 0.5 |
+| Paid, the buyer created it, the seller signed nothing (released to the seller, decided by an arbiter or by the timer, or not ended), and has not reviewed it | one-sided | 0.5 |
 | Not paid yet, or closed unfunded | none | 0.05 |
 | No deal id, an id with no receipt, someone else's receipt, or a token not counted | none | 0.05 |
 
 "Paid" means someone marked the escrow funded, or it ended. Every way out of the escrow pays out a
 balance that held the amount (the program checks it), so an ending proves the payment; a one-tap
-payment is never marked at all. However it ended (released to the seller, sent back to the buyer,
-split, decided by an arbiter, or by the timer) counts the same.
+payment is never marked at all.
 
 ## Trust
 

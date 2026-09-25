@@ -33,7 +33,7 @@ directory's spelling (`https://forest.foundation/markets/online-tutor.json`).
 
 Each offer carries `description`, `price` (`amount`, the currency as `mint`, and `per`: hour, day
 or job), `terms` (optional: an `arbiter`, and a `timer` of `days` to the `seller` or `buyer`),
-`availability`, `remote` or `location`, `expires`, the seller's `did`, `name` and `profileUrl`,
+`availability`, `remote` and `location` (either may be missing), `expires`, the seller's `did`, `name` and `profileUrl`,
 the seller's two scores (`uniqueness`, `trust`), and a `payLink`.
 
 ## Read a profile
@@ -60,11 +60,11 @@ accountable, not good.
 In `badges[]`:
 
 - `counted: true` means this index counts it. It counts only if all three hold:
-  - its `scope` names a directory market exactly (`online-tutors`, or `online-tutors/seller` with
-    a role);
+  - its `scope` is a directory market and one of its roles, exactly (`online-tutors/seller`); a
+    plain market with no role counts for nothing;
   - the profile declares the key the badge was registered with (`wallet` equals `profile.wallet`);
   - the profile exists here.
-- `why` says why not when it doesn't: `notInDirectory` or `walletNotDeclared`.
+- `why` says why not when it doesn't: `notInDirectory`, `noRole` or `walletNotDeclared`.
 - `issuer` is who vouched (the owner of the list the person is on), with the weight this index
   gives it. `scores.uniqueness[]` combines the issuers of each counted badge into one number from
   0 to 1.
@@ -94,7 +94,7 @@ How much a receipt backs a review (`evidence.kind` on the review):
 
 | Kind | Meaning | Weight |
 |---|---|---|
-| `both` | paid, and the seller asked for the payment | 1 |
+| `both` | paid, and the seller signed for it: asked for the payment, or signed a split or a refund | 1 |
 | `oneSidedConfirmed` | paid by the buyer, and the seller reviewed the same deal | 1 |
 | `oneSided` | paid by the buyer; the seller hasn't reviewed it | 0.5 |
 | `none` | no receipt, someone else's, a currency not counted, or not paid; the reason is in `note` | 0.05 |
