@@ -40,7 +40,7 @@ export type Timer = { days: number; to: Side }
 
 /** What `create` carries, besides the buyer, whose key is passed beside it. Every option is off unless set. */
 export type Terms = {
-  /** Any number the buyer has not used before. `randomId()` picks one. */
+  /** Any number the creator has not used before. `randomId()` picks one. */
   id: bigint
   seller: PublicKey
   /** In the mint's base units: what the deal is for, and what funds it. */
@@ -134,11 +134,20 @@ export function randomId(): bigint {
   return new DataView(b.buffer).getBigUint64(0, true)
 }
 
-export function escrowAddress(buyer: PublicKey, id: bigint, programId: PublicKey = PROGRAM_ID): PublicKey {
+/**
+ * The escrow's address: from the key of the party who opens it (the buyer, or the seller for an
+ * invoice) and an id. That party signs `create`, so nobody else can open an escrow there.
+ */
+export function escrowAddress(creator: PublicKey, id: bigint, programId: PublicKey = PROGRAM_ID): PublicKey {
   return PublicKey.findProgramAddressSync(
-    [Buffer.from(ESCROW_SEED), buyer.toBuffer(), Buffer.from(u64le(id))],
+    [Buffer.from(ESCROW_SEED), creator.toBuffer(), Buffer.from(u64le(id))],
     programId,
   )[0]
+}
+
+/** The key an escrow's address comes from: the party who opened it. */
+export function creatorKey(account: Pick<EscrowAccount, 'creator' | 'buyer' | 'seller'>): PublicKey {
+  return account.creator === 'buyer' ? account.buyer : account.seller
 }
 
 /** An associated token account: the standard address of `owner`'s account for `mint`. */
@@ -168,6 +177,15 @@ export function refundAddress(buyer: PublicKey, mint: PublicKey): PublicKey {
 }
 
 /**
+ * The seller's payout address: the seller's standard token account for the mint. Every payout to
+ * the seller lands here and nowhere else, the same rule as the buyer's. It has to exist when the
+ * seller is paid something; `makeStandardAccountIx` makes it first when it might not.
+ */
+export function payoutAddress(seller: PublicKey, mint: PublicKey): PublicKey {
+  return associatedTokenAddress(seller, mint)
+}
+
+/**
  * Make `owner`'s standard token account for `mint` if it is missing, and do nothing if it is
  * there: the associated token program's idempotent create, `payer` paying its rent. The account,
  * and its rent, are the owner's from then on.
@@ -190,6 +208,16 @@ export function makeStandardAccountIx(args: { payer: PublicKey; owner: PublicKey
 /** The buyer's refund address, made if missing: put it before a way out that pays the buyer. */
 export function makeRefundAddressIx(args: { payer: PublicKey; buyer: PublicKey; mint: PublicKey }): TransactionInstruction {
   return makeStandardAccountIx({ payer: args.payer, owner: args.buyer, mint: args.mint })
+}
+
+/**
+ * The deposit address, made if missing, `payer` paying its rent: the first instruction of every
+ * transaction that funds an escrow it creates. `create` adopts it. Made at the top of the
+ * transaction by the associated token program, not inside `create`, so a fee payer that checks
+ * every transfer's destination before it signs finds the deposit address already made.
+ */
+export function makeDepositAddressIx(args: { payer: PublicKey; escrow: PublicKey; mint: PublicKey }): TransactionInstruction {
+  return makeStandardAccountIx({ payer: args.payer, owner: args.escrow, mint: args.mint })
 }
 
 /** A plain SPL Token transfer (instruction 3), the way any wallet funds a deposit account. */
@@ -241,9 +269,9 @@ const rw = (pubkey: PublicKey, isSigner = false): AccountMeta => ({ pubkey, isSi
 
 /**
  * `create`. The creator signs: the buyer (the default), or the seller, invoicing (`invoiceIx`).
- * The payer signs, pays both rents, and is recorded to get back the deposit account's at the end,
- * or both if it never held the amount. The terms are checked against the program's rules
- * (`validateTerms`) before anything is built.
+ * The escrow's address comes from the creator's key. The payer signs and fronts both rents; every
+ * rent refund goes to the creator, never to the payer. The terms are checked against the
+ * program's rules (`validateTerms`) before anything is built.
  */
 export function createIx(args: {
   buyer: PublicKey
@@ -261,7 +289,7 @@ export function createIx(args: {
     throw new Error('NotAParty: the buyer or the seller opens an escrow')
   }
   if (args.mint.equals(NATIVE_MINT)) throw new Error('NativeMint: wrapped SOL is not accepted')
-  const escrow = escrowAddress(args.buyer, args.terms.id, programId)
+  const escrow = escrowAddress(creator, args.terms.id, programId)
   return new TransactionInstruction({
     programId,
     keys: [
@@ -305,8 +333,9 @@ export function markFundedIx(args: { escrow: PublicKey; vault: PublicKey; progra
 
 /**
  * The keys every way out needs, all fixed at creation: the escrow, its deposit account, both
- * parties, the mint and the rent payer. `keysOf` reads them from an escrow account off the chain;
- * `keysFor` computes them from terms, for an escrow created in the same transaction.
+ * parties, the mint and the rent recipient (the creator). `keysOf` reads them from an escrow
+ * account off the chain; `keysFor` computes them from terms, for an escrow created in the same
+ * transaction.
  */
 export type EscrowKeys = {
   escrow: PublicKey
@@ -314,21 +343,18 @@ export type EscrowKeys = {
   buyer: PublicKey
   seller: PublicKey
   mint: PublicKey
-  rentPayer: PublicKey
+  rentRecipient: PublicKey
 }
 
 export function keysOf(account: EscrowAccount, programId: PublicKey = PROGRAM_ID): EscrowKeys {
-  const escrow = escrowAddress(account.buyer, account.id, programId)
-  return { escrow, vault: account.vault, buyer: account.buyer, seller: account.seller, mint: account.mint, rentPayer: account.rentPayer }
+  const escrow = escrowAddress(creatorKey(account), account.id, programId)
+  return { escrow, vault: account.vault, buyer: account.buyer, seller: account.seller, mint: account.mint, rentRecipient: account.rentRecipient }
 }
 
-export function keysFor(args: { buyer: PublicKey; payer: PublicKey; mint: PublicKey; terms: Terms; programId?: PublicKey }): EscrowKeys {
-  const escrow = escrowAddress(args.buyer, args.terms.id, args.programId)
-  return { escrow, vault: vaultAddress(escrow, args.mint), buyer: args.buyer, seller: args.terms.seller, mint: args.mint, rentPayer: args.payer }
-}
-
-function sellersAccount(k: EscrowKeys, sellerTokens?: PublicKey): PublicKey {
-  return sellerTokens ?? associatedTokenAddress(k.seller, k.mint)
+export function keysFor(args: { buyer: PublicKey; mint: PublicKey; terms: Terms; creator?: PublicKey; programId?: PublicKey }): EscrowKeys {
+  const creator = args.creator ?? args.buyer
+  const escrow = escrowAddress(creator, args.terms.id, args.programId)
+  return { escrow, vault: vaultAddress(escrow, args.mint), buyer: args.buyer, seller: args.terms.seller, mint: args.mint, rentRecipient: creator }
 }
 
 function checkBps(sellerBps: number): void {
@@ -338,15 +364,15 @@ function checkBps(sellerBps: number): void {
 }
 
 /**
- * `release_to_seller`: the buyer signs; the whole balance to the seller. The seller's account is
- * its standard one for the mint unless `sellerTokens` names another token account it holds. Names
- * no buyer account: the buyer is paid nothing.
+ * `release_to_seller`: the buyer signs; the whole balance to the seller's payout address, which
+ * must exist (`makeStandardAccountIx` first if the seller may not hold the token yet). Names no
+ * buyer account: the buyer is paid nothing.
  */
-export function releaseToSellerIx(args: { keys: EscrowKeys; sellerTokens?: PublicKey; programId?: PublicKey }): TransactionInstruction {
+export function releaseToSellerIx(args: { keys: EscrowKeys; programId?: PublicKey }): TransactionInstruction {
   const k = args.keys
   return new TransactionInstruction({
     programId: args.programId ?? PROGRAM_ID,
-    keys: [rw(k.escrow), rw(k.vault), rw(sellersAccount(k, args.sellerTokens)), rw(k.rentPayer), ro(TOKEN_PROGRAM_ID), ro(k.buyer, true)],
+    keys: [rw(k.escrow), rw(k.vault), rw(payoutAddress(k.seller, k.mint)), rw(k.rentRecipient), ro(TOKEN_PROGRAM_ID), ro(k.buyer, true)],
     data: concat([discriminator('global', 'release_to_seller')]),
   })
 }
@@ -359,73 +385,73 @@ export function releaseToBuyerIx(args: { keys: EscrowKeys; programId?: PublicKey
   const k = args.keys
   return new TransactionInstruction({
     programId: args.programId ?? PROGRAM_ID,
-    keys: [rw(k.escrow), rw(k.vault), rw(refundAddress(k.buyer, k.mint)), rw(k.rentPayer), ro(TOKEN_PROGRAM_ID), ro(k.seller, true)],
+    keys: [rw(k.escrow), rw(k.vault), rw(refundAddress(k.buyer, k.mint)), rw(k.rentRecipient), ro(TOKEN_PROGRAM_ID), ro(k.seller, true)],
     data: concat([discriminator('global', 'release_to_buyer')]),
   })
 }
 
-function bothAccounts(k: EscrowKeys, sellerTokens?: PublicKey): AccountMeta[] {
-  return [rw(k.escrow), rw(k.vault), rw(refundAddress(k.buyer, k.mint)), rw(sellersAccount(k, sellerTokens)), rw(k.rentPayer), ro(TOKEN_PROGRAM_ID)]
+function bothAccounts(k: EscrowKeys): AccountMeta[] {
+  return [rw(k.escrow), rw(k.vault), rw(refundAddress(k.buyer, k.mint)), rw(payoutAddress(k.seller, k.mint)), rw(k.rentRecipient), ro(TOKEN_PROGRAM_ID)]
 }
 
-/** `split`: both sign; `sellerBps` of the whole balance to the seller, rounded down, the rest to the buyer. */
-export function splitIx(args: { keys: EscrowKeys; sellerBps: number; sellerTokens?: PublicKey; programId?: PublicKey }): TransactionInstruction {
+/**
+ * `split`: both sign; `sellerBps` of the whole balance to the seller, rounded down, the rest to the
+ * buyer. Each side's standard account must exist if its share is above zero.
+ */
+export function splitIx(args: { keys: EscrowKeys; sellerBps: number; programId?: PublicKey }): TransactionInstruction {
   checkBps(args.sellerBps)
   const k = args.keys
   return new TransactionInstruction({
     programId: args.programId ?? PROGRAM_ID,
-    keys: [...bothAccounts(k, args.sellerTokens), ro(k.buyer, true), ro(k.seller, true)],
+    keys: [...bothAccounts(k), ro(k.buyer, true), ro(k.seller, true)],
     data: concat([discriminator('global', 'split'), u16le(args.sellerBps)]),
   })
 }
 
 /** `arbitrate`: the arbiter named at creation signs any split, the same way both parties can. */
-export function arbitrateIx(args: {
-  keys: EscrowKeys
-  arbiter: PublicKey
-  sellerBps: number
-  sellerTokens?: PublicKey
-  programId?: PublicKey
-}): TransactionInstruction {
+export function arbitrateIx(args: { keys: EscrowKeys; arbiter: PublicKey; sellerBps: number; programId?: PublicKey }): TransactionInstruction {
   checkBps(args.sellerBps)
   return new TransactionInstruction({
     programId: args.programId ?? PROGRAM_ID,
-    keys: [...bothAccounts(args.keys, args.sellerTokens), ro(args.arbiter, true)],
+    keys: [...bothAccounts(args.keys), ro(args.arbiter, true)],
     data: concat([discriminator('global', 'arbitrate'), u16le(args.sellerBps)]),
   })
 }
 
 /**
  * `timer_release`: anyone, once the timer set at creation is due (`timerDueAt`); the whole balance
- * to the side it names. Built only from the escrow account as read from the chain, since the
- * account it pays depends on the timer: the buyer's refund address, or a token account the seller
- * holds (its standard one unless `sellerTokens` names another).
+ * to the side it names, at that side's standard account (the buyer's refund address or the
+ * seller's payout address). Built only from the escrow account as read from the chain, since the
+ * account it pays depends on the timer.
  */
-export function timerReleaseIx(args: { account: EscrowAccount; sellerTokens?: PublicKey; programId?: PublicKey }): TransactionInstruction {
+export function timerReleaseIx(args: { account: EscrowAccount; programId?: PublicKey }): TransactionInstruction {
   const programId = args.programId ?? PROGRAM_ID
   const a = args.account
   if (a.status === 'ended') throw new Error('Ended: this escrow has ended')
   if (!a.timer) throw new Error('NoTimer: no timer was set at creation')
   if (a.status !== 'funded') throw new Error('FundingNotMarked: send mark_funded first; the timer counts from it')
   const k = keysOf(a, programId)
-  const to = a.timer.to === 'buyer' ? refundAddress(k.buyer, k.mint) : sellersAccount(k, args.sellerTokens)
+  const to = a.timer.to === 'buyer' ? refundAddress(k.buyer, k.mint) : payoutAddress(k.seller, k.mint)
   return new TransactionInstruction({
     programId,
-    keys: [rw(k.escrow), rw(k.vault), rw(to), rw(k.rentPayer), ro(TOKEN_PROGRAM_ID)],
+    keys: [rw(k.escrow), rw(k.vault), rw(to), rw(k.rentRecipient), ro(TOKEN_PROGRAM_ID)],
     data: concat([discriminator('global', 'timer_release')]),
   })
 }
 
 /**
- * `close_unfunded`: an escrow that never held the amount, by the buyer, the seller or the rent
- * payer, at any time. Whatever it holds goes back to the buyer's refund address (which must exist
- * only if it holds something); both accounts close; both rents go to the rent payer.
+ * `close_unfunded`: an escrow that never held the amount, by the buyer or the seller, at any time.
+ * Whatever it holds goes back to the buyer's refund address (which must exist only if it holds
+ * something); both accounts close; both rents go to the creator.
  */
 export function closeUnfundedIx(args: { keys: EscrowKeys; closer: PublicKey; programId?: PublicKey }): TransactionInstruction {
   const k = args.keys
+  if (!args.closer.equals(k.buyer) && !args.closer.equals(k.seller)) {
+    throw new Error('NotACloser: only the buyer or the seller can close an escrow that never held the amount')
+  }
   return new TransactionInstruction({
     programId: args.programId ?? PROGRAM_ID,
-    keys: [rw(k.escrow), rw(k.vault), rw(refundAddress(k.buyer, k.mint)), rw(k.rentPayer), ro(TOKEN_PROGRAM_ID), ro(args.closer, true)],
+    keys: [rw(k.escrow), rw(k.vault), rw(refundAddress(k.buyer, k.mint)), rw(k.rentRecipient), ro(TOKEN_PROGRAM_ID), ro(args.closer, true)],
     data: concat([discriminator('global', 'close_unfunded')]),
   })
 }
@@ -443,7 +469,7 @@ export function recoverLateIx(args: { account: EscrowAccount; caller: PublicKey;
   return new TransactionInstruction({
     programId,
     keys: [
-      ro(escrowAddress(a.buyer, a.id, programId)),
+      ro(escrowAddress(creatorKey(a), a.id, programId)),
       rw(a.vault),
       rw(a.buyer),
       rw(refundAddress(a.buyer, a.mint)),
@@ -459,22 +485,43 @@ export function recoverLateIx(args: { account: EscrowAccount; caller: PublicKey;
 
 /**
  * `sweep_rent`: anyone, on any escrow. What the escrow account holds above its current rent-exempt
- * minimum goes to the rent payer recorded at creation; the account keeps exactly the minimum and
- * its bytes. Nobody signs but the transaction's fee payer.
+ * minimum goes to the rent recipient recorded at creation, the creator; the account keeps exactly
+ * the minimum and its bytes. Nobody signs but the transaction's fee payer.
  */
-export function sweepRentIx(args: { escrow: PublicKey; rentPayer: PublicKey; programId?: PublicKey }): TransactionInstruction {
+export function sweepRentIx(args: { escrow: PublicKey; rentRecipient: PublicKey; programId?: PublicKey }): TransactionInstruction {
   return new TransactionInstruction({
     programId: args.programId ?? PROGRAM_ID,
-    keys: [rw(args.escrow), rw(args.rentPayer)],
+    keys: [rw(args.escrow), rw(args.rentRecipient)],
     data: concat([discriminator('global', 'sweep_rent')]),
   })
 }
 
 /**
- * Pay in one tap: `create`, a plain transfer of the amount into the deposit account, and
- * `release_to_seller`, for one transaction the buyer signs (with the payer). The buyer pays from
- * its standard account unless `from` names another it holds. Put `makeStandardAccountIx` for the
- * seller first if the seller may not hold the token yet.
+ * Open and fund in one transaction: the deposit address made first (`makeDepositAddressIx`, the
+ * payer paying), the buyer's `create`, and a plain transfer of the amount into the deposit
+ * account. The buyer signs, with the payer. The buyer pays from its standard account unless `from`
+ * names another it holds.
+ */
+export function createAndFund(args: {
+  buyer: PublicKey
+  payer: PublicKey
+  mint: PublicKey
+  terms: Terms
+  from?: PublicKey
+  programId?: PublicKey
+}): TransactionInstruction[] {
+  const keys = keysFor(args)
+  return [
+    makeDepositAddressIx({ payer: args.payer, escrow: keys.escrow, mint: args.mint }),
+    createIx(args),
+    transferIx({ from: args.from ?? associatedTokenAddress(args.buyer, args.mint), to: keys.vault, owner: args.buyer, amount: args.terms.amount }),
+  ]
+}
+
+/**
+ * Pay in one tap: `createAndFund`, then `release_to_seller`, for one transaction the buyer signs
+ * (with the payer). Put `makeStandardAccountIx` for the seller first if the seller may not hold
+ * the token yet: the seller is paid only at its standard account.
  */
 export function payInOneTap(args: {
   buyer: PublicKey
@@ -482,15 +529,9 @@ export function payInOneTap(args: {
   mint: PublicKey
   terms: Terms
   from?: PublicKey
-  sellerTokens?: PublicKey
   programId?: PublicKey
 }): TransactionInstruction[] {
-  const keys = keysFor(args)
-  return [
-    createIx(args),
-    transferIx({ from: args.from ?? associatedTokenAddress(args.buyer, args.mint), to: keys.vault, owner: args.buyer, amount: args.terms.amount }),
-    releaseToSellerIx({ keys, sellerTokens: args.sellerTokens, programId: args.programId }),
-  ]
+  return [...createAndFund(args), releaseToSellerIx({ keys: keysFor(args), programId: args.programId })]
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -513,9 +554,10 @@ export type EscrowAccount = {
   arbiter: PublicKey | null
   mint: PublicKey
   vault: PublicKey
-  rentPayer: PublicKey
+  /** Where every rent refund goes: the creator's key. */
+  rentRecipient: PublicKey
   amount: bigint
-  /** Who opened it: the seller, for an invoice. */
+  /** Who opened it: the seller, for an invoice. The escrow's address comes from its key. */
   creator: Side
   /** null when none was set. */
   timer: Timer | null
@@ -535,7 +577,7 @@ export type EscrowAccount = {
 
 /**
  * version 0, id 1..9, buyer 9..41, seller 41..73, arbiter 73..105, mint 105..137, vault 137..169,
- * rent_payer 169..201, amount 201..209, creator 209, timer_days 210..212, timer_to 212,
+ * rent_recipient 169..201, amount 201..209, creator 209, timer_days 210..212, timer_to 212,
  * created_at 213..221, funded_at 221..229, status 229, bump 230, ended_at 231..239, outcome 239,
  * to_seller 240..248, to_buyer 248..256.
  */
@@ -551,7 +593,7 @@ export function decodeEscrow(data: Uint8Array): EscrowAccount {
   const arbiter = r.key()
   const mint = r.key()
   const vault = r.key()
-  const rentPayer = r.key()
+  const rentRecipient = r.key()
   const amount = r.u64()
   const creator = r.side()
   const timerDays = r.u16()
@@ -576,7 +618,7 @@ export function decodeEscrow(data: Uint8Array): EscrowAccount {
     arbiter: arbiter.equals(PublicKey.default) ? null : arbiter,
     mint,
     vault,
-    rentPayer,
+    rentRecipient,
     amount,
     creator,
     timer: timerDays === 0 ? null : { days: timerDays, to: timerTo },
@@ -607,7 +649,7 @@ export type EscrowEvent =
       arbiter: PublicKey | null
       mint: PublicKey
       vault: PublicKey
-      rentPayer: PublicKey
+      rentRecipient: PublicKey
       amount: bigint
       timer: Timer | null
       createdAt: bigint
@@ -622,14 +664,14 @@ export type EscrowEvent =
       toSeller: bigint
       toBuyer: bigint
       endedAt: bigint
-      rentPayer: PublicKey
-      /** The deposit account's rent, returned. The escrow account's stays in the receipt. */
+      rentRecipient: PublicKey
+      /** The deposit account's rent, returned to the creator. The escrow account's stays in the receipt. */
       rentLamports: bigint
     }
-  | { kind: 'closed'; escrow: PublicKey; closedBy: PublicKey; toBuyer: bigint; rentPayer: PublicKey; rentLamports: bigint }
+  | { kind: 'closed'; escrow: PublicKey; closedBy: PublicKey; toBuyer: bigint; rentRecipient: PublicKey; rentLamports: bigint }
   /** Money that came after the end went back to the buyer's refund address; the deposit account's rent to the buyer. */
   | { kind: 'recoveredLate'; escrow: PublicKey; toBuyer: bigint; rentLamports: bigint }
-  /** Lamports above the minimum went to the rent payer; `left` is the minimum kept. */
+  /** Lamports above the minimum went to the creator; `left` is the minimum kept. */
   | { kind: 'rentSwept'; escrow: PublicKey; lamports: bigint; left: bigint }
 
 const EVENT_NAMES: [string, EscrowEvent['kind']][] = [
@@ -659,7 +701,7 @@ export function decodeEvent(bytes: Uint8Array): EscrowEvent | null {
       const arbiter = r.key()
       const mint = r.key()
       const vault = r.key()
-      const rentPayer = r.key()
+      const rentRecipient = r.key()
       const amount = r.u64()
       const timerDays = r.u16()
       const timerTo = r.side()
@@ -675,7 +717,7 @@ export function decodeEvent(bytes: Uint8Array): EscrowEvent | null {
         arbiter: arbiter.equals(PublicKey.default) ? null : arbiter,
         mint,
         vault,
-        rentPayer,
+        rentRecipient,
         amount,
         timer: timerDays === 0 ? null : { days: timerDays, to: timerTo },
         createdAt,
@@ -697,13 +739,13 @@ export function decodeEvent(bytes: Uint8Array): EscrowEvent | null {
         toSeller: r.u64(),
         toBuyer: r.u64(),
         endedAt: r.i64(),
-        rentPayer: r.key(),
+        rentRecipient: r.key(),
         rentLamports: r.u64(),
       }
       break
     }
     case 'closed':
-      event = { kind, escrow, closedBy: r.key(), toBuyer: r.u64(), rentPayer: r.key(), rentLamports: r.u64() }
+      event = { kind, escrow, closedBy: r.key(), toBuyer: r.u64(), rentRecipient: r.key(), rentLamports: r.u64() }
       break
     case 'recoveredLate':
       event = { kind, escrow, toBuyer: r.u64(), rentLamports: r.u64() }

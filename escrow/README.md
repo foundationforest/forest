@@ -10,12 +10,15 @@ and stopped at the deploy for lack of test SOL in sessions 15 and 18; it has not
 this version.
 
 Money in, and out only when the two sides agree. Either party opens an escrow, naming both keys,
-the token and the amount; one the seller opens is an invoice. Money arrives at its own deposit
+the token and the amount; one the seller opens is an invoice. The escrow's address comes from the
+key of whoever opens it, who signs, so nobody can open an escrow at an address another key will
+use. Money arrives at its own deposit
 address by a plain transfer from anywhere, and the escrow is funded once that address holds the
 amount. Then there are three ways out: the buyer releases everything to the seller, the seller
 releases everything to the buyer, or both sign a split. Receiving in full never needs the
 receiver's signature, so each side alone can give, and only together can they divide. Every way
-out pays out the whole balance, whatever it is.
+out pays out the whole balance, whatever it is, and pays each side only at its standard token
+account for the mint.
 
 Two options exist, each off unless the creator turns it on at creation: an arbiter key that may
 sign any split, and a timer that, a number of days after the funding is marked, lets anyone send
@@ -23,16 +26,17 @@ everything to the side it names. There is no other clock. Cancellation and refun
 features: they are the seller releasing to the buyer, or a split.
 
 A finished escrow stays at its address as a permanent receipt. Money sent to it after the end
-goes back to the buyer, and rent above the minimum goes back to whoever paid it; anyone may send
-either. An escrow that never held the amount is closed instead, by either party or its rent payer,
-at any time. Nothing in the program is anyone's dial: there is no admin, no config account, no
-pause and no fee.
+goes back to the buyer, and rent above the minimum goes back to the creator; anyone may send
+either. An escrow that never held the amount is closed instead, by either party, at any time. Every
+rent refund goes to the creator, whoever fronted the rent: a fee payer that fronts it charges the
+person for it, so the refund has to reach the person. Nothing in the program is anyone's dial:
+there is no admin, no config account, no pause and no fee.
 
 | | |
 |---|---|
 | `program/` | the program. Anchor 1.2, Rust, `cargo build-sbf`. |
-| `program/tests-litesvm/` | 49 LiteSVM tests with the clock moved by hand, and the wire format written out a second time: `escrow.rs` (20: every way out with exact balances, every rejection, the costs), `adversarial.rs` (27: the attacks, and the `finding_…` tests that pin what the program accepts by design) and `one_tap.rs` (2: the one-tap payment, its receipt and its rent, and a second payment to its link). |
-| `program/trident-tests/` | a Trident fuzzer: random flows against the built program, a model of every escrow beside it, twelve invariants checked after every step and at the end of every run. |
+| `program/tests-litesvm/` | 51 LiteSVM tests with the clock moved by hand, and the wire format written out a second time: `escrow.rs` (22: every way out with exact balances, every rejection, whose the address is, where rent goes, the costs), `adversarial.rs` (27: the attacks, and the `finding_…` tests that pin what the program accepts by design) and `one_tap.rs` (2: the one-tap payment, its receipt and its rent, and a second payment to its link). |
+| `program/trident-tests/` | a Trident fuzzer: random flows against the built program, a model of every escrow beside it, thirteen invariants checked after every step and at the end of every run. |
 | `client/` | TypeScript, browser and Node: a builder for every instruction, the terms from a post's optional terms block, the check a person runs before working or paying, the timer, the deposit address and its pay link, the account and the events decoded. |
 | `security-checklist.md` | the safe-solana-builder checklist: every rule, how it is applied here, and every known limit. |
 
@@ -51,16 +55,16 @@ cd escrow/client    && npm run test:devnet                # read-only, against d
 
 | From | Instruction | Signs | Needs | To |
 |---|---|---|---|---|
-| nothing | `create` | the buyer or the seller, and the rent payer | buyer and seller differ; no zero keys; amount above zero; a timer, if any, of at least one day; a classic SPL Token mint, not wrapped SOL; the address never held an escrow that is still there | open |
+| nothing | `create` | the buyer or the seller as creator, and whoever fronts the rent | the address is `["escrow", creator, id]`; buyer and seller differ; no zero keys; amount above zero; a timer, if any, of at least one day; a classic SPL Token mint, not wrapped SOL; the address never held an escrow that is still there | open, the creator recorded as where rent goes back |
 | open | `mark_funded` | nobody | the deposit account holds at least the amount | funded, `funded_at` = now |
-| open, funded | `release_to_seller` | the buyer | the deposit account holds at least the amount | ended: the whole balance to the seller |
-| open, funded | `release_to_buyer` | the seller | the same | ended: the whole balance to the buyer |
+| open, funded | `release_to_seller` | the buyer | the deposit account holds at least the amount | ended: the whole balance to the seller's standard account |
+| open, funded | `release_to_buyer` | the seller | the same | ended: the whole balance to the buyer's standard account |
 | open, funded | `split(seller_bps)` | the buyer and the seller | the same; `seller_bps` at most 10,000 | ended: `⌊balance × seller_bps / 10,000⌋` to the seller, the rest to the buyer |
 | open, funded | `arbitrate(seller_bps)` | the arbiter | an arbiter was named at creation; the same | ended: the same split |
 | funded | `timer_release` | nobody | a timer was set at creation; now is at least `funded_at` + days × 86,400 | ended: the whole balance to the side the timer names |
-| open, funded | `close_unfunded` | the buyer, the seller or the rent payer | the deposit account holds less than the amount | gone: whatever it held to the buyer, both accounts closed, both rents to the rent payer |
+| open, funded | `close_unfunded` | the buyer or the seller | the deposit account holds less than the amount | gone: whatever it held to the buyer, both accounts closed, both rents to the creator |
 | ended | `recover_late` | anyone, who makes the buyer's standard account if it is missing | its deposit account made again by a later payment | ended, unchanged: the late money to the buyer's standard account, that account's rent to the buyer |
-| anything but gone | `sweep_rent` | nobody | the escrow account holds more than its rent-exempt minimum | unchanged: the excess to the rent payer |
+| anything but gone | `sweep_rent` | nobody | the escrow account holds more than its rent-exempt minimum | unchanged: the excess to the creator |
 | ended | anything else | | | refused: `Ended` |
 
 "Funded" in the Needs column is the live balance, never the `funded` status: the ways out check
@@ -70,7 +74,7 @@ added to a deposit account (only this program moves it out, and only by ending t
 once it holds the amount it holds it until the end, and `close_unfunded` can never run on an
 escrow that was funded.
 
-Every ending writes its outcome into the escrow account and emits one `Ended` event: the outcome
+Every ending closes the deposit account, its rent to the creator. Every ending writes its outcome into the escrow account and emits one `Ended` event: the outcome
 (`ReleasedToSeller`, `ReleasedToBuyer`, `Split`, `Arbitrated`, `TimerReleased`), the agreed amount,
 the balance paid out, what each side got, when, and the deposit account's rent returned.
 `close_unfunded` emits `Closed`: nothing was dealt, so there is no receipt. The six events are
@@ -83,42 +87,51 @@ instruction (`what_each_way_out_costs` and `one_tap.rs`):
 
 | | Compute units | Of 1,400,000 | Bytes on the wire | Of 1,232 |
 |---|---|---|---|---|
-| `create`, no options | 31,600 to 49,600 | 2 to 4% | 595 | 48% |
-| `create`, an arbiter and a timer | 31,700 to 57,200 | 2 to 4% | 630 | 51% |
+| `create`, no options | 31,600 to 45,100 | 2 to 3% | 595 | 48% |
+| `create`, an arbiter and a timer | 31,700 to 49,700 | 2 to 4% | 630 | 51% |
 | `mark_funded` | 4,154 | 0.3% | 283 | 23% |
-| `release_to_seller` | 10,782 to 10,799 | 0.8% | 447 | 36% |
-| `release_to_buyer` | 11,600 to 17,600 | 0.8 to 1.3% | 447 | 36% |
-| `split` | 15,200 to 21,200 | 1.1 to 1.5% | 579 | 47% |
-| `arbitrate` | 14,800 to 20,900 | 1.1 to 1.5% | 482 | 39% |
-| `timer_release`, to the seller | 10,028 | 0.7% | 350 | 28% |
-| `timer_release`, to the buyer | 11,300 to 17,300 | 0.8 to 1.2% | 350 | 28% |
-| `close_unfunded`, nothing paid | 8,900 to 14,900 | 0.6 to 1.1% | 447 | 36% |
-| `recover_late`, making the buyer's account | 29,600 to 47,600 | 2 to 3% | 578 | 47% |
-| `sweep_rent` | 4,229 | 0.3% | 251 | 20% |
-| one tap: `create`, a plain transfer in, `release_to_seller` | 42,300 to 63,300 | 3 to 5% | 691 | 56% |
-| the same, the seller's account made first in it | 55,800 to 84,300 | 4 to 6% | 733 | 59% |
-| the same, an arbiter and a timer | 42,400 to 58,900 | 3 to 4% | 726 | 59% |
-| an invoice paid in one tap: the transfer and `release_to_seller` | 10,857 to 10,874 | 0.8% | 494 | 40% |
+| `release_to_seller` | 11,400 to 14,400 | 0.8 to 1.0% | 447 | 36% |
+| `release_to_buyer` | 11,600 to 16,100 | 0.8 to 1.1% | 479 | 39% |
+| `split` | 15,700 to 20,200 | 1.1 to 1.4% | 579 | 47% |
+| `arbitrate` | 15,600 to 20,100 | 1.1 to 1.4% | 514 | 42% |
+| `timer_release`, to the seller | 11,400 to 14,400 | 0.8 to 1.0% | 382 | 31% |
+| `timer_release`, to the buyer | 11,400 to 15,900 | 0.8 to 1.1% | 382 | 31% |
+| `close_unfunded`, nothing paid | 8,900 to 13,400 | 0.6 to 1.0% | 479 | 39% |
+| `recover_late`, making the buyer's account | 29,600 to 43,100 | 2 to 3% | 578 | 47% |
+| `sweep_rent` | 4,230 | 0.3% | 283 | 23% |
+| one tap: the deposit address made, `create`, a plain transfer in, `release_to_seller` | 39,400 to 52,900 | 3 to 4% | 701 | 57% |
+| the same, the seller's account made first in it | 53,000 to 71,000 | 4 to 5% | 743 | 60% |
+| the same, an arbiter and a timer | 39,500 to 56,000 | 3 to 4% | 736 | 60% |
+| an invoice paid in one tap: the transfer and `release_to_seller` | 11,700 to 17,700 | 0.8 to 1.3% | 526 | 43% |
 
 Most rows vary because they derive an address, and a derivation tries bump seeds until one lands
 off the curve at 1,500 units a try; the keys decide how many tries. `create` derives the escrow's
-address and its deposit account; every instruction that names the buyer's standard account checks
-it by address, which is one derivation. `release_to_seller` and a timer to the seller name no buyer
-account, so they barely vary.
+address and its deposit account; every instruction that pays a party checks that party's standard
+account by address, which is one derivation.
+
+Some rows are 32 bytes longer than the last version's: the rent recipient is now the creator, a key
+the transaction does not otherwise carry when someone else signs (the seller releasing the buyer's
+escrow, the arbiter, a timer, a sweep, the buyer paying an invoice), where it used to be the payer,
+which every transaction carries. The one tap's top-level deposit address adds 10 bytes; its compute
+came out lower than the last version's, since `create` finds the account made rather than making it
+through a call into the associated token program.
 
 Rent, at the 5,080 lamports per byte session 3 read from mainnet and the 696 the current cuts end
-at (SOL at $100.24). The deposit account's rent comes back at every ending. The escrow account's
-comes back whole only if it never held the amount; otherwise the account is the receipt and keeps
-its rent-exempt minimum, and `sweep_rent` returns whatever is above that minimum as the cuts land:
+at (SOL at $100.24). Whoever fronts it, it comes back to the creator. The deposit account's rent
+comes back at every ending. The escrow account's comes back whole only if it never held the
+amount; otherwise the account is the receipt and keeps its rent-exempt minimum, and `sweep_rent`
+returns whatever is above that minimum as the cuts land:
 
 | Account | Bytes | Today | After the cuts | Returned |
 |---|---|---|---|---|
 | escrow | 264 | 1,991,360 lamports, $0.20 | 272,832 lamports, $0.027 | whole only if never funded; above the minimum by `sweep_rent` |
 | deposit account | 165 | 1,488,440 lamports, $0.15 | 203,928 lamports, $0.020 | at every ending |
 
-`one_tap.rs` measures the receipt's rent with the Rent sysvar at each rate: 1,991,360 and 272,832
-lamports, exactly what the payer keeps out. The escrow account is 55 bytes smaller than the last
-version's, so a receipt costs 279,400 lamports less at today's rate.
+`one_tap.rs` measures the one tap with the Rent sysvar at each rate: the payer fronts 3,479,800 and
+476,760 lamports, the deposit account's 1,488,440 and 203,928 go to the buyer in the same
+transaction, and the receipt keeps 1,991,360 and 272,832. `feepayer/`'s local test runs the same
+flows through Kora: each storage deposit is charged to the person once, in the dollar token, and
+every one that comes back comes back to the person.
 
 ## What is sealed
 
@@ -126,17 +139,18 @@ These cannot change after v1 deploys.
 
 - **The state.** One account per escrow, 256 bytes after the discriminator, the layout in
   `program/src/state.rs` and written out again by hand in `program/tests-litesvm/src/lib.rs` and
-  `client/src/program.ts`: version, id, buyer, seller, arbiter, mint, deposit account, rent payer,
-  amount, creator, timer days, timer side, created, funded (marked), status, bump, ended, outcome,
+  `client/src/program.ts`: version, id, buyer, seller, arbiter, mint, deposit account, rent
+  recipient (always the creator's key), amount, creator, timer days, timer side, created, funded (marked), status, bump, ended, outcome,
   what the seller got, what the buyer got. `version` is 1. The zero key means no arbiter; zero
   timer days mean no timer; a zero time means not marked or not ended. The status is open, funded
   or ended (0 to 2); the outcome byte means something only once ended (0 to 4, in the order
   above); a side is buyer 0, seller 1.
-- **The addresses.** The escrow is `["escrow", buyer, id]` under the program, whichever party opens
-  it; the deposit account is the escrow's associated token account for the mint, the standard
-  derivation, so any wallet that sends the token "to the escrow's address" lands it there. An
-  address that ever held a funded escrow is taken for good: `create` there fails, because the
-  receipt is still there.
+- **The addresses.** The escrow is `["escrow", creator, id]` under the program: the key of the party
+  who opens it (the buyer, or the seller for an invoice), who signs `create`. Nobody can open an
+  escrow at an address another key will use. The deposit account is the escrow's associated token
+  account for the mint, the standard derivation, so any wallet that sends the token "to the
+  escrow's address" lands it there. An address that ever held a funded escrow is taken for good:
+  `create` there fails, because the receipt is still there.
 - **The rules,** as the state table says, and the order of checks in each handler, which decides
   the error a refused instruction returns. Every one checks "ended" first, as an allowlist of the
   live states (open, funded).
@@ -150,8 +164,13 @@ These cannot change after v1 deploys.
   holds that account now: a buyer who hands it to another key cannot block a way out. It needs to
   exist only when the buyer is paid something; whoever sends the way out makes it first in the same
   transaction if it might be missing (`makeRefundAddressIx`), and `recover_late` makes it itself.
-- **Where the seller is paid.** At any token account for the mint that the seller holds, checked by
-  holder and mint.
+- **Where the seller is paid.** The same rule: at the seller's standard token account for the mint,
+  and no other account, on every way out, the timer included. Checked by address alone. It needs to
+  exist only when the seller is paid something; whoever sends the way out makes it first if it might
+  be missing (`makeStandardAccountIx`).
+- **Where rent goes back.** To the creator, recorded at creation: the deposit account's at every
+  ending, both rents from `close_unfunded`, and everything `sweep_rent` moves. Whoever fronted the
+  rent gets nothing back, and has no say over an escrow it paid for.
 - **What a Token-2022 mint gets.** Refused at `create`: the mint account must be owned by the
   classic token program. A transfer fee, a permanent delegate or a transfer hook would change
   what "hold X, release X" means, and this cannot be patched.
@@ -175,17 +194,14 @@ Everything the program does not know.
   puts that in words; `assertOptionsAgreed` throws instead.
 - **The amount.** Per hour, per session or per job is the app multiplying before creation. One
   escrow per payment.
-- **The id.** Any 64-bit number the buyer has not used; `randomId()` picks one. An address that
+- **The id.** Any 64-bit number the creator has not used; `randomId()` picks one. An address that
   ever held a funded escrow cannot be opened again; one closed without ever holding the amount can,
-  by the same buyer and id, and adopts whatever arrived there since. Anyone can open a buyer's
-  address first, as an invoice naming itself as the seller, because whoever opens an escrow names
-  the seller. One tap loses nothing to that (its `create` fails, and the whole transaction with it);
-  an app that pays in a transaction apart from its own `create` reads the escrow first and checks
-  `whatDiffers` is empty. The buyer can close such an escrow, which never held anything, and
-  reopen.
+  by the same creator and id, and adopts whatever arrived there since.
 - **Who opens it.** The buyer (`createIx`), or the seller as an invoice (`invoice`, which gives the
-  seller's `create` and the pay link to send the buyer). The receipt records which: an index weighs
-  a receipt by who agreed, and a seller who created the escrow agreed.
+  seller's `create`, at the seller's address, and the pay link to send the buyer). The receipt
+  records which: an index weighs a receipt by who agreed, and a seller who created the escrow
+  agreed. Before paying an invoice, the buyer's app checks it names the buyer's own key as buyer:
+  every refund goes there.
 - **When to send `mark_funded`.** Only the timer needs it, and it counts from the moment
   `mark_funded` runs, not from when the money arrived. The side a timer favours marks as soon as the
   money lands; nobody can mark before the amount is there, or date a mark earlier.
@@ -195,15 +211,18 @@ Everything the program does not know.
   balance, so a second payment before the end goes wherever the rest goes (to the seller, on a
   release); the link does not invite one. A payment that arrives after the end anyway is not lost:
   `recover_late` sends it back to the buyer, and anyone may send that.
-- **One tap.** `payInOneTap` gives `create`, a plain transfer of the amount and
-  `release_to_seller` for one transaction; put `makeStandardAccountIx` for the seller first if the
-  seller may not hold the token yet.
-- **Which seller account gets paid.** The seller's standard account unless the caller names another
-  it holds (`sellerTokens`). For `timer_release`, whoever sends it chooses.
-- **Who pays the rent.** Whoever signs `create` as the payer: either party, or any key paying for
-  them; the program cannot tell. The same key gets the deposit account's rent back at the end,
-  whoever sends the ending, and both rents if it never held the amount. Every funded escrow keeps
-  one receipt's rent-exempt minimum for good, and `sweep_rent` returns what the cuts free above it.
+- **Funding in the same transaction.** `createAndFund` gives the deposit address made first (the
+  associated token program's idempotent create, `makeDepositAddressIx`), `create` and a plain
+  transfer of the amount; `payInOneTap` adds `release_to_seller`. The deposit address is made at the
+  top of the transaction, not only inside `create`, so a fee payer that checks every transfer's
+  destination before it signs (Kora does) finds it made, and can sign "Pay". Put
+  `makeStandardAccountIx` for the seller first if the seller may not hold the token yet.
+- **Who fronts the rent.** Whoever signs `create` as the payer: either party, or any key paying for
+  them, such as a fee payer that charges the person for it. The program cannot tell and never needs
+  to: the rent always comes back to the creator. Every funded escrow keeps one receipt's
+  rent-exempt minimum for good, and `sweep_rent` returns what the cuts free above it. A refund
+  arrives in SOL in the creator's wallet, which in a fee payer's app may otherwise hold none; what
+  the app does with it is the app's choice, and the copy never says "SOL".
 
 ## How a review points at an escrow
 
@@ -249,7 +268,7 @@ every other devnet key (`devnet/keys.sh`, `docs/devnet.md`).
 
 ## Chosen, not decided
 
-Where the handoff and Carlos's four answers were silent, the simplest option was taken. Each is
+Where the handoff and Carlos's answers were silent, the simplest option was taken. Each is
 reversible until something ships, and each is in `docs/changes/escrow.md`.
 
 1. **Funded means the live balance covers the amount**, checked by every way out, and below it the
@@ -267,24 +286,30 @@ reversible until something ships, and each is in `docs/changes/escrow.md`.
 6. **One `Ended` event for every way out**, with the outcome inside, rather than one event per
    outcome; `seller_bps` is not in it, since what each side got is.
 7. **The escrow records who created it** (`creator`), for the index's "who said yes".
-8. **`timer_release` names one account**, the side's the timer names, checked in the handler: a
-   seller's by holder and mint, the buyer's by address.
+8. **`timer_release` names one account**, the side's the timer names, checked in the handler by
+   address: that side's standard account.
 9. **The buyer and the seller must differ, and no key may be the zero key**, the arbiter's
    included, since the zero key means "no arbiter".
-10. **`close_unfunded` has no wait for anyone**, the rent payer included: no deadline exists.
+10. **`close_unfunded` has no wait for either party**: no deadline exists. Only the parties may send
+    it; whoever fronted the rent may not, since the rent is not its own.
 11. **The pay link takes the balance and asks for what is missing**, because an overpayment is no
     longer returned by the program.
-12. **`recover_late` and `sweep_rent` are unchanged** from the last version, known limits included.
-13. **Anchor 1.2, `cargo build-sbf`, no IDL**, as in the registry: the client and the Rust tests
+12. **`recover_late` is unchanged** from the last version, known limits included: the re-made
+    deposit account's rent goes to the buyer, whose wallet almost always made it, not to the
+    creator, since it was not fronted at creation. `sweep_rent` pays the creator.
+13. **`whatDiffers` is gone.** It guarded against someone opening the buyer's address first, which
+    the program now refuses.
+14. **Anchor 1.2, `cargo build-sbf`, no IDL**, as in the registry: the client and the Rust tests
     both write the bytes by hand. Classic `token::transfer`, not `transfer_checked`, since
     Token-2022 is refused at `create`.
 
 ## What this does not do
 
-No devnet deploy of this version, no mainnet, no Kora. No paid review has happened, and
+No devnet deploy of this version, no mainnet; Kora only on a local validator, in `feepayer/`'s
+local test. No paid review has happened, and
 `docs/handoff.md`'s "Before mainnet" list still stands in full. Whether the wallets people use accept
 a program-derived address as a Solana Pay recipient has not been tried on a phone; if one does not,
 the app sends to the deposit address directly, which the client also gives. Tokens of another mint
 sent to an escrow's address are not recovered: its associated token account for that mint is a
-different address, and nothing here signs for it. SOL sent to an escrow's address goes to the rent
-payer by `sweep_rent`, not back to whoever sent it. `security-checklist.md` lists every known limit.
+different address, and nothing here signs for it. SOL sent to an escrow's address goes to the
+creator by `sweep_rent`, not back to whoever sent it. `security-checklist.md` lists every known limit.

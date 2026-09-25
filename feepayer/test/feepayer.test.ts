@@ -1,6 +1,8 @@
 // The fee payer, run locally: Kora (installed by ../build.sh, started by ../run.sh) in front of a
-// local validator with both Forest programs loaded. A wallet that holds no SOL registers once and
-// pays for two escrows, paying for everything in a test dollar; Kora refuses what it must refuse.
+// local validator with both Forest programs loaded. A wallet that holds no SOL registers once,
+// pays for two escrows and closes a third it never funded, paying for everything in a test dollar;
+// each storage deposit is charged to it once, and every one that comes back comes back to it. Kora
+// refuses what it must refuse.
 //
 //   npm run test:local
 //
@@ -62,13 +64,14 @@ import {
 } from '../../registry/client/src/index.ts'
 import {
   PROGRAM_ID as ESCROW_ID,
-  approveIx,
-  createIx,
+  closeUnfundedIx,
+  createAndFund,
   decodeEscrow,
-  escrowAddress,
+  keysFor,
+  payInOneTap,
+  releaseToSellerIx,
+  sweepRentIx,
   termsFor,
-  vaultAddress,
-  type OfferTerms,
 } from '../../escrow/client/src/index.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -322,7 +325,7 @@ after(() => {
   if (work) rmSync(work, { recursive: true, force: true })
 })
 
-test('a wallet with no SOL registers and pays for two escrows through Kora, in a test dollar', { timeout: 600_000 }, async (t) => {
+test('a wallet with no SOL registers, pays for two escrows and closes a third through Kora, in a test dollar; every refund comes back to it', { timeout: 600_000 }, async (t) => {
   const why = missing()
   if (why) return t.skip(why)
   if (!validator) return t.skip('solana-test-validator did not start (is it on the PATH?)')
@@ -441,87 +444,103 @@ test('a wallet with no SOL registers and pays for two escrows through Kora, in a
     /[Ff]ee payer cannot/,
   )
 
-  // ---- An escrow: pay (create + the money in), then release, each through Kora ----
-  const offer: OfferTerms = {
-    autoReleaseDays: 7,
-    cancellationSteps: [
-      { hours: -24, refundPercent: 100 },
-      { hours: 0, refundPercent: 50 },
-    ],
-  }
-  const inTenDays = BigInt(Math.floor(Date.now() / 1000)) + 10n * 86_400n
+  // ---- An escrow: pay (the deposit address, create, the money in), then release, each through Kora ----
+  // The seller's post sets no options. The person opens each escrow, so its address is the
+  // person's and every storage deposit that comes back comes back to the person: the fee payer
+  // fronts each one in SOL and charges the person for it in the test dollar, once.
   const deal = (amount: bigint) => {
-    const terms = termsFor(offer, { seller: seller.publicKey, amount, mint: USDC_MINT, serviceTime: inTenDays })
-    const escrow = escrowAddress(person.publicKey, terms.id)
-    const vault = vaultAddress(escrow, USDC_MINT)
-    // Through Kora the deposit address is made at the top of the transaction, not only inside
-    // `create`. Kora 2.0.5 looks up the destination of every token transfer before it signs, and
-    // accepts one that does not exist yet only when the same transaction makes it with a top-level
-    // associated-token-account instruction; one the escrow program makes inside its own call is
-    // invisible to it ("Account ... not found"). `create`'s init_if_needed then finds it made.
-    const depositAddress = createAssociatedTokenAccountIdempotentInstruction(feePayer.publicKey, vault, escrow, USDC_MINT)
-    const create = createIx({ buyer: person.publicKey, payer: feePayer.publicKey, mint: USDC_MINT, terms })
-    const fund = createTransferInstruction(personTokens, vault, person.publicKey, amount)
-    const approve = approveIx({
-      accounts: { escrow, vault, buyer: person.publicKey, mint: USDC_MINT, sellerTokens, rentPayer: feePayer.publicKey },
-      buyer: person.publicKey,
-    })
-    return { escrow, vault, depositAddress, create, fund, approve }
+    const terms = termsFor(undefined, { seller: seller.publicKey, amount })
+    const keys = keysFor({ buyer: person.publicKey, mint: USDC_MINT, terms })
+    const args = { buyer: person.publicKey, payer: feePayer.publicKey, mint: USDC_MINT, terms }
+    return { keys, pay: createAndFund(args), oneTap: payInOneTap(args), release: releaseToSellerIx({ keys }) }
   }
 
   const first = deal(2_000_000n)
   const beforePay = await balances()
-  // Kora refuses the escrow's pay step when only the escrow program makes the deposit address.
-  await assert.rejects(throughKora([first.create, first.fund]), (err: Error) => {
+  // Kora refuses the pay step when only the escrow program makes the deposit address. Kora 2.0.5
+  // looks up the destination of every token transfer before it signs, and accepts one that does not
+  // exist yet only when the same transaction makes it with a top-level associated-token-account
+  // instruction; one the escrow program makes inside its own call is invisible to it ("Account ...
+  // not found"). So the client makes it first, and `create` finds it made.
+  const [, create, fund] = first.pay
+  await assert.rejects(throughKora([create, fund]), (err: Error) => {
     refusals.depositMadeInsideProgram = err.message
     return err instanceof KoraError && /not found/.test(err.message)
   })
-  const pay = await throughKora([first.depositAddress, first.create, first.fund])
+  const pay = await throughKora(first.pay)
   const afterPay = await balances()
-  rent.escrow = await connection.getBalance(first.escrow)
-  assert.equal(await connection.getBalance(first.vault), rent.deposit)
-  const account = decodeEscrow(new Uint8Array((await connection.getAccountInfo(first.escrow))!.data))
-  assert.equal(account.rentPayer.toBase58(), feePayer.publicKey.toBase58(), 'the program records the fee payer as the rent payer')
+  rent.escrow = await connection.getBalance(first.keys.escrow)
+  assert.equal(await connection.getBalance(first.keys.vault), rent.deposit)
+  const account = decodeEscrow(new Uint8Array((await connection.getAccountInfo(first.keys.escrow))!.data))
+  assert.equal(account.rentRecipient.toBase58(), person.publicKey.toBase58(), 'the program records the person, who opened it, as where rent goes back')
   const paySpent = beforePay.feePayerSol - afterPay.feePayerSol
   assert.equal(paySpent, pay.networkFee + rent.escrow + rent.deposit, "the fee payer's SOL: the network fee, the escrow and its deposit address")
-  assert.ok(pay.charge >= BigInt(paySpent), 'the fee payer paid for nobody')
+  assert.equal(pay.charge, BigInt(paySpent) + 50n, 'charged once for each, plus the 50 lamports Kora adds for the payment instruction')
   assert.equal(afterPay.personTokens, beforePay.personTokens - 2_000_000n - pay.charge)
   assert.equal(afterPay.personSol, 0)
 
-  const release = await throughKora([first.approve])
+  const release = await throughKora([first.release])
   const afterRelease = await balances()
-  assert.equal((await getAccount(connection, sellerTokens)).amount, 2_000_000n, 'the seller is paid')
-  assert.equal(await connection.getAccountInfo(first.vault), null, 'the deposit address is closed')
-  const releaseDelta = afterRelease.feePayerSol - afterPay.feePayerSol
+  assert.equal((await getAccount(connection, sellerTokens)).amount, 2_000_000n, 'the seller is paid, at its standard account')
+  assert.equal(await connection.getAccountInfo(first.keys.vault), null, 'the deposit address is closed')
   // The deposit address's storage deposit, which the person paid for when the escrow was made,
-  // comes back to the recorded rent payer: the fee payer.
-  assert.equal(releaseDelta, rent.deposit - release.networkFee, 'the deposit comes back to the fee payer, not the person')
-  assert.equal(release.charge, BigInt(release.networkFee) + 50n, 'and Kora charges the release its network fee only: a deposit coming back is not in its price')
-  assert.equal(afterRelease.personSol, 0)
+  // comes back to the person. The fee payer gets nothing back.
+  assert.equal(afterRelease.personSol, rent.deposit, 'the deposit comes back to the person')
+  const releaseSpent = afterPay.feePayerSol - afterRelease.feePayerSol
+  assert.equal(releaseSpent, release.networkFee, 'the fee payer pays the network fee and gets nothing back')
+  assert.equal(release.charge, BigInt(release.networkFee) + 50n, 'and Kora charges the release its network fee only')
 
-  // ---- A second escrow in one tap: create, pay and release in one transaction ----
+  // ---- A second escrow in one tap: the deposit address, create, pay and release in one transaction ----
   const second = deal(1_000_000n)
   const beforeTap = await balances()
-  const tap = await throughKora([second.depositAddress, second.create, second.fund, second.approve])
+  const tap = await throughKora(second.oneTap)
   const afterTap = await balances()
   assert.equal((await getAccount(connection, sellerTokens)).amount, 3_000_000n)
   const tapSpent = beforeTap.feePayerSol - afterTap.feePayerSol
-  assert.equal(tapSpent, tap.networkFee + rent.escrow, 'the deposit address is made and closed in the same transaction')
-  assert.ok(tap.charge >= BigInt(tapSpent), 'the fee payer paid for nobody')
-  const overcharge = tap.charge - BigInt(tapSpent)
-  assert.equal(overcharge, BigInt(rent.deposit) + 50n, 'the one tap is charged the deposit address that it makes and closes itself')
-  assert.equal(afterTap.personSol, 0)
+  assert.equal(tapSpent, tap.networkFee + rent.escrow + rent.deposit, 'the fee payer fronts the receipt and the deposit address, and gets neither back')
+  assert.equal(tap.charge, BigInt(tapSpent) + 50n, 'charged once for each: nothing over but the 50 lamports for the payment instruction')
+  assert.equal(afterTap.personSol - beforeTap.personSol, rent.deposit, "the deposit address's rent back to the person, in the same transaction")
+
+  // ---- A third escrow, never funded, closed by the person: both storage deposits back to it ----
+  const third = deal(500_000n)
+  const [openDeposit, openCreate] = third.pay
+  const beforeOpen = await balances()
+  const open = await throughKora([openDeposit, openCreate])
+  const afterOpen = await balances()
+  const openSpent = beforeOpen.feePayerSol - afterOpen.feePayerSol
+  assert.equal(openSpent, open.networkFee + rent.escrow + rent.deposit)
+  assert.equal(open.charge, BigInt(openSpent) + 50n, 'charged once for each')
+  const close = await throughKora([closeUnfundedIx({ keys: third.keys, closer: person.publicKey })])
+  const afterClose = await balances()
+  assert.equal(await connection.getAccountInfo(third.keys.escrow), null, 'the escrow is gone')
+  assert.equal(await connection.getAccountInfo(third.keys.vault), null, 'and its deposit address')
+  assert.equal(afterClose.personSol - afterOpen.personSol, rent.escrow + rent.deposit, 'both storage deposits back to the person')
+  assert.equal(afterOpen.feePayerSol - afterClose.feePayerSol, close.networkFee, 'the fee payer gets nothing back')
+  assert.equal(close.charge, BigInt(close.networkFee) + 50n)
+
+  // ---- SOL sent to a receipt, swept: to the person ----
+  // A sweep needs no signature, so anyone sends it; here `setup` does. (Through Kora, the person
+  // would sign only the payment, and `throughKora` asks for its quote before adding the payment, so
+  // the quote would be one signature short.)
+  await send([SystemProgram.transfer({ fromPubkey: setup.publicKey, toPubkey: first.keys.escrow, lamports: 1_000_000 })], [setup])
+  const beforeSweep = await balances()
+  await send([sweepRentIx({ escrow: first.keys.escrow, rentRecipient: person.publicKey })], [setup])
+  const afterSweep = await balances()
+  assert.equal(afterSweep.personSol - beforeSweep.personSol, 1_000_000, 'to the person, who opened the escrow')
+  assert.equal(await connection.getBalance(first.keys.escrow), rent.escrow, 'the receipt keeps exactly its minimum')
 
   const end = await balances()
-  assert.equal(end.personSol, 0, 'the person never held a lamport')
+  const refunded = 3 * rent.deposit + rent.escrow + 1_000_000 // release, one tap, close (both), sweep
+  assert.equal(end.personSol, refunded, 'the person was never given a lamport but its own refunds')
   const lamports = (n: number | bigint) => `${Number(n).toLocaleString('en-US')} lamports`
   console.log('\n== the fee payer, Kora 2.0.5, on a local validator ==')
   console.log(`   rent here: code account ${lamports(rent.code)}, escrow account ${lamports(rent.escrow)}, deposit address ${lamports(rent.deposit)}`)
   console.log(`   registration: ${reg.wire} bytes, ${reg.units} units, network fee ${lamports(reg.networkFee)}; charged ${reg.charge} test-dollar units (${lamports(reg.estimate.fee_in_lamports)}); fee payer spent ${lamports(regSpent)}`)
   console.log(`   escrow, pay: ${pay.wire} bytes, ${pay.units} units; charged ${pay.charge} units; fee payer spent ${lamports(paySpent)}`)
-  console.log(`   escrow, release: ${release.wire} bytes, ${release.units} units; charged ${release.charge} units; fee payer's SOL changed by +${lamports(releaseDelta)} (the deposit address's rent came back to it)`)
-  console.log(`   escrow, one tap: ${tap.wire} bytes, ${tap.units} units; charged ${tap.charge} units; fee payer spent ${lamports(tapSpent)}; overcharge ${overcharge} units`)
-  console.log(`   person: ${START_DOLLARS - end.personTokens} test-dollar units spent in all, 0 SOL throughout`)
+  console.log(`   escrow, release: ${release.wire} bytes, ${release.units} units; charged ${release.charge} units; fee payer spent ${lamports(releaseSpent)}; the deposit address's rent went to the person`)
+  console.log(`   escrow, one tap: ${tap.wire} bytes, ${tap.units} units; charged ${tap.charge} units; fee payer spent ${lamports(tapSpent)}; charged over that: ${tap.charge - BigInt(tapSpent)} units`)
+  console.log(`   escrow, opened and closed unfunded: charged ${open.charge} + ${close.charge} units; both storage deposits went to the person`)
+  console.log(`   person: ${START_DOLLARS - end.personTokens} test-dollar units spent in all; ${lamports(end.personSol)} of storage deposits and a swept tip came back to it, never to the fee payer`)
   console.log('   refused:')
   for (const [name, message] of Object.entries(refusals)) console.log(`     ${name}: ${message.slice(0, 160)}`)
   console.log()

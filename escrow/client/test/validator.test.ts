@@ -5,13 +5,15 @@
 //    seller reads it off the chain and checks its options, money arrives by a plain token
 //    transfer any wallet could make (a half over the amount, on purpose), anyone marks it funded,
 //    and both sign a 70/30 split of the whole balance.
-// 2. An invoice paid in one tap: the seller opens it, the buyer reads it, checks its options, and
-//    pays and releases in one transaction.
-// 3. A refund: the buyer opens one from a post with a timer to the seller, pays, marks it; the
-//    seller gives everything back before the timer is due.
-// Then the balances, the rent, the receipts and the events are checked. Last, the invoice's old
-// pay link is paid again: a stranger sends that money back to the buyer's standard account, and
-// SOL sent to a receipt is swept back to the rent payer.
+// 2. An invoice paid in one tap: the seller opens it at its own address, the buyer reads it,
+//    checks its options, and pays and releases in one transaction.
+// 3. A refund: the buyer opens one from a post with a timer to the seller, the deposit address
+//    made first and the money sent in the same transaction, and marks it; the seller gives
+//    everything back before the timer is due.
+// Then the balances, the rent, the receipts and the events are checked. A payer fronts every
+// rent; the buyer and the seller hold no SOL at all, and every rent refund reaches the creator
+// anyway. Last, the invoice's old pay link is paid again: a stranger sends that money back to the
+// buyer's standard account, and SOL sent to a receipt is swept back to its creator.
 //
 //   npm run test:validator
 //
@@ -44,6 +46,7 @@ import { Connection, Keypair, LAMPORTS_PER_SOL, PublicKey, SystemProgram, Transa
 
 import {
   PROGRAM_ID,
+  createAndFund,
   decodeEscrow,
   decodeEvents,
   depositAddress,
@@ -51,10 +54,12 @@ import {
   keysFor,
   keysOf,
   makeRefundAddressIx,
+  makeStandardAccountIx,
   markFundedIx,
   createIx,
   optionsNotAgreed,
   payout,
+  payoutAddress,
   recoverLateIx,
   refundAddress,
   releaseToBuyerIx,
@@ -154,17 +159,17 @@ test('three deals go through a real validator: a split, an invoice paid in one t
   if (why) return t.skip(why)
   if (!validator) return t.skip('solana-test-validator did not start (is it on the PATH?)')
 
-  // The fee payer and rent payer (a fee payer service in production). Buyer and seller are two keys.
+  // The fee payer, which fronts every rent (a fee payer service in production). Buyer and seller
+  // are two keys with no SOL.
   const payer = Keypair.generate()
   const buyer = Keypair.generate()
   const seller = Keypair.generate()
   await confirm(await connection.requestAirdrop(payer.publicKey, 100 * LAMPORTS_PER_SOL))
 
   // A six-decimal classic SPL Token mint. The buyer holds 10.00 in an account that is not its
-  // standard one; the seller holds an empty one.
+  // standard one; the seller holds nothing yet.
   const mint = Keypair.generate()
   const buyerTokens = Keypair.generate()
-  const sellerTokens = Keypair.generate()
   const mintRent = await connection.getMinimumBalanceForRentExemption(MINT_SIZE)
   const accountRent = await connection.getMinimumBalanceForRentExemption(ACCOUNT_SIZE)
   const newAccount = (key: PublicKey, space: number, lamports: number) =>
@@ -175,13 +180,14 @@ test('three deals go through a real validator: a split, an invoice paid in one t
       createInitializeMint2Instruction(mint.publicKey, 6, payer.publicKey, null),
       newAccount(buyerTokens.publicKey, ACCOUNT_SIZE, accountRent),
       createInitializeAccount3Instruction(buyerTokens.publicKey, mint.publicKey, buyer.publicKey),
-      newAccount(sellerTokens.publicKey, ACCOUNT_SIZE, accountRent),
-      createInitializeAccount3Instruction(sellerTokens.publicKey, mint.publicKey, seller.publicKey),
       createMintToInstruction(mint.publicKey, buyerTokens.publicKey, payer.publicKey, 10_000_000),
     ],
-    [payer, mint, buyerTokens, sellerTokens],
+    [payer, mint, buyerTokens],
   )
   const refund = refundAddress(buyer.publicKey, mint.publicKey)
+  const sellers = payoutAddress(seller.publicKey, mint.publicKey)
+  const sol = (key: Keypair) => connection.getBalance(key.publicKey)
+  assert.deepEqual([await sol(buyer), await sol(seller)], [0, 0])
 
   // ------------------------------------------------------------------------------------------
   // 1. A proposal settled by a split.
@@ -189,7 +195,7 @@ test('three deals go through a real validator: a split, an invoice paid in one t
   // The seller's post carries no terms: every option off.
   const post: PostTerms | undefined = undefined
   const terms = termsFor(post, { seller: seller.publicKey, amount: 1_000_000n })
-  const k = keysFor({ buyer: buyer.publicKey, payer: payer.publicKey, mint: mint.publicKey, terms })
+  const k = keysFor({ buyer: buyer.publicKey, mint: mint.publicKey, terms })
   const payerBefore = await connection.getBalance(payer.publicKey)
   const created = await send([createIx({ buyer: buyer.publicKey, payer: payer.publicKey, mint: mint.publicKey, terms })], [payer, buyer])
   const [createdEvent] = decodeEvents(await logsOf(created))
@@ -222,14 +228,16 @@ test('three deals go through a real validator: a split, an invoice paid in one t
   assert.equal(e.status, 'funded')
   assert.ok(e.fundedAt !== null)
 
-  // Both sign 70/30 of the whole balance. The buyer's share goes to its standard account, which
-  // this buyer does not have yet: made first in the same transaction.
+  // Both sign 70/30 of the whole balance. Each share goes to that side's standard account, which
+  // neither has yet: both made first in the same transaction.
   const expected = payout(1_500_000n, 7_000)
   assert.equal(await connection.getAccountInfo(refund), null, 'no standard account yet')
+  assert.equal(await connection.getAccountInfo(sellers), null, 'no standard account yet')
   const split = await send(
     [
       makeRefundAddressIx({ payer: payer.publicKey, buyer: buyer.publicKey, mint: mint.publicKey }),
-      splitIx({ keys: k, sellerBps: 7_000, sellerTokens: sellerTokens.publicKey }),
+      makeStandardAccountIx({ payer: payer.publicKey, owner: seller.publicKey, mint: mint.publicKey }),
+      splitIx({ keys: k, sellerBps: 7_000 }),
     ],
     [payer, buyer, seller],
   )
@@ -243,23 +251,25 @@ test('three deals go through a real validator: a split, an invoice paid in one t
     toSeller: 1_050_000n,
     toBuyer: 450_000n,
     endedAt: ended.kind === 'ended' ? ended.endedAt : 0n,
-    rentPayer: payer.publicKey,
+    rentRecipient: buyer.publicKey,
     rentLamports: BigInt(vaultRent),
   })
-  assert.equal(await tokens(sellerTokens.publicKey), expected.toSeller)
+  assert.equal(await tokens(sellers), expected.toSeller, "the seller's share, at its standard account")
   assert.equal(await tokens(buyerTokens.publicKey), 10_000_000n - 1_500_000n, 'nothing back here')
   assert.equal(await tokens(refund), expected.toBuyer, "the buyer's share, at its standard account")
   const refundRent = await connection.getBalance(refund)
+  const sellersRent = await connection.getBalance(sellers)
   assert.equal(await connection.getAccountInfo(k.vault), null, 'the deposit account is closed')
+  assert.equal(await sol(buyer), vaultRent, "the deposit account's rent went to the buyer, who opened it, not to the payer")
   // The escrow account stays: the receipt, with how it ended and who got what.
   const receipt = await escrowAt(k.escrow)
   assert.deepEqual([receipt.status, receipt.outcome, receipt.toSeller, receipt.toBuyer], ['ended', 'split', 1_050_000n, 450_000n])
   assert.equal(await connection.getBalance(k.escrow), escrowRent, 'the receipt keeps its rent')
-  // The rent payer paid the fees, the receipt's rent and the buyer's new account, and got the
-  // deposit account's back.
+  // The payer fronted the fees, both rents and both new standard accounts, and got nothing back:
+  // in production it charges the person for each, once.
   const fees = 4 * 3 * 5_000 // generously: four transactions of at most three signatures
-  const spent = payerBefore - (await connection.getBalance(payer.publicKey)) - escrowRent - refundRent
-  assert.ok(spent > 0 && spent <= fees, `only fees, the receipt's rent and the buyer's account left the payer: ${spent} lamports besides`)
+  const spent = payerBefore - (await connection.getBalance(payer.publicKey)) - escrowRent - vaultRent - refundRent - sellersRent
+  assert.ok(spent > 0 && spent <= fees, `only fees, both rents and the two standard accounts left the payer: ${spent} lamports besides`)
 
   // ------------------------------------------------------------------------------------------
   // 2. An invoice paid in one tap.
@@ -270,17 +280,22 @@ test('three deals go through a real validator: a split, an invoice paid in one t
   assert.deepEqual(decodeEvents(await logsOf(invoiced)).map((ev) => ev.kind), ['created'])
   const onChain = await escrowAt(inv.escrow)
   assert.equal(onChain.creator, 'seller')
+  assert.deepEqual([onChain.rentRecipient, keysOf(onChain).escrow], [seller.publicKey, inv.escrow], "the seller's address, its rent back to the seller")
+  assert.ok(onChain.buyer.equals(buyer.publicKey), 'the buyer checks the invoice names it: every refund goes there')
   assert.deepEqual(optionsNotAgreed({ escrow: onChain, me: 'buyer', agreed: null }), [], 'the buyer checks before paying')
+  const invoiceVaultRent = await connection.getBalance(inv.deposit)
+  const sellerSol = await sol(seller)
   const paid = await send(
     [
       createTransferInstruction(buyerTokens.publicKey, inv.deposit, buyer.publicKey, 2_000_000),
-      releaseToSellerIx({ keys: keysOf(onChain), sellerTokens: sellerTokens.publicKey }),
+      releaseToSellerIx({ keys: keysOf(onChain) }),
     ],
     [payer, buyer],
   )
   const paidEvents = decodeEvents(await logsOf(paid))
   assert.ok(paidEvents.length === 1 && paidEvents[0].kind === 'ended' && paidEvents[0].outcome === 'releasedToSeller')
-  assert.equal(await tokens(sellerTokens.publicKey), expected.toSeller + 2_000_000n)
+  assert.equal(await tokens(sellers), expected.toSeller + 2_000_000n)
+  assert.equal(await sol(seller), sellerSol + invoiceVaultRent, "the invoice's deposit rent went to the seller, who opened it")
   const invoiceReceipt = await escrowAt(inv.escrow)
   assert.deepEqual([invoiceReceipt.creator, invoiceReceipt.outcome, invoiceReceipt.fundedAt], ['seller', 'releasedToSeller', null])
 
@@ -289,11 +304,10 @@ test('three deals go through a real validator: a split, an invoice paid in one t
 
   const timedPost: PostTerms = { timer: { days: 3, to: 'seller' } }
   const timedTerms = termsFor(timedPost, { seller: seller.publicKey, amount: 500_000n })
-  const tk = keysFor({ buyer: buyer.publicKey, payer: payer.publicKey, mint: mint.publicKey, terms: timedTerms })
+  const tk = keysFor({ buyer: buyer.publicKey, mint: mint.publicKey, terms: timedTerms })
   await send(
     [
-      createIx({ buyer: buyer.publicKey, payer: payer.publicKey, mint: mint.publicKey, terms: timedTerms }),
-      createTransferInstruction(buyerTokens.publicKey, tk.vault, buyer.publicKey, 500_000),
+      ...createAndFund({ buyer: buyer.publicKey, payer: payer.publicKey, mint: mint.publicKey, terms: timedTerms, from: buyerTokens.publicKey }),
       markFundedIx({ escrow: tk.escrow, vault: tk.vault }),
     ],
     [payer, buyer],
@@ -305,10 +319,13 @@ test('three deals go through a real validator: a split, an invoice paid in one t
   assert.equal(timerDueAt(timed), timed.fundedAt! + 3n * 86_400n)
   assert.equal(timerDue(timed), false)
   const refundBefore = await tokens(refund)
+  const buyerSol = await sol(buyer)
+  const timedVaultRent = await connection.getBalance(tk.vault)
   const given = await send([releaseToBuyerIx({ keys: tk })], [payer, seller])
   const [refunded] = decodeEvents(await logsOf(given))
   assert.ok(refunded.kind === 'ended' && refunded.outcome === 'releasedToBuyer' && refunded.toBuyer === 500_000n)
   assert.equal(await tokens(refund), refundBefore + 500_000n)
+  assert.equal(await sol(buyer), buyerSol + timedVaultRent, "the deposit account's rent back to the buyer")
 
   // ------------------------------------------------------------------------------------------
   // Money after the end, and SOL at a receipt.
@@ -333,17 +350,19 @@ test('three deals go through a real validator: a split, an invoice paid in one t
   assert.equal(await connection.getAccountInfo(depositAddress(inv.escrow, mint.publicKey)), null, 'the deposit account is closed again')
   assert.deepEqual((await connection.getAccountInfo(inv.escrow))!.data, receiptBytes, 'the receipt does not change')
 
-  // SOL sent to the receipt goes back to the rent payer, and the receipt keeps exactly its minimum.
+  // SOL sent to the receipt goes back to its creator, the seller, and the receipt keeps exactly its
+  // minimum. Named to the payer, which fronted the rent, the sweep is refused.
   const minimum = await connection.getBalance(inv.escrow)
   await send([SystemProgram.transfer({ fromPubkey: stranger.publicKey, toPubkey: inv.escrow, lamports: 1_000_000 })], [payer, stranger])
-  const payerBeforeSweep = await connection.getBalance(payer.publicKey)
-  const swept = await send([sweepRentIx({ escrow: inv.escrow, rentPayer: payer.publicKey })], [payer])
+  await assert.rejects(send([sweepRentIx({ escrow: inv.escrow, rentRecipient: payer.publicKey })], [payer]), /ConstraintHasOne|0x7d1/)
+  const sellerBeforeSweep = await sol(seller)
+  const swept = await send([sweepRentIx({ escrow: inv.escrow, rentRecipient: seller.publicKey })], [payer])
   const [sweep] = decodeEvents(await logsOf(swept))
   assert.deepEqual(sweep, { kind: 'rentSwept', escrow: inv.escrow, lamports: 1_000_000n, left: BigInt(minimum) })
   assert.equal(await connection.getBalance(inv.escrow), minimum)
-  assert.equal(await connection.getBalance(payer.publicKey), payerBeforeSweep + 1_000_000 - 5_000, 'the rent payer, less this fee')
+  assert.equal(await sol(seller), sellerBeforeSweep + 1_000_000, 'the creator; the payer paid only the fee')
 
-  console.log(`  escrow ${k.escrow.toBase58()}: funded 1.5 by plain transfer, split 70/30 of the whole balance, ${vaultRent} lamports of rent returned, ${escrowRent} kept in the receipt`)
-  console.log(`  invoice ${inv.escrow.toBase58()}: paid and released in one tap; paid again later and sent back to the buyer by a stranger; a SOL tip swept to the rent payer`)
+  console.log(`  escrow ${k.escrow.toBase58()}: funded 1.5 by plain transfer, split 70/30 of the whole balance, ${vaultRent} lamports of rent returned to the buyer, ${escrowRent} kept in the receipt`)
+  console.log(`  invoice ${inv.escrow.toBase58()}: at the seller's address, paid and released in one tap; paid again later and sent back to the buyer by a stranger; a SOL tip swept to the seller`)
   console.log(`  escrow ${tk.escrow.toBase58()}: a timer to the seller, given back by the seller before it was due`)
 })

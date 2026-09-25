@@ -42,11 +42,11 @@ pub enum EscrowError {
     TimeOverflow,
     #[msg("a split is between 0 and 10,000 basis points")]
     BadSplit,
-    #[msg("only the buyer, the seller or the rent payer can close an escrow that never held the amount")]
+    #[msg("only the buyer or the seller can close an escrow that never held the amount")]
     NotACloser,
     #[msg("the buyer is paid only at its standard token account for the escrow's mint")]
     NotTheRefundAddress,
-    #[msg("the seller is paid only at a token account the seller owns, for the escrow's mint")]
+    #[msg("the seller is paid only at its standard token account for the escrow's mint")]
     NotTheSellersAccount,
     #[msg("the escrow account holds no more than its rent-exempt minimum")]
     NothingToSweep,

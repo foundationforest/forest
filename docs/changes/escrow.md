@@ -168,3 +168,140 @@ consolidation session to fold into `docs/changes.md` and `docs/handoff.md`.
      and the lexicon's `timer.days` bound matches the program's sixteen bits.
 - **Still standing:** as the plan update listed, with the devnet deploy and run still not done; the
   escrow half of it would now deploy this version.
+
+## 2026-09-25, round 2: whose address, where the seller is paid, where rent goes, "Pay" through a fee payer
+
+- **Task,** from Carlos, after the first pull request merged: four changes to the escrow, each with a
+  test that fails before and passes after, every suite kept green; the fuzzer's long campaign on
+  the final binary; the costs measured again; the README and checklist updated; `feepayer/`'s local
+  test run end to end against the new escrow ("each deposit charged to the person once, every
+  refund back to them"), editing that test only where the escrow change broke it. No deploy.
+- **Base.** `main` at `6423919` (the plan update, the fee payer and carrier, and the issuer's
+  request limit all merged). The pull request touches `escrow/`, this file and
+  `feepayer/test/feepayer.test.ts`.
+- **Decided (by Carlos, given in the task; written here):**
+  1. **Nobody can take someone else's escrow address.** The address is `["escrow", creator, id]`,
+     from the key of whoever opens it, and the creator signs `create`. `whatDiffers` goes, since its
+     only purpose was that squatting.
+  2. **The seller is paid only at its standard token account for the mint,** like the buyer, on
+     every way out, the timer included.
+  3. **Rent goes back to the person, never to whoever fronted it.** The creator is recorded as the
+     rent recipient at creation; the deposit account's rent at every ending, both rents at
+     `close_unfunded` and every `sweep_rent` go to that key. The reason: a fee payer fronts the
+     deposit in SOL and charges the person for it in dollars.
+  4. **The fee payer can sign "Pay":** every client builder that funds in the same transaction
+     makes the deposit address first, as its own instruction (the associated token program's
+     idempotent create), before `create`. One tap included.
+  - These close round 1's open 1 (where the seller is paid) and open 3 (the front-run address), and
+    `docs/changes/services.md`'s open 1 (option a) and open 2.
+- **Chosen, not decided** (each reversible before deploy):
+  1. **The field keeps its offset and changes its name:** bytes 169..201 are `rent_recipient`, always
+     the creator's key, where they were `rent_payer`. It is redundant with `creator` plus the two
+     party keys, and kept so `has_one` pins it and a reader need not work it out. Whoever fronted
+     the rent is recorded nowhere, the `Created` event included.
+  2. **`close_unfunded` is the parties' only.** The rent payer lost its right to close, since the rent
+     is no longer its own (`NotACloser` for anyone else, the payer included).
+  3. **`recover_late` keeps sending the re-made deposit account's rent to the buyer,** not the
+     creator: that rent was fronted after the end by whoever paid late, almost always the buyer's
+     wallet, not at creation.
+  4. **The seller's slot is checked by address alone,** as the buyer's is: `UncheckedAccount` with
+     `address = escrow.payout_address()`, the token program checking the rest when it pays. So it
+     must exist only when the seller is paid something, and a split of everything to the buyer runs
+     with no seller account.
+  5. **Two error messages changed** (`NotACloser`, `NotTheSellersAccount`); their codes did not.
+  6. **The client:** `escrowAddress(creator, id)`; `creatorKey`, `payoutAddress`,
+     `makeDepositAddressIx` and `createAndFund` (the deposit address, `create`, the transfer) added;
+     `payInOneTap` is `createAndFund` plus the release; `keysFor` takes an optional creator, not a
+     payer; no builder takes a seller account any more; `closeUnfundedIx` refuses a closer who is
+     not a party; `rentPayer` is `rentRecipient` in the account and the events. `invoice()` still
+     sends `create` alone: it funds nothing.
+- **Built:**
+  - **The program:** the seeds, the recorded recipient, `has_one = rent_recipient` and
+    `close = rent_recipient` everywhere, the seller's slot by address in `release_to_seller`, `split`
+    and `arbitrate`, the timer's `to` by address for either side, `check_sellers_account` removed,
+    every signature made with the creator's key (`creator_key`). 303,432 bytes, sha256
+    `46ea84c2…45cc76`, no warnings.
+  - **Tests first.** The harness and the three LiteSVM files were changed before the program. Against
+    the round-1 binary (rebuilt from its source: the same sha256, `88cbc548…`), 24 of 51 failed,
+    among them the new `the_escrow_address_is_the_creators_and_nobody_can_open_someone_elses`
+    (`ConstraintSeeds`: the old seeds are the buyer's), `a_payout_lands_only_at_the_receiving_partys_standard_account`
+    ("paid the Seller elsewhere") and `rent_goes_back_to_the_creator_never_to_whoever_fronted_it`
+    (the payer recorded, not the buyer); both one-tap tests failed, the old program wanting the payer
+    in the rent slot. After the change all 51 pass. The client's one-tap test was written first too: the old `payInOneTap` gave
+    three instructions, the first not the deposit address.
+  - **LiteSVM, 51 tests:** `escrow.rs` 22 (two new: whose the address is, where rent goes), with the
+    closers, the sweep and the payout-address test rewritten for both sides; `adversarial.rs` 27,
+    the front-run finding turned into `nobody_can_open_the_address_a_buyer_is_about_to_use`, the
+    timer's seller-account finding into `timer_whoever_sends_the_sellers_timer_can_pay_only_its_standard_account`,
+    a party handing its standard account away tested for both sides; `one_tap.rs` 2, the deposit
+    address first in every one tap.
+  - **The fuzzer:** I13 (an escrow's address is its creator's; one `create` in twenty aims at
+    another key's address and must be refused); I3 checks rent reaches the creator to the lamport and
+    nobody else, the payer named in the rent slot now and then and refused; I5 checks each party is
+    paid only at its standard account; the payer, the seller or anyone tries `close_unfunded`; two
+    `create`s in three make the deposit address first. Against the round-1 binary it fails at once
+    (I7 at `create`, I3 on the recipient).
+  - **The client** as above; 16 unit tests (the `whatDiffers` test gone). The validator test's
+    buyer and seller hold no SOL, and every refund reaches them: the split's deposit rent to the
+    buyer, the invoice's to the seller, the refund's to the buyer, a swept tip to the seller, and a
+    sweep named to the payer refused. `scripts/devnet.ts` and `test/devnet.test.ts` follow
+    (type-checked, not run).
+  - **`feepayer/test/feepayer.test.ts`:** its escrow part rewritten on the new client (see learned
+    1): pay, release, one tap, and a third escrow opened and closed unfunded, all through Kora, plus
+    a sweep. Its registration part is unchanged.
+  - **`escrow/README.md`** and **`escrow/security-checklist.md`** updated: the addresses, both payout
+    rules, where rent goes, the new costs, fifteen known limits.
+- **Measured** (LiteSVM, twelve runs with fresh keys):
+  - one tap, the deposit address first: 39,400 to 52,900 compute units, 701 bytes; with the seller's
+    account made in it 53,000 to 71,000 and 743 bytes;
+  - `release_to_seller` 11,400 to 14,400 (it now derives the seller's address); `create` 31,600 to
+    49,700; `release_to_buyer`, `arbitrate`, the timer, `close_unfunded` and `sweep_rent` 32 bytes
+    longer, since the creator is a key those transactions did not otherwise carry;
+  - the rents do not change: at 5,080 lamports a byte the payer fronts 3,479,800 in a one tap, the
+    buyer gets the deposit's 1,488,440 back in the same transaction, the receipt keeps 1,991,360.
+  - Through Kora (`feepayer/`, mock prices, one base unit per lamport): pay charged 4,777,650 for
+    4,777,600 spent; the release 10,050 for 10,000; the one tap 4,777,650 for 4,777,600, where the
+    fee payer's session measured 2,039,330 over (the deposit it got back, plus 50); the person got 9,846,160 lamports back (three deposit rents,
+    one escrow rent, a swept tip) and the fee payer none.
+- **Verified:** 51 LiteSVM tests; 16 client tests; the validator test; `feepayer`'s local test end
+  to end with Kora 2.0.5; the fuzzer's long campaign on the final binary (`46ea84c2…`): 50,000
+  iterations of 80 flows (4,000,000 flows), exit 0, every way out accepted thousands of times
+  (`timer_release` 2,772, `arbitrate` 6,048, `close_unfunded` 80,510, `sweep_rent` 48,701).
+- **Learned:**
+  1. **`feepayer`'s local test was broken on `main`.** It merged after round 1 but was written
+     against the escrow client before it (`approveIx`, `OfferTerms`, `rentPayer`), so it could not
+     load. Ported here, as the task allowed.
+  2. **Refunds now arrive as SOL in a wallet that may hold none.** That works: an empty wallet must
+     end at the rent-exempt minimum for an empty account, and every refund but a sweep is larger at
+     any rate (165 and 256 bytes against 0). A small sweep into an empty wallet fails until more has
+     built up; nothing is lost.
+  3. **`throughKora`'s quote is one signature short when the person signs only the payment.** It asks
+     for the price before adding the payment instruction, so a sweep (which needs no signature) was
+     quoted for one signature and refused ("Required 10000 lamports"). The test sends the sweep from another key instead; anyone
+     may. A fee payer client must quote with the payment in place.
+  4. **Every escrow step through Kora is charged exactly what the fee payer spends, plus 50
+     lamports.** With rent no longer coming back to it, Kora 2.0.5's outflow-only price is right,
+     and Kora 2.2's counting of returning rent is no longer needed for the escrow.
+  5. **The round-1 build reproduces:** its source rebuilt here gave the same sha256.
+- **Open:**
+  1. **A party named as the escrow itself** (checklist limit 3): accepted by `create`, and it locks
+     the deal's money. Refuse it at `create` (one more check, before deploy), or leave it to the
+     app? Not tested.
+  2. **Refunds arrive in SOL.** In a fee payer's app the person's wallet holds none otherwise. How is
+     it shown or used without saying "SOL": left in the wallet, paid back out at ramp-out, or taken
+     by the fee payer as payment (Kora could accept SOL as a paid token)?
+  3. **Frozen accounts now include the seller's,** with no way round: the seller can no longer name
+     another account. Every way out that pays a party waits while that party's standard account is
+     frozen.
+  4. Still standing from round 1: whether a way out should record the funding time;
+     `recover_late`'s holder check; SOL and other-mint tokens at an escrow's address.
+  5. **For the consolidation session** (not this session's folders):
+     - the handoff (line 109) says rent above the minimum goes "back to whoever paid it" and that a
+       never-funded escrow closes by "either party or its rent payer": now the creator, and either
+       party only; its Open (line 226) still lists where money to the buyer lands and "SOL … goes to
+       the rent payer";
+     - `feepayer/README.md`'s "The deposit, answered: counted, and never given back" and its open
+       "The refund gap" are answered: every deposit comes back to the person;
+     - `docs/changes/services.md` opens 1 and 2 are closed by this round;
+     - an index derives an invoice's address from the seller's key;
+     - `docs/devnet.md`'s escrow size, hash and cost are stale (303,432 bytes now).

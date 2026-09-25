@@ -144,36 +144,6 @@ export function assertOptionsAgreed(args: Parameters<typeof optionsNotAgreed>[0]
   throw new Error(`the escrow's options differ from what was agreed: ${diffs.map(say).join('; ')}`)
 }
 
-/** A field an escrow read off the chain can differ in from the one a person meant. */
-export type Field = 'buyer' | 'seller' | 'mint' | 'amount' | 'arbiter' | 'timer'
-
-/**
- * What an escrow read off the chain differs in from the one a person meant to open or pay: its
- * buyer, seller, mint, amount or options. Empty when it is the one.
- *
- * Anyone can open the address a buyer is about to use: the address is the buyer's key and an id,
- * and whoever opens it names the seller. A buyer paying in one tap loses nothing to that (the
- * whole transaction fails), but an app that pays in a transaction apart from its own `create`
- * checks this first. The buyer can close such an escrow, which never held anything, and reopen.
- */
-export function whatDiffers(
-  account: Pick<EscrowAccount, 'buyer' | 'seller' | 'mint' | 'amount' | 'arbiter' | 'timer'>,
-  meant: { buyer: PublicKey; mint: PublicKey; terms: Terms },
-): Field[] {
-  const out: Field[] = []
-  if (!account.buyer.equals(meant.buyer)) out.push('buyer')
-  if (!account.seller.equals(meant.terms.seller)) out.push('seller')
-  if (!account.mint.equals(meant.mint)) out.push('mint')
-  if (account.amount !== meant.terms.amount) out.push('amount')
-  const a = account.arbiter
-  const b = meant.terms.arbiter
-  if (a === null ? b !== null : b === null || !a.equals(b)) out.push('arbiter')
-  const t = account.timer
-  const u = meant.terms.timer
-  if (t === null ? u !== null : u === null || t.days !== u.days || t.to !== u.to) out.push('timer')
-  return out
-}
-
 /**
  * When the timer is due, in unix seconds: `timer_release` succeeds from this second on. Null with
  * no timer, before the funding is marked, or once the escrow has ended.

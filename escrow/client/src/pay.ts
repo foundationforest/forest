@@ -13,12 +13,14 @@
 // lost: anyone can send it back to the buyer (`recover_late`).
 //
 // The invoice pattern: the seller opens the escrow, naming the buyer, and sends the buyer its pay
-// link. The buyer's app reads the escrow, checks its options (`optionsNotAgreed`), and pays by a
-// plain transfer, then releases when the work is done, or at once.
+// link. The escrow's address is the seller's. The buyer's app reads the escrow, checks that it
+// names the buyer's own key as buyer (every refund goes there) and its options
+// (`optionsNotAgreed`), and pays by a plain transfer, then releases when the work is done, or at
+// once.
 
 import type { PublicKey, TransactionInstruction } from '@solana/web3.js'
 
-import { PROGRAM_ID, escrowAddress, invoiceIx, vaultAddress, type EscrowAccount, type Terms } from './program.ts'
+import { PROGRAM_ID, creatorKey, escrowAddress, invoiceIx, vaultAddress, type EscrowAccount, type Terms } from './program.ts'
 
 /** Where money is sent. Any wallet's plain transfer of the mint to this account funds the escrow. */
 export function depositAddress(escrow: PublicKey, mint: PublicKey): PublicKey {
@@ -65,7 +67,7 @@ export function solanaPayUrl(args: {
   if (!awaitingPayment(a, args.balance)) {
     throw new Error(`this escrow is ${a.status === 'ended' ? 'ended' : 'already funded'}: a pay link is one-time`)
   }
-  return payUrl({ ...args, escrow: escrowAddress(a.buyer, a.id, args.programId ?? PROGRAM_ID), mint: a.mint, amount: a.amount - args.balance })
+  return payUrl({ ...args, escrow: escrowAddress(creatorKey(a), a.id, args.programId ?? PROGRAM_ID), mint: a.mint, amount: a.amount - args.balance })
 }
 
 /** The link itself, for an escrow known to be waiting for `amount`. */
@@ -89,10 +91,11 @@ function payUrl(args: {
 }
 
 /**
- * The seller's side of an invoice: the `create` the seller signs (as creator; `payer` pays the
- * rent), the escrow's address, its deposit address, and the pay link to send the buyer. The terms
- * are checked before anything is built, as for any `create`. The escrow is new, so the link asks
- * for the whole amount; a link built later comes from `solanaPayUrl` and the chain.
+ * The seller's side of an invoice: the `create` the seller signs (as creator; `payer` fronts the
+ * rent, which comes back to the seller), the escrow's address (the seller's key and the id), its
+ * deposit address, and the pay link to send the buyer. The terms are checked before anything is
+ * built, as for any `create`. The escrow is new, so the link asks for the whole amount; a link
+ * built later comes from `solanaPayUrl` and the chain.
  */
 export function invoice(args: {
   seller: PublicKey
@@ -106,7 +109,7 @@ export function invoice(args: {
   programId?: PublicKey
 }): { escrow: PublicKey; deposit: PublicKey; instruction: TransactionInstruction; url: string } {
   const instruction = invoiceIx(args)
-  const escrow = escrowAddress(args.buyer, args.terms.id, args.programId)
+  const escrow = escrowAddress(args.seller, args.terms.id, args.programId)
   return {
     escrow,
     deposit: vaultAddress(escrow, args.mint),
