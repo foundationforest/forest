@@ -1,0 +1,8 @@
+# upstream sources and binaries, made by build.sh
+src/
+bin/
+# local runs
+data/
+node_modules/
+*.env
+!*.env.example
