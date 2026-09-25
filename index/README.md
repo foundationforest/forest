@@ -1,9 +1,10 @@
 # index
 
-The Forest index, part one: the data and the scores, served as JSON. It reads signed records from
-a firehose and the registry's and escrow's own events from the chain. It scores every profile
-twice (uniqueness and trust, never blended, each score signed twice) and serves stable JSON URLs
-with no session and no login. Pages for people come in part two.
+The Forest index. It reads signed records from a firehose and the registry's and escrow's own
+events from the chain. It scores every profile twice (uniqueness and trust, never blended, each
+score signed twice). It serves the same data two ways at the same open URLs, with no session and no
+login: pages for people, plain HTML with no JavaScript, and for machines schema.org JSON-LD on
+every page, a JSON twin of every page, a sitemap, `robots.txt`, `llms.txt` and the read skill.
 
 **Nothing here is shipped.** It has run on this machine against a local host, a local directory
 of DIDs, a local validator and a local Postgres, and nowhere else. Nothing is deployed.
@@ -28,49 +29,72 @@ of DIDs, a local validator and a local Postgres, and nowhere else. Nothing is de
     `Program data:` line that another program wrote.
   - From the registry, **badges**: the scope (market, and role after a colon), the DID, the profile's
     wallet, the list, and the list's owner.
-  - From the escrow, **receipts**: buyer, seller, token, amount, when it was funded, accepted and
-    ended, the outcome, and what each side got.
+  - From the escrow, **receipts**: buyer, seller, who created it, its two options, token, amount,
+    when it was created, marked funded and ended, the outcome, and what each side got.
 - **The market directory**, from a folder of market files (`MARKETS_DIR`): the `markets` repo's
   once it exists; `shapes/examples/markets` in tests. Each file is checked with `shapes/`' validator.
 
-**The escrow program is being rewritten.** Everything the index knows about its events is in one
-file, `src/chain/escrow.ts`. It maps the escrow client's events to the index's own `EscrowFact`.
-When the events change, change that file and nothing else.
+**The escrow program may still change.** Everything the index knows about its events is in one
+file, `src/chain/escrow.ts`, which maps the escrow client's events to the index's own `EscrowFact`.
+It follows the escrow as rewritten to the handoff's "Escrow" (six events, no accept step, who
+created it in `Created`). When the events change, change that file; the receipt table and its
+store in `src/chain/poll.ts` change only if a receipt gains or loses a fact.
 
 ## How it scores
 
 In [SCORING.md](SCORING.md), in plain words. In short:
 
-- A badge counts only under a directory name, byte for byte, and only for the wallet the profile
-  declares.
+- A badge counts only under a directory name, byte for byte (`market` or `market/role`), and only
+  for the wallet the profile declares.
 - **Uniqueness** combines the weights this index gives the issuers vouching for a badge. The
   weights are in `config/issuers.json`: the foundation's list starts at 1, everyone else at 0.
 - **Trust** sums the reviews received. Each weighs by its reviewer (their badge, then their own
   trust) and by what is under its deal id:
-  - a receipt both sides said yes to: 1
-  - a one-tap payment: 0.5, or 1 once the seller reviews it too
-  - no receipt: 0.05
+  - a paid receipt the seller created (an invoice): 1
+  - a paid receipt the buyer created: 0.5, or 1 once the seller reviews it too
+  - no receipt, or not paid: 0.05
 - Every score is signed with Ed25519, and with EdDSA-Poseidon on BabyJubJub for later proofs.
 
-## Endpoints
+## Pages and their twins
 
-GET only; JSON; `cache-control: public, max-age=30`; `access-control-allow-origin: *`; no
-cookies, no session, no login. Amounts are base units as strings. Scores are numbers; the signed
-statement carries the exact value in millionths.
+Every page is plain HTML rendered on the server, readable on a phone, with no JavaScript. Its JSON
+twin is the same URL with `.json` (the home page's is `/index.json`), and it is the very object the
+page is rendered from. Both answer GET and HEAD only, with `cache-control: public, max-age=30,
+stale-while-revalidate=300`, `access-control-allow-origin: *`, no cookies, no session, no login.
 
-| URL | What |
-|---|---|
-| `/` | The index's two public keys, the statement format, and the list of endpoints |
-| `/categories` | Each category, from the market files, with its markets and their live offer counts |
-| `/markets/{market}` | The market file, the aliases this index groups under it, and counts (offers, requests, badged profiles). An alias answers 301 to the directory name |
-| `/markets/{market}/offers?limit=&offset=` | Live offers, alias spellings included. Badged sellers first, then by trust, then newest. Each offer carries the seller's two scores side by side |
-| `/profiles/{did}` | The profile, every badge (counted or not, and why not), both signed scores, posts, credentials, review counts |
-| `/profiles/{did}/reviews` | Reviews received and given, each with its evidence, its reviewer's weight and what it added |
-| `/deals/{dealId}` | The escrow receipt (or null for a deal with no escrow), the profiles that declare its two wallets, and the reviews that name it |
-| `/search?q=` | Directory markets whose name, alias, category or role contains `q`, and live offers matching `q` by full-text search (Postgres's `simple` configuration, which favours no language) |
+| Page | Twin | What |
+|---|---|---|
+| `/` | `/index.json` | Categories, their markets and live offer counts. The twin also has the index's two public keys and the statement format |
+| `/categories/{category}` | `.json` | The category's markets |
+| `/markets/{market}?offset=` | `.json` | The market file, the aliases grouped under it, counts, and live offers: badged sellers first, then trust, then newest, 50 a page. An alias answers 301 to the directory name |
+| `/profiles/{did}` | `.json` | The profile; every badge, counted or not and why, and who vouched; both scores, apart and signed; live offers and requests; reviews received and given, each with the payment behind it; credentials |
+| `/deals/{dealId}` | `.json` | The receipt in plain words (or none), the profiles that declare its two keys, and the reviews that name it |
+| `/search?q=` | `/search.json?q=` | Directory markets matching `q` by substring, and live offers by full-text search (Postgres's `simple` configuration, which favours no language) |
+| `/pay?…` | `/pay.json?…` | An offer's Pay link, checked against the offer as indexed ([PAYLINK.md](PAYLINK.md)) |
 
-The endpoints use the records' own field names, such as `wallet` and `mint`, because they are for
-machines. Pages for people (part two) show none of them.
+For machines, at the root:
+
+- `/sitemap.xml`: every page meant for search engines. Search results, pay links and deals with no
+  receipt answer to everyone but say `noindex`, and are not listed.
+- `/robots.txt`: everyone may read everything.
+- `/llms.txt`: what Forest is in three lines, and where everything is.
+- `/skill.md`: the read skill ([skill.md](skill.md)): how any AI agent searches Forest, reads a
+  profile, checks a badge and a receipt, and what the scores mean.
+
+`llms.txt` and `skill.md` are written for `https://forest.foundation`; an index serves them with
+its own `PUBLIC_URL` in its place.
+
+Every page carries schema.org JSON-LD. A profile is a `ProfilePage` about a `Person` (or a
+`LocalBusiness` when an offer names a place) whose offers are `Offer`s of a `Service`; its reviews
+are `Review`s with their authors; and an `AggregateRating` puts its trust on a 1 to 5 scale. The
+JSON twins keep the records' own field names, such as `wallet` and `mint`, because they are for
+machines; the pages for people say none of them.
+
+### Changed from part one
+
+Part one served its JSON at the bare paths. Those paths are now the pages, and the JSON moved to
+the `.json` twins: `/` to `/index.json`; `/categories` into `/index.json`; `/markets/{m}/offers`
+into `/markets/{m}.json`; `/profiles/{did}/reviews` into `/profiles/{did}.json`.
 
 ## Run it locally
 
@@ -88,8 +112,12 @@ export INDEX_SIGNING_SEED=$(openssl rand -hex 32)     # keep it: it is the index
 export FIREHOSE_URL=ws://localhost:2583              # a host from host/run.sh, or the carrier
 export PLC_URL=https://plc.directory
 export SOLANA_RPC_URL=http://127.0.0.1:8899
+export PUBLIC_URL=http://localhost:8080              # where the pages say they are
 npm start                                            # migrates, reads, scores, serves on :8080
 ```
+
+`npm start` runs the readers and the pages in one process. Deployed, they are two
+(`npm run start:readers`, `npm run start:web`); [HOSTING.md](HOSTING.md) says what each needs.
 
 Tests:
 
@@ -98,7 +126,16 @@ npm run test:unit                                    # the scoring rules and the
 DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/postgres npm test
 ```
 
-`npm test` also runs the end-to-end test. It needs:
+`npm test` also runs the page tests and the end-to-end test.
+
+The page tests (`test/pages.test.ts`) need only Postgres. They write part one's story into a fresh
+database (`test/fixture.ts`) and check that every page and twin renders, that every JSON-LD block
+validates against schema.org's vocabulary (release 30.1, cut down in `test/schemaorg/`), that each
+twin matches its page, that the sitemap lists every page, that every URL in the read skill and
+`llms.txt` resolves, that no page says a crypto word, and that the Pay link reads back to the
+offer's terms.
+
+The end-to-end test needs:
 
 - `host/` built (`./build.sh`) and `keys` installed;
 - both programs built (`cargo build-sbf` in `registry/program` and `escrow/program`);
@@ -106,8 +143,8 @@ DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/postgres npm test
 - `solana-test-validator` on the PATH;
 - a Postgres where it may create and drop a database.
 
-It skips, saying which, if one is missing. It takes about 30 seconds here, 19 of them making three
-registration proofs.
+It skips, saying which, if one is missing. The whole of `npm test` takes about 30 seconds here, 19
+of them making three registration proofs.
 
 `npm run check` type-checks; `npm run migrate` applies the migrations and stops (`npm start` does
 that too).
@@ -118,7 +155,8 @@ that too).
 |---|---|---|
 | `DATABASE_URL` | yes | Postgres. A local one, or Supabase's connection string later |
 | `MARKETS_DIR` | yes | A folder of market files. Only these names count in badges and indexes |
-| `INDEX_SIGNING_SEED` | yes | 32 bytes as 64 hex characters. Both signing keys come from it |
+| `INDEX_SIGNING_SEED` | readers | 32 bytes as 64 hex characters. Both signing keys come from it. The pages never need it |
+| `PUBLIC_URL` | no | Where the pages are published: an origin, no path. Canonical links, the sitemap, the Pay link and the read skill use it. Default `https://forest.foundation` |
 | `FIREHOSE_URL` | no | `ws://` or `wss://`. Unset: no record reader |
 | `PLC_URL` | no | Where DIDs resolve. Default `https://plc.directory`. An `http://` URL (a local directory) makes the resolver use plain fetch |
 | `SOLANA_RPC_URL` | no | Unset: no chain reader |
@@ -126,34 +164,23 @@ that too).
 | `CHAIN_POLL_MS` | no | Default 5000 |
 | `REGISTRY_PROGRAM_ID`, `ESCROW_PROGRAM_ID` | no | Default: the clients' own ids |
 | `PORT` | no | Default 8080 |
-| `ISSUERS_FILE`, `ALIASES_FILE`, `SCORING_FILE` | no | Default: the files in `config/` |
+| `ISSUERS_FILE`, `ALIASES_FILE`, `SCORING_FILE`, `CURRENCIES_FILE` | no | Default: the files in `config/` |
 
 ## Files
 
 | | |
 |---|---|
 | `migrations/` | The schema, in plain SQL, applied in order, each once |
-| `config/` | This index's opinions: issuer weights, market aliases, scoring weights |
+| `config/` | This index's opinions: issuer weights, market aliases, scoring weights, and which tokens the pages show as which currency |
 | `src/records/` | The firehose reader and the record store |
 | `src/chain/` | The chain reader, the registry adapter, and **the escrow adapter** |
 | `src/scores/` | The scores as pure functions, the signatures, and the recompute |
-| `src/api/` | The endpoints (`handle(Request) → Response`) and a node:http server |
+| `src/web/` | The pages and their twins: the page models (`data.ts`), the HTML (`pages.ts`, `html.ts`, `words.ts`), the JSON-LD, the Pay link, the machine files, the routes and a node:http server |
+| `src/main.ts` | The readers, the pages, or both |
+| `skill.md`, `llms.txt` | The read skill and `llms.txt`, as served |
 | `SCORING.md` | The rules, in plain words |
+| `PAYLINK.md` | The Pay link's one format |
+| `HOSTING.md` | The two processes: what each needs on Railway, and what the pages need on Vercel |
 
-## Part two
-
-Not built here:
-
-- **Pages for people**, with structured data, published per category once it is dense enough.
-- **The JSON twin of every page**, at a URL next to it.
-- **A sitemap, `llms.txt`, and the read skill**: a plain text file that teaches any AI where the
-  endpoints are and how to read them, published at forest.foundation and in `index/`.
-- **The badge and the pay link** on forest.foundation. The pay link is a one-time Solana Pay link
-  naming the escrow's address.
-- **Deploy** to Vercel and Supabase. The endpoints can run as Vercel functions (`handle` is a web
-  standard handler). The two readers hold an open websocket and a poll loop, which a serverless
-  function cannot keep alive, so they need a long-running process somewhere. Where is an open
-  question.
-
-The choices made here where the handoff was silent, and the open questions, are in
-`docs/changes/index.md`.
+The choices made where the handoff was silent, and the open questions, are in
+`docs/changes/index.md` (part one) and `docs/changes/index-2.md` (part two).

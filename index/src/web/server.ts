@@ -1,14 +1,14 @@
-// The endpoints on node:http, for running locally and on any plain server. Part two can mount
-// `handle` elsewhere instead.
+// The pages on node:http, for running locally and on any plain server (Railway). A serverless host
+// mounts `handle` instead (HOSTING.md).
 
 import { createServer, type Server } from 'node:http'
 
-import type { Api } from './routes.ts'
+import type { Web } from './routes.ts'
 
-export function serve(api: Api, port: number, host = '0.0.0.0'): Promise<Server> {
+export function serve(web: Web, port: number, host = '0.0.0.0'): Promise<Server> {
   const server = createServer(async (req, res) => {
     const url = `http://${req.headers.host ?? 'localhost'}${req.url ?? '/'}`
-    const response = await api.handle(new Request(url, { method: req.method }))
+    const response = await web.handle(new Request(url, { method: req.method }))
     const headers: Record<string, string> = {}
     response.headers.forEach((value, name) => {
       headers[name] = value

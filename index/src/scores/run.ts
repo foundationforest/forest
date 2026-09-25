@@ -16,8 +16,7 @@ export async function loadInputs(db: Db): Promise<Inputs> {
     db.query('select did, wallet from profiles'),
     db.query('select did, wallet, scope, list_owner from badges'),
     db.query(
-      `select escrow, buyer, seller, mint, funded_at is not null as funded, accepted_at is not null as accepted,
-              outcome, closed from escrow_receipts`,
+      `select escrow, buyer, seller, creator, mint, funded_at is not null as funded, outcome, closed from escrow_receipts`,
     ),
     db.query('select uri, reviewer, subject, rating, deal_id, created_at from reviews'),
   ])
@@ -28,9 +27,9 @@ export async function loadInputs(db: Db): Promise<Inputs> {
       escrow: r.escrow,
       buyer: r.buyer,
       seller: r.seller,
+      creator: r.creator,
       mint: r.mint,
       funded: r.funded,
-      accepted: r.accepted,
       outcome: r.outcome,
       closed: r.closed,
     })),

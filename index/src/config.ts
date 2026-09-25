@@ -11,6 +11,8 @@ export const INDEX_ROOT = resolve(here, '..')
 
 export type IssuerConfig = Record<string, { name: string; weight: number }>
 export type AliasConfig = Record<string, string[]>
+/** A token the pages show as money: its ISO 4217 code, its symbol, and its base units' decimals. */
+export type CurrencyConfig = Record<string, { code: string; symbol: string; decimals: number }>
 export type ScoringConfig = {
   evidence: { both: number; oneSided: number; none: number }
   unbadgedReviewer: number
@@ -32,14 +34,17 @@ export type Config = {
   chainPollMs: number
   /** How settled a transaction must be before it is read: 'finalized' (the default) or 'confirmed'. */
   chainCommitment: 'finalized' | 'confirmed'
-  /** 32 bytes, hex. Both of the index's signing keys come from it. */
-  signingSeed: Uint8Array
+  /** 32 bytes, hex. Both of the index's signing keys come from it. Null in the web process, which never signs. */
+  signingSeed: Uint8Array | null
   /** A folder of market files: the `markets` repo's, or shapes/examples/markets in tests. */
   marketsDir: string
   port: number
+  /** Where the pages are published, with no trailing slash: every canonical link, the sitemap and the read skill use it. */
+  publicUrl: string
   issuers: IssuerConfig
   aliases: AliasConfig
   scoring: ScoringConfig
+  currencies: CurrencyConfig
 }
 
 function readJson<T>(path: string, key: string): T {
@@ -60,9 +65,22 @@ export function hexSeed(hex: string | undefined): Uint8Array {
   return new Uint8Array(Buffer.from(hex, 'hex'))
 }
 
-export function loadConfig(env: Record<string, string | undefined> = process.env): Config {
+/** An origin only: the pages live at the root of their host (`/`, `/markets/…`, `/sitemap.xml`). */
+export function publicUrl(raw: string | undefined): string {
+  const url = new URL(raw || 'https://forest.foundation')
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new Error('PUBLIC_URL must be an http or https URL')
+  if (url.pathname !== '/' || url.search || url.hash) throw new Error('PUBLIC_URL is an origin, such as https://forest.foundation, with no path')
+  return url.origin
+}
+
+/**
+ * `seed: false` for the web process: it reads the database and serves pages, and never holds the
+ * signing seed.
+ */
+export function loadConfig(env: Record<string, string | undefined> = process.env, opts: { seed?: boolean } = {}): Config {
   if (!env.DATABASE_URL) throw new Error('DATABASE_URL is required')
   if (!env.MARKETS_DIR) throw new Error('MARKETS_DIR is required: a folder of market files')
+  const needSeed = opts.seed ?? true
   return {
     databaseUrl: env.DATABASE_URL,
     firehoseUrl: env.FIREHOSE_URL || null,
@@ -72,11 +90,13 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     escrowProgramId: env.ESCROW_PROGRAM_ID || null,
     chainPollMs: Number(env.CHAIN_POLL_MS || 5000),
     chainCommitment: env.CHAIN_COMMITMENT === 'confirmed' ? 'confirmed' : 'finalized',
-    signingSeed: hexSeed(env.INDEX_SIGNING_SEED),
+    signingSeed: needSeed ? hexSeed(env.INDEX_SIGNING_SEED) : null,
     marketsDir: resolve(env.MARKETS_DIR),
     port: Number(env.PORT || 8080),
+    publicUrl: publicUrl(env.PUBLIC_URL),
     issuers: readJson(env.ISSUERS_FILE || join(INDEX_ROOT, 'config/issuers.json'), 'issuers'),
     aliases: readJson(env.ALIASES_FILE || join(INDEX_ROOT, 'config/aliases.json'), 'aliases'),
     scoring: readScoring(env.SCORING_FILE || join(INDEX_ROOT, 'config/scoring.json')),
+    currencies: readJson(env.CURRENCIES_FILE || join(INDEX_ROOT, 'config/currencies.json'), 'currencies'),
   }
 }
