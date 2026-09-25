@@ -10,5 +10,66 @@
       "port": 5432,
       "mode": "session"
     }
+  },
+  "railway": {
+    "workspace": "Carlos Islas's Projects",
+    "project": "forest-devnet",
+    "projectId": "d222014f-0f90-4695-961e-c6ba803102d7",
+    "environmentId": "59c63b74-7845-4638-bc65-5fa46ec22aed",
+    "environment": "production",
+    "services": {
+      "host": {
+        "id": "1f59a363-75d8-4d30-afc8-4c836e9c0cb1",
+        "source": "github",
+        "url": "https://host-production-22a4.up.railway.app",
+        "port": 2583,
+        "volume": "/data",
+        "blocked": null
+      },
+      "carrier": {
+        "id": "a3d89a6e-ca40-4348-a61f-a3b76c2b7d34",
+        "source": "github",
+        "url": "https://carrier-production-f88f.up.railway.app",
+        "port": 2470,
+        "volume": "/data",
+        "blocked": null
+      },
+      "index": {
+        "id": "37f23042-b2a0-4ff0-90c6-e0521fc811d2",
+        "source": "github",
+        "url": "https://index-production-1b6e.up.railway.app",
+        "port": 8080,
+        "volume": null,
+        "blocked": null
+      },
+      "issuer": {
+        "id": "a1ce9fdf-ad09-4bf5-a016-bab97ce8be81",
+        "source": "github",
+        "url": "https://issuer-production-fd68.up.railway.app",
+        "port": 8080,
+        "volume": "/data",
+        "blocked": null
+      },
+      "feepayer": {
+        "blocked": "Free plan resource provision limit exceeded. Please upgrade to provision more resources!"
+      }
+    },
+    "sealed": {
+      "host": [
+        "PDS_ADMIN_PASSWORD",
+        "PDS_JWT_SECRET",
+        "PDS_PLC_ROTATION_KEY_K256_PRIVATE_KEY_HEX"
+      ],
+      "index": [
+        "DATABASE_URL",
+        "INDEX_SIGNING_SEED"
+      ],
+      "carrier": [
+        "RELAY_ADMIN_PASSWORD"
+      ],
+      "issuer": [
+        "ISSUER_KEYPAIR"
+      ]
+    }
   }
 }

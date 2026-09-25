@@ -1,7 +1,7 @@
 // The services on Railway, through Railway's public GraphQL API (RAILWAY_API_TOKEN, an account token).
 //
 //   node railway.ts provision          the project `forest-devnet`: five services, their volumes and
-//                                      public domains, each service's config file (deploy/<name>/railway.json)
+//                                      public domains, and each one's build and run settings (SERVICES below)
 //   node railway.ts variables          every service's variables; the secrets sealed
 //   node railway.ts deploy [name...]   builds and deploys: the branch's pushed commit when Railway can read
 //                                      the repo, otherwise an upload of this checkout (`railway up`)
@@ -36,12 +36,17 @@ const rpc = process.env.HELIUS_API_KEY
   : { value: 'https://api.devnet.solana.com', sealed: false }
 
 type Name = 'host' | 'carrier' | 'index' | 'issuer' | 'feepayer'
-const SERVICES: Record<Name, { port: number; volume?: string }> = {
-  host: { port: 2583, volume: '/data' },
-  carrier: { port: 2470, volume: '/data' },
-  index: { port: 8080 },
+/**
+ * Each service builds from deploy/<name>/Dockerfile with the repo root as its context, runs one
+ * replica, restarts always, and answers its health path (the issuer's routes are POST only, so it has
+ * none). Railway's config files (railway.json) are deprecated, so these are set through the API.
+ */
+const SERVICES: Record<Name, { port: number; volume?: string; health?: string }> = {
+  host: { port: 2583, volume: '/data', health: '/xrpc/_health' },
+  carrier: { port: 2470, volume: '/data', health: '/xrpc/_health' },
+  index: { port: 8080, health: '/' },
   issuer: { port: 8080, volume: '/data' },
-  feepayer: { port: 8080 },
+  feepayer: { port: 8080, health: '/liveness' },
 }
 const NAMES = Object.keys(SERVICES) as Name[]
 
@@ -85,8 +90,9 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 async function projectAndEnvironment(): Promise<{ projectId: string; environmentId: string }> {
   const { me } = await gql(`query { me { workspaces { id name } } }`)
   const workspaceId = me.workspaces[0].id
-  const { projects } = await gql(`query { projects { edges { node { id name } } } }`)
-  let project = projects.edges.map((e: any) => e.node).find((p: any) => p.name === PROJECT)
+  // A workspace's projects are listed under the workspace; `projects` alone lists none of them.
+  const { workspace } = await gql(`query($id: String!) { workspace(workspaceId: $id) { projects { edges { node { id name } } } } }`, { id: workspaceId })
+  let project = workspace.projects.edges.map((e: any) => e.node).find((p: any) => p.name === PROJECT)
   if (!project) {
     const { projectCreate } = await gql(
       `mutation($input: ProjectCreateInput!) { projectCreate(input: $input) { id name } }`,
@@ -107,7 +113,7 @@ async function projectAndEnvironment(): Promise<{ projectId: string; environment
 async function projectState(projectId: string) {
   const { project } = await gql(
     `query($id: String!) { project(id: $id) {
-       services { edges { node { id name serviceInstances { edges { node { environmentId source { repo image } railwayConfigFile domains { serviceDomains { domain targetPort } } } } } } } }
+       services { edges { node { id name serviceInstances { edges { node { environmentId source { repo image } domains { serviceDomains { domain targetPort } } } } } } } }
        volumes { edges { node { id name volumeInstances { edges { node { serviceId mountPath environmentId } } } } } }
      } }`,
     { id: projectId },
@@ -115,6 +121,14 @@ async function projectState(projectId: string) {
   const services = project.services.edges.map((e: any) => e.node)
   const mounts = project.volumes.edges.flatMap((e: any) => e.node.volumeInstances.edges.map((v: any) => v.node))
   return { services, mounts }
+}
+
+async function createService(projectId: string, environmentId: string, name: Name, from?: { repo: string; branch: string }) {
+  const { serviceCreate } = await gql(
+    `mutation($input: ServiceCreateInput!) { serviceCreate(input: $input) { id } }`,
+    { input: { projectId, environmentId, name, ...(from ? { source: { repo: from.repo }, branch: from.branch } : {}) } },
+  )
+  return serviceCreate
 }
 
 async function provision(): Promise<void> {
@@ -126,19 +140,17 @@ async function provision(): Promise<void> {
     let source: 'github' | 'upload' = 'github'
     if (!service) {
       try {
-        const { serviceCreate } = await gql(
-          `mutation($input: ServiceCreateInput!) { serviceCreate(input: $input) { id } }`,
-          { input: { projectId, environmentId, name, source: { repo: REPO }, branch } },
-        )
-        service = serviceCreate
+        service = await createService(projectId, environmentId, name, { repo: REPO, branch })
         console.log(`${name}: created from ${REPO} at ${branch}`)
       } catch (err) {
-        console.log(`${name}: Railway would not take ${REPO} as the source (${(err as Error).message}); created empty, deployed by upload`)
-        const { serviceCreate } = await gql(
-          `mutation($input: ServiceCreateInput!) { serviceCreate(input: $input) { id } }`,
-          { input: { projectId, environmentId, name } },
-        )
-        service = serviceCreate
+        const why = (err as Error).message
+        if (/limit/i.test(why)) {
+          console.log(`${name}: BLOCKED by Railway: ${why}`)
+          updateRecord({ railway: { services: { [name]: { blocked: why } } } })
+          continue
+        }
+        console.log(`${name}: Railway would not take ${REPO} as the source (${why}); created empty, deployed by upload`)
+        service = await createService(projectId, environmentId, name)
         source = 'upload'
       }
       ;({ services, mounts } = await projectState(projectId))
@@ -149,15 +161,24 @@ async function provision(): Promise<void> {
     }
     const id = service.id
 
-    // The config file: builder, Dockerfile, health check, restarts. Kept in the repo.
+    const { volume, port, health } = SERVICES[name]
     await gql(
       `mutation($serviceId: String!, $environmentId: String!, $input: ServiceInstanceUpdateInput!) {
          serviceInstanceUpdate(serviceId: $serviceId, environmentId: $environmentId, input: $input) }`,
-      { serviceId: id, environmentId, input: { railwayConfigFile: `deploy/${name}/railway.json`, builder: 'DOCKERFILE', dockerfilePath: `deploy/${name}/Dockerfile` } },
+      {
+        serviceId: id,
+        environmentId,
+        input: {
+          dockerfilePath: `deploy/${name}/Dockerfile`,
+          numReplicas: 1,
+          restartPolicyType: 'ALWAYS',
+          ...(health ? { healthcheckPath: health, healthcheckTimeout: 300 } : {}),
+        },
+      },
     )
 
-    const { volume, port } = SERVICES[name]
     if (volume && !mounts.some((m: any) => m.serviceId === id && m.environmentId === environmentId)) {
+      await sleep(31_000) // Railway allows one new volume per 30 seconds
       await gql(`mutation($input: VolumeCreateInput!) { volumeCreate(input: $input) { id } }`, {
         input: { projectId, environmentId, serviceId: id, mountPath: volume },
       })
@@ -174,7 +195,7 @@ async function provision(): Promise<void> {
       domain = serviceDomainCreate.domain as string
       console.log(`${name}: https://${domain}`)
     }
-    updateRecord({ railway: { services: { [name]: { id, source, url: `https://${domain}`, port, volume: volume ?? null } } } })
+    updateRecord({ railway: { services: { [name]: { id, source, url: `https://${domain}`, port, volume: volume ?? null, blocked: null } } } })
   }
 }
 
@@ -264,13 +285,16 @@ function variablesFor(name: Name, urls: Record<Name, string>): Record<string, Va
   }
 }
 
+/** The services provisioned so far; one Railway refused (`blocked`) has no URL and is skipped. */
+function live(): Name[] {
+  const s = readRecord().railway?.services ?? {}
+  return NAMES.filter((n) => s[n]?.id && s[n]?.url)
+}
+
 function urlsFromRecord(): Record<Name, string> {
   const s = readRecord().railway?.services ?? {}
   const urls = {} as Record<Name, string>
-  for (const name of NAMES) {
-    if (!s[name]?.url) throw new Error(`no URL for ${name} in services.json; run provision first`)
-    urls[name] = s[name].url
-  }
+  for (const name of live()) urls[name] = s[name].url
   return urls
 }
 
@@ -278,6 +302,8 @@ function urlsFromRecord(): Record<Name, string> {
 async function setVariables(name: Name, vars: Record<string, Value>): Promise<void> {
   const { railway } = readRecord()
   const serviceId = railway.services[name].id
+  // Railway's documented way to build from a Dockerfile that is not at the root.
+  vars = { RAILWAY_DOCKERFILE_PATH: plain(`deploy/${name}/Dockerfile`), ...vars }
   const variables: Record<string, { value: string; isSealed?: boolean }> = {}
   for (const [key, v] of Object.entries(vars)) variables[key] = v.sealed ? { value: v.value, isSealed: true } : { value: v.value }
   await gql(
@@ -291,7 +317,7 @@ async function setVariables(name: Name, vars: Record<string, Value>): Promise<vo
 
 async function variables(): Promise<void> {
   const urls = urlsFromRecord()
-  for (const name of NAMES) await setVariables(name, variablesFor(name, urls))
+  for (const name of live()) await setVariables(name, variablesFor(name, urls))
   await sealedReport()
 }
 
@@ -299,7 +325,7 @@ async function variables(): Promise<void> {
 async function sealedReport(): Promise<void> {
   const { railway } = readRecord()
   const { environment } = await gql(
-    `query($id: String!) { environment(id: $id) { variables { edges { node { name isSealed serviceId } } } } }`,
+    `query($id: String!) { environment(id: $id) { variables(first: 500) { edges { node { name isSealed serviceId } } } } }`,
     { id: railway.environmentId },
   )
   const byId = Object.fromEntries(Object.entries(railway.services).map(([n, s]: any) => [s.id, n]))
@@ -329,7 +355,7 @@ function pushedCommit(): string {
 
 async function deploy(names: Name[]): Promise<void> {
   const { railway } = readRecord()
-  for (const name of names.length ? names : NAMES) {
+  for (const name of names.length ? names : live()) {
     const s = railway.services[name]
     if (s.source === 'github') {
       const sha = pushedCommit()
@@ -357,6 +383,10 @@ async function status(): Promise<void> {
   const { railway } = readRecord()
   for (const name of NAMES) {
     const s = railway.services[name]
+    if (!s?.id) {
+      console.log(`${name.padEnd(9)} not provisioned${s?.blocked ? `: ${s.blocked}` : ''}`)
+      continue
+    }
     const { deployments } = await gql(
       `query($input: DeploymentListInput!) { deployments(first: 1, input: $input) { edges { node { id status createdAt } } } }`,
       { input: { serviceId: s.id, environmentId: railway.environmentId } },
