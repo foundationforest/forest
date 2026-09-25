@@ -18,6 +18,8 @@ node bin/validate.js market examples/markets/online-tutors.json
 
 A post may carry a `terms` block, fully optional, on an offer or a request. It holds only the options an escrow made from the post is created with, each off unless set: `arbiter`, a Solana key that may decide any split, and `timer`, `{ days, to }`: that many whole days after funding, everything goes to `to`, which is `seller` or `buyer`. With no terms, the only ways out of an escrow are the ones the two sides sign. The post's `price` names its token by `mint`, the token's address on Solana: any classic token works, and which tokens an index weighs is the index's call.
 
+A post's `remote` and `location` are both optional: a post may say it happens online, name a place, or say neither.
+
 A review requires only `subject`, the DID it is about (and `createdAt`, as every record has): a review can be as thin as pointing at a person. `rating` (1 to 5), `text` and `dealId` are optional; what is missing weighs less, and nothing is refused for it. `dealId` is the deal the review is about: the escrow's address (base58, 32 bytes) when an escrow exists, else 32 random bytes as lowercase hex, chosen when the deal began. The validator refuses a `dealId` that is neither, since it points at nothing.
 
 A market file has five required keys, `name`, `category`, `fields`, `evidenceTypes`, `credentialIssuers`, and two optional ones, `description` and `roles`. Nothing else belongs in one.

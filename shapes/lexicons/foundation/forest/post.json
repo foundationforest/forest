@@ -8,7 +8,7 @@
       "key": "tid",
       "record": {
         "type": "object",
-        "required": ["direction", "market", "role", "description", "price", "remote", "createdAt"],
+        "required": ["direction", "market", "role", "description", "price", "createdAt"],
         "properties": {
           "direction": {
             "type": "string",
@@ -46,7 +46,7 @@
           },
           "remote": {
             "type": "boolean",
-            "description": "True when the work happens online."
+            "description": "Optional. True when the work happens online."
           },
           "location": {
             "type": "string",
