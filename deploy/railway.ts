@@ -216,6 +216,7 @@ function variablesFor(name: Name, urls: Record<Name, string>): Record<string, Va
       return {
         PDS_HOSTNAME: plain(host(urls.host)),
         PDS_PORT: plain('2583'),
+        PORT: plain('2583'), // Railway's health check calls PORT
         PDS_DATA_DIRECTORY: plain('/data'),
         PDS_BLOBSTORE_DISK_LOCATION: plain('/data/blobs'),
         PDS_DID_PLC_URL: plain('https://plc.directory'),
@@ -237,6 +238,7 @@ function variablesFor(name: Name, urls: Record<Name, string>): Record<string, Va
         RELAY_PERSIST_DIR: plain('/data/relay/persist'),
         RELAY_REPLAY_WINDOW: plain('72h'),
         RELAY_API_BIND: plain(':2470'),
+        PORT: plain('2470'), // Railway's health check calls PORT
         RELAY_METRICS_LISTEN: plain(':2471'),
         RELAY_ADMIN_PASSWORD: sealed(secret('RELAY_ADMIN_PASSWORD', password)),
       }
@@ -298,21 +300,73 @@ function urlsFromRecord(): Record<Name, string> {
   return urls
 }
 
-/** Sets one service's variables through the environment config, sealing the secrets there. */
+/** Names and seal flags of one service's variables, as Railway lists them (no values). */
+async function listed(serviceId: string): Promise<Map<string, boolean>> {
+  const { railway } = readRecord()
+  const { environment } = await gql(
+    `query($id: String!) { environment(id: $id) { variables(first: 500) { edges { node { name isSealed serviceId } } } } }`,
+    { id: railway.environmentId },
+  )
+  const out = new Map<string, boolean>()
+  for (const e of environment.variables.edges) if (e.node.serviceId === serviceId) out.set(e.node.name, e.node.isSealed)
+  return out
+}
+
+/**
+ * One change to the environment's config. Railway applies it as a workflow, in order behind any other
+ * change, which can take minutes; this waits until it is applied.
+ */
+async function patch(serviceId: string, variables: Record<string, { value: string; isSealed?: boolean } | null>): Promise<void> {
+  const { railway } = readRecord()
+  const { environmentPatchCommit: workflowId } = await gql(
+    `mutation($environmentId: String!, $patch: EnvironmentConfig!) {
+       environmentPatchCommit(environmentId: $environmentId, patch: $patch, skipDeploys: true, commitMessage: "forest deploy/railway.ts variables") }`,
+    { environmentId: railway.environmentId, patch: { services: { [serviceId]: { variables } } } },
+  )
+  for (let i = 0; i < 120; i++) {
+    const { workflowStatus } = await gql(`query($id: String!) { workflowStatus(workflowId: $id) { status error } }`, { id: workflowId })
+    if (workflowStatus.status !== 'Running') {
+      if (workflowStatus.error) console.log(`a variables change ended ${workflowStatus.status}: ${redact(String(workflowStatus.error))}`)
+      return
+    }
+    await sleep(5000)
+  }
+  throw new Error('a variables change was still applying after 10 minutes')
+}
+
+/**
+ * Sets one service's variables through the environment config, sealing the secrets there, then checks
+ * Railway's own list (names and seal flags). Seen here: changes are applied one after another and can
+ * take minutes, and a change that marks an existing unsealed variable as sealed fails ("An unknown error
+ * occurred"). So a secret found unsealed is removed through the config (null) and sent again sealed,
+ * and anything missing is sent again.
+ */
 async function setVariables(name: Name, vars: Record<string, Value>): Promise<void> {
   const { railway } = readRecord()
   const serviceId = railway.services[name].id
   // Railway's documented way to build from a Dockerfile that is not at the root.
   vars = { RAILWAY_DOCKERFILE_PATH: plain(`deploy/${name}/Dockerfile`), ...vars }
-  const variables: Record<string, { value: string; isSealed?: boolean }> = {}
-  for (const [key, v] of Object.entries(vars)) variables[key] = v.sealed ? { value: v.value, isSealed: true } : { value: v.value }
-  await gql(
-    `mutation($environmentId: String!, $patch: EnvironmentConfig!) {
-       environmentPatchCommit(environmentId: $environmentId, patch: $patch, skipDeploys: true, commitMessage: "forest deploy/railway.ts variables") }`,
-    { environmentId: railway.environmentId, patch: { services: { [serviceId]: { variables } } } },
-  )
-  const n = Object.values(vars).filter((v) => v.sealed).length
-  console.log(`${name}: ${Object.keys(vars).length} variables set, ${n} sealed`)
+  const shape = (v: Value) => (v.sealed ? { value: v.value, isSealed: true } : { value: v.value })
+  await patch(serviceId, Object.fromEntries(Object.entries(vars).map(([k, v]) => [k, shape(v)])))
+
+  for (let round = 0; round < 5; round++) {
+    const have = await listed(serviceId)
+    const missing = Object.keys(vars).filter((k) => !have.has(k))
+    const unsealed = Object.keys(vars).filter((k) => vars[k].sealed && have.get(k) === false)
+    if (!missing.length && !unsealed.length) {
+      const n = Object.values(vars).filter((v) => v.sealed).length
+      console.log(`${name}: ${Object.keys(vars).length} variables set, ${n} sealed, checked against Railway's list`)
+      return
+    }
+    // Railway's patches are diffed against the environment's stored config, so a variable deleted any
+    // other way and sent again with the same value is no change to it. Removing it through the config
+    // (null) and then sending it is.
+    const again = [...missing, ...unsealed]
+    for (const k of unsealed) console.log(`${name}: ${k} was unsealed; removed, to be set again sealed`)
+    await patch(serviceId, Object.fromEntries(again.map((k) => [k, null])))
+    await patch(serviceId, Object.fromEntries(again.map((k) => [k, shape(vars[k])])))
+  }
+  throw new Error(`${name}: variables did not settle as set; see node railway.ts sealed`)
 }
 
 async function variables(): Promise<void> {

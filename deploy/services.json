@@ -67,13 +67,19 @@
       ],
       "index": [
         "DATABASE_URL",
-        "INDEX_SIGNING_SEED"
+        "INDEX_SIGNING_SEED",
+        "SOLANA_RPC_URL"
       ],
       "carrier": [
         "RELAY_ADMIN_PASSWORD"
       ],
       "issuer": [
-        "ISSUER_KEYPAIR"
+        "ISSUER_KEYPAIR",
+        "SOLANA_RPC_URL"
+      ],
+      "feepayer": [
+        "FOREST_FEEPAYER_KEY",
+        "RPC_URL"
       ]
     }
   }
