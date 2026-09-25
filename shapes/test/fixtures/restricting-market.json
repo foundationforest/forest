@@ -1,8 +1,12 @@
 {
   "name": "online-tutors",
-  "category": "freelance-work",
-  "fields": {},
+  "folder": "freelance-work",
+  "description": "Lessons and tutoring held online, one to one.",
+  "sides": "two",
+  "money": true,
   "evidenceTypes": ["escrow"],
-  "credentialIssuers": [],
+  "offerFields": {},
+  "ratings": ["overall"],
+  "howDealsGo": "The student pays; the tutor teaches.",
   "arbiterAllowed": false
 }

@@ -15,9 +15,13 @@ test('the same seed gives the same keys, and another seed other keys', () => {
   assert.notDeepEqual(publicKeys(indexKeys(new Uint8Array(32).fill(8))), pub)
 })
 
-test('a statement reads back as written', () => {
-  const s = { kind: 'trust' as const, did: 'did:plc:abc', scope: '', value: -1_234_567n, at: 1_790_000_000n }
+test('a statement reads back as written, for each kind; an unknown kind is refused', () => {
+  const s = { kind: 'standing' as const, did: 'did:plc:abc', scope: '', value: -1_234_567n, at: 1_790_000_000n }
   assert.deepEqual(parseStatement(statementText(s)), s)
+  const r = { kind: 'rating' as const, did: 'did:plc:abc', scope: '', value: 8_500_000n, at: 1_790_000_000n }
+  assert.deepEqual(parseStatement(statementText(r)), r)
+  assert.throws(() => parseStatement(statementText(s).replace('kind standing', 'kind trust')), /unknown kind/)
+  assert.throws(() => parseStatement(statementText(s).replace('kind standing', 'kind toString')), /unknown kind/)
 })
 
 test('both signatures verify, and a changed score fails both', () => {
@@ -34,11 +38,12 @@ test('both signatures verify, and a changed score fails both', () => {
 })
 
 test('the field message separates kinds, scopes and signs of value', () => {
-  const base = { kind: 'trust' as const, did: 'did:plc:abc', scope: '', value: 5n, at: 1n }
+  const base = { kind: 'standing' as const, did: 'did:plc:abc', scope: '', value: 5n, at: 1n }
   const m = messageOf(base)
   assert.notEqual(messageOf({ ...base, kind: 'uniqueness' }), m)
+  assert.notEqual(messageOf({ ...base, kind: 'rating' }), m)
   assert.notEqual(messageOf({ ...base, value: -5n }), m)
   assert.notEqual(messageOf({ ...base, scope: 'online-tutors' }), m)
-  assert.equal(KIND.trust, 2n)
+  assert.deepEqual(KIND, { uniqueness: 1n, standing: 2n, rating: 3n }, 'standing keeps trust’s code')
   assert.ok(-5n + VALUE_OFFSET > 0n, 'a negative value is still a positive field element')
 })

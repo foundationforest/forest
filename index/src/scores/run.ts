@@ -9,7 +9,7 @@ import type { Config } from '../config.ts'
 import type { Db } from '../db.ts'
 import type { Directory } from '../markets.ts'
 import { type Inputs, type Scores, compute, toMicro } from './compute.ts'
-import { type IndexKeys, sign } from './sign.ts'
+import { type IndexKeys, type Kind, sign } from './sign.ts'
 
 export async function loadInputs(db: Db): Promise<Inputs> {
   const [profiles, badges, receipts, reviews] = await Promise.all([
@@ -18,7 +18,7 @@ export async function loadInputs(db: Db): Promise<Inputs> {
     db.query(
       `select escrow, buyer, seller, creator, mint, funded_at is not null as funded, outcome, closed from escrow_receipts`,
     ),
-    db.query('select uri, reviewer, subject, rating, deal_id, created_at from reviews'),
+    db.query('select uri, reviewer, subject, overall, deal_id, created_at from reviews'),
   ])
   return {
     profiles: profiles.rows.map((r) => ({ did: r.did, wallet: r.wallet })),
@@ -37,14 +37,14 @@ export async function loadInputs(db: Db): Promise<Inputs> {
       uri: r.uri,
       reviewer: r.reviewer,
       subject: r.subject,
-      rating: r.rating,
+      overall: r.overall === null ? null : Number(r.overall),
       dealId: r.deal_id,
       createdAt: r.created_at ? new Date(r.created_at).toISOString() : null,
     })),
   }
 }
 
-type Row = { did: string; kind: 'uniqueness' | 'trust'; scope: string; value: bigint; details: unknown }
+type Row = { did: string; kind: Kind; scope: string; value: bigint; details: unknown }
 
 export async function recompute(
   db: Db,
@@ -66,13 +66,17 @@ export async function recompute(
       value: toMicro(u.value),
       details: { market: u.market, role: u.role, issuers: u.issuers },
     })),
-    ...scores.trust.map((t) => ({
+    ...scores.standing.map((t) => ({
       did: t.did,
-      kind: 'trust' as const,
+      kind: 'standing' as const,
       scope: '',
       value: toMicro(t.value),
       details: { reviews: t.reviews, rounds: scores.rounds },
     })),
+    // No counted review rates: no rating, rather than a rating of zero.
+    ...scores.rating
+      .filter((r) => r.value !== null)
+      .map((r) => ({ did: r.did, kind: 'rating' as const, scope: '', value: toMicro(r.value!), details: { reviews: r.reviews } })),
   ]
 
   const client = await db.connect()

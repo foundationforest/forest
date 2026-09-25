@@ -12,7 +12,9 @@ people as pages and to you as JSON.
   twin is `/index.json`. The twin is the exact data the page shows.
 - Answers may be up to 30 seconds old.
 - Amounts in receipts are base units, as text. A price in an offer is whole units, as text
-  (`"25"`, `"12.50"`).
+  (`"25"`, `"12.50"`). An offer in a market with no money has no price at all.
+- In records, decimals are text: a price, a rating (`"8.5"`), a point's degrees (`"38.72"`). In
+  the JSON twins, ratings and scores are plain numbers.
 - Start anywhere below; every answer links onward with full URLs (`url`, `profileUrl`,
   `marketUrl`, `dealUrl`).
 
@@ -20,21 +22,33 @@ people as pages and to you as JSON.
 
     GET https://forest.foundation/search.json?q=portuguese
 
-Returns `markets` (directory markets whose name, other spellings, category or roles contain the
-words) and `offers` (live offers whose text matches), ranked the same way as a market.
+Returns `markets` (directory markets whose name, folder, roles or labels contain the words) and
+`offers` (live offers whose text matches), ranked the same way as a market.
 
-To browse instead: `https://forest.foundation/index.json` lists the categories and their markets;
-`https://forest.foundation/categories/freelance-work.json` lists one category's markets;
+To browse instead: `https://forest.foundation/index.json` lists the folders and their markets;
+`https://forest.foundation/folders/freelance-work.json` lists one folder's markets;
 `https://forest.foundation/markets/online-tutors.json` lists a market's live offers.
 
-In a market, offers are ranked: sellers with a counted badge in that market first, then by trust,
-then newest. Page with `?offset=50`. Another spelling of a market's name answers 301 to the
-directory's spelling (`https://forest.foundation/markets/online-tutor.json`).
+In a market, offers are ranked: sellers with a counted badge in that market first, then by
+standing, then newest. Page with `?offset=50`. A market has one name: another spelling is not
+that market.
+
+Near a place: add `near=lat,lon&km=N` to a market or a search, such as
+`https://forest.foundation/markets/language-exchange.json?near=38.72,-9.14&km=10`. It keeps the
+offers whose point is within N km, and leaves out offers that name no place.
+
+The market file comes with its market (`market`): `description`, `sides` (`two`: a seller and a
+buyer; `one`: peers), `labels` (the plain words for seller and buyer, such as tutor and student),
+`money` (whether deals are paid), `ratings` (the rating names reviews there usually give),
+`howDealsGo` (how deals there usually go, in plain text), and the extra fields offers and reviews
+there carry.
 
 Each offer carries `description`, `price` (`amount`, the currency as `mint`, and `per`: hour, day
-or job), `terms` (optional: an `arbiter`, and a `timer` of `days` to the `seller` or `buyer`),
-`availability`, `remote` and `location` (either may be missing), `expires`, the seller's `did`, `name` and `profileUrl`,
-the seller's two scores (`uniqueness`, `trust`), and a `payLink`.
+or job; null in a market with no money), `terms` (optional: an `arbiter`, and a `timer` of `days`
+to the `seller` or `buyer`), `options` (the terms in one plain sentence, and a `flag` with `why`:
+`arbiterIsParty` or `timerToBuyer`), `availability`, `remote` and `location` (`lat`, `lon`,
+`precisionKm`, `area`; either may be missing), `expires`, the seller's `did`, `name` and
+`profileUrl`, the seller's `uniqueness`, `rating` and `standing`, and a `payLink`.
 
 ## Read a profile
 
@@ -45,10 +59,13 @@ several profiles; they are linked only if the person chose to link them. The ans
 
 - `profile`: `name`, `about`, `contact`, and the key it is paid at.
 - `badges`: every badge registered for this profile, counted or not.
-- `scores`: `uniqueness` (one per counted badge) and `trust`, each signed.
+- `scores`: `uniqueness` (one per counted badge), `rating` and `standing`, each signed.
 - `offers` and `requests`: its live posts.
-- `reviews.received` and `reviews.given`: each with its `evidence` (what payment backs it), the
-  reviewer's weight, and what it added to trust.
+- `reviews.received` and `reviews.given`: each with its `ratings` (by name, 1 to 10), its
+  `evidence` (what payment backs it), the reviewer's weight, and what it added to standing. A
+  review's market is the market of the profile it is about; `fields` are the ones that market's
+  file adds to a review. `media` lists its photos and videos by content id; this index does not
+  fetch them.
 - `credentials`: none are issued yet.
 
 ## Check a badge
@@ -60,8 +77,9 @@ accountable, not good.
 In `badges[]`:
 
 - `counted: true` means this index counts it. It counts only if all three hold:
-  - its `scope` is a directory market and one of its roles, exactly (`online-tutors/seller`); a
-    plain market with no role counts for nothing;
+  - its `scope` is a directory market and a role its sides allow, exactly
+    (`online-tutors/seller`, `language-exchange/peer`); a plain market with no role counts for
+    nothing;
   - the profile declares the key the badge was registered with (`wallet` equals `profile.wallet`);
   - the profile exists here.
 - `why` says why not when it doesn't: `notInDirectory`, `noRole` or `walletNotDeclared`.
@@ -81,9 +99,10 @@ and its record stays forever as a receipt.
     GET https://forest.foundation/deals/CJfRUQxyonG6B5mnztsNUqxknbFT89DJdrdrzV9F96mU.json
 
 - `receipt`: `buyer` and `seller` (keys) with the profiles that declare them
-  (`buyerProfiles`, `sellerProfiles`), `creator` (who started it; `seller` means the seller asked
-  for the payment), `amount`, `mint`, `arbiter` and `timer` if set, `createdAt`, `fundedAt`,
-  `endedAt`, `outcome`, `toSeller` and `toBuyer`.
+  (`buyerProfiles`, `sellerProfiles`, each with its `rating` and `standing`), `creator` (who
+  started it; `seller` means the seller asked for the payment), `amount`, `mint`, `arbiter` and
+  `timer` if set, `options` (as on an offer; the flag also rises when the arbiter is the buyer or
+  the seller), `createdAt`, `fundedAt`, `endedAt`, `outcome`, `toSeller` and `toBuyer`.
 - `outcome`: `releasedToSeller`, `releasedToBuyer`, `split`, `arbitrated`, `timerReleased`, or
   null while it is held.
 - `receipt: null` means this index has no payment for the deal; the reviews that name it are still
@@ -104,13 +123,18 @@ the escrow program's own events for it (`Created`, `Funded`, `Ended`, `Closed`).
 
 ## What the scores mean
 
-Two scores per profile. They are never added together. Everyone starts at zero.
+Three scores. They are never added together.
 
 - **Uniqueness**, per badge, 0 to 1: how sure this index is that the badge belongs to one real
   person. `1 − (1 − w1) × (1 − w2) × …` over the weights of the issuers that vouched.
-- **Trust**, per profile, any number, below zero too: the sum of the reviews received, each
-  weighed by its reviewer (their badge, then their own trust) and by the payment behind it. Five
-  stars adds, three is neutral, one takes away.
+- **Rating**, per profile, 1.0 to 10.0: the `overall` ratings of the reviews that count,
+  averaged, each weighed by its reviewer and by the payment behind it. No review that counts gives
+  one: no rating, not zero.
+- **Standing**, per profile, any number, below zero too, starting at zero: the sum of the reviews
+  received, each weighed by its reviewer (their badge, then their own standing) and by the payment
+  behind it. An overall of 10 adds, 5.5 is neutral, 1 takes away.
+
+Pages show the rating and the standing side by side, as two numbers.
 
 Both are this index's opinion, and the rules are open:
 https://github.com/foundationforest/forest/blob/main/index/SCORING.md. Another index may weigh
@@ -137,14 +161,15 @@ An example, from this index's test data:
     https://forest.foundation/pay?v=1&offer=at%3A%2F%2Fdid%3Aplc%3Aexampleana22222222222222%2Ffoundation.forest.post%2F3kzq2vrffxb2c&cid=bafyreiexampleanaportuguese2222&price.amount=25&price.mint=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v&price.per=hour
 
 Its twin, `https://forest.foundation/pay.json?…` with the same query, says whether the link still
-matches the offer (`check`: `matches`, `changed`, `differs`, `notLive`, `noKey`, `notFound`,
-`invalid`).
+matches the offer (`check`: `matches`, `changed`, `differs`, `notLive`, `noPrice`, `noKey`,
+`notFound`, `invalid`). An offer with no price has no Pay link.
 
 ## Talking to people about it
 
 People reading your answer don't need the machinery. Say "payment", "dollars", "verified real
 person", "receipt". Don't say wallet, USDC, chain or gas. A score is evidence, not a verdict:
-say what backs it ("2 reviews, 1 backed by a payment"). Don't combine the two scores into one.
+say what backs it ("2 reviews, 1 backed by a payment"). Don't combine the scores into one. Say
+the options as the offer's `options.text` says them, and mention its flag.
 
 ## Examples
 

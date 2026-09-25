@@ -12,7 +12,6 @@
     "test": "node --test test/*.test.js"
   },
   "dependencies": {
-    "@atproto/lexicon": "0.7.14",
-    "@atproto/syntax": "0.7.6"
+    "@atproto/lexicon": "0.7.14"
   }
 }

@@ -1,13 +1,15 @@
 // The scores, as pure functions: plain data in, plain data out, no database and no clock. Every
 // rule here is written out in plain words in SCORING.md; the two must say the same thing.
 //
-// Two scores per profile, never blended into one number:
+// Three scores, never blended into one number:
 //   uniqueness  per badge: which issuers' lists vouch for it, by this index's issuer weights
-//   trust       per profile: reviews received, each weighed by its reviewer and by its evidence
+//   standing    per profile: reviews received, each weighed by its reviewer and by its evidence
+//               (the handoff calls it trust)
+//   rating      per profile: the reviews' `overall`, averaged with the same weights, 1.0 to 10.0
 //
-// Uniqueness enters trust only as the starting weight of a reviewer (the handoff: "an unbadged
-// reviewer's review weighs near zero"). Without that seed, "weighted by the reviewer's own trust"
-// with everyone starting at zero would leave every score at zero forever.
+// Uniqueness enters standing only as the starting weight of a reviewer (the handoff: "an unbadged
+// reviewer's review weighs near zero"). Without that seed, "weighted by the reviewer's own
+// standing" with everyone starting at zero would leave every score at zero forever.
 
 import type { IssuerConfig, ScoringConfig } from '../config.ts'
 import { type Directory, splitScope } from '../markets.ts'
@@ -31,7 +33,8 @@ export type ReviewIn = {
   uri: string
   reviewer: string
   subject: string
-  rating: number | null
+  /** The review's `overall` rating, 1.0 to 10.0, or null when it gives none. */
+  overall: number | null
   dealId: string | null
   createdAt: string | null
 }
@@ -186,15 +189,15 @@ function partiesMatch(r: ReceiptIn, reviewerWallet: string | null, subjectWallet
 }
 
 // ---------------------------------------------------------------------------------------------
-// Trust
+// Standing and rating
 // ---------------------------------------------------------------------------------------------
 
-/** A rating as a signal: 5 stars is +1, 3 is 0, 1 is −1. No rating says neither, so 0. */
-export function signal(rating: number | null): number {
-  return rating === null ? 0 : (rating - 3) / 2
+/** An overall rating as a signal: 10 is +1, 5.5 is 0, 1 is −1. No rating says neither, so 0. */
+export function signal(overall: number | null): number {
+  return overall === null ? 0 : (overall - 5.5) / 4.5
 }
 
-/** How much a reviewer's word weighs: its best badge (or the floor), scaled by its own trust. */
+/** How much a reviewer's word weighs: its best badge (or the floor), scaled by its own standing. */
 export function reviewerWeight(u: number, t: number, scoring: ScoringConfig): number {
   return Math.max(u, scoring.unbadgedReviewer) * (1 + t / (Math.abs(t) + 1))
 }
@@ -209,15 +212,27 @@ export type ScoredReview = ReviewIn & {
   contribution: number
 }
 
-export type Trust = {
+export type Standing = {
   did: string
   value: number
   reviews: { received: number; counted: number; withReceipt: number }
 }
 
+/**
+ * The weighted `overall`: each counted review that gives one, weighed by its reviewer's weight
+ * times the evidence under it, the same weights standing uses. Null when no counted review rates.
+ */
+export type Rating = {
+  did: string
+  value: number | null
+  /** How many counted reviews give an `overall`. */
+  reviews: number
+}
+
 export type Scores = {
   uniqueness: Uniqueness[]
-  trust: Trust[]
+  standing: Standing[]
+  rating: Rating[]
   reviews: ScoredReview[]
   rounds: number
 }
@@ -248,8 +263,8 @@ export function compute(inputs: Inputs, settings: Settings): Scores {
   }
   const counted = inputs.reviews.filter((v) => kept.has(v.uri))
 
-  // Trust: repeat the sum, each reviewer weighed by the trust the last round gave it, until no
-  // profile moves by more than the tolerance.
+  // Standing: repeat the sum, each reviewer weighed by the standing the last round gave it, until
+  // no profile moves by more than the tolerance.
   const dids = new Set<string>([...wallets.keys(), ...inputs.reviews.map((v) => v.subject), ...inputs.reviews.map((v) => v.reviewer)])
   let t = new Map<string, number>([...dids].map((d) => [d, 0]))
   let rounds = 0
@@ -258,7 +273,7 @@ export function compute(inputs: Inputs, settings: Settings): Scores {
     const next = new Map<string, number>([...dids].map((d) => [d, 0]))
     for (const v of counted) {
       const w = reviewerWeight(best.get(v.reviewer) ?? 0, t.get(v.reviewer)!, scoring)
-      next.set(v.subject, next.get(v.subject)! + w * evidence.get(v.uri)!.weight * signal(v.rating))
+      next.set(v.subject, next.get(v.subject)! + w * evidence.get(v.uri)!.weight * signal(v.overall))
     }
     let delta = 0
     for (const d of dids) delta = Math.max(delta, Math.abs(next.get(d)! - t.get(d)!))
@@ -276,12 +291,12 @@ export function compute(inputs: Inputs, settings: Settings): Scores {
       ...(isCounted ? {} : { skipped: v.reviewer === v.subject ? ('self' as const) : ('replaced' as const) }),
       evidence: e,
       reviewerWeight: w,
-      signal: signal(v.rating),
-      contribution: isCounted ? w * e.weight * signal(v.rating) : 0,
+      signal: signal(v.overall),
+      contribution: isCounted ? w * e.weight * signal(v.overall) : 0,
     }
   })
 
-  const trust: Trust[] = [...wallets.keys()].sort().map((did) => {
+  const standing: Standing[] = [...wallets.keys()].sort().map((did) => {
     const received = reviews.filter((v) => v.subject === did)
     return {
       did,
@@ -294,7 +309,19 @@ export function compute(inputs: Inputs, settings: Settings): Scores {
     }
   })
 
-  return { uniqueness: uniq, trust, reviews, rounds }
+  const rating: Rating[] = [...wallets.keys()].sort().map((did) => {
+    const rated = reviews.filter((v) => v.subject === did && v.counted && v.overall !== null)
+    let sum = 0
+    let weights = 0
+    for (const v of rated) {
+      const weight = v.reviewerWeight * v.evidence.weight
+      sum += weight * v.overall!
+      weights += weight
+    }
+    return { did, value: weights > 0 ? sum / weights : null, reviews: rated.length }
+  })
+
+  return { uniqueness: uniq, standing, rating, reviews, rounds }
 }
 
 /** Millionths, the unit every score is stored, signed and served in. */

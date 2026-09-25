@@ -1,5 +1,5 @@
 // The scoring rules, on plain data: every evidence class, how badges count and combine, the
-// dedupe, and trust as a fixed point. No database, no chain, no host.
+// dedupe, standing as a fixed point, and the weighted rating. No database, no chain, no host.
 
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -16,12 +16,17 @@ import {
   compute,
   evidenceFor,
   reviewerWeight,
+  signal,
   uniqueness,
 } from '../src/scores/compute.ts'
 import { MARKETS_FOLDER } from './markets-repo.ts'
 
 const tutors = JSON.parse(readFileSync(join(MARKETS_FOLDER, 'freelance-work/online-tutors.json'), 'utf8'))
-const directory = new Directory([{ file: 'freelance-work/online-tutors.json', market: tutors }], { 'online-tutors': ['online-tutor'] })
+const exchange = JSON.parse(readFileSync(join(MARKETS_FOLDER, 'learning/language-exchange.json'), 'utf8'))
+const directory = new Directory([
+  { file: 'freelance-work/online-tutors.json', market: tutors },
+  { file: 'learning/language-exchange.json', market: exchange },
+])
 const USDC = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'
 const FOUNDATION = 'H7qXWNAeAvedhwuvhAkBYK2WE2nA3KgbufnRz38zFdzS'
 const OTHER_ISSUER = 'Other1ssuer11111111111111111111111111111111'
@@ -55,7 +60,7 @@ const review = (reviewer: string, subject: string, over: Partial<ReviewIn> = {})
   uri: `at://${reviewer}/foundation.forest.review/${String(++n).padStart(4, '0')}`,
   reviewer,
   subject,
-  rating: 5,
+  overall: 10,
   dealId: null,
   createdAt: `2026-10-01T00:00:${String(n % 60).padStart(2, '0')}Z`,
   ...over,
@@ -121,10 +126,19 @@ test('a badge counts only as market/role under a directory name, and only for th
   assert.deepEqual(badgeStatus(badge(ana.did, ana.wallet, 'online-tutors:seller'), ana.wallet, directory), { counted: false, why: 'notInDirectory' }, 'only the slash separates a role')
   assert.deepEqual(badgeStatus(badge(ana.did, 'NotDeclared'), ana.wallet, directory), { counted: false, why: 'walletNotDeclared' })
   assert.deepEqual(badgeStatus(badge(ana.did, ana.wallet), null, directory), { counted: false, why: 'walletNotDeclared' })
-  assert.deepEqual(badgeStatus(badge(ana.did, ana.wallet, 'online-tutor/seller'), ana.wallet, directory), { counted: false, why: 'notInDirectory' }, 'an alias never counts for a badge')
+  assert.deepEqual(badgeStatus(badge(ana.did, ana.wallet, 'online-tutor/seller'), ana.wallet, directory), { counted: false, why: 'notInDirectory' }, 'another spelling is another name, not in the directory')
   assert.deepEqual(badgeStatus(badge(ana.did, ana.wallet, 'plumbing/seller'), ana.wallet, directory), { counted: false, why: 'notInDirectory' }, 'a name the directory does not list')
   assert.deepEqual(badgeStatus(badge(ana.did, ana.wallet, 'Online-Tutors/seller'), ana.wallet, directory), { counted: false, why: 'notInDirectory' }, 'byte for byte')
   assert.deepEqual(badgeStatus(badge(ana.did, ana.wallet, 'online-tutors/plumber'), ana.wallet, directory), { counted: false, why: 'notInDirectory' }, 'a role the market does not have')
+})
+
+test('a badge counts only under a role its market’s sides allow: peer in a one-sided market', () => {
+  assert.deepEqual(badgeStatus(badge(ana.did, ana.wallet, 'language-exchange/peer'), ana.wallet, directory), { counted: true, market: 'language-exchange', role: 'peer' })
+  for (const role of ['seller', 'buyer']) {
+    assert.deepEqual(badgeStatus(badge(ana.did, ana.wallet, `language-exchange/${role}`), ana.wallet, directory), { counted: false, why: 'notInDirectory' }, `no ${role} in a one-sided market`)
+  }
+  assert.deepEqual(badgeStatus(badge(ana.did, ana.wallet, 'online-tutors/peer'), ana.wallet, directory), { counted: false, why: 'notInDirectory' }, 'no peer in a two-sided one')
+  assert.deepEqual(badgeStatus(badge(ana.did, ana.wallet, 'online-tutors/tutor'), ana.wallet, directory), { counted: false, why: 'notInDirectory' }, 'a label is a word for pages, not a role')
 })
 
 test('uniqueness: issuers combine, an issuer at 0 adds nothing', () => {
@@ -146,22 +160,22 @@ test('uniqueness: issuers combine, an issuer at 0 adds nothing', () => {
   assert.deepEqual(uniqueness({ profiles: [cleo], badges: [badge(cleo.did, 'CleoOther')] }, settings), [], 'wallet not declared')
 })
 
-test('trust: everyone starts at zero; the scenario the end-to-end test runs', () => {
+test('standing: everyone starts at zero; the scenario the end-to-end test runs', () => {
   const deal = receipt()
   const inputs: Inputs = {
     profiles: [ana, ben, cleo],
     badges: [badge(ana.did, ana.wallet), badge(ben.did, ben.wallet), badge(cleo.did, 'CleoUndeclared')],
     receipts: [deal],
     reviews: [
-      review(ben.did, ana.did, { dealId: deal.escrow, rating: 5 }),
-      review(ana.did, ben.did, { dealId: deal.escrow, rating: 5 }),
-      review(cleo.did, ana.did, { dealId: 'cd'.repeat(32), rating: 1 }),
+      review(ben.did, ana.did, { dealId: deal.escrow, overall: 10 }),
+      review(ana.did, ben.did, { dealId: deal.escrow, overall: 10 }),
+      review(cleo.did, ana.did, { dealId: 'cd'.repeat(32), overall: 1 }),
     ],
   }
-  assert.deepEqual(compute({ ...inputs, reviews: [] }, settings).trust.map((t) => t.value), [0, 0, 0])
+  assert.deepEqual(compute({ ...inputs, reviews: [] }, settings).standing.map((t) => t.value), [0, 0, 0])
 
   const s = compute(inputs, settings)
-  const t = Object.fromEntries(s.trust.map((x) => [x.did, x.value]))
+  const t = Object.fromEntries(s.standing.map((x) => [x.did, x.value]))
   // Ana and Ben vouch for each other, both badged at 1: each converges to x = 1 + x / (x + 1),
   // the golden ratio, less Cleo's small negative on Ana. Cleo counts at the floor, with no receipt.
   const cleoPart = 0.05 * 0.05 * -1
@@ -177,31 +191,71 @@ test('trust: everyone starts at zero; the scenario the end-to-end test runs', ()
   const cleoReview = s.reviews.find((v) => v.reviewer === cleo.did)!
   assert.equal(cleoReview.evidence.note, 'noReceipt')
   assert.equal(cleoReview.reviewerWeight, 0.05, 'her badge is not counted, so the floor')
-  assert.deepEqual(s.trust.find((x) => x.did === ana.did)!.reviews, { received: 2, counted: 2, withReceipt: 1 })
+  assert.deepEqual(s.standing.find((x) => x.did === ana.did)!.reviews, { received: 2, counted: 2, withReceipt: 1 })
 })
 
-test('trust: repeating yourself or inventing deal ids adds nothing; self-reviews are ignored', () => {
-  const spam = Array.from({ length: 20 }, (_, i) => review(ben.did, ana.did, { dealId: i.toString(16).padStart(64, '0'), rating: 5 }))
+test('standing: repeating yourself or inventing deal ids adds nothing; self-reviews are ignored', () => {
+  const spam = Array.from({ length: 20 }, (_, i) => review(ben.did, ana.did, { dealId: i.toString(16).padStart(64, '0'), overall: 10 }))
   const s = compute({ profiles: [ana, ben], badges: [badge(ben.did, ben.wallet)], receipts: [], reviews: spam }, settings)
   assert.equal(s.reviews.filter((v) => v.counted).length, 1, 'only the latest no-receipt review counts')
-  assert.ok(Math.abs(s.trust.find((x) => x.did === ana.did)!.value - 0.05) < 1e-9, '1 × 0.05 × 1')
+  assert.ok(Math.abs(s.standing.find((x) => x.did === ana.did)!.value - 0.05) < 1e-9, '1 × 0.05 × 1')
 
   const self = review(ana.did, ana.did)
   const t = compute({ profiles: [ana], badges: [badge(ana.did, ana.wallet)], receipts: [], reviews: [self] }, settings)
-  assert.equal(t.trust[0].value, 0)
+  assert.equal(t.standing[0].value, 0)
   assert.equal(t.reviews[0].skipped, 'self')
 })
 
-test('trust: a bad review with a receipt lowers trust below zero; no rating is neutral', () => {
+test('standing: a bad review with a receipt lowers standing below zero; no rating is neutral', () => {
   const deal = receipt()
   const bad = compute(
-    { profiles: [ana, ben], badges: [badge(ben.did, ben.wallet)], receipts: [deal], reviews: [review(ben.did, ana.did, { dealId: deal.escrow, rating: 1 })] },
+    { profiles: [ana, ben], badges: [badge(ben.did, ben.wallet)], receipts: [deal], reviews: [review(ben.did, ana.did, { dealId: deal.escrow, overall: 1 })] },
     settings,
   )
-  assert.equal(bad.trust.find((x) => x.did === ana.did)!.value, -1)
+  assert.equal(bad.standing.find((x) => x.did === ana.did)!.value, -1)
   const thin = compute(
-    { profiles: [ana, ben], badges: [badge(ben.did, ben.wallet)], receipts: [deal], reviews: [review(ben.did, ana.did, { dealId: deal.escrow, rating: null })] },
+    { profiles: [ana, ben], badges: [badge(ben.did, ben.wallet)], receipts: [deal], reviews: [review(ben.did, ana.did, { dealId: deal.escrow, overall: null })] },
     settings,
   )
-  assert.equal(thin.trust.find((x) => x.did === ana.did)!.value, 0)
+  assert.equal(thin.standing.find((x) => x.did === ana.did)!.value, 0)
+})
+
+test('the signal: an overall of 10 is +1, 5.5 is 0, 1 is −1; none says neither', () => {
+  assert.deepEqual([signal(10), signal(5.5), signal(1), signal(null)], [1, 0, -1, 0])
+  assert.ok(Math.abs(signal(8.2) - 0.6) < 1e-12)
+})
+
+test('rating: the counted overalls, averaged with the weights standing uses', () => {
+  const deal = receipt()
+  const s = compute(
+    {
+      profiles: [ana, ben, cleo],
+      badges: [badge(ben.did, ben.wallet)],
+      receipts: [deal],
+      reviews: [
+        // Ben: badged, with a receipt both said yes to: weight 1 × 1.
+        review(ben.did, ana.did, { dealId: deal.escrow, overall: 9 }),
+        // Cleo: no counted badge, no receipt: weight 0.05 × 0.05.
+        review(cleo.did, ana.did, { dealId: 'cd'.repeat(32), overall: 1 }),
+        // Ana gives no overall, so Ben has no rating.
+        review(ana.did, ben.did, { dealId: deal.escrow, overall: null }),
+      ],
+    },
+    settings,
+  )
+  const r = Object.fromEntries(s.rating.map((x) => [x.did, x]))
+  const wBen = s.reviews.find((v) => v.reviewer === ben.did)!.reviewerWeight
+  const wCleo = s.reviews.find((v) => v.reviewer === cleo.did)!.reviewerWeight * 0.05
+  assert.ok(Math.abs(r[ana.did].value! - (9 * wBen + 1 * wCleo) / (wBen + wCleo)) < 1e-9, `Ana ${r[ana.did].value}`)
+  assert.ok(r[ana.did].value! > 8.97, 'an unbadged stranger with nothing under their review barely moves it')
+  assert.equal(r[ana.did].reviews, 2)
+  assert.deepEqual(r[ben.did], { did: ben.did, value: null, reviews: 0 }, 'no counted review gives an overall: no rating, not zero')
+  assert.deepEqual(r[cleo.did], { did: cleo.did, value: null, reviews: 0 })
+
+  // A replaced review is not counted, so it does not rate either.
+  const again = compute(
+    { profiles: [ana, ben], badges: [], receipts: [], reviews: [review(ben.did, ana.did, { overall: 2 }), review(ben.did, ana.did, { overall: 8 })] },
+    settings,
+  )
+  assert.deepEqual(again.rating.find((x) => x.did === ana.did), { did: ana.did, value: 8, reviews: 1 }, 'the latest no-receipt review is the one that counts')
 })
