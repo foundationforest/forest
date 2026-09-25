@@ -51,7 +51,12 @@
         "blocked": null
       },
       "feepayer": {
-        "blocked": "Free plan resource provision limit exceeded. Please upgrade to provision more resources!"
+        "blocked": null,
+        "id": "8eda2bc9-4966-4e9c-8fcb-664efe976c37",
+        "source": "github",
+        "url": "https://feepayer-production.up.railway.app",
+        "port": 8080,
+        "volume": null
       }
     },
     "sealed": {
