@@ -151,21 +151,16 @@ async function storeEscrowFacts(client: pg.PoolClient, signature: string, facts:
       case 'created':
         // A new deal at this address (only possible after a never-funded one closed): start afresh.
         await client.query(
-          `insert into escrow_receipts (escrow, program_id, buyer, seller, mint, amount, created_at, signature)
-           values ($1, $2, $3, $4, $5, $6, to_timestamp($7), $8)
+          `insert into escrow_receipts (escrow, program_id, buyer, seller, creator, arbiter, mint, amount, timer_days, timer_to,
+                                        created_at, signature)
+           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, to_timestamp($11), $12)
            on conflict (escrow) do update set program_id = excluded.program_id, buyer = excluded.buyer,
-             seller = excluded.seller, mint = excluded.mint, amount = excluded.amount, created_at = excluded.created_at,
-             funded_at = null, accepted_at = null, ended_at = null, outcome = null, to_seller = null, to_buyer = null,
-             locked = false, closed = false, signature = excluded.signature, updated_at = now()`,
-          [f.escrow, programId, f.buyer, f.seller, f.mint, f.amount, f.createdAt, signature],
+             seller = excluded.seller, creator = excluded.creator, arbiter = excluded.arbiter, mint = excluded.mint,
+             amount = excluded.amount, timer_days = excluded.timer_days, timer_to = excluded.timer_to,
+             created_at = excluded.created_at, funded_at = null, ended_at = null, outcome = null, to_seller = null,
+             to_buyer = null, closed = false, signature = excluded.signature, updated_at = now()`,
+          [f.escrow, programId, f.buyer, f.seller, f.creator, f.arbiter, f.mint, f.amount, f.timer?.days ?? null, f.timer?.to ?? null, f.createdAt, signature],
         )
-        break
-      case 'accepted':
-        await client.query('update escrow_receipts set accepted_at = to_timestamp($2), signature = $3, updated_at = now() where escrow = $1', [
-          f.escrow,
-          f.acceptedAt,
-          signature,
-        ])
         break
       case 'funded':
         await client.query(
@@ -173,16 +168,12 @@ async function storeEscrowFacts(client: pg.PoolClient, signature: string, facts:
           [f.escrow, f.fundedAt, signature],
         )
         break
-      case 'objected':
-        await client.query('update escrow_receipts set locked = true, signature = $2, updated_at = now() where escrow = $1', [f.escrow, signature])
-        break
       case 'ended':
         await client.query(
-          `update escrow_receipts set outcome = $2, to_seller = $3, to_buyer = $4,
-             accepted_at = coalesce(to_timestamp($5), accepted_at), ended_at = to_timestamp($6), locked = false,
-             signature = $7, updated_at = now()
+          `update escrow_receipts set outcome = $2, to_seller = $3, to_buyer = $4, ended_at = to_timestamp($5),
+             signature = $6, updated_at = now()
            where escrow = $1`,
-          [f.escrow, f.outcome, f.toSeller, f.toBuyer, f.acceptedAt, f.endedAt, signature],
+          [f.escrow, f.outcome, f.toSeller, f.toBuyer, f.endedAt, signature],
         )
         break
       case 'closed':

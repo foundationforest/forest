@@ -18,9 +18,12 @@ export type ReceiptIn = {
   escrow: string
   buyer: string
   seller: string
+  /** Who opened the escrow: the seller, for an invoice. */
+  creator: 'buyer' | 'seller'
   mint: string
+  /** Someone marked the funding. */
   funded: boolean
-  accepted: boolean
+  /** How it ended, or null while it has not. Every way out pays the whole balance, which must hold the amount. */
   outcome: string | null
   closed: boolean
 }
@@ -115,10 +118,11 @@ export function uniqueness(inputs: Pick<Inputs, 'profiles' | 'badges'>, settings
 // ---------------------------------------------------------------------------------------------
 
 /**
- * What stands under a review's deal id.
- *   both                paid, and the seller accepted or invoiced: both said yes
- *   oneSidedConfirmed   paid in one tap with no acceptance, and the seller reviewed the same deal
- *   oneSided            paid in one tap with no acceptance, and the seller has not reviewed it
+ * What stands under a review's deal id (the handoff's "who said yes": a receipt counts fully when
+ * the seller created the escrow or reviewed the deal).
+ *   both                paid, and the seller created the escrow (an invoice)
+ *   oneSidedConfirmed   paid, the buyer created it, and the seller reviewed the same deal
+ *   oneSided            paid, the buyer created it, and the seller has not reviewed it
  *   none                no receipt this index counts, with the reason in `note`
  */
 export type EvidenceKind = 'both' | 'oneSidedConfirmed' | 'oneSided' | 'none'
@@ -127,11 +131,17 @@ export type EvidenceNote =
   | 'noReceipt'
   | 'notTheParties'
   | 'tokenNotCounted'
-  | 'nobodySaidYes'
+  | 'notPaid'
 export type Evidence = { kind: EvidenceKind; weight: number; note?: EvidenceNote }
 
-/** Every outcome but these two paid someone out of a balance that held the amount. */
-const PAID_OUTCOMES = new Set(['approved', 'releasedBySilence', 'agreed', 'arbitrated', 'cancelledByBuyer', 'cancelledBySeller'])
+/**
+ * Paid: someone marked the funding, or it ended. Every way out of the escrow pays out a balance
+ * that held the amount (the program checks it), so an ending proves the payment; a one-tap payment
+ * has no funding mark at all.
+ */
+export function paid(r: Pick<ReceiptIn, 'funded' | 'outcome'>): boolean {
+  return r.funded || r.outcome !== null
+}
 
 export function evidenceFor(
   review: ReviewIn,
@@ -151,18 +161,12 @@ export function evidenceFor(
     return none('notTheParties')
   }
   if (!ctx.scoring.countedMints.includes(r.mint)) return none('tokenNotCounted')
-  const paid = r.funded || (r.outcome !== null && PAID_OUTCOMES.has(r.outcome))
-  if (paid && r.accepted) return { kind: 'both', weight: w.both }
-  if (!r.accepted && r.outcome === 'approved') {
-    const sellerReviewed = ctx.reviews.some(
-      (v) =>
-        v.dealId === r.escrow &&
-        ctx.wallets.get(v.reviewer) === r.seller &&
-        ctx.wallets.get(v.subject) === r.buyer,
-    )
-    return sellerReviewed ? { kind: 'oneSidedConfirmed', weight: w.both } : { kind: 'oneSided', weight: w.oneSided }
-  }
-  return none('nobodySaidYes')
+  if (!paid(r)) return none('notPaid')
+  if (r.creator === 'seller') return { kind: 'both', weight: w.both }
+  const sellerReviewed = ctx.reviews.some(
+    (v) => v.dealId === r.escrow && ctx.wallets.get(v.reviewer) === r.seller && ctx.wallets.get(v.subject) === r.buyer,
+  )
+  return sellerReviewed ? { kind: 'oneSidedConfirmed', weight: w.both } : { kind: 'oneSided', weight: w.oneSided }
 }
 
 /** The reviewer and the subject are the escrow's two parties, by their declared wallets, either way round. */

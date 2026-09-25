@@ -17,10 +17,11 @@ can change on their own copy: `config/issuers.json`, `config/scoring.json` and
 A badge is one `Registered` entry the registry program itself wrote. It counts for a profile only
 if all three are true:
 
-1. **Its name is in the directory, byte for byte.** The name before the first colon must be a
-   market file's name exactly: no other case, no alias. If a role follows the colon, it must be one
-   of that market's roles. Aliases never apply to badges. If they did, one person could register
-   under two spellings and hold two badges in one market.
+1. **Its name is in the directory, byte for byte.** A scope is `market` or `market/role`, such as
+   `online-tutors/seller`. The name before the first slash must be a market file's name exactly: no
+   other case, no alias. If a role follows the slash, it must be one of that market's roles (seller
+   and buyer when the file names none). Aliases and other separators never apply to badges. If they
+   did, one person could register under two spellings and hold two badges in one market.
 2. **The profile declares its wallet.** The entry names the wallet that signed the registration.
    The profile's own record must name the same wallet. Change the record's wallet and the badge
    stops counting at once.
@@ -54,18 +55,21 @@ The receipt counts only if:
 - its token is one this index counts (`countedMints` in `config/scoring.json`; for now, USDC on
   mainnet and on devnet).
 
-If it counts, the index asks who said yes:
+If it counts, the index asks who said yes. The escrow has no accept step: the seller says yes by
+creating the escrow (an invoice), or by reviewing the deal.
 
 | What the receipt shows | Evidence | Weight |
 |---|---|---|
-| Paid, and the seller accepted it (or opened it as an invoice) | both | 1 |
-| Paid in full in one tap, the seller never accepted, and the seller reviewed the same deal id | one-sided, confirmed | 1 |
-| Paid in full in one tap, the seller never accepted, and the seller has not reviewed it | one-sided | 0.5 |
-| Withdrawn, never accepted, never paid, or closed unfunded | none | 0.05 |
+| Paid, and the seller created it (an invoice) | both | 1 |
+| Paid, the buyer created it, and the seller reviewed the same deal id | one-sided, confirmed | 1 |
+| Paid, the buyer created it, and the seller has not reviewed it | one-sided | 0.5 |
+| Not paid yet, or closed unfunded | none | 0.05 |
 | No deal id, an id with no receipt, someone else's receipt, or a token not counted | none | 0.05 |
 
-"Paid" means the index saw the escrow funded, or saw it end in a way that paid someone from a full
-balance. An ending proves the funding, because a one-tap payment has no separate funding event.
+"Paid" means someone marked the escrow funded, or it ended. Every way out of the escrow pays out a
+balance that held the amount (the program checks it), so an ending proves the payment; a one-tap
+payment is never marked at all. However it ended (released to the seller, sent back to the buyer,
+split, decided by an arbiter, or by the timer) counts the same.
 
 ## Trust
 
@@ -102,11 +106,24 @@ in `docs/changes/index.md`.
 
 A worked example (the end-to-end test):
 
-- Ana and Ben are each badged at 1. They made one deal both said yes to, and each gave the other
-  5 stars. Each converges to 1.618 (the golden ratio: x = 1 + x / (x + 1)).
+- Ana and Ben are each badged at 1. Ana invoiced Ben and he paid, so both said yes; each gave the
+  other 5 stars on that deal. Each converges to 1.618 (the golden ratio: x = 1 + x / (x + 1)).
 - Cleo's badge does not count, because her profile declares another wallet. She gives Ana 1 star
   with a made-up deal id, which takes off 0.05 × 0.05 × 1 = 0.0025.
 - Cleo, with no reviews, stays at 0.
+
+## How the pages show them
+
+- **Side by side, never as one number.** A market lists badged sellers first, then by trust: two
+  keys, one after the other.
+- **Uniqueness** as a percentage on each badge ("how sure this index is that it is one real
+  person"), with who vouched.
+- **Trust** as its number, with the counts beside it: how many reviews counted and how many a
+  payment backs. A raw sum means little alone.
+- **For machines,** each profile's JSON-LD carries an `AggregateRating` made from trust alone, put
+  on schema.org's 1 to 5 scale as `3 + 2 × t / (|t| + 1)` (3 at zero, the same curve the reviewer
+  weight uses), with `reviewCount` the counted reviews that have a rating. Its `ratingExplanation`
+  says it is not an average of stars. No counted rated review, no rating.
 
 ## Signatures
 

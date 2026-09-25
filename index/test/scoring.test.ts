@@ -38,14 +38,15 @@ const ana = { did: 'did:plc:ana', wallet: 'AnaWallet' }
 const ben = { did: 'did:plc:ben', wallet: 'BenWallet' }
 const cleo = { did: 'did:plc:cleo', wallet: 'CleoDeclared' }
 const badge = (did: string, wallet: string, scope = 'online-tutors', listOwner = FOUNDATION): BadgeIn => ({ did, wallet, scope, listOwner })
+// Ana invoiced Ben (the seller created it), and Ben paid in one tap: no funding mark, released.
 const receipt = (over: Partial<ReceiptIn> = {}): ReceiptIn => ({
   escrow: 'Deal1111111111111111111111111111111111111111',
   buyer: ben.wallet,
   seller: ana.wallet,
+  creator: 'seller',
   mint: USDC,
-  funded: true,
-  accepted: true,
-  outcome: 'approved',
+  funded: false,
+  outcome: 'releasedToSeller',
   closed: false,
   ...over,
 })
@@ -69,22 +70,25 @@ function evidence(v: ReviewIn, receipts: ReceiptIn[], reviews: ReviewIn[] = [v])
   })
 }
 
-test('evidence: both said yes counts fully, whoever opened it', () => {
+test('evidence: the seller created it (an invoice) and it was paid: full, however it ended', () => {
   const r = receipt()
   assert.deepEqual(evidence(review(ben.did, ana.did, { dealId: r.escrow }), [r]), { kind: 'both', weight: 1 })
   assert.deepEqual(evidence(review(ana.did, ben.did, { dealId: r.escrow }), [r]), { kind: 'both', weight: 1 }, 'the other way round')
-  const running = receipt({ outcome: null })
-  assert.equal(evidence(review(ben.did, ana.did, { dealId: running.escrow }), [running]).kind, 'both', 'paid and accepted, not ended yet')
-  const cancelled = receipt({ funded: false, outcome: 'cancelledBySeller' })
-  assert.equal(evidence(review(ben.did, ana.did, { dealId: cancelled.escrow }), [cancelled]).kind, 'both', 'an ending is proof of funding')
+  const marked = receipt({ funded: true, outcome: null })
+  assert.equal(evidence(review(ben.did, ana.did, { dealId: marked.escrow }), [marked]).kind, 'both', 'funding marked, not ended yet')
+  for (const outcome of ['releasedToBuyer', 'split', 'arbitrated', 'timerReleased']) {
+    const ended = receipt({ outcome })
+    assert.equal(evidence(review(ben.did, ana.did, { dealId: ended.escrow }), [ended]).kind, 'both', `an ending proves the payment: ${outcome}`)
+  }
 })
 
-test('evidence: a one-tap payment is one-sided until the seller reviews the same deal', () => {
-  const r = receipt({ accepted: false, funded: false, outcome: 'approved' })
+test('evidence: the buyer created it: one-sided until the seller reviews the same deal', () => {
+  const r = receipt({ creator: 'buyer' })
   const byBuyer = review(ben.did, ana.did, { dealId: r.escrow })
   assert.deepEqual(evidence(byBuyer, [r]), { kind: 'oneSided', weight: 0.5 })
   const bySeller = review(ana.did, ben.did, { dealId: r.escrow })
   assert.deepEqual(evidence(byBuyer, [r], [byBuyer, bySeller]), { kind: 'oneSidedConfirmed', weight: 1 })
+  assert.deepEqual(evidence(bySeller, [r], [bySeller]), { kind: 'oneSidedConfirmed', weight: 1 }, 'the seller reviewing the deal is the seller saying yes')
 })
 
 test('evidence: what counts little', () => {
@@ -93,21 +97,19 @@ test('evidence: what counts little', () => {
   assert.equal(evidence(review(ben.did, ana.did, { dealId: 'ab'.repeat(32) }), [r]).note, 'noReceipt')
   assert.equal(evidence(review(cleo.did, ana.did, { dealId: r.escrow }), [r]).note, 'notTheParties', "someone else's receipt")
   assert.equal(evidence(review(ben.did, ana.did, { dealId: r.escrow }), [receipt({ mint: 'SelfMinted111111111111111111111111111111111' })]).note, 'tokenNotCounted')
-  for (const outcome of ['withdrawn', 'neverAccepted']) {
-    assert.equal(evidence(review(ben.did, ana.did, { dealId: r.escrow }), [receipt({ accepted: false, outcome })]).note, 'nobodySaidYes', outcome)
-  }
-  assert.equal(evidence(review(ben.did, ana.did, { dealId: r.escrow }), [receipt({ funded: false, outcome: null })]).note, 'nobodySaidYes', 'accepted, never paid')
+  assert.equal(evidence(review(ben.did, ana.did, { dealId: r.escrow }), [receipt({ funded: false, outcome: null })]).note, 'notPaid', 'invoiced, never paid')
   assert.equal(evidence(review(ben.did, ana.did, { dealId: r.escrow }), [receipt({ closed: true, funded: false, outcome: null })]).note, 'noReceipt', 'closed, never funded')
 })
 
 test('a badge counts only under a directory name, and only for the wallet the profile declares', () => {
   assert.deepEqual(badgeStatus(badge(ana.did, ana.wallet), ana.wallet, directory), { counted: true, market: 'online-tutors', role: null })
-  assert.deepEqual(badgeStatus(badge(ana.did, ana.wallet, 'online-tutors:tutor'), ana.wallet, directory), { counted: true, market: 'online-tutors', role: 'tutor' })
+  assert.deepEqual(badgeStatus(badge(ana.did, ana.wallet, 'online-tutors/seller'), ana.wallet, directory), { counted: true, market: 'online-tutors', role: 'seller' }, 'market/role; a file with no roles has seller and buyer')
+  assert.deepEqual(badgeStatus(badge(ana.did, ana.wallet, 'online-tutors:seller'), ana.wallet, directory), { counted: false, why: 'notInDirectory' }, 'only the slash separates a role')
   assert.deepEqual(badgeStatus(badge(ana.did, 'NotDeclared'), ana.wallet, directory), { counted: false, why: 'walletNotDeclared' })
   assert.deepEqual(badgeStatus(badge(ana.did, ana.wallet), null, directory), { counted: false, why: 'walletNotDeclared' })
   assert.deepEqual(badgeStatus(badge(ana.did, ana.wallet, 'online-tutor'), ana.wallet, directory), { counted: false, why: 'notInDirectory' }, 'an alias never counts for a badge')
   assert.deepEqual(badgeStatus(badge(ana.did, ana.wallet, 'Online-Tutors'), ana.wallet, directory), { counted: false, why: 'notInDirectory' }, 'byte for byte')
-  assert.deepEqual(badgeStatus(badge(ana.did, ana.wallet, 'online-tutors:plumber'), ana.wallet, directory), { counted: false, why: 'notInDirectory' }, 'a role the market does not have')
+  assert.deepEqual(badgeStatus(badge(ana.did, ana.wallet, 'online-tutors/plumber'), ana.wallet, directory), { counted: false, why: 'notInDirectory' }, 'a role the market does not have')
 })
 
 test('uniqueness: issuers combine, an issuer at 0 adds nothing', () => {

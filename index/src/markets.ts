@@ -5,19 +5,22 @@
 //   postMarket(name)   which directory market a post belongs to, through the aliases
 //   badgeScope(scope)  whether a registry scope counts as a badge: the directory name, byte for
 //                      byte, never through an alias, since a second spelling is a second scope
-//                      and would be a second badge for the same human in the same market.
+//                      and would be a second badge for the same human in the same market. A
+//                      scope is `market` or `market/role` (CLAUDE.md's recommended scope).
 
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 
 // @ts-expect-error shapes/ is plain JavaScript with no type declarations
-import { validateMarket } from '../../shapes/src/validate.js'
+import { rolesOf, validateMarket } from '../../shapes/src/validate.js'
 
 import type { AliasConfig } from './config.ts'
 
 export type MarketFile = {
   name: string
   category: string
+  description?: string
+  /** Always filled: the file's own roles, or shapes/' default (seller and buyer) when it names none. */
   roles: string[]
   fields: unknown
   evidenceTypes: string[]
@@ -40,7 +43,7 @@ export class Directory {
         continue
       }
       const m = market as MarketFile
-      this.markets.set(m.name, m)
+      this.markets.set(m.name, { ...m, roles: [...(rolesOf(m) as string[])] })
     }
     for (const [name, spellings] of Object.entries(aliases)) {
       if (!this.markets.has(name)) continue
@@ -69,7 +72,7 @@ export class Directory {
 
   /**
    * Whether a registry scope is a badge this index counts: its market part, before the first
-   * colon, is a directory name byte for byte, and its role part, if any, is one of that market's
+   * slash, is a directory name byte for byte, and its role part, if any, is one of that market's
    * roles.
    */
   badgeScope(scope: string): { market: string; role: string | null } | null {
@@ -89,8 +92,13 @@ export class Directory {
   }
 }
 
-/** A registry scope is a market, or a market and a role after the first colon. */
+/**
+ * A registry scope is a market, or a market and a role after the first slash: `online-tutors` or
+ * `online-tutors/seller`. Only the slash: market names and roles are slugs, so a scope written
+ * with any other separator is not a directory name and counts for nothing. Accepting two
+ * separators would make two scopes, so two badges, for one human in one market.
+ */
 export function splitScope(scope: string): { market: string; role: string | null } {
-  const at = scope.indexOf(':')
+  const at = scope.indexOf('/')
   return at === -1 ? { market: scope, role: null } : { market: scope.slice(0, at), role: scope.slice(at + 1) }
 }
