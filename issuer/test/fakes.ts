@@ -32,10 +32,13 @@ export class FakeFaceCheck implements FaceCheck {
   readonly sessions = new Map<string, Decision>()
   down = false
   waiting = 0
+  /** How many sessions Didit was asked to open. */
+  created = 0
   #gate: Promise<void> | undefined
 
   async createSession() {
     if (this.down) throw new Error('down')
+    this.created++
     const sessionId = randomUUID()
     return { sessionId, url: `https://verify.example/session/${sessionId}` }
   }

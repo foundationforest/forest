@@ -3,13 +3,17 @@
 //   npm test
 
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { after, test } from 'node:test'
 
 import { BN254_R, toBytes32 } from '../../registry/client/src/field.ts'
+import { Keypair } from '@solana/web3.js'
+
 import { shuffle } from '../src/batch.ts'
+import { RateLimit, addressGroup } from '../src/limit.ts'
+import { loadKeypair, writeKeyFile } from '../src/list.ts'
 import { readConfig, startIssuer, type Issuer } from '../src/service.ts'
 import { Store } from '../src/store.ts'
 import {
@@ -39,12 +43,14 @@ type Harness = {
   list: FakeList
   dbPath: string
   logs: string[]
-  post(path: string, body?: unknown): Promise<{ status: number; body: any }>
+  post(path: string, body?: unknown, headers?: Record<string, string>): Promise<{ status: number; body: any }>
   /** A new session whose check came to `decision`; returns its id. */
   session(decision?: ReturnType<typeof passed>): Promise<string>
 }
 
-async function start(options: { batchMax?: number; intervalSeconds?: number } = {}): Promise<Harness> {
+async function start(
+  options: { batchMax?: number; intervalSeconds?: number; env?: Record<string, string> } = {},
+): Promise<Harness> {
   const dbPath = join(tempDir(), 'issuer.sqlite')
   const config = readConfig({
     DIDIT_API_KEY: 'not-used',
@@ -54,16 +60,19 @@ async function start(options: { batchMax?: number; intervalSeconds?: number } = 
     DATABASE_PATH: dbPath,
     BATCH_MAX: String(options.batchMax ?? 1000),
     BATCH_INTERVAL_SECONDS: String(options.intervalSeconds ?? 3600),
+    // Every request here comes from one address; the limit has its own test.
+    SESSION_LIMIT_PER_HOUR: '100000',
     PORT: '0',
+    ...options.env,
   })
   const faces = new FakeFaceCheck()
   const list = new FakeList()
   const logs: string[] = []
   const issuer = await startIssuer(config, { faceCheck: faces, list, log: (line) => logs.push(line) })
-  const post = async (path: string, body: unknown = {}) => {
+  const post = async (path: string, body: unknown = {}, headers: Record<string, string> = {}) => {
     const res = await fetch(issuer.url + path, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...headers },
       body: typeof body === 'string' ? body : JSON.stringify(body),
     })
     return { status: res.status, body: await res.json() }
@@ -376,7 +385,10 @@ test('the store queues a commitment only with an unused session, in one step', (
 })
 
 test('the configuration names what is missing', () => {
-  assert.throws(() => readConfig({}), /DIDIT_API_KEY, DIDIT_WORKFLOW_ID, ISSUER_KEYPAIR_PATH, SOLANA_RPC_URL/)
+  assert.throws(
+    () => readConfig({}),
+    /DIDIT_API_KEY, DIDIT_WORKFLOW_ID, SOLANA_RPC_URL, ISSUER_KEYPAIR or ISSUER_KEYPAIR_PATH/,
+  )
   const base = { DIDIT_API_KEY: 'k', DIDIT_WORKFLOW_ID: 'w', ISSUER_KEYPAIR_PATH: 'p', SOLANA_RPC_URL: 'r' }
   assert.throws(() => readConfig({ ...base, BATCH_MAX: '0' }), /BATCH_MAX/)
   const config = readConfig(base)
@@ -384,4 +396,113 @@ test('the configuration names what is missing', () => {
   assert.equal(config.batchIntervalMs, 3_600_000)
   assert.equal(config.listIndex, 0)
   assert.equal(config.diditBaseUrl, 'https://verification.didit.me')
+  assert.equal(config.sessionLimitPerHour, 5)
+  assert.equal(config.clientAddressHeader, undefined)
+  assert.equal(readConfig({ ...base, CLIENT_ADDRESS_HEADER: 'X-Real-IP' }).clientAddressHeader, 'x-real-ip')
+})
+
+test('opening sessions is limited per address, and a refusal says only "try later"', async () => {
+  const h = await start({ env: { SESSION_LIMIT_PER_HOUR: '3', CLIENT_ADDRESS_HEADER: 'x-real-ip' } })
+  try {
+    const from = (address: string) => h.post('/session', {}, { 'x-real-ip': address })
+    for (let i = 0; i < 3; i++) assert.equal((await from('203.0.113.7')).status, 201)
+    assert.deepEqual(await from('203.0.113.7'), { status: 429, body: { error: 'try_later' } })
+    assert.equal(h.faces.created, 3, 'a refused request never reaches Didit')
+    assert.equal((await from('203.0.113.8')).status, 201, 'another address has its own share')
+
+    // An IPv6 address counts with the rest of its /64, so walking through one's own addresses gets no more.
+    for (const a of ['2001:db8:1:2::a', '2001:db8:1:2:ffff::b', '2001:0db8:0001:0002:0:0:0:c']) {
+      assert.equal((await from(a)).status, 201)
+    }
+    assert.equal((await from('2001:db8:1:2:9::d')).status, 429)
+    assert.equal((await from('2001:db8:1:3::a')).status, 201, 'the next /64 is someone else')
+
+    // A malformed request is refused before it is counted, and submits are not limited.
+    assert.equal((await h.post('/session', { x: 1 }, { 'x-real-ip': '203.0.113.9' })).status, 400)
+    for (let i = 0; i < 3; i++) assert.equal((await from('203.0.113.9')).status, 201)
+
+    // The address is never written: not in the log, not in the file.
+    const sessionId = await h.session()
+    assert.equal((await h.post('/submit', { sessionId, commitment: randomCommitment().toString() }, { 'x-real-ip': '203.0.113.7' })).status, 202)
+    await h.issuer.batcher.flush()
+    assert.deepEqual(h.logs, ['issuer: batch of 1 inserted'])
+    const file = readFileSync(h.dbPath)
+    for (const a of ['203.0.113.7', '203.0.113.8', '2001:db8']) assert.equal(file.includes(Buffer.from(a)), false)
+  } finally {
+    await h.issuer.close()
+  }
+
+  // Without a header named, every request counts against the connection's own address.
+  const direct = await start({ env: { SESSION_LIMIT_PER_HOUR: '2' } })
+  try {
+    assert.equal((await direct.post('/session', {}, { 'x-real-ip': '198.51.100.1' })).status, 201)
+    assert.equal((await direct.post('/session', {}, { 'x-real-ip': '198.51.100.2' })).status, 201)
+    assert.equal((await direct.post('/session', {}, { 'x-real-ip': '198.51.100.3' })).status, 429, 'a header nobody named is ignored')
+  } finally {
+    await direct.issuer.close()
+  }
+})
+
+test('the limit: a fresh share each hour, and nothing kept past it', () => {
+  let now = 1_000_000
+  const limit = new RateLimit({ max: 2, windowMs: 3_600_000, now: () => now })
+  assert.equal(limit.take('192.0.2.1'), true)
+  assert.equal(limit.take('192.0.2.1'), true)
+  assert.equal(limit.take('192.0.2.1'), false)
+  assert.equal(limit.take('::ffff:192.0.2.1'), false, 'the same IPv4 address, as a dual-stack socket reports it')
+  assert.equal(limit.take('192.0.2.2'), true)
+  now += 3_599_999
+  assert.equal(limit.take('192.0.2.1'), false, 'still inside the hour')
+  now += 1
+  assert.equal(limit.take('192.0.2.1'), true, 'a new hour')
+  now += 3_600_000
+  limit.take('192.0.2.3')
+  assert.equal(limit.size, 1, 'addresses whose hour has passed are forgotten')
+
+  assert.equal(addressGroup('2001:db8::1'), '2001:db8:0:0::/64')
+  assert.equal(addressGroup('2001:0DB8:0000:0000:ffff:1:2:3'), '2001:db8:0:0::/64')
+  assert.equal(addressGroup('fe80::1%eth0'), 'fe80:0:0:0::/64')
+  assert.equal(addressGroup('::1'), '0:0:0:0::/64')
+  assert.equal(addressGroup('::ffff:10.0.0.1'), '10.0.0.1')
+  assert.equal(addressGroup('not an address'), 'not an address')
+})
+
+test('the key from a sealed variable: a private temporary file, loaded, then deleted', () => {
+  const keypair = Keypair.generate()
+  const contents = JSON.stringify([...keypair.secretKey])
+
+  const env: Record<string, string | undefined> = {
+    DIDIT_API_KEY: 'k',
+    DIDIT_WORKFLOW_ID: 'w',
+    SOLANA_RPC_URL: 'r',
+    ISSUER_KEYPAIR: contents,
+  }
+  const config = readConfig(env)
+  assert.equal(config.issuerKeypair, contents)
+  assert.equal(config.issuerKeypairPath, undefined)
+  assert.equal(env.ISSUER_KEYPAIR, undefined, 'taken out of the environment once read')
+  assert.throws(
+    () => readConfig({ ...env, ISSUER_KEYPAIR: contents, ISSUER_KEYPAIR_PATH: '/k.json' }),
+    /not both/,
+  )
+
+  const file = writeKeyFile(contents)
+  try {
+    assert.ok(file.path.startsWith(tmpdir()), 'under the system temporary directory, not the repo')
+    assert.equal(statSync(file.path).mode & 0o777, 0o600, 'the file: this user only')
+    assert.equal(statSync(dirname(file.path)).mode & 0o777, 0o700, 'its directory: this user only')
+    assert.equal(loadKeypair(file.path).publicKey.toBase58(), keypair.publicKey.toBase58())
+  } finally {
+    file.remove()
+  }
+  assert.equal(existsSync(dirname(file.path)), false, 'removed, directory and all')
+
+  // A malformed key is refused, and the message quotes none of it.
+  const broken = [contents.slice(0, 40), JSON.stringify([...keypair.secretKey].slice(0, 32)), JSON.stringify([...keypair.secretKey.slice(0, 32), ...Keypair.generate().secretKey.slice(32)])]
+  for (const text of broken) {
+    assert.throws(
+      () => writeKeyFile(text),
+      (error: Error) => /^ISSUER_KEYPAIR is not a Solana keypair/.test(error.message) && !error.message.includes(text.slice(1, 12)),
+    )
+  }
 })

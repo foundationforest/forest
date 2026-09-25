@@ -7,16 +7,19 @@
 //
 // Errors are `{error: <code>}`: 400 a malformed body, 403 a face check that does not count (the code
 // says why), 409 a session already used or a commitment already queued or listed, 413 a body over
-// 1 KB, 502 Didit not answering. A refused or failed submit uses nothing up: the same session can be
-// sent again, for instance once a review in Didit approves it.
+// 1 KB, 429 `try_later` for an address that has opened its share of sessions this hour, 502 Didit not
+// answering. A refused or failed submit uses nothing up: the same session can be sent again, for
+// instance once a review in Didit approves it.
 //
-// No request is logged, and nothing reads the client's address.
+// No request is logged. The client's address is read for one thing only, counting `/session` against
+// the limit (`limit.ts`), and is never written anywhere.
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
 import { isFieldElement } from '../../registry/client/src/field.ts'
 import { errorKind, type Batcher } from './batch.ts'
 import { judge, type FaceCheck } from './didit.ts'
+import type { RateLimit } from './limit.ts'
 import type { IssuerList } from './list.ts'
 import type { Store } from './store.ts'
 
@@ -84,17 +87,30 @@ export type IssuerDeps = {
   faceCheck: FaceCheck
   list: IssuerList
   batcher: Batcher
+  /** How often one address may open a session. */
+  limit: RateLimit
+  /** The header a proxy puts the client's address in; unset, the connection's own address. */
+  clientAddressHeader?: string
   workflowId: string
   log?: (line: string) => void
 }
 
+/** The address a request came from: the proxy's header when one is named, else the connection's. */
+function clientAddress(req: IncomingMessage, header: string | undefined): string {
+  const value = header ? req.headers[header] : undefined
+  const first = (Array.isArray(value) ? value[0] : value)?.split(',')[0].trim()
+  return first || req.socket.remoteAddress || ''
+}
+
 export function handler(deps: IssuerDeps): (req: IncomingMessage, res: ServerResponse) => void {
-  const { store, faceCheck, list, batcher, workflowId } = deps
+  const { store, faceCheck, list, batcher, limit, workflowId } = deps
   const log = deps.log ?? ((line) => console.log(line))
 
-  const routes: Record<string, (body: Record<string, unknown>) => Promise<[number, unknown]>> = {
-    async '/session'(body) {
+  type Route = (body: Record<string, unknown>, req: IncomingMessage) => Promise<[number, unknown]>
+  const routes: Record<string, Route> = {
+    async '/session'(body, req) {
       fields(body)
+      if (!limit.take(clientAddress(req, deps.clientAddressHeader))) throw new HttpError(429, 'try_later')
       try {
         return [201, await faceCheck.createSession()]
       } catch {
@@ -144,7 +160,7 @@ export function handler(deps: IssuerDeps): (req: IncomingMessage, res: ServerRes
         if (!Object.hasOwn(routes, path)) throw new HttpError(404, 'not_found')
         const route = routes[path]
         if (req.method !== 'POST') throw new HttpError(405, 'post_only')
-        const [status, body] = await route(await readBody(req))
+        const [status, body] = await route(await readBody(req), req)
         send(res, status, body)
       } catch (error) {
         if (error instanceof HttpError) return send(res, error.status, { error: error.message })

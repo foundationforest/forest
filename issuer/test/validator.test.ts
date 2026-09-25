@@ -133,13 +133,10 @@ test('face check to list: submit, batch, and the commitments are the list’s le
   init.sign(payer)
   await confirm(await connection.sendRawTransaction(init.serialize()))
 
-  // The key, from a file the environment names, as in production.
-  const keyPath = join(temp, 'issuer-keypair.json')
-  writeFileSync(keyPath, JSON.stringify([...issuerKey.secretKey]))
-  const env = {
+  // The key's contents in a variable, as a sealed variable brings them on Railway.
+  const env: Record<string, string> = {
     DIDIT_API_KEY: 'not-used-with-the-stand-in',
     DIDIT_WORKFLOW_ID: WORKFLOW,
-    ISSUER_KEYPAIR_PATH: keyPath,
     SOLANA_RPC_URL: RPC,
     DATABASE_PATH: join(temp, 'data', 'issuer.sqlite'),
     BATCH_MAX: '50',
@@ -147,7 +144,8 @@ test('face check to list: submit, batch, and the commitments are the list’s le
     PORT: '0',
   }
 
-  // A key that is not one of the list's insert keys is refused at start, not at the first batch.
+  // A key that is not one of the list's insert keys is refused at start, not at the first batch. This
+  // one comes from a file, as in a local run.
   const strangerPath = join(temp, 'stranger-keypair.json')
   writeFileSync(strangerPath, JSON.stringify([...Keypair.generate().secretKey]))
   await assert.rejects(
@@ -157,7 +155,12 @@ test('face check to list: submit, batch, and the commitments are the list’s le
 
   const faces = new FakeFaceCheck()
   const logs: string[] = []
-  const issuer = await startIssuer(readConfig(env), { faceCheck: faces, log: (line) => logs.push(line) })
+  const issuer = await startIssuer(readConfig({ ...env, ISSUER_KEYPAIR: JSON.stringify([...issuerKey.secretKey]) }), {
+    faceCheck: faces,
+    log: (line) => logs.push(line),
+  })
+  assert.ok(issuer.keyFile, 'the key went through a file of its own')
+  assert.equal(existsSync(issuer.keyFile), false, 'which is gone once the key is loaded')
   const post = async (path: string, body: unknown = {}) => {
     const res = await fetch(issuer.url + path, { method: 'POST', body: JSON.stringify(body) })
     return { status: res.status, body: await res.json() }
