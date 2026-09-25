@@ -40,10 +40,19 @@ async function account(address: PublicKey | string) {
   return info
 }
 
+/** One transaction, read back. Devnet's public endpoint limits `getTransaction` per client, so a
+ * 429 is waited out (the web3 client's own retries give up after about eight seconds). */
 async function landed(signature: string) {
-  const tx = await connection.getTransaction(signature, { commitment: 'confirmed', maxSupportedTransactionVersion: 0 })
-  assert.ok(tx?.meta, `no transaction ${signature}`)
-  return tx
+  for (let i = 0; ; i++) {
+    try {
+      const tx = await connection.getTransaction(signature, { commitment: 'confirmed', maxSupportedTransactionVersion: 0 })
+      assert.ok(tx?.meta, `no transaction ${signature}`)
+      return tx
+    } catch (e) {
+      if (!String(e).includes('429') || i >= 10) throw e
+      await new Promise((r) => setTimeout(r, 10_000))
+    }
+  }
 }
 
 test('the registry is deployed at its recorded id, its upgrade key still the deploy key', { skip }, async () => {
@@ -100,7 +109,7 @@ test('the registration is on chain, and the same one sent again was refused', { 
   assert.equal(decodeRegisteredEvents(refused.meta!.logMessages!, programId).length, 0, 'and wrote no entry')
 })
 
-test('every registry transaction the record lists landed, and only the refusal failed', { skip, timeout: 120_000 }, async () => {
+test('every registry transaction the record lists landed, and only the refusal failed', { skip, timeout: 600_000 }, async () => {
   for (const { program, what, signature } of record.transactions) {
     if (program !== 'registry') continue
     const tx = await landed(signature)

@@ -1,15 +1,15 @@
-// The registry on devnet, used for real (session 15): init, a test dollar accepted, one person
-// inserted into list 0 by the foundation's devnet issuer, and one registration, then the same
-// registration again, refused.
+// The registry on devnet, used for real: init, a test dollar accepted, one person inserted into
+// list 0 by the foundation's devnet issuer, and one registration in `freelance/seller`, then the
+// same registration again, refused.
 //
 //   FOREST_DEVNET_KEYS=<dir> node scripts/devnet.ts
 //
-// <dir> holds the throwaway devnet keypairs, as `solana-keygen` writes them: payer, treasury,
-// issuer, test-dollar-mint, test-dollar-authority, buyer, seller. They are read, never printed and
-// never written anywhere. Everything public (addresses, signatures, what each did) goes into
-// devnet/devnet.json (FOREST_DEVNET_RECORD overrides the path; FOREST_DEVNET_RPC the endpoint, for
-// a rehearsal on a local validator). Each step checks the chain first and is skipped if it is done,
-// so the script can be run again after a failure.
+// <dir> holds the throwaway devnet keypairs, as `solana-keygen` writes them: deploy (only to fund
+// the payer, once), payer, treasury, issuer, test-dollar-mint, test-dollar-authority, buyer,
+// seller. They are read, never printed and never written anywhere. Everything public (addresses,
+// signatures, what each did) goes into devnet/devnet.json (FOREST_DEVNET_RECORD overrides the path;
+// FOREST_DEVNET_RPC the endpoint, for a rehearsal on a local validator). Each step checks the chain
+// first and is skipped if it is done, so the script can be run again after a failure.
 //
 // The person is the keys recipe's pinned test seed (`keys/test/vectors.json`): profile 0, its wallet
 // and its DID, and the identity secret, all derived here through `keys/` itself. The list's members
@@ -64,7 +64,8 @@ import {
 } from '../src/index.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
-const MARKET = 'online-tutors'
+/** A badge scope as `market/role`, the recommended shape: this profile sells in `freelance`. */
+const MARKET = 'freelance/seller'
 /** The test dollar's fee: 0.25 at its six decimals, set once by the treasury at `add_token`. */
 const TEST_DOLLAR_FEE = 250_000n
 
@@ -79,12 +80,13 @@ const programId = new PublicKey(record.registry.programId)
 function key(name: string): Keypair {
   return Keypair.fromSecretKey(Uint8Array.from(JSON.parse(readFileSync(join(keysDir!, `${name}.json`), 'utf8'))))
 }
+const deployKey = key('deploy')
 const payer = key('payer')
 const treasury = key('treasury')
 const issuer = key('issuer')
 const mint = key('test-dollar-mint')
 const mintAuthority = key('test-dollar-authority')
-for (const [name, k] of [['payer', payer], ['treasury', treasury], ['foundationIssuer', issuer], ['testDollarAuthority', mintAuthority]] as const) {
+for (const [name, k] of [['deploy', deployKey], ['payer', payer], ['treasury', treasury], ['foundationIssuer', issuer], ['testDollarAuthority', mintAuthority]] as const) {
   if (k.publicKey.toBase58() !== record.keys[name]) throw new Error(`the ${name} key is not the one the record names`)
 }
 if (mint.publicKey.toBase58() !== record.testDollar.mint) throw new Error('the test dollar key is not the one the record names')
@@ -102,10 +104,19 @@ function note(what: string, signature: string): void {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-/** Polls rather than subscribing: nothing here needs a websocket. Returns the error, if it failed. */
+/** Polls rather than subscribing: nothing here needs a websocket. Returns the error, if it failed.
+ * A rate limit while polling is waited out, not thrown: the transaction is already sent, and
+ * throwing would lose its signature from the record. */
 async function settle(signature: string): Promise<unknown> {
   for (let i = 0; i < 240; i++) {
-    const { value } = await connection.getSignatureStatuses([signature], { searchTransactionHistory: true })
+    let value
+    try {
+      ;({ value } = await connection.getSignatureStatuses([signature], { searchTransactionHistory: true }))
+    } catch (e) {
+      if (!String(e).includes('429')) throw e
+      await sleep(5_000)
+      continue
+    }
     const status = value[0]
     if (status && (status.confirmationStatus === 'confirmed' || status.confirmationStatus === 'finalized')) return status.err
     await sleep(500)
@@ -126,9 +137,11 @@ async function send(instructions: TransactionInstruction[], signers: Keypair[]):
 
 async function logsOf(signature: string): Promise<string[]> {
   for (let i = 0; i < 20; i++) {
-    const tx = await connection.getTransaction(signature, { commitment: 'confirmed', maxSupportedTransactionVersion: 0 })
+    const tx = await connection
+      .getTransaction(signature, { commitment: 'confirmed', maxSupportedTransactionVersion: 0 })
+      .catch((e) => (String(e).includes('429') ? null : Promise.reject(e)))
     if (tx?.meta?.logMessages) return tx.meta.logMessages
-    await sleep(500)
+    await sleep(3_000)
   }
   throw new Error(`no log for ${signature}`)
 }
@@ -150,6 +163,13 @@ record.registry.list0 = listAddress(0, programId).toBase58()
 record.registry.codeTree = codeTreeAddress(programId).toBase58()
 record.registry.usdcMint = USDC_MINT_DEVNET.toBase58()
 save()
+
+// The payer plays the fee payer: every network fee and every rent after the deploy. It starts with
+// nothing; the deploy key sends it 0.2 SOL once.
+if ((await connection.getBalance(payer.publicKey)) < 0.05 * LAMPORTS_PER_SOL) {
+  const sig = await send([SystemProgram.transfer({ fromPubkey: deployKey.publicKey, toPubkey: payer.publicKey, lamports: 0.2 * LAMPORTS_PER_SOL })], [deployKey])
+  note('0.2 SOL from the deploy key to the payer, which pays every network fee and rent from here on', sig)
+}
 
 // A little SOL for the two keys a sweep pays: the treasury (config and code tree) and list 0's
 // owner (list 0). The runtime refuses to credit an empty account less than its own rent.

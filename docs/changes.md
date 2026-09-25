@@ -2059,3 +2059,76 @@ From `docs/changes/index-2.md`, as it was written, folded here by the integratio
   4. The workflow's first runs on GitHub's machines, and the nightly jobs' first run after merge. *Mechanical.*
   5. `keys/` and its test pages call the 24 words a "paper export". *Mechanical.*
 - **Still standing:** nothing is deployed anywhere; the devnet deploy key holds 2.0 SOL of about 3.4 needed.
+
+## 2026-09-25: devnet, both programs deployed, a real badge and two real deals
+
+Carlos asked for seven things in one session: longer badge scopes, the newer program format, the funding checked, both programs deployed, the run done for real, the smoke tests, and `docs/devnet.md` rewritten. Carlos decided two things in planning:
+- the registry's longest scope is 256 bytes, since the scope will be `category/market/role`;
+- deal 1 is a real invoice: the seller opens it, and the buyer funds and releases it in one transaction, deposit address first, through a new client builder.
+
+- **Built:**
+  1. **The registry takes a scope of up to 256 bytes** (`MAX_MARKET_NAME`, was 64; the error text follows; the DID stays at 64). No account stores the name, so no size or offset moves.
+     - A new real-proof fixture, `alice-longest`, sits at both bounds at once: a 256-byte scope and a 64-byte DID.
+     - A new test, `the_longest_scope_and_did_register_and_the_entry_carries_both_whole`, registers it, and first shows the same proof refused under the scope one byte shorter.
+     - `adversarial.rs` refuses a 257-byte scope.
+     - `what_a_registration_costs` sends the largest registration for real on both paths, and again with a fee payer's payment instruction added: 1,105 bytes, and 1,152 with it, of 1,232.
+     - `npm run fixtures` regenerated every proof. The codes are the same, and the points are new, since each proof draws fresh randomness.
+     - The registry's first `security-checklist.md`, by the safe-solana-builder skill, and the README's item 6 and test counts.
+  2. **Both programs built as SBPF v3 and used that way on devnet** (`cargo build-sbf --arch v3`; `devnet/build.sh` defaults to it, `FOREST_SBPF_ARCH=v0` for the old format). Everything below passed on the v3 builds before devnet was touched:
+     - both LiteSVM suites (registry 48, escrow 52);
+     - both clients' `test:validator`;
+     - a full local rehearsal of the devnet run on a validator with every feature on, SIMD-0500 included: both deploys, both scripts, a rerun of each that sent nothing, and both smoke suites.
+     - The registry's suite also passes on a v0 build, which is what CI builds.
+  3. **`devnet/deploy.sh`, one program per run.** Before each deploy it:
+     - closes any leftover buffer;
+     - computes the deploy's exact cost from Solana CLI 4.2.2's own procedure, and prints the key and the amount on a line by itself;
+     - waits up to 90 minutes if the key is short.
+
+     After the deploy it records the balance before and after. `deploy.sh cost` prints both costs and deploys nothing. The deployed program's SBPF version is read from the ELF header and recorded.
+  4. **`payInvoiceInOneTap`** in `escrow/client`: the deposit address made first, the transfer of the amount, and `release_to_seller`, for an invoice nothing has been paid into yet. It refuses an escrow already funded or ended. It has a unit test, and the validator test now pays its invoice with it. One line was added to the escrow README.
+  5. **On devnet** (every address and signature is in `devnet/devnet.json` and `docs/devnet.md`):
+     - both programs, their bytes checked against the builds, the upgrade authority on the deploy key;
+     - `init`, the test dollar accepted at 0.25, and profile 0's commitment inserted into list 0;
+     - profile 0 registered in `freelance/seller` with a proof made from list 0's members as read back from devnet (835 bytes, 137,019 compute units), and the repeat refused on chain;
+     - the invoice paid in one tap (2.00 to the seller);
+     - the buyer's escrow, marked, and split 60/40 by both sides (1.80 and 1.20).
+
+     Both smoke suites pass against devnet: 5 and 3, none skipped.
+  6. **The scripts and the smoke tests wait out the public endpoint's 429s.** The escrow smoke test also checks, on chain, that the one tap's first instruction made the deposit address, before the transfer and the release.
+- **Learned:**
+  - **The exact deploy cost** for L bytes is rent(45 + L) + rent(36) + 10,000 + 5,000 per non-zero 1,012-byte chunk + 10,000 lamports, all spent.
+    - On devnet: 1.5522762 SOL for the registry and 1.440203 for the escrow, each equal to the key's balance drop to the lamport.
+    - In the local rehearsal the key was given exactly the computed amount and ended at zero.
+    - The CLI's own balance check leaves out the program account's rent(36), so a key short by less than that passes the check and fails at the last transaction.
+    - The handoff's "about 3.2 SOL" for both becomes 2.9924792, plus 0.2 for the payer, which spent about 0.074.
+  - **The deploy key held 6.0 SOL** when this session started, not 2.0. There were four 1 SOL transfers on 2026-09-25 between 17:01 and 17:03 UTC from `FkTagjLiMb6YMjfSTJJGbcHmfWefpoRHj9e2ricMFLX8`, recorded under `airdrops`. It holds 2.8075158 now.
+  - **SBPF v3 deploys are already active on devnet and mainnet** (feature `5cC3foj…`, on devnet since slot 461,808,000). SIMD-0500 is active on neither: its feature account does not exist on either (read 2026-09-25).
+    - Anchor 1.2, groth16-solana, the Poseidon and alt_bn128 syscalls, and LiteSVM 0.16 all work with v3 as they are. No harness switch was needed.
+    - v3 is smaller: the registry is 304,928 bytes against 329,136, the escrow 282,888 against 304,912.
+    - v3 is a little cheaper: 133,038 compute units for a registration against 133,093.
+  - **The public devnet endpoint limits `getTransaction` and `getSignatureStatuses` per client.** Twice the scripts stopped on a 429 after a transaction was sent.
+    - Once it lost a signature. `add_token` landed while its confirmation poll was refused, and the rerun found the mint accepted and skipped the step.
+    - Its signature was read back from the config's history and checked there: the payer and the treasury signed, it logged `AddToken`, and it succeeded. It is in the record with a note saying so.
+    - A smoke test also failed once on a 429, not on an assertion.
+    - The fix is in the scripts and the tests, above.
+  - **A code account is created during account validation, before the proof is read.** So a used code refuses a second registration with "already in use" whatever the proof, as the devnet refusal shows. The new test tries the wrong scope first for that reason.
+  - **The largest registration leaves 127 bytes of room, and 80 with a fee payer's payment instruction.** That margin is what any later addition to a registration transaction has to fit in.
+- **Open:**
+  1. **The scope is `category/market/role`,** Carlos said, but everything else says `market/role`: the handoff's Markets section, `index/src/markets.ts` (it reads a scope as a market and a role after the first slash, so a category-first scope would read the category as the market), and the `markets` repo. The devnet badge is `freelance/seller`, as asked. *Needs Carlos*, then mechanical in the index and the `markets` repo.
+  2. **The handoff's Open item on the 64-byte scope is answered** (256 bytes); the consolidation session drops it. The handoff's devnet lines are stale too:
+     - Build status says the deploy key holds 2.0 SOL and nothing is deployed;
+     - Next item 1 says to deploy;
+     - the Devnet Open item asks for funding.
+
+     This session did not edit the handoff. *Mechanical.*
+  3. **The newer program format.** The handoff's "Before mainnet" line says both programs build as SBPF v0. Both now build, pass and run on devnet as v3, and mainnet accepts v3 today. Whether mainnet's sealed builds are v3 is Carlos's call, logged here and not written into any checklist. *Needs Carlos.*
+  4. **CI builds v0** (`.github/workflows/checks.yml`), while the devnet programs are v3. To test what is deployed, the programs job builds `--arch v3` too, or instead. *Mechanical.*
+  5. **The registry's release profile sets no `overflow-checks`, and `open_list`'s `list_count + 1` is unchecked.** It is unreachable in practice (it wraps only after 2^32 lists, and a wrap stops new lists without corrupting one), but it is a program change, possible only before deploy (`registry/security-checklist.md`, §3.1). *Needs Carlos.*
+  6. **The invoice one tap has not run through Kora.** Its shape is `createAndFund`'s, deposit address first, which `feepayer/`'s local test runs through Kora; this builder has not been run through it. *Mechanical.*
+  7. **Both READMEs' opening paragraphs still say nothing is deployed on devnet.** They fall outside this session's files; `docs/devnet.md` is current. *Mechanical.*
+  8. **Whether `freelance` is a market in the `markets` directory** was not checked; the foundation's index counts only directory markets. *Mechanical.*
+  9. **The escrow README's cost table was measured on v0 builds.** v3's compute differs slightly. *Mechanical.*
+- **Still standing:**
+  - Nothing is on mainnet, and nothing is shipped.
+  - On devnet both programs stay upgradeable by whoever holds the phrase.
+  - No Kora, no face check and no services are in front of either program.

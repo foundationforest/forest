@@ -24,6 +24,8 @@ const connection = new Connection(process.env.FOREST_DEVNET_RPC ?? record.rpc, '
 const programId = new PublicKey(record.escrow.programId)
 const mint = new PublicKey(record.testDollar.mint)
 const UPGRADEABLE_LOADER = 'BPFLoaderUpgradeab1e11111111111111111111111'
+const ASSOCIATED_TOKEN_PROGRAM = 'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL'
+const TOKEN_PROGRAM = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA'
 
 async function account(address: PublicKey | string) {
   const info = await connection.getAccountInfo(new PublicKey(address))
@@ -31,8 +33,21 @@ async function account(address: PublicKey | string) {
   return info
 }
 
+/** One transaction, read back. Devnet's public endpoint limits `getTransaction` per client, so a
+ * 429 is waited out (the web3 client's own retries give up after about eight seconds). */
+async function transaction(signature: string) {
+  for (let i = 0; ; i++) {
+    try {
+      return await connection.getTransaction(signature, { commitment: 'confirmed', maxSupportedTransactionVersion: 0 })
+    } catch (e) {
+      if (!String(e).includes('429') || i >= 10) throw e
+      await new Promise((r) => setTimeout(r, 10_000))
+    }
+  }
+}
+
 async function kinds(signature: string): Promise<string[]> {
-  const tx = await connection.getTransaction(signature, { commitment: 'confirmed', maxSupportedTransactionVersion: 0 })
+  const tx = await transaction(signature)
   assert.ok(tx?.meta, `no transaction ${signature}`)
   assert.equal(tx.meta.err, null, signature)
   return decodeEvents(tx.meta.logMessages!, programId).map((e) => e.kind)
@@ -62,6 +77,20 @@ test('the invoice paid with one tap left its receipt at the seller\'s address: e
   assert.equal(await connection.getAccountInfo(depositAddress(escrow, mint)), null, 'the deposit account is closed')
   assert.deepEqual(await kinds(d.signatures.invoice), ['created'])
   assert.deepEqual(await kinds(d.signatures['one tap']), ['ended'], 'paid and released in one transaction')
+
+  // The one tap's instructions, in order: the deposit address made first (the associated token
+  // program's idempotent create, so a fee payer that checks every transfer's destination finds it
+  // made), a plain transfer of the amount into it, and the buyer's release.
+  const tx = await transaction(d.signatures['one tap'])
+  assert.ok(tx, 'the one tap is on chain')
+  const message = tx.transaction.message
+  const keys = message.staticAccountKeys
+  const steps = message.compiledInstructions.map((ix) => ({ program: keys[ix.programIdIndex].toBase58(), accounts: ix.accountKeyIndexes.map((i) => keys[i].toBase58()), data: Buffer.from(ix.data) }))
+  assert.deepEqual(steps.map((s) => s.program), [ASSOCIATED_TOKEN_PROGRAM, TOKEN_PROGRAM, programId.toBase58()])
+  assert.deepEqual([steps[0].accounts[1], steps[0].accounts[2], steps[0].data.toString('hex')], [d.deposit, d.escrow, '01'], 'the deposit address, made if missing')
+  assert.equal(steps[1].data[0], 3, 'a plain transfer')
+  assert.equal(steps[1].data.readBigUInt64LE(1), 2_000_000n, 'of the whole amount')
+  assert.equal(steps[1].accounts[1], d.deposit, 'into the deposit address')
 })
 
 test('the split deal left its receipt: ended, split 60/40 of the whole balance', { skip }, async () => {

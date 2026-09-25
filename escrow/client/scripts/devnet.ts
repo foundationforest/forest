@@ -3,8 +3,10 @@
 //
 //   FOREST_DEVNET_KEYS=<dir> node scripts/devnet.ts        (after registry/client/scripts/devnet.ts)
 //
-// 1. The seller invoices; the buyer reads it, checks its options, and pays with one tap (a plain
-//    transfer to the deposit address and the release, in one transaction); the receipt stays.
+// 1. The seller invoices; the buyer reads it, checks its options, and pays with one tap
+//    (`payInvoiceInOneTap`: the deposit address made first, so a fee payer that checks every
+//    transfer's destination could sign it, then a plain transfer to it and the release, in one
+//    transaction); the receipt stays.
 // 2. The buyer proposes, with every option off; pays by a plain transfer; anyone marks it funded;
 //    both sign a 60/40 split of the whole balance; the receipt stays.
 //
@@ -27,10 +29,9 @@ import {
   decodeEvents,
   invoice,
   keysFor,
-  keysOf,
   markFundedIx,
+  payInvoiceInOneTap,
   randomId,
-  releaseToSellerIx,
   splitIx,
   termsFor,
   type EscrowAccount,
@@ -79,7 +80,16 @@ async function send(instructions: TransactionInstruction[], signers: Keypair[]):
   tx.sign(...signers)
   const signature = await connection.sendRawTransaction(tx.serialize())
   for (let i = 0; i < 240; i++) {
-    const { value } = await connection.getSignatureStatuses([signature], { searchTransactionHistory: true })
+    // A rate limit while polling is waited out, not thrown: the transaction is already sent, and
+    // throwing would lose its signature from the record.
+    let value
+    try {
+      ;({ value } = await connection.getSignatureStatuses([signature], { searchTransactionHistory: true }))
+    } catch (e) {
+      if (!String(e).includes('429')) throw e
+      await sleep(5_000)
+      continue
+    }
     const status = value[0]
     if (status?.err) throw new Error(`${signature} failed: ${JSON.stringify(status.err)}`)
     if (status && (status.confirmationStatus === 'confirmed' || status.confirmationStatus === 'finalized')) return signature
@@ -90,9 +100,11 @@ async function send(instructions: TransactionInstruction[], signers: Keypair[]):
 
 async function events(signature: string) {
   for (let i = 0; i < 20; i++) {
-    const tx = await connection.getTransaction(signature, { commitment: 'confirmed', maxSupportedTransactionVersion: 0 })
+    const tx = await connection
+      .getTransaction(signature, { commitment: 'confirmed', maxSupportedTransactionVersion: 0 })
+      .catch((e) => (String(e).includes('429') ? null : Promise.reject(e)))
     if (tx?.meta?.logMessages) return decodeEvents(tx.meta.logMessages, programId)
-    await sleep(500)
+    await sleep(3_000)
   }
   throw new Error(`no log for ${signature}`)
 }
@@ -141,7 +153,7 @@ save()
 // 1. An invoice, paid with one tap.
 
 {
-  const d = deal('invoice', 'the seller invoices 2.00; the buyer checks it, then pays and releases in one transaction')
+  const d = deal('invoice', 'the seller invoices 2.00; the buyer checks it, then, in one transaction, the deposit address made first, pays and releases')
   const terms = termsFor(post, { seller: seller.publicKey, amount: 2_000_000n, id: BigInt(d.id) })
   const inv = invoice({ seller: seller.publicKey, buyer: buyer.publicKey, payer: payer.publicKey, mint, decimals: 6, terms, label: 'Forest devnet', programId })
   d.escrow = inv.escrow.toBase58()
@@ -157,20 +169,18 @@ save()
   }
   let e = (await escrowAt(inv.escrow))!
   if (e.status !== 'ended') {
-    // The buyer's app reads the invoice off the chain and checks its options before paying.
+    // The buyer's app reads the invoice off the chain and checks it before paying: its options,
+    // that it names the buyer's own key (every refund goes there), and that nothing has been paid
+    // into it yet (the one tap sends the whole amount).
     assertOptionsAgreed({ escrow: e, me: 'buyer', agreed: post ?? null })
+    if (!e.buyer.equals(buyer.publicKey)) throw new Error('the invoice names another buyer')
+    if ((await tokens(inv.deposit)) !== 0n) throw new Error('something was already paid into the invoice')
     const sellerBefore = await tokens(sellerTokens)
-    const sig = await send(
-      [
-        createTransferInstruction(buyerTokens, inv.deposit, buyer.publicKey, e.amount),
-        releaseToSellerIx({ keys: keysOf(e, programId), programId }),
-      ],
-      [payer, buyer],
-    )
+    const sig = await send(payInvoiceInOneTap({ escrow: e, payer: payer.publicKey, programId }), [payer, buyer])
     const kinds = (await events(sig)).map((ev) => ev.kind)
     if (kinds.join() !== 'ended') throw new Error(`the one tap logged ${kinds}`)
     if ((await tokens(sellerTokens)) !== sellerBefore + e.amount) throw new Error('the seller was not paid the amount')
-    note(d, 'one tap: the buyer pays 2.00 to the deposit address and releases it to the seller, in one transaction', sig)
+    note(d, 'one tap: the deposit address made first, then the buyer pays 2.00 into it and releases it to the seller, in one transaction', sig)
     e = (await escrowAt(inv.escrow))!
   }
   if (e.status !== 'ended' || e.outcome !== 'releasedToSeller' || e.creator !== 'seller') throw new Error('the invoice receipt is not ended, released to the seller, created by the seller')

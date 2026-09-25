@@ -2,7 +2,7 @@ use anchor_lang::prelude::*;
 
 #[error_code]
 pub enum RegistryError {
-    #[msg("the market name must be between 1 and 64 bytes")]
+    #[msg("the market name must be between 1 and 256 bytes")]
     MarketNameLength,
     #[msg("the DID must be between 1 and 64 bytes")]
     DidLength,

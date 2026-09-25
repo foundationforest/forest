@@ -673,6 +673,32 @@ fn only_a_lists_owner_adds_or_removes_its_insert_keys_or_closes_it() {
 }
 
 #[test]
+fn the_longest_scope_and_did_register_and_the_entry_carries_both_whole() {
+    let (mut h, f) = ready();
+    // A 256-byte scope, the most `register` takes: longer than a `category/market/role` of three
+    // 64-character slugs. And a 64-byte DID, the most it takes of that.
+    let p = f.proof("alice-longest");
+    assert_eq!((p.market.len(), p.did.len()), (256, 64));
+
+    // A proof for a 256-byte scope counts for that scope only: the same proof under the scope one
+    // byte shorter does not verify. (Tried first: once the code is used, its account refuses
+    // anything before the proof is read.)
+    let (wallet, tokens) = h.profile_with(p, h.usdc, 1_000_000);
+    let err = register(&mut h, p, &p.market[..255], 0, &wallet, tokens).expect_err("another scope");
+    assert!(err.contains("ProofRejected") || err.contains("does not verify"), "{err}");
+
+    let meta = register(&mut h, p, &p.market, 0, &wallet, tokens).expect("the longest registration");
+    let events = registered_events(&meta.logs);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].market, p.market, "the entry carries the whole scope");
+    assert_eq!(events[0].did, p.did, "and the whole DID");
+    assert_eq!(events[0].code, p.code_bytes());
+    assert!(h.svm.get_account(&used_code_address(&p.code_bytes())).is_some(), "the code is used");
+    assert_eq!(token_amount(&h.account(&tokens).data), 1_000_000 - QUARTER_USDC);
+    println!("a 256-byte scope and a 64-byte DID register, and the entry carries both whole");
+}
+
+#[test]
 fn the_entry_names_the_list_and_its_owner() {
     let (mut h, f) = ready();
     // A stranger opens list 1 and vouches for its humans.
@@ -1074,6 +1100,79 @@ fn what_a_registration_costs() {
         assert!(cu < 1_400_000);
     }
     println!("   (legacy transactions with a compute-budget instruction; the client's v0 form is two bytes more)\n");
+
+    // The largest registration there can be: a 256-byte scope and a 64-byte DID, the program's
+    // two bounds, on both paths, and on the paid path again with the payment instruction a fee
+    // payer that charges in the token adds (a plain transfer to its own token account, one more
+    // account). Each is sent for real, in a registry of its own, since a code lands once.
+    println!("== the largest registration: a 256-byte scope and a 64-byte DID ==");
+    for path in ["paid", "paid for by another key", "paid, with a fee payer's payment instruction"] {
+        let (mut h, f) = ready();
+        let p = f.proof("alice-longest");
+        assert_eq!((p.market.len(), p.did.len()), (256, 64), "the fixture is at both bounds");
+        let profile = p.wallet_keypair();
+        let payer = h.payer.insecure_clone();
+        let (fee_authority, fee_tokens) = if path == "paid for by another key" {
+            let tokens = Address::new_unique();
+            h.svm.set_account(tokens, spl_token_account(&h.usdc, &payer.pubkey(), 1_000_000)).unwrap();
+            (payer.insecure_clone(), tokens)
+        } else {
+            h.profile_with(p, h.usdc, 1_000_000)
+        };
+        let accounts = RegisterAccounts {
+            payer: payer.pubkey(),
+            profile_wallet: profile.pubkey(),
+            fee_authority: fee_authority.pubkey(),
+            fee_tokens,
+            treasury_tokens: h.treasury_tokens,
+        };
+        let mut ixs = vec![
+            ComputeBudgetInstruction::set_compute_unit_limit(220_000),
+            register_ix(&register_args(p), &accounts),
+        ];
+        if path.ends_with("payment instruction") {
+            let fee_payer_tokens = h.token_account_for(h.usdc, payer.pubkey());
+            ixs.push(token_transfer_ix(fee_tokens, fee_payer_tokens, profile.pubkey(), 1_000));
+        }
+        h.svm.expire_blockhash();
+        let msg = Message::new(&ixs, Some(&payer.pubkey()));
+        let tx = Transaction::new(&[&payer, &profile], msg, h.svm.latest_blockhash());
+        let bytes = bincode::serialize(&tx).unwrap().len();
+        let meta = h.send_tx(tx).unwrap_or_else(|e| panic!("{path}: {e}"));
+        let events = registered_events(&meta.logs);
+        assert_eq!((events[0].market.as_str(), events[0].did.as_str()), (p.market.as_str(), p.did.as_str()));
+        println!("   {path}: {bytes} bytes of the 1,232 limit, {} to spare; {} compute units", 1232 - bytes, meta.compute_units_consumed);
+        assert!(bytes < 1232, "the largest registration must fit in one standard transaction");
+    }
+    println!();
+}
+
+fn register_args(p: &FixtureProof) -> RegisterArgs<'_> {
+    RegisterArgs {
+        market: &p.market,
+        did: &p.did,
+        list_index: 0,
+        root: p.root_bytes(),
+        code: p.code_bytes(),
+        proof_a: p.a_bytes(),
+        proof_b: p.b_bytes(),
+        proof_c: p.c_bytes(),
+    }
+}
+
+/// A plain SPL Token transfer (instruction 3): what a fee payer's payment instruction is.
+fn token_transfer_ix(from: Address, to: Address, owner: Address, amount: u64) -> Instruction {
+    let mut data = vec![3u8];
+    data.extend_from_slice(&amount.to_le_bytes());
+    Instruction {
+        program_id: TOKEN_PROGRAM,
+        accounts: vec![
+            solana_instruction::AccountMeta::new(from, false),
+            solana_instruction::AccountMeta::new(to, false),
+            solana_instruction::AccountMeta::new_readonly(owner, true),
+        ],
+        data,
+    }
 }
 
 #[test]

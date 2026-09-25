@@ -12,17 +12,62 @@
     "testDollarAuthority": "EK6EjtXy1YMDwDSUNQGJv6RVuG4KVRyoJxErZGR2xyzK"
   },
   "registry": {
-    "programId": "8sUyd9JXRGEUqf2hYVnLCybi74549VG27dAK6YvbbU3i"
+    "programId": "8sUyd9JXRGEUqf2hYVnLCybi74549VG27dAK6YvbbU3i",
+    "programData": "8o6rWB9iGKc7cMQKeUhinQzT3kxRrpRzXgp6MkScna9c",
+    "upgradeAuthority": "2mz33wBK7FKRXoAi7LptGGTwVQJDbrSyrVwbYRCqwP3A",
+    "lastDeploySlot": 504105793,
+    "soSha256": "47171998b5d12c46e97720721fa7ded05c0d9c1132f7483572622ea76568c64c",
+    "soBytes": 304928,
+    "sbpfVersion": "v3",
+    "deploySignature": "AkfJTcjedMaLWVBM6TwMCG3o9SbU1HT6zHMXHGpXPv4RiYj2hsg14up4WEjnBW3eHuCJFmUsUZTtHrW8wDMRPGF",
+    "deployCost": {
+      "note": "computed before the deploy by devnet/deploy.sh (lamports), and the deploy key's balance before and after it",
+      "bytes": 304928,
+      "programDataRent": 1549913080,
+      "programRent": 833120,
+      "writes": 302,
+      "fees": 1530000,
+      "total": 1552276200,
+      "balanceBefore": 6000000000,
+      "balanceAfter": 4447723800,
+      "spent": 1552276200
+    },
+    "config": "4nxop5nYuJHyRKgLn6yj6vvDB1LZTM7wDykH3N8Qsn2y",
+    "list0": "7PMx9JpaP7ZwewZ78833FomUbHQgDFFERM9WuvyRurjD",
+    "codeTree": "82eKSXYhRAQGL3Y2FtFYc9fFQQnxhPbFHwGAxjvNxGJX",
+    "usdcMint": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
   },
   "escrow": {
-    "programId": "3vAVLwiwFkCUG4AHV3gK3t15HoyRSuKNEuBFvvy9CbeR"
+    "programId": "3vAVLwiwFkCUG4AHV3gK3t15HoyRSuKNEuBFvvy9CbeR",
+    "programData": "6WQ3CvZnVBodtQ9fSTieCfMQzUTJJnqTaaPjAYqE8T83",
+    "upgradeAuthority": "2mz33wBK7FKRXoAi7LptGGTwVQJDbrSyrVwbYRCqwP3A",
+    "lastDeploySlot": 504106452,
+    "soSha256": "e4c9d3dad28199282940e6d35aae896ab14610257ae84a6106353f71e6113182",
+    "soBytes": 282888,
+    "sbpfVersion": "v3",
+    "deploySignature": "hbAsbJNCAcrNoCpPpBTumdcrzrRPALnTFxFnA3Nejiwnfj9Q7p68vK3zR321KCQVETJafDqNRCNXNMYWn6MCTxS",
+    "deployCost": {
+      "note": "computed before the deploy by devnet/deploy.sh (lamports), and the deploy key's balance before and after it",
+      "bytes": 282888,
+      "programDataRent": 1437949880,
+      "programRent": 833120,
+      "writes": 280,
+      "fees": 1420000,
+      "total": 1440203000,
+      "balanceBefore": 4447723800,
+      "balanceAfter": 3007520800,
+      "spent": 1440203000
+    },
+    "testDollar": "J2QBACfPPb1ys2UyGx3ecXHgCr4hWuHFT3C2Nr6TSVSa"
   },
   "testDollar": {
     "mint": "J2QBACfPPb1ys2UyGx3ecXHgCr4hWuHFT3C2Nr6TSVSa",
-    "decimals": 6
+    "decimals": 6,
+    "authority": "EK6EjtXy1YMDwDSUNQGJv6RVuG4KVRyoJxErZGR2xyzK",
+    "fee": "250000"
   },
   "airdrops": {
-    "note": "Session 18, 2026-09-24, for the deploy key only, through RPC requestAirdrop. First 12 requests from 15:30 to 15:33 UTC with backoff (2 then 1 SOL, both endpoints), then one 1 SOL request a minute, alternating, until 17:00 UTC: 62 in all, 2 granted, both by Alchemy's public demo endpoint. The rest were refused: api.devnet.solana.com 18 times with \"Internal error\" and 13 times with 429, \"You've either reached your airdrop limit today or the airdrop faucet has run dry\"; Alchemy's endpoint 29 times with HTTP 429 and no body. faucet.solana.com asks for a Cloudflare captcha on every request and was not used from the machine; Carlos could not get SOL from it either. The proof-of-work faucets on devnet (program PoWSNH2hEZogtCg1Zgm51FnkmJperzYDgPK4fvs8taL) are drained. In all: deploy 2.0 SOL, every other key 0.",
+    "note": "Session 18, 2026-09-24, for the deploy key only, through RPC requestAirdrop. First 12 requests from 15:30 to 15:33 UTC with backoff (2 then 1 SOL, both endpoints), then one 1 SOL request a minute, alternating, until 17:00 UTC: 62 in all, 2 granted, both by Alchemy's public demo endpoint. The rest were refused: api.devnet.solana.com 18 times with \"Internal error\" and 13 times with 429, \"You've either reached your airdrop limit today or the airdrop faucet has run dry\"; Alchemy's endpoint 29 times with HTTP 429 and no body. faucet.solana.com asks for a Cloudflare captcha on every request and was not used from the machine; Carlos could not get SOL from it either. The proof-of-work faucets on devnet (program PoWSNH2hEZogtCg1Zgm51FnkmJperzYDgPK4fvs8taL) are drained. In all: deploy 2.0 SOL, every other key 0. Then, on 2026-09-25 from 17:01 to 17:03 UTC, four plain transfers of 1 SOL each to the deploy key from FkTagjLiMb6YMjfSTJJGbcHmfWefpoRHj9e2ricMFLX8, before the deploying session started (who holds that address was not checked): 6.0 SOL in all before the deploy.",
     "granted": [
       {
         "key": "deploy",
@@ -38,6 +83,220 @@
         "via": "https://solana-devnet.g.alchemy.com/v2/demo",
         "signature": "57NwVuvZTr5yf35r3FH6Fvztm79nS3UkhqC8JacidcrZ6GGVoT91nccGq1NK3e4VdqzB2NwLLnRdmDWNiSZUG2YF"
       }
+    ],
+    "transfersIn": [
+      {
+        "key": "deploy",
+        "lamports": 1000000000,
+        "at": "2026-09-25 17:01:08 UTC",
+        "from": "FkTagjLiMb6YMjfSTJJGbcHmfWefpoRHj9e2ricMFLX8",
+        "signature": "4cVPWuQKfk5sX9zLT6fMtdXhWFqwrBrFFCdagvtRtUp9yDpBDk4FdV49RpKv8gPFQ6F8KwJZFZtPSTjudzPrk1Ax"
+      },
+      {
+        "key": "deploy",
+        "lamports": 1000000000,
+        "at": "2026-09-25 17:02:12 UTC",
+        "from": "FkTagjLiMb6YMjfSTJJGbcHmfWefpoRHj9e2ricMFLX8",
+        "signature": "3VAr2eRWJW4xxQZyhwJrhpqAtNkuhPW8YTCRGEpGju6UyxNZo8Ve8Suya9orTvagESdxPBuEyCDyCoMWFYbmhBf8"
+      },
+      {
+        "key": "deploy",
+        "lamports": 1000000000,
+        "at": "2026-09-25 17:02:42 UTC",
+        "from": "FkTagjLiMb6YMjfSTJJGbcHmfWefpoRHj9e2ricMFLX8",
+        "signature": "49oAAJL9YziN3o3gu9UAZDUvd6ewfSguUL4rTupeVy6NgZorvwFnmFQW4SB4DTUHUeH4aCPghb4qqiMUztcn4PoS"
+      },
+      {
+        "key": "deploy",
+        "lamports": 1000000000,
+        "at": "2026-09-25 17:03:43 UTC",
+        "from": "FkTagjLiMb6YMjfSTJJGbcHmfWefpoRHj9e2ricMFLX8",
+        "signature": "4E96Y2GMUMyHSHy6c2v62pas1krnKmnct2sr4HNQ1VSJtyu6KnkKzZhSdQkrdeN89WccfuRBjcN5XxAQ6AqZ1Ago"
+      }
     ]
+  },
+  "transactions": [
+    {
+      "program": "registry",
+      "what": "deploy: the registry program (SBPF v3), built by devnet/build.sh, upgrade authority kept on the deploy key",
+      "signature": "AkfJTcjedMaLWVBM6TwMCG3o9SbU1HT6zHMXHGpXPv4RiYj2hsg14up4WEjnBW3eHuCJFmUsUZTtHrW8wDMRPGF"
+    },
+    {
+      "program": "escrow",
+      "what": "deploy: the escrow program (SBPF v3), built by devnet/build.sh, upgrade authority kept on the deploy key",
+      "signature": "hbAsbJNCAcrNoCpPpBTumdcrzrRPALnTFxFnA3Nejiwnfj9Q7p68vK3zR321KCQVETJafDqNRCNXNMYWn6MCTxS"
+    },
+    {
+      "program": "registry",
+      "what": "0.2 SOL from the deploy key to the payer, which pays every network fee and rent from here on",
+      "signature": "48GXVDTL5w2y8X59iS4BR6W3Y8kEPCHvXtC4FxtCzRUaP49ghctfEgV77YNAJeZHEvLBoe5otxuzMPw7HGrF8aA1"
+    },
+    {
+      "program": "registry",
+      "what": "0.01 SOL from the payer to the treasury, so a rent sweep can land there",
+      "signature": "4VsrXor6iNvbKv8mhJbLvvonq2gVqFmGAkDiedNXRDQKDqqDXxRadAcaSVYN2CqSHgJQo1p184rvd48aE2WcGi4j"
+    },
+    {
+      "program": "registry",
+      "what": "0.01 SOL from the payer to the foundation issuer, so a rent sweep can land there",
+      "signature": "2tH9z1ieNmUkKVh3tdkCbfqqwoXZm8j3XK88uWjFrxHFQJUT2ZWVhYYHBkdGwYe6cNn4wD47wFoUBue4YzCfta2j"
+    },
+    {
+      "program": "registry",
+      "what": "init: the config (treasury, devnet USDC at 0.25), list 0 owned by the foundation issuer, the code tree",
+      "signature": "5dBGfPmpgPnDqd584xx2CyVB1R6GAqb2JHFb72Cb8576A4a2VQB7e4GVsXfVNaVwTvesf9Gv7iPYCxdKgjKQ5pAS"
+    },
+    {
+      "program": "registry",
+      "what": "the test dollar: a classic SPL Token mint, 6 decimals, a throwaway mint authority",
+      "signature": "5sANiHH84r3mhQkQU7NParcXEn71EwzySLyi1GLNPtpCs4xG1vWwC6eY2jJFpeRUrkN4kYgEygzAFca81i34RLc1"
+    },
+    {
+      "program": "registry",
+      "what": "add_token: the treasury accepts the test dollar at 250,000 base units (0.25) (landed while the RPC answered 429 to the script's confirmation polling; its signature was read back from the config's transaction history)",
+      "signature": "5Z8LKmJKSGitGaafrDgLNxujpk3DigpKdH7TnCGic9MzREDgdShCpf2Bx7qFFwN4xKHuWs7qpYb1YEnyHc55x9fy"
+    },
+    {
+      "program": "registry",
+      "what": "token accounts for the test dollar: the treasury's, profile 0's wallet's, the buyer's and the seller's",
+      "signature": "2VwD2Q3Z3fo7GRVBf9FhCYeTGYveQrxUSaV1MTozTgxYzJpUW2rA2Y5nLndjkiJh3vCut9htCe2ymzGgpvuCpS6X"
+    },
+    {
+      "program": "registry",
+      "what": "test dollars minted: 1.00 to profile 0's wallet, 10.00 to the buyer",
+      "signature": "2BCYVQJ156e3S458kQJcpFCtZmquxHsGY91CjFApqo1CZMf3qjqPJoq5s3KXbrz7gmgBSDKQeuqoLxnUZa8XU5Mv"
+    },
+    {
+      "program": "registry",
+      "what": "insert_identity: the foundation issuer adds profile 0's person to list 0 (the commitment only)",
+      "signature": "3rTkDouR4he5AdkR8fWNX8BB3L9qBsuTHPwbJBw3cucZ4qg1FxikgRgX8f8ifh2erT8ykkgeSiwCBN3HZUX5bUd4"
+    },
+    {
+      "program": "registry",
+      "what": "register: profile 0 in \"freelance/seller\" on list 0; the payer paid the network fee and the code account's rent, the profile's wallet signed and paid 0.25 test dollars",
+      "signature": "25CpahXh3ZKjrF3hxHet7xms1xjmTK1d94B6Y9MTeDCXaNEJ6TZtgUvsYqKWAaxpsHF6fT9gr2UncUtNxAiLrYGE"
+    },
+    {
+      "program": "registry",
+      "what": "register again, the same person in the same market: refused, the code account already exists (code used)",
+      "signature": "58fpcLpumjsW2Lq2znDYDB2pE2YoduS61TnJPyMb3r9MEEJtySMAYt7zHBNJTAGZbXbmbtXT3MJgJhpd8cqwCT5c"
+    },
+    {
+      "program": "escrow",
+      "what": "invoice: the seller opens an escrow naming the buyer, 2.00 test dollars, no options",
+      "signature": "4rYJSwYTNVJEUNqZxYgWJKQp4SFfqSXgGzKJBkZKVeeyLpveHbKkb3apb6stvKidMMgkZTHxw49wyLUJbDmMohBo"
+    },
+    {
+      "program": "escrow",
+      "what": "one tap: the deposit address made first, then the buyer pays 2.00 into it and releases it to the seller, in one transaction",
+      "signature": "66g2DXqb8VgNM7sYymhEjaEPi4wsgXLNaUZxMYs68m4AsbxN6DBK6HoiJaquWuu5hdy9iD4YhRX32Zc1Mvn64Riq"
+    },
+    {
+      "program": "escrow",
+      "what": "create: the buyer proposes an escrow of 3.00 test dollars to the seller, no options",
+      "signature": "5Y9FrY4m1TqqjoVUKTNw9VSH4XCTfo5WuBx7iPvh53PmkthzGYDcGkRd2o5tJsaWL3GsKAQrTN6iuobwjAHPKVWV"
+    },
+    {
+      "program": "escrow",
+      "what": "fund: the buyer sends 3.00 to the escrow's deposit address by a plain transfer",
+      "signature": "2UqDDbMAJ92KX63dFvxJKttfFSZ5A4tsezgTdotya1KH3HtVrGUYMkuWfQt4wqLQXQrno5k9VswsCBe5d6XCSrei"
+    },
+    {
+      "program": "escrow",
+      "what": "mark_funded: the payer marks the funding; nobody else signs",
+      "signature": "3cLrUgCaTB9YeYsT4AbR5ERzCnTM4JaVTdqNpHqMHdQnLgXYKJbKBpej7dXPPz1qzFLb4hu8Z32TUNaqL4f9bnNV"
+    },
+    {
+      "program": "escrow",
+      "what": "split: buyer and seller both sign 60/40; 1.80 to the seller, 1.20 back to the buyer",
+      "signature": "2jkrKGRZFTZdi3PFv8YVJgdPTUX9Ypm9tuyEx2U7xJcThXbRaekvyseGa8a5ERbBGQZA6MXq7FyC2f9FUL1YaHsZ"
+    }
+  ],
+  "tokenAccounts": {
+    "treasury": "B9iw1KiatSkcVyk3nuPbaR6mWy3iqC3yt1dDnCyBcvdj",
+    "profile0": "5ibx9fUA31Zf259Dong6H26n7MVHnVtBxEzrx7a16cA4",
+    "buyer": "DsNgtxH7aVrbGJNraTgB19AaRrWSGdr7z7Vwzwz6BX4R",
+    "seller": "8WU1DgsmnTnfwjNPUwDuV4wPtLnjzaeKsefhnBXz6Gcq"
+  },
+  "registration": {
+    "market": "freelance/seller",
+    "did": "did:plc:wece24yzukt4pj6hqvmb2fn4",
+    "wallet": "Azh4zBXfQsXLKrrD6YanN7VZhpNyQot7vVdtB2r41UWx",
+    "commitment": "14568690134484466610252976219100933485694269593799802854234702390895629808185",
+    "listIndex": 0,
+    "membersRead": 1,
+    "transactionsRead": 2,
+    "root": "2035961e8afaccb15bc1cd878da3c4f42db4a7f0a72b19c30251a4a2b8a3b239",
+    "code": "12081e10633818060719a994b13b69ce1548b4e76839dae6e0878a1e845505aa",
+    "codeAccount": "8oYetSy3vATJNJyLtU4RWKG2NccYYL6gAnN6R28Cbqq8",
+    "signature": "25CpahXh3ZKjrF3hxHet7xms1xjmTK1d94B6Y9MTeDCXaNEJ6TZtgUvsYqKWAaxpsHF6fT9gr2UncUtNxAiLrYGE",
+    "provingMs": 1322,
+    "computeUnits": 137019,
+    "bytes": 835,
+    "refusedSignature": "58fpcLpumjsW2Lq2znDYDB2pE2YoduS61TnJPyMb3r9MEEJtySMAYt7zHBNJTAGZbXbmbtXT3MJgJhpd8cqwCT5c",
+    "refusedError": {
+      "InstructionError": [
+        1,
+        {
+          "Custom": 0
+        }
+      ]
+    },
+    "refusedLog": [
+      "Allocate: account Address { address: 8oYetSy3vATJNJyLtU4RWKG2NccYYL6gAnN6R28Cbqq8, base: None } already in use",
+      "Program 11111111111111111111111111111111 failed: custom program error: 0x0",
+      "Program 8sUyd9JXRGEUqf2hYVnLCybi74549VG27dAK6YvbbU3i failed: custom program error: 0x0"
+    ]
+  },
+  "deals": {
+    "invoice": {
+      "what": "the seller invoices 2.00; the buyer checks it, then, in one transaction, the deposit address made first, pays and releases",
+      "id": "13100031500319075776",
+      "signatures": {
+        "invoice": "4rYJSwYTNVJEUNqZxYgWJKQp4SFfqSXgGzKJBkZKVeeyLpveHbKkb3apb6stvKidMMgkZTHxw49wyLUJbDmMohBo",
+        "one tap": "66g2DXqb8VgNM7sYymhEjaEPi4wsgXLNaUZxMYs68m4AsbxN6DBK6HoiJaquWuu5hdy9iD4YhRX32Zc1Mvn64Riq"
+      },
+      "escrow": "GCWxAT7cQZeaRdfkTkhsRnAPEEim58pv6SJqfJrtq8Qm",
+      "deposit": "4ffWkRmTXgUpNREZ9SqKwXVxLjQKMfy3g13QiRZJ2AfB",
+      "payLink": "solana:GCWxAT7cQZeaRdfkTkhsRnAPEEim58pv6SJqfJrtq8Qm?amount=2&spl-token=J2QBACfPPb1ys2UyGx3ecXHgCr4hWuHFT3C2Nr6TSVSa&reference=GCWxAT7cQZeaRdfkTkhsRnAPEEim58pv6SJqfJrtq8Qm&label=Forest+devnet",
+      "receipt": {
+        "status": "ended",
+        "outcome": "releasedToSeller",
+        "amount": "2000000",
+        "toSeller": "2000000",
+        "toBuyer": "0",
+        "createdAt": "1790359161",
+        "fundedAt": null,
+        "creator": "seller",
+        "endedAt": "1790359163",
+        "rentRecipient": "3Ttfgh6ATW9j5cYMttLiZuVub77hQjkDiZDDhzqyooTf"
+      },
+      "depositClosed": true
+    },
+    "split": {
+      "what": "the buyer proposes 3.00 and pays; anyone marks it funded; both sign a 60/40 split",
+      "id": "225163091175537227",
+      "signatures": {
+        "create": "5Y9FrY4m1TqqjoVUKTNw9VSH4XCTfo5WuBx7iPvh53PmkthzGYDcGkRd2o5tJsaWL3GsKAQrTN6iuobwjAHPKVWV",
+        "fund": "2UqDDbMAJ92KX63dFvxJKttfFSZ5A4tsezgTdotya1KH3HtVrGUYMkuWfQt4wqLQXQrno5k9VswsCBe5d6XCSrei",
+        "mark_funded": "3cLrUgCaTB9YeYsT4AbR5ERzCnTM4JaVTdqNpHqMHdQnLgXYKJbKBpej7dXPPz1qzFLb4hu8Z32TUNaqL4f9bnNV",
+        "split": "2jkrKGRZFTZdi3PFv8YVJgdPTUX9Ypm9tuyEx2U7xJcThXbRaekvyseGa8a5ERbBGQZA6MXq7FyC2f9FUL1YaHsZ"
+      },
+      "escrow": "CerdZJU5Xqk8wrn5x3KDF41fW6Kd22QRR1h4GFG6zumq",
+      "deposit": "EaFkT5d2degrBTDn7vS39wEMttmRk3tK8TUinr6hYn3H",
+      "receipt": {
+        "status": "ended",
+        "outcome": "split",
+        "amount": "3000000",
+        "toSeller": "1800000",
+        "toBuyer": "1200000",
+        "createdAt": "1790359164",
+        "fundedAt": "1790359165",
+        "creator": "buyer",
+        "endedAt": "1790359166",
+        "rentRecipient": "4kFff36dwTKhK8tEm4m9QiyRCRcj67aXsYgkKMxwLuqE"
+      },
+      "depositClosed": true
+    }
   }
 }
