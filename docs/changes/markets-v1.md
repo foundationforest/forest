@@ -129,6 +129,10 @@ Each is the simplest reading, and each is reversible; nothing is deployed.
   - Both LiteSVM suites pass: registry 48 and escrow 52.
   - The registry property test passes: 100 iterations, 4,000 flows.
   - The validator tests of the registry client, the escrow client and the issuer pass, each 1 of 1 with none skipped.
+  - The fee payer's local test passes (Kora 2.0.5 in front of a validator), 1 of 1.
+  - The index's whole `npm test` passes, the end-to-end test included: 39 of 39, none skipped.
+  - The host's `test.sh` passes: its jest suites, and 7 of 7 of its own tests, which write the new shapes examples.
+  - The carrier's test was not run here: it reads only the profile and post examples, which did not change, and it needs the relay built.
   - The v3 builds' sha256: registry `c33310b7…`, escrow `53f32c43…`.
 - **Trident 0.12 runs only v0 programs.**
   - Its runtime (trident-svm 0.2.0, on solana-svm 2.3.13) starts with `SVMFeatureSet::default()`, every feature off.
