@@ -17,11 +17,13 @@
     "rewriteRelativeImportExtensions": true,
     "resolveJsonModule": true,
     "skipLibCheck": true,
-    "noEmit": true
+    "noEmit": true,
+    "allowJs": true
   },
   "include": [
     "*.ts",
     "lib",
-    "issuer"
+    "issuer",
+    "../registry/client/types"
   ]
 }

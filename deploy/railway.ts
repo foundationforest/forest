@@ -8,6 +8,8 @@
 //   node railway.ts status             each service's latest deployment
 //   node railway.ts sealed             every variable's name and whether it is sealed; never a value
 //   node railway.ts rotate NAME        a new value for a secret this script makes, sealed, and a redeploy
+//   node railway.ts wire               the relay told to read the host (its admin requestCrawl), and its host list
+//   node railway.ts track BRANCH       every service built from BRANCH of the repo (main, once this is merged)
 //
 // Each step reads what exists first and changes only what is missing or different. Public facts
 // (ids, domains) go to deploy/services.json. Secrets are made or read by lib/secrets.ts, sent to
@@ -133,7 +135,8 @@ async function createService(projectId: string, environmentId: string, name: Nam
 
 async function provision(): Promise<void> {
   const { projectId, environmentId } = await projectAndEnvironment()
-  const branch = currentBranch()
+  const branch = readRecord().railway?.branch ?? currentBranch()
+  updateRecord({ railway: { branch } })
   for (const name of NAMES) {
     let { services, mounts } = await projectState(projectId)
     let service = services.find((s: any) => s.name === name)
@@ -469,6 +472,47 @@ async function rotate(key: string): Promise<void> {
   await deploy([made.service])
 }
 
+// ---- wire ---------------------------------------------------------------------------------------
+
+/** The relay reads only hosts an admin adds (carrier/README.md, "Adding a host"). */
+async function wire(): Promise<void> {
+  const urls = urlsFromRecord()
+  const relayPassword = readSecret('RELAY_ADMIN_PASSWORD')
+  secrets.add(relayPassword)
+  const auth = `Basic ${Buffer.from(`admin:${relayPassword}`).toString('base64')}`
+  const hostname = new URL(urls.host).host
+  const res = await fetch(`${urls.carrier}/admin/pds/requestCrawl`, {
+    method: 'POST',
+    headers: { authorization: auth, 'content-type': 'application/json' },
+    body: JSON.stringify({ hostname }),
+  })
+  console.log(`relay requestCrawl ${hostname}: ${res.status} ${redact((await res.text()).slice(0, 200))}`)
+  const list = await fetch(`${urls.carrier}/admin/pds/list`, { headers: { authorization: auth } })
+  const hosts = list.ok ? ((await list.json()) as any[]) : []
+  const ours = hosts.find((h) => String(h.Host ?? h.host ?? h.hostname ?? '').includes(hostname))
+  console.log(`relay hosts: ${hosts.length}; ours: ${ours ? JSON.stringify(ours).slice(0, 300) : 'not listed'}`)
+  updateRecord({ wiring: { relayReadsHost: hostname, relayHostEntry: ours ?? null } })
+}
+
+// ---- track --------------------------------------------------------------------------------------
+
+/**
+ * Points every service at a branch of the repo. `deploy` then builds that branch's pushed commit;
+ * a push to it redeploys by itself only once Railway's GitHub app can see the repo.
+ */
+async function track(branch: string): Promise<void> {
+  if (!branch) throw new Error('usage: node railway.ts track BRANCH')
+  const { railway } = readRecord()
+  for (const name of live()) {
+    await gql(`mutation($id: String!, $input: ServiceConnectInput!) { serviceConnect(id: $id, input: $input) { id } }`, {
+      id: railway.services[name].id,
+      input: { repo: REPO, branch },
+    })
+    console.log(`${name}: builds from ${REPO} at ${branch}`)
+  }
+  updateRecord({ railway: { branch } })
+}
+
 // ---- main ---------------------------------------------------------------------------------------
 
 const [step, ...args] = process.argv.slice(2)
@@ -491,6 +535,12 @@ switch (step) {
   case 'rotate':
     await rotate(args[0])
     break
+  case 'wire':
+    await wire()
+    break
+  case 'track':
+    await track(args[0])
+    break
   default:
-    throw new Error('usage: node railway.ts provision|variables|deploy [name...]|status|sealed|rotate NAME')
+    throw new Error('usage: node railway.ts provision|variables|deploy [name...]|status|sealed|rotate NAME|wire|track BRANCH')
 }

@@ -102,9 +102,8 @@ async function url(): Promise<void> {
   // which suits the index: a long-lived pool of ordinary connections.
   const host: string = primary.db_host
   const port = 5432
-  const session = primary
-  const db = session.db_name ?? 'postgres'
-  const build = (user: string, pass: string) => `postgresql://${user}.${ref}:${encodeURIComponent(pass)}@${host}:${port}/${db}?sslmode=require`
+  const db = primary.db_name ?? 'postgres'
+  const build = (user: string, pass: string) => `postgresql://${user}.${ref}:${encodeURIComponent(pass)}@${host}:${port}/${db}?sslmode=verify-full`
   writeSecret('DATABASE_URL', build('postgres', readSecret('supabase-db-password')))
   writeSecret('DATABASE_URL_PAGES', build('index_pages', readSecret('supabase-pages-password')))
   updateRecord({ supabase: { pooler: { host, port, mode: 'session' } } })
