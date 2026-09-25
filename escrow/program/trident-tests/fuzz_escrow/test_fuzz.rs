@@ -1,37 +1,40 @@
-//! Adversarial review 1: the escrow under Trident.
+//! The escrow under Trident.
 //!
 //! Random flows against the built program (`../target/deploy/forest_escrow.so`), with a model
-//! of every escrow kept beside it. The model is the README's state machine written out a third
+//! of every escrow kept beside it. The model is the README's state table written out a third
 //! time: for every instruction the fuzzer sends, it says whether the program must accept it and,
 //! if so, exactly what moves. After every step the invariants below are checked.
 //!
 //! Trident's runtime does not check signatures: an account marked as a signer is taken as signed.
 //! So every key here can "sign", and every authority rule has to hold on key comparisons alone.
 //!
-//! Invariants, from `docs/decisions/adversarial-review-1.md`, with session 11's rules (the seller's
-//! acceptance, permanent receipts, `withdraw`, `close_unfunded`, wrapped SOL refused) and session
-//! 12's (`recover_late`, `sweep_rent`, `close_unaccepted`, the clock that waits for the funding,
-//! `mark_funded` before acceptance) and session 14's (every ending pays the buyer only at its
-//! refund address, checked by address, whoever holds that account):
+//! Invariants, for the escrow of "Escrow" in the handoff (money in, and out only when the two
+//! sides agree; an arbiter and a timer only if the creator turned them on):
 //!   I1 every deposit account holds exactly what was sent to it;
-//!   I2 no ending pays out more, or less, than the deposit account held;
+//!   I2 every way out pays out the whole balance, no more and no less, and a split gives the
+//!      seller exactly its basis points of the balance, rounded down;
 //!   I3 rent goes back to the recorded rent payer, to the lamport, and to nobody else: the deposit
-//!      account's at every ending, and the escrow account's too only when it never held the amount;
-//!      a deposit account made again after the end goes back to the buyer with the late money;
+//!      account's at every ending, and the escrow account's too only when it never held the
+//!      amount; a deposit account made again after the end goes back to the buyer with the late
+//!      money;
 //!   I4 an ended escrow accepts nothing but `recover_late` and `sweep_rent`, even after a later
 //!      payment re-creates its deposit account, and its address never opens again;
-//!   I5 a buyer's cancellation refund is never below the step's percent of the amount;
-//!   I6 no token is created or destroyed: every balance, every buyer's refund address and every
+//!   I5 money leaves a funded escrow only with an authority named at creation: the buyer's
+//!      release to the seller, the seller's release to the buyer, both signing a split, the
+//!      arbiter named at creation, or the timer set at creation once due; checked on every
+//!      accepted way out by a separate `authorized` test, apart from the model's own verdict;
+//!   I6 no token is created or destroyed: every balance, every standard account and every
 //!      deposit account add up to a constant;
-//!   I7 the program accepts exactly what the state machine allows, and refuses everything else;
+//!   I7 the program accepts exactly what the model allows, and refuses everything else;
 //!   I8 a receipt, once written, never changes its bytes and never closes;
-//!   I9 late money always reaches the buyer: `recover_late` runs whenever an ended escrow's deposit
-//!      account exists, and pays exactly what it held to the buyer's refund address;
+//!   I9 late money always reaches the buyer: `recover_late` runs whenever an ended escrow's
+//!      deposit account exists, and pays exactly what it held to the buyer's standard account;
 //!   I10 a sweep never breaches the minimum: every escrow account always holds at least its
 //!      rent-exempt minimum, and a sweep leaves exactly that and pays the rest to the rent payer;
-//!   I11 an unaccepted escrow past its timeout always returns everything to the buyer: at the end
-//!      of every run, each funded escrow nobody accepted is observed, waited out and closed, and
-//!      every unit goes to the buyer's refund address.
+//!   I11 nothing is stuck: at the end of every run, every live escrow is ended by the parties'
+//!      own signatures (a funded one by the buyer's release, a never-funded one by its rent
+//!      payer's close), and every unit comes out;
+//!   I12 a timer never pays before it is due: never before `timer_days` whole days after the mark.
 //!
 //! Run: `cargo run --release --bin fuzz_escrow` from this directory (after `cargo build-sbf` in
 //! `escrow/program`). `FOREST_FUZZ_ITERATIONS` and `FOREST_FUZZ_FLOWS` set the size;
@@ -47,12 +50,22 @@ const SYSTEM_PROGRAM: Pubkey = pubkey!("11111111111111111111111111111111");
 const NATIVE_MINT: Pubkey = pubkey!("So11111111111111111111111111111111111111112");
 const BPS: u16 = 10_000;
 const DAY: i64 = 86_400;
-const UNACCEPTED_DAYS: i64 = 30;
 const T0: i64 = 1_800_000_000;
 const START_TOKENS: u64 = 100_000_000_000_000_000;
 /// People: two buyers, two sellers, an arbiter, a stranger and a sponsor. Anyone can be anything.
 const PEOPLE: usize = 7;
 const SPONSOR: usize = 6;
+/// Side bytes, as the program stores them.
+const BUYER: u8 = 0;
+const SELLER: u8 = 1;
+/// The receipt's offsets after the eight-byte discriminator.
+const AT_CREATOR: usize = 209;
+const AT_FUNDED_AT: usize = 221;
+const AT_STATUS: usize = 229;
+const AT_OUTCOME: usize = 239;
+const AT_TO_SELLER: usize = 240;
+const AT_TO_BUYER: usize = 248;
+const ENDED: u8 = 2;
 
 fn disc(namespace: &str, name: &str) -> [u8; 8] {
     Sha256::digest(format!("{namespace}:{name}").as_bytes())[..8].try_into().unwrap()
@@ -96,17 +109,14 @@ struct Deal {
     vault: Pubkey,
     buyer: Pubkey,
     seller: Pubkey,
+    creator: u8,
     arbiter: Option<Pubkey>,
+    /// (days, side)
+    timer: Option<(u16, u8)>,
     rent_payer: Pubkey,
     amount: u64,
-    service_time: i64,
-    silence_days: u16,
-    steps: Vec<(i64, u16)>,
-    created_at: i64,
+    /// When `mark_funded` ran, or 0.
     funded_at: i64,
-    /// 0 until the seller accepts; the creation time for an invoice.
-    accepted_at: i64,
-    locked: bool,
     deposited: u64,
     /// Paid out: the escrow account stays as the receipt.
     ended: bool,
@@ -121,49 +131,15 @@ impl Deal {
     fn live(&self) -> bool {
         !self.ended && !self.closed
     }
-    fn accepted(&self) -> bool {
-        self.accepted_at != 0
+    fn marked(&self) -> bool {
+        self.funded_at != 0
     }
-    /// The latest of the service time, the funding observation and the acceptance; nothing until
-    /// the last two have happened.
-    fn clock_start(&self) -> Option<i64> {
-        if self.accepted_at == 0 || self.funded_at == 0 {
-            return None;
+    /// When the timer is due; `None` with no timer or before the mark.
+    fn timer_due(&self) -> Option<i64> {
+        match self.timer {
+            Some((days, _)) if self.marked() => self.funded_at.checked_add(i64::from(days) * DAY),
+            _ => None,
         }
-        Some(self.service_time.max(self.funded_at).max(self.accepted_at))
-    }
-    /// When anyone may send an unaccepted escrow back: the last deadline from the later of the
-    /// service time and the funding observation, or 30 days after the observation with no steps.
-    /// `Ok(None)` until observed; `Err(())` is an overflow, which the program refuses.
-    fn unaccepted_timeout(&self) -> Result<Option<i64>, ()> {
-        if self.funded_at == 0 {
-            return Ok(None);
-        }
-        match self.steps.last() {
-            Some((o, _)) => self.service_time.max(self.funded_at).checked_add(*o).map(Some).ok_or(()),
-            None => self.funded_at.checked_add(UNACCEPTED_DAYS * DAY).map(Some).ok_or(()),
-        }
-    }
-    /// A never-funded escrow's last deadline, from the service time if set, else creation.
-    fn unfunded_deadline(&self) -> Option<Option<i64>> {
-        let reference = if self.service_time != 0 { self.service_time } else { self.created_at };
-        match self.steps.last() {
-            None => Some(None),
-            Some((o, _)) => reference.checked_add(*o).map(Some),
-        }
-    }
-    fn silence_ends(&self, start: i64) -> Option<i64> {
-        start.checked_add(i64::from(self.silence_days) * DAY)
-    }
-    /// `Err(())` is an overflow, which the program refuses.
-    fn current_step(&self, start: i64, now: i64) -> Result<Option<u16>, ()> {
-        for (offset, bps) in &self.steps {
-            let deadline = start.checked_add(*offset).ok_or(())?;
-            if now < deadline {
-                return Ok(Some(*bps));
-            }
-        }
-        Ok(None)
     }
 }
 
@@ -177,11 +153,11 @@ struct Counts {
 struct FuzzTest {
     trident: Trident,
     people: Vec<Pubkey>,
+    /// Each person's everyday token account for the mint: not their standard one.
     tokens: Vec<Pubkey>,
-    /// Each person's refund address: their associated token account for the mint. Most people
-    /// start with one; the rest get it from `make_refund`, or from `recover_late` or
-    /// `close_unaccepted` when a buyer is paid there first. Every ending pays the buyer here and
-    /// nowhere else.
+    /// Each person's standard token account for the mint. Most people start with one; the rest
+    /// get it from `make_refund`, or from `recover_late` when a buyer is paid there first. Every
+    /// payout to a buyer lands here and nowhere else.
     refunds: Vec<Pubkey>,
     /// An escrow account's rent-exempt minimum: what `create` put in the first one. Trident's rent
     /// rate never changes, and every escrow account has the same size.
@@ -249,7 +225,7 @@ impl FuzzTest {
         let buyer = self.people[buyer_i];
         let native = self.pick(40) == 0;
         let mint = if native { NATIVE_MINT } else { self.mint };
-        // Mostly well-formed terms, so the endings get exercised; each malformed choice ~3%.
+        // Mostly well-formed terms, so the ways out get exercised; each malformed choice ~3%.
         let seller = match self.pick(33) {
             0 => Pubkey::default(),
             1 => buyer,
@@ -257,43 +233,21 @@ impl FuzzTest {
         };
         let arbiter = match self.pick(33) {
             0 => Some(Pubkey::default()),
-            1 => Some(buyer),
-            2 => Some(seller),
-            k if k < 18 => None,
+            1..=3 => Some(buyer),
+            4..=6 => Some(seller),
+            k if k < 20 => None,
             _ => Some(self.person()),
         };
+        let timer: Option<(u16, u8)> = match self.pick(33) {
+            0 => Some((0, self.side())),
+            1 => Some((u16::MAX, self.side())),
+            k if k < 16 => None,
+            _ => Some((self.trident.random_from_range(1..=3), self.side())),
+        };
         let amount = self.amount();
-        let now = self.now();
-        let service_time = match self.pick(33) {
-            0 => Some(0),
-            1 => Some(-5),
-            2 => Some(i64::MAX - self.trident.random_from_range(0..100)),
-            k if k < 20 => None,
-            k if k < 26 => Some(now - self.trident.random_from_range(1..10 * DAY)),
-            _ => Some(now + self.trident.random_from_range(1..10 * DAY)),
-        };
-        let silence_days: u16 = match self.pick(33) {
-            0 => 0,
-            1 => u16::MAX,
-            _ => self.trident.random_from_range(1..=7),
-        };
-        let n = if self.pick(20) == 0 { 5 } else { self.trident.random_from_range(0..=4usize) };
-        let mut steps = Vec::new();
-        let mut offset: i64 = self.trident.random_from_range(-2 * DAY..3 * DAY);
-        for _ in 0..n {
-            let bps: u16 = if self.pick(33) == 0 { BPS + 1 } else { self.trident.random_from_range(0..=BPS) };
-            steps.push((offset, bps));
-            offset = offset.saturating_add(match self.pick(40) {
-                0 => 0,                                        // a repeat: must be refused
-                1 => -self.trident.random_from_range(1..DAY),  // unsorted: must be refused
-                2 => i64::MAX / 2,                             // far future, and overflow later
-                _ => self.trident.random_from_range(1..5 * DAY),
-            });
-        }
         let id: u64 = self.trident.random_from_range(0..6);
         let payer_i = if self.coin() { buyer_i } else { SPONSOR };
         let payer = self.people[payer_i];
-
         // Who opens it: the buyer, proposing; the seller, invoicing; now and then someone else.
         let creator = match self.pick(20) {
             0 => self.person(),
@@ -308,20 +262,17 @@ impl FuzzTest {
         let valid = seller != buyer
             && seller != Pubkey::default()
             && (creator == buyer || creator == seller)
-            && arbiter.map_or(true, |a| a != Pubkey::default() && a != buyer && a != seller)
+            && arbiter != Some(Pubkey::default())
             && !native
             && amount > 0
-            && silence_days > 0
-            && service_time.map_or(true, |t| t > 0)
-            && steps.len() <= 4
-            && steps.iter().all(|(_, b)| *b <= BPS)
-            && steps.windows(2).all(|w| w[1].0 > w[0].0)
+            && timer.map_or(true, |(days, _)| days > 0)
             && !taken;
 
         let mut data = disc("global", "create").to_vec();
         data.extend_from_slice(&id.to_le_bytes());
         data.extend_from_slice(buyer.as_ref());
         data.extend_from_slice(seller.as_ref());
+        data.extend_from_slice(&amount.to_le_bytes());
         match arbiter {
             Some(k) => {
                 data.push(1);
@@ -329,19 +280,13 @@ impl FuzzTest {
             }
             None => data.push(0),
         }
-        data.extend_from_slice(&amount.to_le_bytes());
-        match service_time {
-            Some(t) => {
+        match timer {
+            Some((days, side)) => {
                 data.push(1);
-                data.extend_from_slice(&t.to_le_bytes());
+                data.extend_from_slice(&days.to_le_bytes());
+                data.push(side);
             }
             None => data.push(0),
-        }
-        data.extend_from_slice(&silence_days.to_le_bytes());
-        data.extend_from_slice(&(steps.len() as u32).to_le_bytes());
-        for (o, b) in &steps {
-            data.extend_from_slice(&o.to_le_bytes());
-            data.extend_from_slice(&b.to_le_bytes());
         }
         let ix = Instruction {
             program_id: PROGRAM_ID,
@@ -373,23 +318,20 @@ impl FuzzTest {
             self.escrow_min = self.lamports(&escrow);
         }
         assert_eq!(self.lamports(&escrow), self.escrow_min, "I10 create: an escrow account starts at its minimum");
-        let invoice = creator == seller;
-        let funded_at = if invoice && prefunded >= amount { now } else { 0 };
+        let bytes = self.trident.get_account(&escrow).data().to_vec();
+        let creator_byte = if creator == buyer { BUYER } else { SELLER };
+        assert_eq!(bytes[8 + AT_CREATOR], creator_byte, "create: the receipt names its creator");
         self.deals.push(Deal {
             escrow,
             vault,
             buyer,
             seller,
+            creator: creator_byte,
             arbiter,
+            timer,
             rent_payer: payer,
             amount,
-            service_time: service_time.unwrap_or(0),
-            silence_days,
-            steps,
-            created_at: now,
-            funded_at,
-            accepted_at: if invoice { now } else { 0 },
-            locked: false,
+            funded_at: 0,
             deposited: prefunded,
             ended: false,
             closed: false,
@@ -397,46 +339,15 @@ impl FuzzTest {
         });
     }
 
-    /// The seller accepts, usually; sometimes someone else tries.
-    #[flow]
-    fn accept(&mut self) {
-        let Some(i) = self.latest_deal() else { return };
-        let d = self.deals[i].clone();
-        let actor = self.actor_for(&d, "accept");
-        let balance = self.vault_balance(&d);
-        let vault_exists = self.trident.get_account(&d.vault).lamports() > 0;
-        let valid = d.live() && vault_exists && !d.accepted() && actor == d.seller;
-        let ix = Instruction {
-            program_id: PROGRAM_ID,
-            accounts: vec![
-                AccountMeta::new(d.escrow, false),
-                AccountMeta::new_readonly(d.vault, false),
-                AccountMeta::new_readonly(actor, true),
-            ],
-            data: disc("global", "accept").to_vec(),
-        };
-        // Trident's runtime moves its clock on by the wall-clock seconds that pass after each
-        // transaction, so the time the program saw is the one read before sending, not after.
-        let now = self.now();
-        let ok = self.send(&[ix], "accept");
-        assert_eq!(ok, valid, "I4/I7 accept: model {valid}, program {ok}");
-        if ok {
-            self.deals[i].accepted_at = now;
-            if d.funded_at == 0 && balance >= d.amount {
-                self.deals[i].funded_at = now;
-            }
-        }
-    }
-
     /// A plain transfer into a deposit account, from anyone. If the deposit account does not exist
-    /// yet (a deal not created, or one that ended), a wallet would create it first: so does this.
+    /// (a deal that ended or was closed), a wallet would create it first: so does this.
     #[flow]
     fn deposit(&mut self) {
         let Some(d) = self.any_deal() else { return };
         let from = self.pick(PEOPLE);
         let have = self.vault_balance(&d);
         let amount = match self.pick(6) {
-            0 | 1 | 2 => d.amount.saturating_sub(have).max(1), // exactly enough
+            0..=2 => d.amount.saturating_sub(have).max(1), // exactly enough
             3 => d.amount.saturating_sub(have).saturating_sub(1).max(1), // one short
             4 => self.trident.random_from_range(1..1_000),
             _ => self.amount(),
@@ -447,18 +358,7 @@ impl FuzzTest {
         }
         let mut ixs = vec![];
         if self.trident.get_account(&d.vault).lamports() == 0 {
-            ixs.push(Instruction {
-                program_id: ATA_PROGRAM,
-                accounts: vec![
-                    AccountMeta::new(self.people[from], true),
-                    AccountMeta::new(d.vault, false),
-                    AccountMeta::new_readonly(d.escrow, false),
-                    AccountMeta::new_readonly(self.mint, false),
-                    AccountMeta::new_readonly(SYSTEM_PROGRAM, false),
-                    AccountMeta::new_readonly(TOKEN_PROGRAM, false),
-                ],
-                data: vec![1],
-            });
+            ixs.push(self.make_ata_ix(from, d.vault, d.escrow));
         }
         let mut data = vec![3u8];
         data.extend_from_slice(&amount.to_le_bytes());
@@ -474,35 +374,24 @@ impl FuzzTest {
         let ok = self.send(&ixs, "deposit");
         assert!(ok, "a plain transfer to a deposit address must land");
         // The newest deal at this address owns what arrives, live or not. An ended one's deposit
-        // account is stranded for good, since its address never reopens; a never-funded one that
-        // was closed keeps it until the same buyer reopens the id, which adopts it.
+        // account waits for `recover_late`; a never-funded one that was closed keeps it until the
+        // same buyer reopens the id, which adopts it.
         let latest = self.latest_at(&d.escrow);
         self.deals[latest].deposited += amount;
     }
 
-    /// Anyone makes someone's refund address, the standard idempotent way: what the sender of an
-    /// ending does first when the buyer has none.
+    /// Anyone makes someone's standard account, the idempotent way: what the sender of a way out
+    /// does first when the buyer has none and is paid.
     #[flow]
     fn make_refund(&mut self) {
         let owner_i = self.pick(PEOPLE);
         let payer_i = self.pick(PEOPLE);
-        let ix = Instruction {
-            program_id: ATA_PROGRAM,
-            accounts: vec![
-                AccountMeta::new(self.people[payer_i], true),
-                AccountMeta::new(self.refunds[owner_i], false),
-                AccountMeta::new_readonly(self.people[owner_i], false),
-                AccountMeta::new_readonly(self.mint, false),
-                AccountMeta::new_readonly(SYSTEM_PROGRAM, false),
-                AccountMeta::new_readonly(TOKEN_PROGRAM, false),
-            ],
-            data: vec![1],
-        };
+        let ix = self.make_ata_ix(payer_i, self.refunds[owner_i], self.people[owner_i]);
         let ok = self.send(&[ix], "make_refund");
         assert!(ok, "making a standard token account, or finding it there, must land");
     }
 
-    /// What a buyer's app does: send exactly what is missing and record it, in one transaction.
+    /// What a buyer's app does: send exactly what is missing and mark it, in one transaction.
     #[flow]
     fn fund_and_mark(&mut self) {
         let Some(i) = self.latest_deal() else { return };
@@ -512,7 +401,7 @@ impl FuzzTest {
         }
         let have = self.vault_balance(&d);
         let missing = d.amount.saturating_sub(have);
-        let buyer_i = self.people.iter().position(|p| *p == d.buyer).unwrap();
+        let buyer_i = self.index_of(&d.buyer);
         let mut ixs = vec![];
         if missing > 0 {
             let mut data = vec![3u8];
@@ -527,14 +416,9 @@ impl FuzzTest {
                 data,
             });
         }
-        // The funding can be observed before the seller accepts, too.
-        let marks = d.funded_at == 0;
+        let marks = !d.marked();
         if marks {
-            ixs.push(Instruction {
-                program_id: PROGRAM_ID,
-                accounts: vec![AccountMeta::new(d.escrow, false), AccountMeta::new_readonly(d.vault, false)],
-                data: disc("global", "mark_funded").to_vec(),
-            });
+            ixs.push(self.mark_ix(&d));
         }
         if ixs.is_empty() {
             return;
@@ -553,12 +437,11 @@ impl FuzzTest {
         let Some(i) = self.latest_deal() else { return };
         let d = self.deals[i].clone();
         let balance = self.vault_balance(&d);
-        let valid = d.live() && d.funded_at == 0 && balance >= d.amount;
-        let ix = Instruction {
-            program_id: PROGRAM_ID,
-            accounts: vec![AccountMeta::new(d.escrow, false), AccountMeta::new_readonly(d.vault, false)],
-            data: disc("global", "mark_funded").to_vec(),
-        };
+        let vault_exists = self.lamports(&d.vault) > 0;
+        let valid = d.live() && vault_exists && !d.marked() && balance >= d.amount;
+        let ix = self.mark_ix(&d);
+        // Trident's runtime moves its clock on by the wall-clock seconds that pass after each
+        // transaction, so the time the program saw is the one read before sending, not after.
         let now = self.now();
         let ok = self.send(&[ix], "mark_funded");
         assert_eq!(ok, valid, "I4/I7 mark_funded: model {valid}, program {ok}");
@@ -568,76 +451,28 @@ impl FuzzTest {
     }
 
     #[flow]
-    fn object(&mut self) {
-        let Some(i) = self.latest_deal() else { return };
-        let d = self.deals[i].clone();
-        let actor = self.actor_for(&d, "object");
-        let now = self.now();
-        let balance = self.vault_balance(&d);
-        let valid = (|| {
-            if !d.live() || !d.accepted() || actor != d.buyer || d.locked || balance < d.amount {
-                return false;
-            }
-            let mut dd = d.clone();
-            if dd.funded_at == 0 {
-                dd.funded_at = now;
-            }
-            let Some(start) = dd.clock_start() else { return false };
-            match dd.silence_ends(start) {
-                Some(ends) => now <= ends,
-                None => false,
-            }
-        })();
-        let ix = Instruction {
-            program_id: PROGRAM_ID,
-            accounts: vec![
-                AccountMeta::new(d.escrow, false),
-                AccountMeta::new_readonly(d.vault, false),
-                AccountMeta::new_readonly(actor, true),
-            ],
-            data: disc("global", "object").to_vec(),
-        };
-        let ok = self.send(&[ix], "object");
-        assert_eq!(ok, valid, "I4/I7 object: model {valid}, program {ok}");
-        if ok {
-            if self.deals[i].funded_at == 0 {
-                self.deals[i].funded_at = now;
-            }
-            self.deals[i].locked = true;
-        }
-    }
-
-    #[flow]
-    fn approve(&mut self) {
-        self.ending("approve");
+    fn release_to_seller(&mut self) {
+        self.way_out("release_to_seller");
     }
     #[flow]
-    fn release_by_silence(&mut self) {
-        self.ending("release_by_silence");
+    fn release_to_buyer(&mut self) {
+        self.way_out("release_to_buyer");
     }
     #[flow]
-    fn agree(&mut self) {
-        self.ending("agree");
+    fn split(&mut self) {
+        self.way_out("split");
     }
     #[flow]
     fn arbitrate(&mut self) {
-        self.ending("arbitrate");
+        self.way_out("arbitrate");
     }
     #[flow]
-    fn cancel_buyer(&mut self) {
-        self.ending("cancel_buyer");
-    }
-    #[flow]
-    fn cancel_seller(&mut self) {
-        self.ending("cancel_seller");
-    }
-    #[flow]
-    fn withdraw(&mut self) {
-        self.ending("withdraw");
+    fn timer_release(&mut self) {
+        self.way_out("timer_release");
     }
     #[flow]
     fn close_unfunded(&mut self) {
-        self.ending("close_unfunded");
+        self.way_out("close_unfunded");
     }
 
     /// SOL sent to an escrow's address, live or ended. It never counts as funding; a sweep takes it
@@ -669,7 +504,7 @@ impl FuzzTest {
         let Some(d) = self.any_deal() else { return };
         let i = self.latest_at(&d.escrow);
         let d = self.deals[i].clone();
-        let payer_i = self.people.iter().position(|p| *p == d.rent_payer).unwrap();
+        let payer_i = self.index_of(&d.rent_payer);
         let rp_i = if self.pick(10) == 0 { self.pick(PEOPLE) } else { payer_i };
         let lamports = self.lamports(&d.escrow);
         let excess = lamports.saturating_sub(self.escrow_min);
@@ -695,15 +530,228 @@ impl FuzzTest {
     }
 
     /// Late money back to the buyer. Anyone sends it, usually on an ended escrow, usually naming
-    /// the buyer's refund address.
+    /// the buyer's standard account.
     #[flow]
     fn recover_late(&mut self) {
         let Some(i) = self.ended_deal().or_else(|| self.latest_deal()) else { return };
-        let d = self.deals[i].clone();
         let caller_i = self.pick(PEOPLE);
-        let buyer_i = self.people.iter().position(|p| *p == d.buyer).unwrap();
-        let buyer_key = if self.pick(20) == 0 { self.person() } else { d.buyer };
-        let refund = match self.pick(20) {
+        let wrong_buyer = self.pick(20) == 0;
+        let refund_choice = self.pick(20);
+        self.send_recover_late(i, caller_i, wrong_buyer, refund_choice);
+    }
+
+    /// Time moves: by a random stretch, or to a second either side of a deal's timer.
+    #[flow]
+    fn time_passes(&mut self) {
+        let target = match (self.pick(3), self.latest_deal()) {
+            (0, Some(i)) => {
+                let Some(due) = self.deals[i].timer_due() else { return };
+                due.saturating_add(self.trident.random_from_range(-1..=1))
+            }
+            _ => self.now().saturating_add(match self.pick(4) {
+                0 => self.trident.random_from_range(1..120),
+                1 => self.trident.random_from_range(1..DAY),
+                _ => self.trident.random_from_range(1..4 * DAY),
+            }),
+        };
+        // The cluster clock never runs backwards.
+        if target > self.now() && target < T0 + 100_000 * DAY {
+            self.trident.warp_to_timestamp(target);
+        }
+    }
+
+    #[end]
+    fn end(&mut self) {
+        self.nothing_is_stuck();
+        self.check_everything();
+        let mut all = std::collections::BTreeMap::new();
+        std::mem::swap(&mut all, &mut self.counts);
+        for (k, c) in all {
+            self.trident.record_accumulator(&format!("{k} accepted"), c.accepted as f64);
+            self.trident.record_accumulator(&format!("{k} refused"), c.refused as f64);
+        }
+    }
+
+    // -- the ways out ---------------------------------------------------------------------------
+
+    fn way_out(&mut self, name: &'static str) {
+        let Some(i) = self.latest_deal() else { return };
+        let d = self.deals[i].clone();
+        let now = self.now();
+        let actor = self.actor_for(&d, name);
+        let second = if self.pick(4) == 0 { self.person() } else { d.seller };
+        let bps: u16 = match self.pick(5) {
+            0 => BPS + self.trident.random_from_range(1..100),
+            1 => 0,
+            2 => BPS,
+            _ => self.trident.random_from_range(0..=BPS),
+        };
+        let buyer_i = self.index_of(&d.buyer);
+        let seller_i = self.index_of(&d.seller);
+        let payer_i = self.index_of(&d.rent_payer);
+        // The buyer's slot: its standard account, or now and then another account it holds, or
+        // anyone's. Only the standard account is right, by address.
+        let buyer_account = self.pick_account(buyer_i);
+        // The seller's slot: any account the seller holds is right, if it exists.
+        let seller_account = self.pick_account(seller_i);
+        // The timer's one slot: whichever side it names, or now and then the other.
+        let timer_side = d.timer.map(|(_, side)| side).unwrap_or(BUYER);
+        let anyone = self.pick(PEOPLE);
+        let to_account = match (timer_side, self.pick(8)) {
+            (_, 0) => self.pick_account(anyone),
+            (BUYER, _) => buyer_account,
+            _ => seller_account,
+        };
+        let rp_i = if self.pick(20) == 0 { self.pick(PEOPLE) } else { payer_i };
+
+        let balance = self.vault_balance(&d);
+        let vault_exists = self.lamports(&d.vault) > 0;
+        let funded = balance >= d.amount;
+        let buyer_right = buyer_account == self.refunds[buyer_i];
+        let buyer_live = self.lamports(&self.refunds[buyer_i].clone()) > 0;
+        let seller_right = self.holder_of(&seller_account) == Some(d.seller) && self.lamports(&seller_account) > 0;
+
+        // (valid, to_seller, to_buyer)
+        let expect: (bool, u64, u64) = if !d.live() || !vault_exists || rp_i != payer_i {
+            (false, 0, 0)
+        } else {
+            match name {
+                "release_to_seller" => (actor == d.buyer && funded && seller_right, balance, 0),
+                "release_to_buyer" => (actor == d.seller && funded && buyer_right && buyer_live, 0, balance),
+                "split" | "arbitrate" => {
+                    let signed = if name == "split" {
+                        actor == d.buyer && second == d.seller
+                    } else {
+                        d.arbiter.is_some() && Some(actor) == d.arbiter
+                    };
+                    let to_seller = share(balance, bps.min(BPS));
+                    let to_buyer = balance - to_seller;
+                    let ok = signed && bps <= BPS && funded && buyer_right && seller_right && (to_buyer == 0 || buyer_live);
+                    (ok, to_seller, to_buyer)
+                }
+                "timer_release" => {
+                    let due = d.timer_due().map_or(false, |due| now >= due);
+                    let to_right = match timer_side {
+                        BUYER => to_account == self.refunds[buyer_i] && buyer_live,
+                        _ => self.holder_of(&to_account) == Some(d.seller) && self.lamports(&to_account) > 0,
+                    };
+                    let (s, b) = if timer_side == SELLER { (balance, 0) } else { (0, balance) };
+                    (d.timer.is_some() && due && funded && to_right, s, b)
+                }
+                "close_unfunded" => {
+                    let closer = actor == d.buyer || actor == d.seller || actor == d.rent_payer;
+                    (closer && !funded && buyer_right && (balance == 0 || buyer_live), 0, balance)
+                }
+                _ => unreachable!(),
+            }
+        };
+
+        let mut metas = vec![AccountMeta::new(d.escrow, false), AccountMeta::new(d.vault, false)];
+        match name {
+            "release_to_seller" => metas.push(AccountMeta::new(seller_account, false)),
+            "release_to_buyer" | "close_unfunded" => metas.push(AccountMeta::new(buyer_account, false)),
+            "timer_release" => metas.push(AccountMeta::new(to_account, false)),
+            _ => {
+                metas.push(AccountMeta::new(buyer_account, false));
+                metas.push(AccountMeta::new(seller_account, false));
+            }
+        }
+        metas.push(AccountMeta::new(self.people[rp_i], false));
+        metas.push(AccountMeta::new_readonly(TOKEN_PROGRAM, false));
+        let mut data = disc("global", name).to_vec();
+        match name {
+            "timer_release" => {}
+            "split" => {
+                metas.push(AccountMeta::new_readonly(actor, true));
+                metas.push(AccountMeta::new_readonly(second, true));
+                data.extend_from_slice(&bps.to_le_bytes());
+            }
+            "arbitrate" => {
+                metas.push(AccountMeta::new_readonly(actor, true));
+                data.extend_from_slice(&bps.to_le_bytes());
+            }
+            _ => metas.push(AccountMeta::new_readonly(actor, true)),
+        }
+        let paid_to = |name: &str| match name {
+            "release_to_seller" => (seller_account, Pubkey::default()),
+            "timer_release" if timer_side == SELLER => (to_account, Pubkey::default()),
+            "timer_release" | "release_to_buyer" | "close_unfunded" => (Pubkey::default(), self.refunds[buyer_i]),
+            _ => (seller_account, self.refunds[buyer_i]),
+        };
+        let (seller_paid_at, buyer_paid_at) = paid_to(name);
+        let before_s = self.token_balance(&seller_paid_at);
+        let before_b = self.token_balance(&buyer_paid_at);
+        let escrow_rent = self.lamports(&d.escrow);
+        let vault_rent = self.lamports(&d.vault);
+        let before_rp: Vec<u64> = (0..PEOPLE).map(|k| self.lamports(&self.people[k].clone())).collect();
+
+        let ok = self.send(&[Instruction { program_id: PROGRAM_ID, accounts: metas, data }], name);
+        let (valid, to_seller, to_buyer) = expect;
+        assert_eq!(ok, valid, "I4/I7 {name}: model {valid}, program {ok} (deal {d:?}, balance {balance}, now {now})");
+        if !ok {
+            return;
+        }
+        assert!(self.authorized(&d, name, actor, second, now), "I5 {name}: money moved without an authority named at creation");
+        if name == "timer_release" {
+            assert!(d.timer_due().is_some_and(|due| now >= due), "I12 timer_release: paid before it was due");
+        }
+        let got_s = self.token_balance(&seller_paid_at) - before_s;
+        let got_b = self.token_balance(&buyer_paid_at) - before_b;
+        assert_eq!((got_s, got_b), (to_seller, to_buyer), "I2 {name}: each side's share");
+        assert_eq!(got_s + got_b, balance, "I2 {name}: every unit the deposit account held, and no more");
+        assert_eq!(balance, d.deposited, "I1 {name}: the deposit account held exactly what was sent");
+        // A never-funded escrow gives both rents back and leaves nothing; every other ending gives
+        // back the deposit account's and keeps the escrow account as the receipt.
+        let returned = if name == "close_unfunded" { escrow_rent + vault_rent } else { vault_rent };
+        for k in 0..PEOPLE {
+            let want = if k == payer_i { before_rp[k] + returned } else { before_rp[k] };
+            assert_eq!(self.lamports(&self.people[k].clone()), want, "I3 {name}: rent to the rent payer and to nobody else (person {k})");
+        }
+        assert_eq!(self.lamports(&d.vault), 0, "{name}: deposit account closed");
+        if name == "close_unfunded" {
+            assert_eq!(self.lamports(&d.escrow), 0, "{name}: an escrow that never held the amount leaves nothing");
+            self.deals[i].closed = true;
+        } else {
+            let account = self.trident.get_account(&d.escrow);
+            assert_eq!(account.lamports(), escrow_rent, "I3/I8 {name}: the receipt keeps its own rent");
+            let b = &account.data()[8..];
+            let outcome = ["release_to_seller", "release_to_buyer", "split", "arbitrate", "timer_release"]
+                .iter()
+                .position(|n| *n == name)
+                .unwrap() as u8;
+            assert_eq!(b[AT_STATUS], ENDED, "I8 {name}: the receipt says Ended");
+            assert_eq!(b[AT_OUTCOME], outcome, "I8 {name}: the receipt's outcome");
+            assert_eq!(u64::from_le_bytes(b[AT_TO_SELLER..AT_TO_SELLER + 8].try_into().unwrap()), to_seller, "I8 {name}: to the seller");
+            assert_eq!(u64::from_le_bytes(b[AT_TO_BUYER..AT_TO_BUYER + 8].try_into().unwrap()), to_buyer, "I8 {name}: to the buyer");
+            assert_eq!(i64::from_le_bytes(b[AT_FUNDED_AT..AT_FUNDED_AT + 8].try_into().unwrap()), d.funded_at, "I8 {name}: when the funding was marked");
+            assert_eq!(b[AT_CREATOR], d.creator, "I8 {name}: who created it");
+            self.deals[i].ended = true;
+            self.deals[i].receipt = Some(account.data().to_vec());
+        }
+        self.deals[i].deposited = 0;
+    }
+
+    /// I5, apart from the model's verdict: the authority a way out needs, and nothing else.
+    fn authorized(&self, d: &Deal, name: &str, actor: Pubkey, second: Pubkey, now: i64) -> bool {
+        match name {
+            "release_to_seller" => actor == d.buyer,
+            "release_to_buyer" => actor == d.seller,
+            "split" => actor == d.buyer && second == d.seller,
+            "arbitrate" => d.arbiter == Some(actor),
+            "timer_release" => d.timer.is_some() && d.timer_due().is_some_and(|due| now >= due),
+            // Nothing was dealt: whatever is there goes back to the buyer.
+            "close_unfunded" => actor == d.buyer || actor == d.seller || actor == d.rent_payer,
+            _ => false,
+        }
+    }
+
+    /// `recover_late` on deal `i`, naming the right accounts unless told otherwise, checked
+    /// against the model and, when it lands, against I1, I3, I8 and I9.
+    fn send_recover_late(&mut self, i: usize, caller_i: usize, wrong_buyer: bool, refund_choice: usize) {
+        let d = self.deals[i].clone();
+        let buyer_i = self.index_of(&d.buyer);
+        let buyer_key = if wrong_buyer { self.people[(buyer_i + 1) % PEOPLE] } else { d.buyer };
+        let refund = match refund_choice {
             0 => self.tokens[buyer_i], // the buyer's, but not its standard account
             1 => self.refunds[caller_i],
             _ => self.refunds[buyer_i],
@@ -739,7 +787,7 @@ impl FuzzTest {
         }
         assert_eq!(late, d.deposited, "I1 recover_late: the deposit account held exactly what was sent after the end");
         let got = self.token_balance(&self.refunds[buyer_i].clone()) - before_ref;
-        assert_eq!(got, late, "I9 recover_late: every late unit to the buyer's refund address");
+        assert_eq!(got, late, "I9 recover_late: every late unit to the buyer's standard account");
         assert_eq!(self.lamports(&d.vault), 0, "recover_late: the deposit account closed again");
         let made = if refund_existed { 0 } else { self.lamports(&self.refunds[buyer_i].clone()) };
         for k in 0..PEOPLE {
@@ -753,7 +801,7 @@ impl FuzzTest {
             assert_eq!(
                 self.lamports(&self.people[k].clone()),
                 want,
-                "I3 recover_late: the deposit account's rent to the buyer, the refund address paid for by the caller (person {k})"
+                "I3 recover_late: the deposit account's rent to the buyer, the standard account paid for by the caller (person {k})"
             );
         }
         let escrow_after = self.trident.get_account(&d.escrow);
@@ -762,353 +810,64 @@ impl FuzzTest {
         self.deals[i].deposited = 0;
     }
 
-    /// Everything back from a funded escrow the seller never accepted, after its timeout. Anyone
-    /// sends it, usually naming the buyer's refund address and the recorded rent payer.
-    #[flow]
-    fn close_unaccepted(&mut self) {
-        let Some(i) = self.latest_deal() else { return };
-        let d = self.deals[i].clone();
-        let now = self.now();
-        let caller_i = self.pick(PEOPLE);
-        let buyer_i = self.people.iter().position(|p| *p == d.buyer).unwrap();
-        let payer_i = self.people.iter().position(|p| *p == d.rent_payer).unwrap();
-        let buyer_key = if self.pick(20) == 0 { self.person() } else { d.buyer };
-        let refund = match self.pick(20) {
-            0 => self.tokens[buyer_i],
-            1 => self.refunds[caller_i],
-            _ => self.refunds[buyer_i],
-        };
-        let rp_i = if self.pick(20) == 0 { self.pick(PEOPLE) } else { payer_i };
-        let balance = self.vault_balance(&d);
-        let accounts_right = buyer_key == d.buyer && refund == self.refunds[buyer_i] && rp_i == payer_i;
-        let valid = d.live()
-            && accounts_right
-            && !d.accepted()
-            && balance >= d.amount
-            && matches!(d.unaccepted_timeout(), Ok(Some(t)) if now > t);
-        self.send_close_unaccepted(i, caller_i, buyer_key, refund, rp_i, valid, now);
-    }
-
-    /// Time moves: by a random stretch, or to a second either side of a deal's own boundary.
-    #[flow]
-    fn time_passes(&mut self) {
-        let target = match (self.pick(3), self.latest_deal()) {
-            (0, Some(i)) => {
-                let d = self.deals[i].clone();
-                let start = d.clock_start().unwrap_or(d.created_at);
-                let mut marks: Vec<i64> = d.silence_ends(start).into_iter().collect();
-                marks.extend(d.steps.iter().filter_map(|(o, _)| start.checked_add(*o)));
-                if let Some(Some(deadline)) = d.unfunded_deadline() {
-                    marks.push(deadline);
-                }
-                if let Ok(Some(timeout)) = d.unaccepted_timeout() {
-                    marks.push(timeout);
-                }
-                if marks.is_empty() {
-                    return;
-                }
-                let m = marks[self.pick(marks.len())];
-                m.saturating_add(self.trident.random_from_range(-1..=1))
-            }
-            _ => self.now().saturating_add(match self.pick(4) {
-                0 => self.trident.random_from_range(1..120),
-                1 => self.trident.random_from_range(1..DAY),
-                _ => self.trident.random_from_range(1..8 * DAY),
-            }),
-        };
-        // The cluster clock never runs backwards.
-        if target > self.now() && target < T0 + 100_000 * DAY {
-            self.trident.warp_to_timestamp(target);
-        }
-    }
-
-    #[end]
-    fn end(&mut self) {
-        self.every_unaccepted_escrow_comes_back();
-        self.check_everything();
-        let mut all = std::collections::BTreeMap::new();
-        std::mem::swap(&mut all, &mut self.counts);
-        for (k, c) in all {
-            self.trident.record_accumulator(&format!("{k} accepted"), c.accepted as f64);
-            self.trident.record_accumulator(&format!("{k} refused"), c.refused as f64);
-        }
-    }
-
-    // -- the endings ----------------------------------------------------------------------------
-
-    fn ending(&mut self, name: &'static str) {
-        let Some(i) = self.latest_deal() else { return };
-        let d = self.deals[i].clone();
-        let now = self.now();
-        let balance = self.vault_balance(&d);
-        let actor = self.actor_for(&d, name);
-        let second = if self.pick(4) == 0 { self.person() } else { d.seller };
-        let bps: u16 = match self.pick(5) {
-            0 => BPS + self.trident.random_from_range(1..100),
-            1 => 0,
-            2 => BPS,
-            _ => self.trident.random_from_range(0..=BPS),
-        };
-        let refund = name == "withdraw" || name == "close_unfunded";
-
-        // Which token accounts and rent payer the sender names: usually the right ones. The two
-        // exits that pay the seller nothing name no seller account at all.
-        let buyer_i = self.people.iter().position(|p| *p == d.buyer).unwrap();
-        let seller_i = self.people.iter().position(|p| *p == d.seller).unwrap();
-        let payer_i = self.people.iter().position(|p| *p == d.rent_payer).unwrap();
-        // The buyer's slot: its refund address, or now and then another account the buyer owns, or
-        // anyone's. Only the refund address is right (session 14), and it must exist.
-        let buyer_account = match self.pick(20) {
-            0 => self.tokens[buyer_i],
-            1 => {
-                let k = self.pick(PEOPLE);
-                if self.coin() { self.refunds[k] } else { self.tokens[k] }
-            }
-            _ => self.refunds[buyer_i],
-        };
-        let st_i = if !refund && self.pick(20) == 0 { self.pick(PEOPLE) } else { seller_i };
-        let rp_i = if self.pick(20) == 0 { self.pick(PEOPLE) } else { payer_i };
-        let accounts_right = buyer_account == self.refunds[buyer_i] && st_i == seller_i && rp_i == payer_i;
-        let refund_exists = self.lamports(&self.refunds[buyer_i].clone()) > 0;
-        let vault_exists = self.trident.get_account(&d.vault).lamports() > 0;
-
-        let funded = balance >= d.amount;
-        let accepted = d.accepted();
-        // (valid, to_seller)
-        let expect: (bool, u64) = if !d.live() || !accounts_right || !refund_exists || !vault_exists {
-            (false, 0)
-        } else {
-            match name {
-                "approve" => (
-                    actor == d.buyer && !d.locked && bps <= BPS && funded && (accepted || bps == BPS),
-                    share(d.amount, bps),
-                ),
-                "agree" => (accepted && actor == d.buyer && second == d.seller && bps <= BPS && funded, share(d.amount, bps)),
-                "arbitrate" => (
-                    accepted && d.arbiter.is_some() && Some(actor) == d.arbiter && bps <= BPS && funded,
-                    share(d.amount, bps),
-                ),
-                "release_by_silence" => {
-                    let ok = accepted
-                        && !d.locked
-                        && funded
-                        && d.clock_start().and_then(|s| d.silence_ends(s)).map_or(false, |ends| now > ends);
-                    (ok, d.amount)
-                }
-                "cancel_buyer" => {
-                    if !accepted || actor != d.buyer || d.locked || !funded {
-                        (false, 0)
-                    } else {
-                        match d.clock_start().map(|s| d.current_step(s, now)) {
-                            Some(Ok(Some(refund))) => (true, share(d.amount, BPS - refund)),
-                            _ => (false, 0),
-                        }
-                    }
-                }
-                "cancel_seller" => (accepted && actor == d.seller && funded, 0),
-                "withdraw" => (!accepted && actor == d.buyer && funded, 0),
-                "close_unfunded" => {
-                    let ok = !funded
-                        && (actor == d.buyer
-                            || actor == d.seller
-                            || (actor == d.rent_payer
-                                && match d.unfunded_deadline() {
-                                    Some(None) => true,
-                                    Some(Some(deadline)) => now > deadline,
-                                    None => false,
-                                }));
-                    (ok, 0)
-                }
-                _ => unreachable!(),
-            }
-        };
-
-        let mut metas = vec![
-            AccountMeta::new(d.escrow, false),
-            AccountMeta::new(d.vault, false),
-            AccountMeta::new(buyer_account, false),
-        ];
-        if !refund {
-            metas.push(AccountMeta::new(self.tokens[st_i], false));
-        }
-        metas.push(AccountMeta::new(self.people[rp_i], false));
-        metas.push(AccountMeta::new_readonly(TOKEN_PROGRAM, false));
-        let mut data = disc("global", name).to_vec();
-        match name {
-            "release_by_silence" => {}
-            "agree" => {
-                metas.push(AccountMeta::new_readonly(actor, true));
-                metas.push(AccountMeta::new_readonly(second, true));
-                data.extend_from_slice(&bps.to_le_bytes());
-            }
-            "approve" | "arbitrate" => {
-                metas.push(AccountMeta::new_readonly(actor, true));
-                data.extend_from_slice(&bps.to_le_bytes());
-            }
-            _ => metas.push(AccountMeta::new_readonly(actor, true)),
-        }
-        let before_b = self.token_balance(&self.refunds[buyer_i].clone());
-        let before_s = self.token_balance(&self.tokens[seller_i].clone());
-        let escrow_rent = self.lamports(&d.escrow);
-        let vault_rent = self.lamports(&d.vault);
-        let before_rp: Vec<u64> = (0..PEOPLE).map(|k| self.lamports(&self.people[k].clone())).collect();
-
-        let ok = self.send(&[Instruction { program_id: PROGRAM_ID, accounts: metas, data }], name);
-        let (valid, to_seller) = expect;
-        assert_eq!(ok, valid, "I4/I7 {name}: model {valid}, program {ok} (deal {d:?}, balance {balance}, now {now})");
-        if !ok {
-            return;
-        }
-        let got_s = self.token_balance(&self.tokens[seller_i].clone()) - before_s;
-        let got_b = self.token_balance(&self.refunds[buyer_i].clone()) - before_b;
-        assert_eq!(got_s, to_seller, "{name}: the seller's share");
-        assert_eq!(got_b + got_s, balance, "I2 {name}: every unit the deposit account held, and no more");
-        assert_eq!(balance, d.deposited, "I1 {name}: the deposit account held exactly what was sent");
-        if name == "cancel_buyer" {
-            let bps = d.clock_start().and_then(|s| d.current_step(s, now).ok().flatten()).unwrap();
-            assert!(
-                u128::from(d.amount - to_seller) * u128::from(BPS) >= u128::from(d.amount) * u128::from(bps),
-                "I5 cancel_buyer: refund {} of {} is below {bps} bps",
-                d.amount - to_seller,
-                d.amount
-            );
-        }
-        // A never-funded escrow gives both rents back and leaves nothing; every other ending gives
-        // back the deposit account's and keeps the escrow account as the receipt.
-        let returned = if name == "close_unfunded" { escrow_rent + vault_rent } else { vault_rent };
-        for k in 0..PEOPLE {
-            let now_l = self.lamports(&self.people[k].clone());
-            let want = if k == payer_i { before_rp[k] + returned } else { before_rp[k] };
-            assert_eq!(now_l, want, "I3 {name}: rent to the rent payer and to nobody else (person {k})");
-        }
-        assert_eq!(self.lamports(&d.vault), 0, "{name}: deposit account closed");
-        if name == "close_unfunded" {
-            assert_eq!(self.lamports(&d.escrow), 0, "{name}: an escrow that never held the amount leaves nothing");
-            self.deals[i].closed = true;
-        } else {
-            let account = self.trident.get_account(&d.escrow);
-            assert_eq!(account.lamports(), escrow_rent, "I3/I8 {name}: the receipt keeps its own rent");
-            let b = &account.data()[8..];
-            let outcome = ["approve", "release_by_silence", "agree", "arbitrate", "cancel_buyer", "cancel_seller", "withdraw"]
-                .iter()
-                .position(|n| *n == name)
-                .unwrap() as u8;
-            assert_eq!(b[276], 4, "I8 {name}: the receipt says Ended");
-            assert_eq!(b[294], outcome, "I8 {name}: the receipt's outcome");
-            assert_eq!(u64::from_le_bytes(b[295..303].try_into().unwrap()), to_seller, "I8 {name}: to the seller");
-            assert_eq!(u64::from_le_bytes(b[303..311].try_into().unwrap()), balance - to_seller, "I8 {name}: to the buyer");
-            assert_eq!(i64::from_le_bytes(b[278..286].try_into().unwrap()), d.accepted_at, "I8 {name}: when the seller accepted, or never");
-            assert_eq!(i64::from_le_bytes(b[268..276].try_into().unwrap()), d.funded_at, "I8 {name}: when the funding was observed");
-            self.deals[i].ended = true;
-            self.deals[i].receipt = Some(account.data().to_vec());
-        }
-        self.deals[i].deposited = 0;
-    }
-
-    /// I11. Every funded escrow nobody accepted comes back to its buyer: observed if nobody had,
-    /// waited out, and closed by the sponsor, every unit to the buyer's refund address. Exempt only
-    /// a timeout the program refuses as an overflow, or one past the end of the model's clock
-    /// (the same bound `time_passes` keeps); `close_unaccepted`'s flow checks both refusals.
-    fn every_unaccepted_escrow_comes_back(&mut self) {
+    /// I11 and I9 at the end of every run. Every live escrow ends by the parties' own signatures:
+    /// a funded one by the buyer's release to the seller, a never-funded one by its rent payer's
+    /// close (the buyer's standard account made first when there is something to return). Then
+    /// every late payment at an ended escrow goes back to its buyer. After that, no deposit
+    /// account holds anything.
+    fn nothing_is_stuck(&mut self) {
         for i in 0..self.deals.len() {
             let d = self.deals[i].clone();
-            if !d.live() || d.accepted() || self.vault_balance(&d) < d.amount {
+            if !d.live() {
                 continue;
             }
-            if d.funded_at == 0 {
-                let now = self.now();
-                let ix = Instruction {
-                    program_id: PROGRAM_ID,
-                    accounts: vec![AccountMeta::new(d.escrow, false), AccountMeta::new_readonly(d.vault, false)],
-                    data: disc("global", "mark_funded").to_vec(),
-                };
-                let ok = self.send(&[ix], "mark_funded");
-                assert!(ok, "I11: anyone can observe the funding of an escrow nobody accepted");
-                self.deals[i].funded_at = now;
+            let balance = self.vault_balance(&d);
+            let buyer_i = self.index_of(&d.buyer);
+            let seller_i = self.index_of(&d.seller);
+            let payer_i = self.index_of(&d.rent_payer);
+            let (name, accounts, signer) = if balance >= d.amount {
+                ("release_to_seller", vec![self.tokens[seller_i]], d.buyer)
+            } else {
+                if balance > 0 {
+                    let ix = self.make_ata_ix(SPONSOR, self.refunds[buyer_i], d.buyer);
+                    assert!(self.send(&[ix], "make_refund"), "I11: anyone can make the buyer's standard account");
+                }
+                ("close_unfunded", vec![self.refunds[buyer_i]], d.rent_payer)
+            };
+            let mut metas = vec![AccountMeta::new(d.escrow, false), AccountMeta::new(d.vault, false)];
+            metas.extend(accounts.iter().map(|a| AccountMeta::new(*a, false)));
+            metas.push(AccountMeta::new(self.people[payer_i], false));
+            metas.push(AccountMeta::new_readonly(TOKEN_PROGRAM, false));
+            metas.push(AccountMeta::new_readonly(signer, true));
+            let ix = Instruction { program_id: PROGRAM_ID, accounts: metas, data: disc("global", name).to_vec() };
+            assert!(self.send(&[ix], name), "I11 {name}: a live escrow must always end by its parties ({d:?}, balance {balance})");
+            assert_eq!(balance, d.deposited, "I1 {name}");
+            if name == "close_unfunded" {
+                self.deals[i].closed = true;
+            } else {
+                self.deals[i].ended = true;
+                self.deals[i].receipt = Some(self.trident.get_account(&d.escrow).data().to_vec());
             }
+            self.deals[i].deposited = 0;
+            self.trident.record_accumulator("I11 live escrows ended at the end of a run", 1.0);
+        }
+        for i in 0..self.deals.len() {
             let d = self.deals[i].clone();
-            let Ok(Some(timeout)) = d.unaccepted_timeout() else { continue };
-            if timeout >= T0 + 100_000 * DAY {
+            if d.ended && self.lamports(&d.vault) > 0 && self.latest_at(&d.escrow) == i {
+                self.send_recover_late(i, SPONSOR, false, 2);
+                assert_eq!(self.lamports(&d.vault), 0, "I9: late money at an ended escrow always goes back");
+            }
+        }
+        // The newest deal at each address. One that was closed is skipped: money sent to a closed
+        // address waits for the same buyer to reopen the id (adversarial.rs pins that).
+        let mut seen = std::collections::HashSet::new();
+        for i in (0..self.deals.len()).rev() {
+            let d = self.deals[i].clone();
+            if !seen.insert(d.escrow) || d.closed {
                 continue;
             }
-            if self.now() <= timeout {
-                self.trident.warp_to_timestamp(timeout + 1);
-            }
-            let now = self.now();
-            let buyer_i = self.people.iter().position(|p| *p == d.buyer).unwrap();
-            let payer_i = self.people.iter().position(|p| *p == d.rent_payer).unwrap();
-            let refund = self.refunds[buyer_i];
-            self.send_close_unaccepted(i, SPONSOR, d.buyer, refund, payer_i, true, now);
-            self.trident.record_accumulator("I11 unaccepted escrows sent back", 1.0);
+            assert_eq!(self.vault_balance(&d), 0, "I11: nothing left in deposit account {}", d.vault);
         }
-    }
-
-    /// Sends `close_unaccepted` for deal `i` with the accounts given, checks the program agrees
-    /// with `valid`, and, when it lands, that every unit went to the buyer's refund address, the
-    /// deposit account's rent to the rent payer, and the receipt says `NeverAccepted`.
-    #[allow(clippy::too_many_arguments)]
-    fn send_close_unaccepted(&mut self, i: usize, caller_i: usize, buyer_key: Pubkey, refund: Pubkey, rp_i: usize, valid: bool, now: i64) {
-        let d = self.deals[i].clone();
-        let buyer_i = self.people.iter().position(|p| *p == d.buyer).unwrap();
-        let payer_i = self.people.iter().position(|p| *p == d.rent_payer).unwrap();
-        let balance = self.vault_balance(&d);
-        let vault_lamports = self.lamports(&d.vault);
-        let escrow_lamports = self.lamports(&d.escrow);
-        let refund_existed = self.lamports(&self.refunds[buyer_i].clone()) > 0;
-        let before_ref = self.token_balance(&self.refunds[buyer_i].clone());
-        let before: Vec<u64> = (0..PEOPLE).map(|k| self.lamports(&self.people[k].clone())).collect();
-        let ix = Instruction {
-            program_id: PROGRAM_ID,
-            accounts: vec![
-                AccountMeta::new(d.escrow, false),
-                AccountMeta::new(d.vault, false),
-                AccountMeta::new_readonly(buyer_key, false),
-                AccountMeta::new(refund, false),
-                AccountMeta::new_readonly(self.mint, false),
-                AccountMeta::new(self.people[rp_i], false),
-                AccountMeta::new(self.people[caller_i], true),
-                AccountMeta::new_readonly(TOKEN_PROGRAM, false),
-                AccountMeta::new_readonly(ATA_PROGRAM, false),
-                AccountMeta::new_readonly(SYSTEM_PROGRAM, false),
-            ],
-            data: disc("global", "close_unaccepted").to_vec(),
-        };
-        let ok = self.send(&[ix], "close_unaccepted");
-        assert_eq!(ok, valid, "I4/I7/I11 close_unaccepted: model {valid}, program {ok} (deal {d:?}, balance {balance}, now {now})");
-        if !ok {
-            return;
-        }
-        assert_eq!(balance, d.deposited, "I1 close_unaccepted: the deposit account held exactly what was sent");
-        let got = self.token_balance(&self.refunds[buyer_i].clone()) - before_ref;
-        assert_eq!(got, balance, "I2/I11 close_unaccepted: every unit to the buyer's refund address");
-        assert_eq!(self.lamports(&d.vault), 0, "close_unaccepted: deposit account closed");
-        let made = if refund_existed { 0 } else { self.lamports(&self.refunds[buyer_i].clone()) };
-        for k in 0..PEOPLE {
-            let mut want = before[k];
-            if k == payer_i {
-                want += vault_lamports;
-            }
-            if k == caller_i {
-                want -= made;
-            }
-            assert_eq!(
-                self.lamports(&self.people[k].clone()),
-                want,
-                "I3 close_unaccepted: the deposit account's rent to the rent payer, the refund address paid for by the caller (person {k})"
-            );
-        }
-        let account = self.trident.get_account(&d.escrow);
-        assert_eq!(account.lamports(), escrow_lamports, "I3/I8 close_unaccepted: the receipt keeps its own rent");
-        let b = &account.data()[8..];
-        assert_eq!(b[276], 4, "I8 close_unaccepted: the receipt says Ended");
-        assert_eq!(b[294], 7, "I8 close_unaccepted: the outcome is NeverAccepted");
-        assert_eq!(u64::from_le_bytes(b[295..303].try_into().unwrap()), 0, "I8 close_unaccepted: nothing to the seller");
-        assert_eq!(u64::from_le_bytes(b[303..311].try_into().unwrap()), balance, "I8 close_unaccepted: everything to the buyer");
-        assert_eq!(i64::from_le_bytes(b[278..286].try_into().unwrap()), 0, "I8 close_unaccepted: never accepted");
-        assert_eq!(i64::from_le_bytes(b[268..276].try_into().unwrap()), d.funded_at, "I8 close_unaccepted: when the funding was observed");
-        self.deals[i].ended = true;
-        self.deals[i].receipt = Some(account.data().to_vec());
-        self.deals[i].deposited = 0;
     }
 
     // -- invariants -----------------------------------------------------------------------------
@@ -1156,9 +915,57 @@ impl FuzzTest {
         ok
     }
 
+    fn mark_ix(&self, d: &Deal) -> Instruction {
+        Instruction {
+            program_id: PROGRAM_ID,
+            accounts: vec![AccountMeta::new(d.escrow, false), AccountMeta::new_readonly(d.vault, false)],
+            data: disc("global", "mark_funded").to_vec(),
+        }
+    }
+
+    /// The associated token program's idempotent create: `payer_i` pays for `owner`'s standard
+    /// account `account` for the mint.
+    fn make_ata_ix(&self, payer_i: usize, account: Pubkey, owner: Pubkey) -> Instruction {
+        Instruction {
+            program_id: ATA_PROGRAM,
+            accounts: vec![
+                AccountMeta::new(self.people[payer_i], true),
+                AccountMeta::new(account, false),
+                AccountMeta::new_readonly(owner, false),
+                AccountMeta::new_readonly(self.mint, false),
+                AccountMeta::new_readonly(SYSTEM_PROGRAM, false),
+                AccountMeta::new_readonly(TOKEN_PROGRAM, false),
+            ],
+            data: vec![1],
+        }
+    }
+
+    /// Someone's token account: usually `k`'s everyday one or standard one, now and then anyone's.
+    fn pick_account(&mut self, k: usize) -> Pubkey {
+        match self.pick(20) {
+            0 => {
+                let j = self.pick(PEOPLE);
+                if self.coin() { self.refunds[j] } else { self.tokens[j] }
+            }
+            1..=6 => self.tokens[k],
+            _ => self.refunds[k],
+        }
+    }
+
+    /// Who holds a token account the model knows: nobody hands one over in this model.
+    fn holder_of(&self, account: &Pubkey) -> Option<Pubkey> {
+        (0..PEOPLE).find(|&k| self.tokens[k] == *account || self.refunds[k] == *account).map(|k| self.people[k])
+    }
+
+    fn index_of(&self, key: &Pubkey) -> usize {
+        self.people.iter().position(|p| p == key).unwrap()
+    }
     fn person(&mut self) -> Pubkey {
         let k = self.pick(PEOPLE);
         self.people[k]
+    }
+    fn side(&mut self) -> u8 {
+        if self.coin() { SELLER } else { BUYER }
     }
     fn pick(&mut self, n: usize) -> usize {
         self.trident.random_from_range(0..n)
@@ -1173,6 +980,9 @@ impl FuzzTest {
         self.trident.get_account(k).lamports()
     }
     fn token_balance(&mut self, k: &Pubkey) -> u64 {
+        if *k == Pubkey::default() {
+            return 0;
+        }
         token_amount_of(&self.trident.get_account(k))
     }
     fn vault_balance(&mut self, d: &Deal) -> u64 {
@@ -1181,7 +991,6 @@ impl FuzzTest {
     fn amount(&mut self) -> u64 {
         match self.pick(18) {
             0 => 0,
-            6..=17 => self.trident.random_from_range(1..10_000_000),
             1 => 1,
             2 => self.trident.random_from_range(2..10),
             3 => self.trident.random_from_range(1..1_000_000_000_000),
@@ -1192,7 +1001,7 @@ impl FuzzTest {
     /// Who sends an instruction: usually the key the rules want, sometimes any party, sometimes anyone.
     fn actor_for(&mut self, d: &Deal, name: &str) -> Pubkey {
         let right = match name {
-            "cancel_seller" | "accept" => d.seller,
+            "release_to_buyer" => d.seller,
             "arbitrate" => d.arbiter.unwrap_or(d.buyer),
             "close_unfunded" => match self.pick(3) {
                 0 => d.buyer,

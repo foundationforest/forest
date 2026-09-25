@@ -5,13 +5,16 @@
 // address, so the link's recipient is the escrow's own address. Nothing in the link is trusted
 // by the program: whatever arrives, from wherever, counts.
 //
-// A pay link is one-time. It is built only for an escrow still waiting for its money: open or
-// accepted, its funding not yet observed. Money that arrives anyway after the end is not lost:
-// anyone can send it back to the buyer (`recover_late`), but the link should not invite it.
+// A pay link is one-time, and asks only for what is missing. Every way out pays out the whole
+// balance, whatever it is, so a second payment before the end is not sent back: it goes wherever
+// the way out sends the rest (to the seller, on a release). The link is built only for an escrow
+// still waiting for money, from its account and its deposit account's balance as read from the
+// chain, and names exactly the amount still missing. Money that arrives after the end is not
+// lost: anyone can send it back to the buyer (`recover_late`).
 //
-// The invoice pattern: the seller opens the escrow, naming the buyer, so it is accepted from the
-// start, and sends the buyer its pay link. The buyer's app reads the escrow, checks its terms
-// (`checkTerms`) and pays by a plain transfer, then approves when the work is done, or at once.
+// The invoice pattern: the seller opens the escrow, naming the buyer, and sends the buyer its pay
+// link. The buyer's app reads the escrow, checks its options (`optionsNotAgreed`), and pays by a
+// plain transfer, then releases when the work is done, or at once.
 
 import type { PublicKey, TransactionInstruction } from '@solana/web3.js'
 
@@ -31,22 +34,27 @@ export function formatAmount(baseUnits: bigint, decimals: number): string {
   return frac.length ? `${whole}.${frac}` : whole
 }
 
-/** Whether an escrow, as read from the chain, still waits for its money: open or accepted, and its funding not yet observed. */
-export function awaitingPayment(account: Pick<EscrowAccount, 'status' | 'fundedAt'>): boolean {
-  return (account.status === 'open' || account.status === 'accepted') && account.fundedAt === null
+/**
+ * Whether an escrow, as read from the chain with its deposit account's balance, still waits for
+ * money: open (the funding not marked) and holding less than the amount.
+ */
+export function awaitingPayment(account: Pick<EscrowAccount, 'status' | 'amount'>, balance: bigint): boolean {
+  return account.status === 'open' && balance < account.amount
 }
 
 /**
- * A Solana Pay transfer request for the escrow's amount: `solana:<escrow>?amount=…&spl-token=…`.
- * The escrow's address is also the `reference`, so the funding transfer can be found by looking
- * up that address. `label` and `message` are what a wallet shows; crypto is not in them.
+ * A Solana Pay transfer request for what the escrow still misses:
+ * `solana:<escrow>?amount=…&spl-token=…`. The escrow's address is also the `reference`, so the
+ * funding transfer can be found by looking up that address. `label` and `message` are what a
+ * wallet shows; crypto is not in them.
  *
- * One-time: built only from the escrow account as read from the chain, and refused unless the
- * escrow still waits for its money (`awaitingPayment`). A link to an escrow that is funded, locked
- * or ended would only invite a second payment.
+ * One-time: built only from the escrow account and its deposit account's balance as read from the
+ * chain, and refused unless the escrow still waits for money (`awaitingPayment`).
  */
 export function solanaPayUrl(args: {
   account: EscrowAccount
+  /** The deposit account's balance now, in base units: 0 if it does not exist yet. */
+  balance: bigint
   decimals: number
   label?: string
   message?: string
@@ -54,13 +62,13 @@ export function solanaPayUrl(args: {
   programId?: PublicKey
 }): string {
   const a = args.account
-  if (!awaitingPayment(a)) {
+  if (!awaitingPayment(a, args.balance)) {
     throw new Error(`this escrow is ${a.status === 'ended' ? 'ended' : 'already funded'}: a pay link is one-time`)
   }
-  return payUrl({ ...args, escrow: escrowAddress(a.buyer, a.id, args.programId ?? PROGRAM_ID), mint: a.mint, amount: a.amount })
+  return payUrl({ ...args, escrow: escrowAddress(a.buyer, a.id, args.programId ?? PROGRAM_ID), mint: a.mint, amount: a.amount - args.balance })
 }
 
-/** The link itself, for an escrow known to be waiting for its money. */
+/** The link itself, for an escrow known to be waiting for `amount`. */
 function payUrl(args: {
   escrow: PublicKey
   mint: PublicKey
@@ -83,8 +91,8 @@ function payUrl(args: {
 /**
  * The seller's side of an invoice: the `create` the seller signs (as creator; `payer` pays the
  * rent), the escrow's address, its deposit address, and the pay link to send the buyer. The terms
- * are checked before anything is built, as for any `create`. The escrow is new, so it is waiting
- * for its money by construction; a link built later comes from `solanaPayUrl` and the chain.
+ * are checked before anything is built, as for any `create`. The escrow is new, so the link asks
+ * for the whole amount; a link built later comes from `solanaPayUrl` and the chain.
  */
 export function invoice(args: {
   seller: PublicKey
@@ -95,7 +103,6 @@ export function invoice(args: {
   terms: Terms
   label?: string
   message?: string
-  now?: bigint
   programId?: PublicKey
 }): { escrow: PublicKey; deposit: PublicKey; instruction: TransactionInstruction; url: string } {
   const instruction = invoiceIx(args)
@@ -104,13 +111,6 @@ export function invoice(args: {
     escrow,
     deposit: vaultAddress(escrow, args.mint),
     instruction,
-    url: payUrl({
-      escrow,
-      mint: args.mint,
-      amount: args.terms.amount,
-      decimals: args.decimals,
-      label: args.label,
-      message: args.message,
-    }),
+    url: payUrl({ escrow, mint: args.mint, amount: args.terms.amount, decimals: args.decimals, label: args.label, message: args.message }),
   }
 }
