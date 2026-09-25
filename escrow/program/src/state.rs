@@ -35,7 +35,7 @@ pub enum Status {
     /// `mark_funded` saw the deposit account holding the amount, at `funded_at`.
     Funded,
     /// Paid out. `outcome`, `ended_at`, `to_seller` and `to_buyer` say how. Nothing more happens
-    /// to it but late money going back to the buyer and rent above the minimum to the rent payer.
+    /// to it but late money going back to the buyer and rent above the minimum to the creator.
     Ended,
 }
 
@@ -54,14 +54,15 @@ pub enum Outcome {
     TimerReleased,
 }
 
-/// One escrow. Address: `["escrow", buyer, id]`. Never closed once it has ended: its deposit
-/// account closes and its rent goes back, and this account stays as the receipt. Only an escrow
-/// that never held the amount is closed (`close_unfunded`).
+/// One escrow. Address: `["escrow", creator, id]`, where the creator is the party who opened it
+/// and signed `create`: nobody can open an escrow at an address another key will use. Never
+/// closed once it has ended: its deposit account closes and its rent goes back, and this account
+/// stays as the receipt. Only an escrow that never held the amount is closed (`close_unfunded`).
 #[account]
 pub struct Escrow {
     /// `crate::VERSION`. A v2 is a new program; this says which program's rules a record followed.
     pub version: u8,
-    /// Chosen at creation, so one buyer can hold many escrows. The app picks it at random.
+    /// Chosen at creation, so one creator can open many escrows. The app picks it at random.
     pub id: u64,
     pub buyer: Pubkey,
     pub seller: Pubkey,
@@ -71,9 +72,11 @@ pub struct Escrow {
     /// The deposit account: this escrow's associated token account for `mint`. Derivable from
     /// the escrow address alone, and recorded so a reader need not derive it.
     pub vault: Pubkey,
-    /// Who paid the creation rent. The deposit account's rent goes back here at the end; the
-    /// escrow account's stays in the receipt, unless the escrow never held the amount.
-    pub rent_payer: Pubkey,
+    /// Where every rent refund goes: the creator's key, always, whoever fronted the rent. The
+    /// deposit account's rent comes back here at the end; the escrow account's stays in the
+    /// receipt, unless the escrow never held the amount; rent above the minimum is swept here. A
+    /// fee payer that fronts the rent charges the person for it, so the refund goes to the person.
+    pub rent_recipient: Pubkey,
     /// The agreed amount, in the mint's base units. The escrow is funded once the deposit account
     /// holds at least this much; every way out then pays out the whole balance, whatever it is.
     pub amount: u64,
@@ -101,7 +104,7 @@ pub struct Escrow {
 
 impl Escrow {
     /// version 0, id 1..9, buyer 9..41, seller 41..73, arbiter 73..105, mint 105..137,
-    /// vault 137..169, rent_payer 169..201, amount 201..209, creator 209, timer_days 210..212,
+    /// vault 137..169, rent_recipient 169..201, amount 201..209, creator 209, timer_days 210..212,
     /// timer_to 212, created_at 213..221, funded_at 221..229, status 229, bump 230,
     /// ended_at 231..239, outcome 239, to_seller 240..248, to_buyer 248..256.
     pub const LEN: usize = 1 + 8 + 32 * 6 + 8 + 1 + 2 + 1 + 8 + 8 + 1 + 1 + 8 + 1 + 8 + 8;
@@ -120,11 +123,25 @@ impl Escrow {
         matches!(self.status, Status::Open | Status::Funded)
     }
 
+    /// The key the escrow's address is derived from: the party who opened it.
+    pub fn creator_key(&self) -> Pubkey {
+        match self.creator {
+            Side::Buyer => self.buyer,
+            Side::Seller => self.seller,
+        }
+    }
+
     /// The buyer's refund address: the buyer's associated token account for the mint, the one
     /// account any payout to the buyer lands in. Computed from two keys fixed at creation, so
     /// nothing more is stored, and nobody who sends an instruction can name another.
     pub fn refund_address(&self) -> Pubkey {
         anchor_spl::associated_token::get_associated_token_address(&self.buyer, &self.mint)
+    }
+
+    /// The seller's payout address: the seller's associated token account for the mint, the one
+    /// account any payout to the seller lands in. The same rule as the buyer's.
+    pub fn payout_address(&self) -> Pubkey {
+        anchor_spl::associated_token::get_associated_token_address(&self.seller, &self.mint)
     }
 
     /// When the timer is due: `timer_days` whole days after the funding was marked. `None` with no

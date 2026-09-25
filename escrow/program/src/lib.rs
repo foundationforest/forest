@@ -24,9 +24,13 @@
 //!
 //! When an escrow ends, its deposit account closes and the escrow account stays, with the outcome
 //! and the amounts in it: its address is a permanent receipt, and never holds a second deal. Money
-//! paid to it after the end goes back to the buyer, and rent above the minimum goes back to whoever
-//! paid it; neither changes the receipt. An escrow that never held the amount is closed instead,
+//! paid to it after the end goes back to the buyer, and rent above the minimum goes back to the
+//! creator; neither changes the receipt. An escrow that never held the amount is closed instead,
 //! both accounts and both rents.
+//!
+//! The escrow's address comes from the creator's key and an id, and the creator signs: nobody can
+//! open an escrow at an address another key will use. Each party is paid only at its standard
+//! token account for the mint. Every rent refund goes to the creator, whoever fronted the rent.
 //!
 //! This program is sealed per version. The upgrade authority is removed at deploy, so nothing
 //! here can be patched: read `escrow/README.md` for what is sealed and what the app decides.
@@ -57,9 +61,9 @@ pub const NATIVE_MINT: Pubkey = pubkey!("So1111111111111111111111111111111111111
 /// What `create` carries. Sealed: clients build these bytes forever.
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
 pub struct CreateArgs {
-    /// Any number the buyer has not used before. The app picks it at random.
+    /// Any number the creator has not used before. The app picks it at random.
     pub id: u64,
-    /// Whose money it is. The escrow's address is derived from this key and the id, whoever opens it.
+    /// Whose money it is.
     pub buyer: Pubkey,
     pub seller: Pubkey,
     /// In the mint's base units: what the deal is for, and what funds it.
@@ -75,7 +79,9 @@ pub mod forest_escrow {
     use super::*;
 
     /// Open an escrow. The buyer or the seller signs as its creator (an escrow the seller opens is
-    /// an invoice); whoever pays the rent signs too and is recorded.
+    /// an invoice). The address comes from the creator's key and the id, so only that key can open
+    /// an escrow there. Whoever pays the rent signs too, and is not recorded: every rent refund
+    /// goes to the creator.
     ///
     /// The deposit account is the escrow's associated token account for the mint, so any wallet
     /// that can send this token "to an address" lands it here: the address to send to is the
@@ -87,6 +93,16 @@ pub mod forest_escrow {
         require_keys_neq!(args.seller, buyer, EscrowError::SameParty);
         require_keys_neq!(buyer, Pubkey::default(), EscrowError::EmptyKey);
         require_keys_neq!(args.seller, Pubkey::default(), EscrowError::EmptyKey);
+        // Neither party may be the escrow itself or its deposit account. Neither can ever sign, so
+        // a party named as either could never give, agree or be paid: the escrow's standard
+        // account is the deposit account itself, and the deposit account's is a token account no
+        // key can move anything out of. Money paid in would leave only by a way out that pays that
+        // party nothing, if the creator set one.
+        let escrow_key = ctx.accounts.escrow.key();
+        let vault_key = ctx.accounts.vault.key();
+        for party in [buyer, args.seller] {
+            require!(party != escrow_key && party != vault_key, EscrowError::PartyIsTheEscrow);
+        }
         let creator_key = ctx.accounts.creator.key();
         let creator = if creator_key == buyer {
             Side::Buyer
@@ -123,7 +139,7 @@ pub mod forest_escrow {
         escrow.arbiter = arbiter;
         escrow.mint = ctx.accounts.mint.key();
         escrow.vault = ctx.accounts.vault.key();
-        escrow.rent_payer = ctx.accounts.payer.key();
+        escrow.rent_recipient = creator_key;
         escrow.amount = args.amount;
         escrow.creator = creator;
         escrow.timer_days = timer_days;
@@ -147,7 +163,7 @@ pub mod forest_escrow {
             arbiter,
             mint: escrow.mint,
             vault: escrow.vault,
-            rent_payer: escrow.rent_payer,
+            rent_recipient: escrow.rent_recipient,
             amount: args.amount,
             timer_days,
             timer_to,
@@ -179,7 +195,7 @@ pub mod forest_escrow {
         require!(a.escrow.live(), EscrowError::Ended);
         require_keys_eq!(a.buyer.key(), a.escrow.buyer, EscrowError::NotTheBuyer);
         let balance = funded_balance(&a.escrow, &a.vault)?;
-        let rent = pay_out(&a.escrow, &a.vault, &[(a.seller_tokens.to_account_info(), balance)], &a.rent_payer, &a.token_program)?;
+        let rent = pay_out(&a.escrow, &a.vault, &[(a.seller_tokens.to_account_info(), balance)], &a.rent_recipient, &a.token_program)?;
         end(&mut ctx.accounts.escrow, Outcome::ReleasedToSeller, balance, balance, 0, rent)
     }
 
@@ -189,7 +205,7 @@ pub mod forest_escrow {
         require!(a.escrow.live(), EscrowError::Ended);
         require_keys_eq!(a.seller.key(), a.escrow.seller, EscrowError::NotTheSeller);
         let balance = funded_balance(&a.escrow, &a.vault)?;
-        let rent = pay_out(&a.escrow, &a.vault, &[(a.buyer_tokens.to_account_info(), balance)], &a.rent_payer, &a.token_program)?;
+        let rent = pay_out(&a.escrow, &a.vault, &[(a.buyer_tokens.to_account_info(), balance)], &a.rent_recipient, &a.token_program)?;
         end(&mut ctx.accounts.escrow, Outcome::ReleasedToBuyer, balance, 0, balance, rent)
     }
 
@@ -204,7 +220,7 @@ pub mod forest_escrow {
         let balance = funded_balance(&a.escrow, &a.vault)?;
         let (to_seller, to_buyer) = divide(balance, seller_bps)?;
         let payouts = [(a.seller_tokens.to_account_info(), to_seller), (a.buyer_tokens.to_account_info(), to_buyer)];
-        let rent = pay_out(&a.escrow, &a.vault, &payouts, &a.rent_payer, &a.token_program)?;
+        let rent = pay_out(&a.escrow, &a.vault, &payouts, &a.rent_recipient, &a.token_program)?;
         end(&mut ctx.accounts.escrow, Outcome::Split, balance, to_seller, to_buyer, rent)
     }
 
@@ -219,7 +235,7 @@ pub mod forest_escrow {
         let balance = funded_balance(&a.escrow, &a.vault)?;
         let (to_seller, to_buyer) = divide(balance, seller_bps)?;
         let payouts = [(a.seller_tokens.to_account_info(), to_seller), (a.buyer_tokens.to_account_info(), to_buyer)];
-        let rent = pay_out(&a.escrow, &a.vault, &payouts, &a.rent_payer, &a.token_program)?;
+        let rent = pay_out(&a.escrow, &a.vault, &payouts, &a.rent_recipient, &a.token_program)?;
         end(&mut ctx.accounts.escrow, Outcome::Arbitrated, balance, to_seller, to_buyer, rent)
     }
 
@@ -235,7 +251,8 @@ pub mod forest_escrow {
         let now = Clock::get()?.unix_timestamp;
         require!(now >= due, EscrowError::TimerNotDue);
         let balance = funded_balance(&a.escrow, &a.vault)?;
-        // Anyone sends this, so the account it pays is checked against the side the timer names.
+        // Anyone sends this, so the account it pays is checked against the side the timer names:
+        // that side's standard token account for the mint, by address, as on every way out.
         let to = a.to.to_account_info();
         let (to_seller, to_buyer) = match a.escrow.timer_to {
             Side::Buyer => {
@@ -243,36 +260,33 @@ pub mod forest_escrow {
                 (0, balance)
             }
             Side::Seller => {
-                check_sellers_account(&to, &a.escrow)?;
+                require_keys_eq!(to.key(), a.escrow.payout_address(), EscrowError::NotTheSellersAccount);
                 (balance, 0)
             }
         };
-        let rent = pay_out(&a.escrow, &a.vault, &[(to, balance)], &a.rent_payer, &a.token_program)?;
+        let rent = pay_out(&a.escrow, &a.vault, &[(to, balance)], &a.rent_recipient, &a.token_program)?;
         end(&mut ctx.accounts.escrow, Outcome::TimerReleased, balance, to_seller, to_buyer, rent)
     }
 
     /// Close an escrow that never held the amount. Whatever the deposit account holds goes back
-    /// to the buyer, both accounts close, and both rents go back to whoever paid them: nothing was
-    /// dealt, so there is no receipt to keep. The buyer, the seller or the rent payer may do this
-    /// at any time. A funded escrow cannot be closed at all.
+    /// to the buyer, both accounts close, and both rents go back to the creator: nothing was
+    /// dealt, so there is no receipt to keep. The buyer or the seller may do this at any time;
+    /// whoever fronted the rent has no say. A funded escrow cannot be closed at all.
     pub fn close_unfunded(ctx: Context<CloseUnfunded>) -> Result<()> {
         let a = &ctx.accounts;
         require!(a.escrow.live(), EscrowError::Ended);
         let closer = a.closer.key();
-        require!(
-            closer == a.escrow.buyer || closer == a.escrow.seller || closer == a.escrow.rent_payer,
-            EscrowError::NotACloser
-        );
+        require!(closer == a.escrow.buyer || closer == a.escrow.seller, EscrowError::NotACloser);
         let balance = a.vault.amount;
         require!(balance < a.escrow.amount, EscrowError::StillFunded);
-        let vault_rent = pay_out(&a.escrow, &a.vault, &[(a.buyer_tokens.to_account_info(), balance)], &a.rent_payer, &a.token_program)?;
-        // Anchor closes the escrow account to the rent payer after this returns (`close`).
+        let vault_rent = pay_out(&a.escrow, &a.vault, &[(a.buyer_tokens.to_account_info(), balance)], &a.rent_recipient, &a.token_program)?;
+        // Anchor closes the escrow account to the creator after this returns (`close`).
         let escrow_rent = a.escrow.to_account_info().lamports();
         emit!(Closed {
             escrow: a.escrow.key(),
             closed_by: closer,
             to_buyer: balance,
-            rent_payer: a.escrow.rent_payer,
+            rent_recipient: a.escrow.rent_recipient,
             // Two accounts' lamports cannot add up past the total supply of SOL, far below u64::MAX.
             rent_lamports: vault_rent.saturating_add(escrow_rent),
         });
@@ -283,16 +297,18 @@ pub mod forest_escrow {
     /// that has ended: whatever sits at its deposit address, which a later payment made again,
     /// goes to the buyer's refund address, the buyer's associated token account for the mint,
     /// which the caller makes first, at the caller's cost, if it does not exist. The deposit
-    /// account closes again and its rent goes to the buyer, whose wallet almost always made it.
+    /// account closes again and its rent goes to the buyer, whose wallet almost always made it:
+    /// this rent was not fronted at creation, so it is not the creator's.
     /// The receipt does not change: it says what the deal was, and this was not part of it.
     pub fn recover_late(ctx: Context<RecoverLate>) -> Result<()> {
         let escrow = &ctx.accounts.escrow;
         require!(escrow.status == Status::Ended, EscrowError::NotEnded);
         let late = ctx.accounts.vault.amount;
 
+        let creator = escrow.creator_key();
         let id = escrow.id.to_le_bytes();
         let bump = [escrow.bump];
-        let seeds: &[&[u8]] = &[ESCROW_SEED, escrow.buyer.as_ref(), &id, &bump];
+        let seeds: &[&[u8]] = &[ESCROW_SEED, creator.as_ref(), &id, &bump];
         let signer: &[&[&[u8]]] = &[seeds];
         if late > 0 {
             token::transfer(
@@ -323,12 +339,12 @@ pub mod forest_escrow {
     }
 
     /// Move the lamports the escrow account holds above the current rent-exempt minimum to the
-    /// rent payer recorded at creation.
+    /// rent recipient recorded at creation: the creator.
     ///
     /// Solana is part way through a cut to the rent rate, and receipts are never closed, so each
     /// one would keep the difference forever: only an instruction in this program can move it.
-    /// Anyone may call it, on an escrow in any state: the only possible destination is the rent
-    /// payer, and the account keeps exactly its minimum. SOL sent to the escrow's address leaves
+    /// Anyone may call it, on an escrow in any state: the only possible destination is the
+    /// creator, and the account keeps exactly its minimum. SOL sent to the escrow's address leaves
     /// the same way.
     pub fn sweep_rent(ctx: Context<SweepRent>) -> Result<()> {
         let account = ctx.accounts.escrow.to_account_info();
@@ -342,7 +358,7 @@ pub mod forest_escrow {
         //                                              the minimum yields zero and the call fails
         //   require excess > 0
         //   account.lamports -= excess                 subtract; never assign a computed total
-        //   rent_payer.lamports += excess              the recorded rent payer; never a caller's choice
+        //   rent_recipient.lamports += excess          the recorded creator; never a caller's choice
         //   assert account.lamports == minimum         still exactly rent exempt
         //
         // The account's bytes are not changed, it is never grown, realloc'd or closed, and no
@@ -354,7 +370,7 @@ pub mod forest_escrow {
         require!(excess > 0, EscrowError::NothingToSweep);
 
         **account.try_borrow_mut_lamports()? -= excess;
-        **ctx.accounts.rent_payer.try_borrow_mut_lamports()? += excess;
+        **ctx.accounts.rent_recipient.try_borrow_mut_lamports()? += excess;
         require_eq!(account.lamports(), minimum, EscrowError::NothingToSweep);
 
         emit!(RentSwept { escrow: account.key(), lamports: excess, left: minimum });
@@ -380,20 +396,8 @@ fn divide(balance: u64, seller_bps: u16) -> Result<(u64, u64)> {
     Ok((to_seller, to_buyer))
 }
 
-/// A seller's token account, checked by hand where the account is named only when the seller is
-/// paid (`timer_release`): owned by the classic token program, initialized, for the escrow's mint,
-/// and held by the seller. The same rule `token::mint` and `token::authority` check elsewhere.
-fn check_sellers_account(info: &AccountInfo, escrow: &Escrow) -> Result<()> {
-    require_keys_eq!(*info.owner, token::ID, EscrowError::NotTheSellersAccount);
-    let data = info.try_borrow_data()?;
-    let account = TokenAccount::try_deserialize(&mut &data[..])?;
-    require_keys_eq!(account.owner, escrow.seller, EscrowError::NotTheSellersAccount);
-    require_keys_eq!(account.mint, escrow.mint, EscrowError::NotTheSellersAccount);
-    Ok(())
-}
-
 /// Pays each `(account, amount)` from the deposit account, skipping zeros, then closes the
-/// deposit account with its rent to the rent payer. Returns the rent returned.
+/// deposit account with its rent to the creator. Returns the rent returned.
 ///
 /// The amounts are the whole balance, split by the caller. Nothing here re-checks their sum: the
 /// token program refuses a transfer above what the deposit account holds, and refuses to close it
@@ -402,12 +406,13 @@ fn pay_out<'info>(
     escrow: &Account<'info, Escrow>,
     vault: &Account<'info, TokenAccount>,
     payouts: &[(AccountInfo<'info>, u64)],
-    rent_payer: &UncheckedAccount<'info>,
+    rent_recipient: &UncheckedAccount<'info>,
     token_program: &Program<'info, Token>,
 ) -> Result<u64> {
+    let creator = escrow.creator_key();
     let id = escrow.id.to_le_bytes();
     let bump = [escrow.bump];
-    let seeds: &[&[u8]] = &[ESCROW_SEED, escrow.buyer.as_ref(), &id, &bump];
+    let seeds: &[&[u8]] = &[ESCROW_SEED, creator.as_ref(), &id, &bump];
     let signer: &[&[&[u8]]] = &[seeds];
 
     for (to, amount) in payouts {
@@ -428,7 +433,7 @@ fn pay_out<'info>(
         token_program.key(),
         CloseAccount {
             account: vault.to_account_info(),
-            destination: rent_payer.to_account_info(),
+            destination: rent_recipient.to_account_info(),
             authority: escrow.to_account_info(),
         },
         signer,
@@ -454,7 +459,7 @@ fn end(escrow: &mut Account<Escrow>, outcome: Outcome, balance: u64, to_seller: 
         to_seller,
         to_buyer,
         ended_at: now,
-        rent_payer: escrow.rent_payer,
+        rent_recipient: escrow.rent_recipient,
         rent_lamports,
     });
     Ok(())
@@ -469,7 +474,7 @@ pub struct Create<'info> {
         init,
         payer = payer,
         space = 8 + Escrow::LEN,
-        seeds = [ESCROW_SEED, args.buyer.as_ref(), &args.id.to_le_bytes()],
+        seeds = [ESCROW_SEED, creator.key().as_ref(), &args.id.to_le_bytes()],
         bump
     )]
     pub escrow: Account<'info, Escrow>,
@@ -485,10 +490,11 @@ pub struct Create<'info> {
         associated_token::token_program = token_program,
     )]
     pub vault: Account<'info, TokenAccount>,
-    /// The buyer, proposing; or the seller, invoicing.
+    /// The buyer, proposing; or the seller, invoicing. The escrow's address comes from this key,
+    /// and every rent refund goes to it.
     pub creator: Signer<'info>,
-    /// Pays the rent of both accounts. Gets the deposit account's back when the escrow ends, and
-    /// both back if it never held the amount. Either party, or any key paying for them.
+    /// Fronts the rent of both accounts: either party, or any key paying for them, such as a fee
+    /// payer that charges the person for it. Gets nothing back; the refunds go to the creator.
     #[account(mut)]
     pub payer: Signer<'info>,
     /// A classic SPL Token mint. `anchor_spl::token::Mint` is owned by the classic token program
@@ -509,16 +515,17 @@ pub struct MarkFunded<'info> {
 /// The buyer gives. Names only the seller's account: the buyer is paid nothing.
 #[derive(Accounts)]
 pub struct ReleaseToSeller<'info> {
-    #[account(mut, has_one = vault, has_one = rent_payer)]
+    #[account(mut, has_one = vault, has_one = rent_recipient)]
     pub escrow: Account<'info, Escrow>,
     #[account(mut)]
     pub vault: Account<'info, TokenAccount>,
-    /// Any token account for the mint that the seller holds.
-    #[account(mut, token::mint = escrow.mint, token::authority = escrow.seller)]
-    pub seller_tokens: Account<'info, TokenAccount>,
-    /// CHECK: the key recorded at creation, checked by `has_one`. It only receives lamports.
+    /// CHECK: the seller's standard token account for the mint, by address, and no other account;
+    /// the same rule as the buyer's (see `ReleaseToBuyer`).
+    #[account(mut, address = escrow.payout_address() @ EscrowError::NotTheSellersAccount)]
+    pub seller_tokens: UncheckedAccount<'info>,
+    /// CHECK: the creator's key, recorded at creation, checked by `has_one`. It only receives lamports.
     #[account(mut)]
-    pub rent_payer: UncheckedAccount<'info>,
+    pub rent_recipient: UncheckedAccount<'info>,
     pub token_program: Program<'info, Token>,
     /// Checked against the escrow's buyer in the handler.
     pub buyer: Signer<'info>,
@@ -527,7 +534,7 @@ pub struct ReleaseToSeller<'info> {
 /// The seller gives. Names only the buyer's account: the seller is paid nothing.
 #[derive(Accounts)]
 pub struct ReleaseToBuyer<'info> {
-    #[account(mut, has_one = vault, has_one = rent_payer)]
+    #[account(mut, has_one = vault, has_one = rent_recipient)]
     pub escrow: Account<'info, Escrow>,
     #[account(mut)]
     pub vault: Account<'info, TokenAccount>,
@@ -537,9 +544,9 @@ pub struct ReleaseToBuyer<'info> {
     /// classic token account for the same mint, not frozen.
     #[account(mut, address = escrow.refund_address() @ EscrowError::NotTheRefundAddress)]
     pub buyer_tokens: UncheckedAccount<'info>,
-    /// CHECK: the key recorded at creation, checked by `has_one`. It only receives lamports.
+    /// CHECK: the creator's key, recorded at creation, checked by `has_one`. It only receives lamports.
     #[account(mut)]
-    pub rent_payer: UncheckedAccount<'info>,
+    pub rent_recipient: UncheckedAccount<'info>,
     pub token_program: Program<'info, Token>,
     /// Checked against the escrow's seller in the handler.
     pub seller: Signer<'info>,
@@ -548,7 +555,7 @@ pub struct ReleaseToBuyer<'info> {
 /// Both parties sign a split.
 #[derive(Accounts)]
 pub struct Split<'info> {
-    #[account(mut, has_one = vault, has_one = rent_payer)]
+    #[account(mut, has_one = vault, has_one = rent_recipient)]
     pub escrow: Account<'info, Escrow>,
     #[account(mut)]
     pub vault: Account<'info, TokenAccount>,
@@ -556,12 +563,13 @@ pub struct Split<'info> {
     /// see `ReleaseToBuyer`. It needs to exist only if the buyer's share is above zero.
     #[account(mut, address = escrow.refund_address() @ EscrowError::NotTheRefundAddress)]
     pub buyer_tokens: UncheckedAccount<'info>,
-    /// Any token account for the mint that the seller holds.
-    #[account(mut, token::mint = escrow.mint, token::authority = escrow.seller)]
-    pub seller_tokens: Account<'info, TokenAccount>,
-    /// CHECK: the key recorded at creation, checked by `has_one`. It only receives lamports.
+    /// CHECK: the seller's standard token account for the mint, by address, and no other account;
+    /// the same rule as the buyer's (see `ReleaseToBuyer`).
+    #[account(mut, address = escrow.payout_address() @ EscrowError::NotTheSellersAccount)]
+    pub seller_tokens: UncheckedAccount<'info>,
+    /// CHECK: the creator's key, recorded at creation, checked by `has_one`. It only receives lamports.
     #[account(mut)]
-    pub rent_payer: UncheckedAccount<'info>,
+    pub rent_recipient: UncheckedAccount<'info>,
     pub token_program: Program<'info, Token>,
     /// Checked against the escrow's buyer in the handler.
     pub buyer: Signer<'info>,
@@ -572,7 +580,7 @@ pub struct Split<'info> {
 /// The arbiter named at creation signs a split. The same accounts as `Split`, one signer.
 #[derive(Accounts)]
 pub struct Arbitrate<'info> {
-    #[account(mut, has_one = vault, has_one = rent_payer)]
+    #[account(mut, has_one = vault, has_one = rent_recipient)]
     pub escrow: Account<'info, Escrow>,
     #[account(mut)]
     pub vault: Account<'info, TokenAccount>,
@@ -580,12 +588,13 @@ pub struct Arbitrate<'info> {
     /// see `ReleaseToBuyer`. It needs to exist only if the buyer's share is above zero.
     #[account(mut, address = escrow.refund_address() @ EscrowError::NotTheRefundAddress)]
     pub buyer_tokens: UncheckedAccount<'info>,
-    /// Any token account for the mint that the seller holds.
-    #[account(mut, token::mint = escrow.mint, token::authority = escrow.seller)]
-    pub seller_tokens: Account<'info, TokenAccount>,
-    /// CHECK: the key recorded at creation, checked by `has_one`. It only receives lamports.
+    /// CHECK: the seller's standard token account for the mint, by address, and no other account;
+    /// the same rule as the buyer's (see `ReleaseToBuyer`).
+    #[account(mut, address = escrow.payout_address() @ EscrowError::NotTheSellersAccount)]
+    pub seller_tokens: UncheckedAccount<'info>,
+    /// CHECK: the creator's key, recorded at creation, checked by `has_one`. It only receives lamports.
     #[account(mut)]
-    pub rent_payer: UncheckedAccount<'info>,
+    pub rent_recipient: UncheckedAccount<'info>,
     pub token_program: Program<'info, Token>,
     /// Checked against the escrow's arbiter in the handler.
     pub arbiter: Signer<'info>,
@@ -594,18 +603,17 @@ pub struct Arbitrate<'info> {
 /// The timer pays one side, so it names one account. No signer: anyone may send it.
 #[derive(Accounts)]
 pub struct TimerRelease<'info> {
-    #[account(mut, has_one = vault, has_one = rent_payer)]
+    #[account(mut, has_one = vault, has_one = rent_recipient)]
     pub escrow: Account<'info, Escrow>,
     #[account(mut)]
     pub vault: Account<'info, TokenAccount>,
-    /// CHECK: checked in the handler against the side the timer names: the buyer's standard token
-    /// account for the mint, by address, when it pays the buyer; a token account for the mint the
-    /// seller holds, when it pays the seller (`check_sellers_account`).
+    /// CHECK: checked in the handler, by address, against the side the timer names: that side's
+    /// standard token account for the mint. The token program checks the rest when it is paid.
     #[account(mut)]
     pub to: UncheckedAccount<'info>,
-    /// CHECK: the key recorded at creation, checked by `has_one`. It only receives lamports.
+    /// CHECK: the creator's key, recorded at creation, checked by `has_one`. It only receives lamports.
     #[account(mut)]
-    pub rent_payer: UncheckedAccount<'info>,
+    pub rent_recipient: UncheckedAccount<'info>,
     pub token_program: Program<'info, Token>,
 }
 
@@ -613,7 +621,7 @@ pub struct TimerRelease<'info> {
 /// account, and only this kind. It pays the seller nothing and names no seller account.
 #[derive(Accounts)]
 pub struct CloseUnfunded<'info> {
-    #[account(mut, close = rent_payer, has_one = vault, has_one = rent_payer)]
+    #[account(mut, close = rent_recipient, has_one = vault, has_one = rent_recipient)]
     pub escrow: Account<'info, Escrow>,
     #[account(mut)]
     pub vault: Account<'info, TokenAccount>,
@@ -622,11 +630,11 @@ pub struct CloseUnfunded<'info> {
     /// escrow nobody paid closes without anyone making the buyer an account.
     #[account(mut, address = escrow.refund_address() @ EscrowError::NotTheRefundAddress)]
     pub buyer_tokens: UncheckedAccount<'info>,
-    /// CHECK: the key recorded at creation, checked by `has_one`. It only receives lamports.
+    /// CHECK: the creator's key, recorded at creation, checked by `has_one`. It only receives lamports.
     #[account(mut)]
-    pub rent_payer: UncheckedAccount<'info>,
+    pub rent_recipient: UncheckedAccount<'info>,
     pub token_program: Program<'info, Token>,
-    /// The buyer, the seller, or the rent payer; checked in the handler.
+    /// The buyer or the seller; checked in the handler.
     pub closer: Signer<'info>,
 }
 
@@ -663,14 +671,14 @@ pub struct RecoverLate<'info> {
     pub system_program: Program<'info, System>,
 }
 
-/// Rent above the minimum back to the rent payer: `sweep_rent`. No signer.
+/// Rent above the minimum back to the creator: `sweep_rent`. No signer.
 #[derive(Accounts)]
 pub struct SweepRent<'info> {
-    #[account(mut, has_one = rent_payer)]
+    #[account(mut, has_one = rent_recipient)]
     pub escrow: Account<'info, Escrow>,
-    /// CHECK: the key recorded at creation, checked by `has_one`. It only receives lamports.
+    /// CHECK: the creator's key, recorded at creation, checked by `has_one`. It only receives lamports.
     #[account(mut)]
-    pub rent_payer: UncheckedAccount<'info>,
+    pub rent_recipient: UncheckedAccount<'info>,
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -690,7 +698,7 @@ pub struct Created {
     pub arbiter: Pubkey,
     pub mint: Pubkey,
     pub vault: Pubkey,
-    pub rent_payer: Pubkey,
+    pub rent_recipient: Pubkey,
     pub amount: u64,
     /// 0 when there is no timer.
     pub timer_days: u16,
@@ -708,7 +716,7 @@ pub struct Funded {
 }
 
 /// Every ending of an escrow that held the amount. `balance` is what the deposit account held;
-/// `to_seller + to_buyer == balance`. The deposit account's rent went back to the rent payer; the
+/// `to_seller + to_buyer == balance`. The deposit account's rent went back to the creator; the
 /// escrow account stays, holding the same numbers, as the receipt.
 #[event]
 pub struct Ended {
@@ -719,19 +727,19 @@ pub struct Ended {
     pub to_seller: u64,
     pub to_buyer: u64,
     pub ended_at: i64,
-    pub rent_payer: Pubkey,
+    pub rent_recipient: Pubkey,
     pub rent_lamports: u64,
 }
 
 /// An escrow that never held the amount, closed. Whatever the deposit account held went back to
-/// the buyer; both accounts are gone and both rents went back to the rent payer. Not a receipt of
+/// the buyer; both accounts are gone and both rents went back to the creator. Not a receipt of
 /// anything: nothing was dealt.
 #[event]
 pub struct Closed {
     pub escrow: Pubkey,
     pub closed_by: Pubkey,
     pub to_buyer: u64,
-    pub rent_payer: Pubkey,
+    pub rent_recipient: Pubkey,
     pub rent_lamports: u64,
 }
 
@@ -744,7 +752,7 @@ pub struct RecoveredLate {
     pub rent_lamports: u64,
 }
 
-/// Lamports above the escrow account's rent-exempt minimum went to the rent payer; `left` is the
+/// Lamports above the escrow account's rent-exempt minimum went to the creator; `left` is the
 /// minimum it still holds.
 #[event]
 pub struct RentSwept {

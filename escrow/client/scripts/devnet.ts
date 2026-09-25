@@ -8,8 +8,8 @@
 // 2. The buyer proposes, with every option off; pays by a plain transfer; anyone marks it funded;
 //    both sign a 60/40 split of the whole balance; the receipt stays.
 //
-// A payer key pays every network fee and every rent, the way a fee payer would, so the parties hold
-// only test dollars. <dir> holds the devnet keypairs (payer, buyer, seller), read and never printed.
+// A payer key pays every network fee and fronts every rent, the way a fee payer would, so the
+// parties hold only test dollars; every rent refund goes to the party who opened the escrow. <dir> holds the devnet keypairs (payer, buyer, seller), read and never printed.
 // Everything public goes into devnet/devnet.json (FOREST_DEVNET_RECORD, FOREST_DEVNET_RPC as in the
 // registry script). Each step checks the chain first, so the script can be run again after a failure.
 
@@ -117,7 +117,7 @@ function receipt(e: EscrowAccount) {
     fundedAt: e.fundedAt?.toString() ?? null,
     creator: e.creator,
     endedAt: e.endedAt?.toString() ?? null,
-    rentPayer: e.rentPayer.toBase58(),
+    rentRecipient: e.rentRecipient.toBase58(),
   }
 }
 
@@ -163,7 +163,7 @@ save()
     const sig = await send(
       [
         createTransferInstruction(buyerTokens, inv.deposit, buyer.publicKey, e.amount),
-        releaseToSellerIx({ keys: keysOf(e, programId), sellerTokens, programId }),
+        releaseToSellerIx({ keys: keysOf(e, programId), programId }),
       ],
       [payer, buyer],
     )
@@ -186,7 +186,7 @@ save()
 {
   const d = deal('split', 'the buyer proposes 3.00 and pays; anyone marks it funded; both sign a 60/40 split')
   const terms = termsFor(post, { seller: seller.publicKey, amount: 3_000_000n, id: BigInt(d.id) })
-  const k = keysFor({ buyer: buyer.publicKey, payer: payer.publicKey, mint, terms, programId })
+  const k = keysFor({ buyer: buyer.publicKey, mint, terms, programId })
   d.escrow = k.escrow.toBase58()
   d.deposit = k.vault.toBase58()
   save()
@@ -211,7 +211,7 @@ save()
   }
   if (e.status === 'funded') {
     const sellerBefore = await tokens(sellerTokens)
-    const sig = await send([splitIx({ keys: k, sellerBps: 6_000, sellerTokens, programId })], [payer, buyer, seller])
+    const sig = await send([splitIx({ keys: k, sellerBps: 6_000, programId })], [payer, buyer, seller])
     const kinds = (await events(sig)).map((ev) => ev.kind)
     if (kinds.join() !== 'ended') throw new Error(`the split logged ${kinds}`)
     if ((await tokens(sellerTokens)) !== sellerBefore + 1_800_000n) throw new Error('the seller was not paid 60%')

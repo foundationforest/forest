@@ -1,11 +1,16 @@
-//! The one-tap payment: `create`, a plain transfer into the deposit account and
-//! `release_to_seller`, in one transaction.
+//! The one-tap payment: the deposit address made, `create`, a plain transfer into the deposit
+//! account and `release_to_seller`, in one transaction, as the client builds it (`payInOneTap`).
 //!
 //! A product may make every payment an escrow released in the same second, so every payment
 //! leaves a receipt at an address a review can point at. This file sends exactly that, measures
-//! it, and checks what it leaves behind: a permanent receipt, whose rent the payer keeps in it,
-//! and the deposit account's rent back in the same transaction. The rent is measured at today's
-//! rate and at the rate the cuts end at.
+//! it, and checks what it leaves behind: a permanent receipt, which keeps its own rent, and the
+//! deposit account's rent back to the buyer, its creator, in the same transaction. The key that
+//! fronted both rents (a fee payer, in production, which charges the person for them) gets
+//! nothing back. The rent is measured at today's rate and at the rate the cuts end at.
+//!
+//! The deposit address is made by the associated token program at the top of the transaction,
+//! before `create`, so a fee payer that checks every transfer's destination before signing (Kora)
+//! finds it made; `create` adopts it.
 //!
 //! Run with `cargo test --test one_tap -- --nocapture` for the numbers.
 
@@ -18,20 +23,27 @@ const RENT_TODAY: u64 = 5_080;
 /// The dollar price of SOL the READMEs use for every rent figure.
 const SOL_USD: f64 = 100.24;
 
+/// The deposit address, made first: the associated token program's idempotent create, the payer
+/// paying.
+fn make_deposit(h: &Harness, escrow: &solana_address::Address) -> solana_instruction::Instruction {
+    create_ata_idempotent_ix(h.payer.pubkey(), *escrow, h.mint).0
+}
+
 #[test]
 fn create_fund_and_release_to_seller_ride_in_one_transaction() {
     let mut h = Harness::new();
     let buyer = h.buyer.insecure_clone();
-    println!("\n== one tap: create, a plain transfer into the deposit account, release_to_seller, in one transaction ==");
+    println!("\n== one tap: the deposit address, create, a plain transfer in, release_to_seller, in one transaction ==");
 
-    // Another key (the transaction's fee payer) pays the rent; the buyer signs create, the
+    // Another key (the transaction's fee payer) fronts the rent; the buyer signs create, the
     // transfer and the release. Every option off. The buyer's standard account is not named.
     let t = h.terms(1);
     let escrow = escrow_address(&buyer.pubkey(), t.id);
     let vault = vault_address(&escrow, &h.mint);
     let s = h.accounts(&escrow);
-    let payer_before = h.lamports(&h.payer.pubkey());
+    let (payer_before, buyer_before) = (h.lamports(&h.payer.pubkey()), h.lamports(&buyer.pubkey()));
     let ixs = [
+        make_deposit(&h, &escrow),
         create_ix(&t, &h.create_accounts()),
         spl_transfer_ix(h.buyer_tokens, vault, buyer.pubkey(), AMOUNT),
         release_to_seller_ix(&s, buyer.pubkey()),
@@ -43,12 +55,14 @@ fn create_fund_and_release_to_seller_ride_in_one_transaction() {
     h.assert_closed(&vault, "the deposit account");
     let e = h.escrow(&escrow);
     assert_eq!((e.status, e.outcome, e.to_seller, e.creator), (Status::Ended, Some(Outcome::ReleasedToSeller), AMOUNT, Side::Buyer));
+    assert_eq!(e.rent_recipient, buyer.pubkey());
     assert_eq!(h.balance(&h.seller_tokens), AMOUNT);
     assert_eq!(h.balance(&h.buyer_tokens), BUYER_START - AMOUNT);
     let fee = 2 * 5_000; // two signatures; the compute-budget instruction sets a limit, not a price
     let receipt_rent = h.lamports(&escrow);
-    assert_eq!(h.lamports(&h.payer.pubkey()), payer_before - fee - receipt_rent, "the deposit account's rent came back; the receipt's stays");
-    println!("   the deposit account's {rent_lamports} lamports of rent come back in the same transaction; the receipt keeps {receipt_rent}");
+    assert_eq!(h.lamports(&h.payer.pubkey()), payer_before - fee - receipt_rent - rent_lamports, "the payer fronted both rents and gets neither back");
+    assert_eq!(h.lamports(&buyer.pubkey()), buyer_before + rent_lamports, "the deposit account's rent goes to the buyer, its creator");
+    println!("   the deposit account's {rent_lamports} lamports of rent go to the buyer in the same transaction; the receipt keeps {receipt_rent}");
 
     // The seller has never held this token: the same transaction makes the seller's standard
     // account first. That account's rent is not returned; it is the seller's account from then on.
@@ -60,6 +74,7 @@ fn create_fund_and_release_to_seller_ride_in_one_transaction() {
     let s2 = Accounts { seller_tokens: seller2_tokens, ..h.accounts(&escrow2) };
     let ixs = [
         make,
+        make_deposit(&h, &escrow2),
         create_ix(&t2, &h.create_accounts()),
         spl_transfer_ix(h.buyer_tokens, vault2, buyer.pubkey(), AMOUNT),
         release_to_seller_ix(&s2, buyer.pubkey()),
@@ -74,32 +89,34 @@ fn create_fund_and_release_to_seller_ride_in_one_transaction() {
     let escrow3 = escrow_address(&buyer.pubkey(), t3.id);
     let s3 = h.accounts(&escrow3);
     let ixs = [
+        make_deposit(&h, &escrow3),
         create_ix(&t3, &h.create_accounts()),
         spl_transfer_ix(h.buyer_tokens, s3.vault, buyer.pubkey(), AMOUNT),
         release_to_seller_ix(&s3, buyer.pubkey()),
     ];
     h.measure("one tap, an arbiter and a timer", &ixs, &[&buyer]);
 
-    // An invoice paid in one tap: the seller opened it earlier; the buyer's app reads it, then pays
-    // and releases in one transaction. The receipt says the seller created it.
+    // An invoice paid in one tap: the seller opened it earlier (its deposit address exists since);
+    // the buyer's app reads it, then pays and releases in one transaction. The receipt says the
+    // seller created it, and the deposit account's rent goes to the seller.
     let (invoice, _) = h.invoice(&h.terms(4)).expect("invoice");
     let s4 = h.accounts(&invoice);
     let ixs = [spl_transfer_ix(h.buyer_tokens, s4.vault, buyer.pubkey(), AMOUNT), release_to_seller_ix(&s4, buyer.pubkey())];
     h.measure("an invoice paid in one tap", &ixs, &[&buyer]);
     assert_eq!((h.escrow(&invoice).creator, h.escrow(&invoice).outcome), (Side::Seller, Some(Outcome::ReleasedToSeller)));
 
-    // The receipt's rent, measured: the same one tap with the Rent sysvar at today's rate and at
-    // the rate the cuts end at. The payer's balance moves by the fee and by the receipt's rent,
-    // and by nothing else: the deposit account's rent is fronted and returned inside the
-    // transaction.
+    // The rents, measured: the same one tap with the Rent sysvar at today's rate and at the rate
+    // the cuts end at. The payer fronts the receipt's rent and the deposit account's; the buyer
+    // gets the deposit account's back in the same transaction; the receipt keeps its own.
     for (id, rate) in [(10u64, RENT_TODAY), (11, RENT_FINAL)] {
         h.svm.set_sysvar(&rent_at(rate));
         let t = h.terms(id);
         let escrow = escrow_address(&buyer.pubkey(), t.id);
         let s = h.accounts(&escrow);
-        let before = h.lamports(&h.payer.pubkey());
+        let (before, buyer_before) = (h.lamports(&h.payer.pubkey()), h.lamports(&buyer.pubkey()));
         h.send(
             &[
+                make_deposit(&h, &escrow),
                 create_ix(&t, &h.create_accounts()),
                 spl_transfer_ix(h.buyer_tokens, s.vault, buyer.pubkey(), AMOUNT),
                 release_to_seller_ix(&s, buyer.pubkey()),
@@ -107,11 +124,14 @@ fn create_fund_and_release_to_seller_ride_in_one_transaction() {
             &[&buyer],
         )
         .expect("one tap");
-        let kept = before - 2 * 5_000 - h.lamports(&h.payer.pubkey());
-        assert_eq!(kept, h.lamports(&escrow), "the receipt holds exactly what the payer kept out");
+        let fronted = before - 2 * 5_000 - h.lamports(&h.payer.pubkey());
+        let deposit = (128 + 165) * rate;
+        let kept = h.lamports(&escrow);
         assert_eq!(kept, (128 + ESCROW_LEN as u64) * rate, "{ESCROW_LEN} bytes and the 128-byte overhead, at {rate} a byte");
+        assert_eq!(fronted, kept + deposit, "the payer fronted the receipt's rent and the deposit account's");
+        assert_eq!(h.lamports(&buyer.pubkey()), buyer_before + deposit, "the buyer got the deposit account's back");
         let usd = kept as f64 / 1e9 * SOL_USD;
-        println!("   the receipt's rent at {rate:>5} lamports/byte: {kept:>9} lamports, ${usd:.4} at SOL ${SOL_USD}, kept for good");
+        println!("   at {rate:>5} lamports/byte: fronted {fronted:>9}, {deposit:>9} back to the buyer, the receipt keeps {kept:>9} (${usd:.4} at SOL ${SOL_USD})");
     }
     print_cu_summary();
 }
@@ -128,6 +148,7 @@ fn a_second_payment_to_a_one_tap_link_goes_back_to_the_buyer() {
     let s = h.accounts(&escrow);
     h.send(
         &[
+            make_deposit(&h, &escrow),
             create_ix(&t, &h.create_accounts()),
             spl_transfer_ix(h.buyer_tokens, s.vault, buyer.pubkey(), AMOUNT),
             release_to_seller_ix(&s, buyer.pubkey()),
