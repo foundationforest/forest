@@ -27,12 +27,15 @@ of DIDs, a local validator and a local Postgres, and nowhere else. Nothing is de
     nodes are not an archive.
   - It reads only events the programs themselves wrote. The clients' decoders already refuse a
     `Program data:` line that another program wrote.
-  - From the registry, **badges**: the scope (market, and role after a colon), the DID, the profile's
+  - From the registry, **badges**: the scope (market, and role after a slash), the DID, the profile's
     wallet, the list, and the list's owner.
   - From the escrow, **receipts**: buyer, seller, who created it, its two options, token, amount,
     when it was created, marked funded and ended, the outcome, and what each side got.
-- **The market directory**, from a folder of market files (`MARKETS_DIR`): the `markets` repo's
-  once it exists; `shapes/examples/markets` in tests. Each file is checked with `shapes/`' validator.
+- **The market directory**, from the `markets` repo itself, over HTTPS (`MARKETS_URL`, its main
+  branch by default), never copied: its `directory.md`, each market file that page links, checked
+  with `shapes/`' validator, and its Aliases table, which groups other spellings of a market. It is
+  read once at start, so a change in the `markets` repo reaches the index at its next restart. The
+  tests serve a stand-in from `test/markets/`.
 
 **The escrow program may still change.** Everything the index knows about its events is in one
 file, `src/chain/escrow.ts`, which maps the escrow client's events to the index's own `EscrowFact`.
@@ -44,14 +47,15 @@ store in `src/chain/poll.ts` change only if a receipt gains or loses a fact.
 
 In [SCORING.md](SCORING.md), in plain words. In short:
 
-- A badge counts only under a directory name, byte for byte (`market` or `market/role`), and only
-  for the wallet the profile declares.
+- A badge counts only as `market/role`, the market a directory name byte for byte and the role one
+  of its roles, and only for the wallet the profile declares. A plain `market` counts for nothing.
 - **Uniqueness** combines the weights this index gives the issuers vouching for a badge. The
   weights are in `config/issuers.json`: the foundation's list starts at 1, everyone else at 0.
 - **Trust** sums the reviews received. Each weighs by its reviewer (their badge, then their own
   trust) and by what is under its deal id:
-  - a paid receipt the seller created (an invoice): 1
-  - a paid receipt the buyer created: 0.5, or 1 once the seller reviews it too
+  - a paid receipt the seller signed for (created it as an invoice, or signed a split or a refund): 1
+  - a paid receipt the buyer created and the seller signed nothing on: 0.5, or 1 once the seller
+    reviews it too
   - no receipt, or not paid: 0.05
 - Every score is signed with Ed25519, and with EdDSA-Poseidon on BabyJubJub for later proofs.
 
@@ -107,7 +111,6 @@ those first:
 cd index && npm install
 
 export DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/forest_index
-export MARKETS_DIR=../shapes/examples/markets
 export INDEX_SIGNING_SEED=$(openssl rand -hex 32)     # keep it: it is the index's signing identity
 export FIREHOSE_URL=ws://localhost:2583              # a host from host/run.sh, or the carrier
 export PLC_URL=https://plc.directory
@@ -122,7 +125,7 @@ npm start                                            # migrates, reads, scores, 
 Tests:
 
 ```
-npm run test:unit                                    # the scoring rules and the signatures; nothing else needed
+npm run test:unit                                    # the directory, the scoring rules and the signatures; nothing else needed
 DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/postgres npm test
 ```
 
@@ -154,7 +157,7 @@ that too).
 | Variable | Required | What |
 |---|---|---|
 | `DATABASE_URL` | yes | Postgres. A local one, or Supabase's connection string later |
-| `MARKETS_DIR` | yes | A folder of market files. Only these names count in badges and indexes |
+| `MARKETS_URL` | no | Where the `markets` repo's files are read: the folder holding its `directory.md`, over HTTP(S). Default `https://raw.githubusercontent.com/foundationforest/markets/main`; a commit in place of `main` pins it. Only these names count in badges |
 | `INDEX_SIGNING_SEED` | readers | 32 bytes as 64 hex characters. Both signing keys come from it. The pages never need it |
 | `PUBLIC_URL` | no | Where the pages are published: an origin, no path. Canonical links, the sitemap, the Pay link and the read skill use it. Default `https://forest.foundation` |
 | `FIREHOSE_URL` | no | `ws://` or `wss://`. Unset: no record reader |
@@ -164,14 +167,14 @@ that too).
 | `CHAIN_POLL_MS` | no | Default 5000 |
 | `REGISTRY_PROGRAM_ID`, `ESCROW_PROGRAM_ID` | no | Default: the clients' own ids |
 | `PORT` | no | Default 8080 |
-| `ISSUERS_FILE`, `ALIASES_FILE`, `SCORING_FILE`, `CURRENCIES_FILE` | no | Default: the files in `config/` |
+| `ISSUERS_FILE`, `SCORING_FILE`, `CURRENCIES_FILE` | no | Default: the files in `config/` |
 
 ## Files
 
 | | |
 |---|---|
 | `migrations/` | The schema, in plain SQL, applied in order, each once |
-| `config/` | This index's opinions: issuer weights, market aliases, scoring weights, and which tokens the pages show as which currency |
+| `config/` | This index's opinions: issuer weights, scoring weights, and which tokens the pages show as which currency |
 | `src/records/` | The firehose reader and the record store |
 | `src/chain/` | The chain reader, the registry adapter, and **the escrow adapter** |
 | `src/scores/` | The scores as pure functions, the signatures, and the recompute |

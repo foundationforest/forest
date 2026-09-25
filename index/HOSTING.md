@@ -56,12 +56,12 @@ One service, from this repo:
   |---|---|
   | `DATABASE_URL` | The database, with a role that can write |
   | `INDEX_SIGNING_SEED` | 64 hex characters, as a secret. It is the index's signing identity: keep it, and never give it to the pages |
-  | `MARKETS_DIR` | A folder of market files: the `markets` repo, checked out in the build next to this one |
-  | `FIREHOSE_URL` | The carrier's `wss://` address |
+  | `MARKETS_URL` | Unset: the `markets` repo's main branch, read over HTTPS at start. Set it to pin a commit |
+  | `FIREHOSE_URL` | The carrier's relay, `wss://`: its own stream, which the readers check commit by commit, not Jetstream's JSON |
   | `PLC_URL` | `https://plc.directory` (the default) |
   | `SOLANA_RPC_URL` | An RPC for the network the programs are on |
   | `CHAIN_COMMITMENT` | `finalized` (the default) |
-  | `ISSUERS_FILE`, `ALIASES_FILE`, `SCORING_FILE` | Only to use other files than `config/` |
+  | `ISSUERS_FILE`, `SCORING_FILE` | Only to use other files than `config/` |
 
 ## Pages on Railway
 
@@ -75,10 +75,10 @@ A second service from the same repo, same build:
   | Variable | Value |
   |---|---|
   | `DATABASE_URL` | The read-only role above |
-  | `MARKETS_DIR` | The same market files as the readers |
+  | `MARKETS_URL` | The same as the readers', so both read one directory |
   | `PUBLIC_URL` | `https://forest.foundation`: every canonical link, the sitemap, the pay link and the read skill use it |
   | `PORT` | Railway sets it |
-  | `CURRENCIES_FILE`, `ISSUERS_FILE`, `ALIASES_FILE` | Only to use other files than `config/`; must match the readers' |
+  | `CURRENCIES_FILE`, `ISSUERS_FILE` | Only to use other files than `config/`; must match the readers' |
 
   No `INDEX_SIGNING_SEED`: the pages read the public keys the readers write to `index_meta`.
 
@@ -99,7 +99,7 @@ built, not tried):
 
   const config = loadConfig(process.env, { seed: false })
   const db = createPool(config.databaseUrl)
-  const web = createWeb({ db, directory: Directory.load(config.marketsDir, config.aliases), config })
+  const web = createWeb({ db, directory: await Directory.fetch(config.marketsUrl), config })
   export default { fetch: (req: Request) => web.handle(req) }
   ```
 
@@ -107,8 +107,8 @@ built, not tried):
 - **The Node.js runtime,** not Edge: it uses `pg` and reads files.
 - **The repo root as the project's root,** for the relative imports to `shapes/` and the clients.
 - **The files it reads at start, included in the function:** `index/config/*.json`,
-  `index/skill.md`, `index/llms.txt`, and the market files (`MARKETS_DIR`), through the function's
-  `includeFiles`.
+  `index/skill.md` and `index/llms.txt`, through the function's `includeFiles`. The market
+  directory is fetched from the `markets` repo when an instance starts.
 - **A pooled connection:** Supabase's pooler in transaction mode, with a pool of one client per
   instance (`createPool` takes 10 today; a serverless instance should take 1).
 - **The same variables** as the pages on Railway, less `PORT`.

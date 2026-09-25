@@ -90,7 +90,7 @@ export async function applyRecordOp(db: Db, directory: Directory, op: RecordOp):
           r.price.amount,
           r.price.mint,
           r.price.per,
-          r.remote,
+          r.remote ?? null,
           r.location ?? null,
           ts(r.expires),
           ts(r.createdAt),

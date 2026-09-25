@@ -1,6 +1,6 @@
-// Everything the index is told from outside: environment variables for where things are, and three
-// JSON files for its opinions (issuer weights, market aliases, scoring weights). Read once at
-// start; a change means a restart.
+// Everything the index is told from outside: environment variables for where things are (the
+// market directory among them), and JSON files for its opinions (issuer weights, scoring weights,
+// the currencies its pages show). Read once at start; a change means a restart.
 
 import { readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
@@ -10,7 +10,6 @@ const here = dirname(fileURLToPath(import.meta.url))
 export const INDEX_ROOT = resolve(here, '..')
 
 export type IssuerConfig = Record<string, { name: string; weight: number }>
-export type AliasConfig = Record<string, string[]>
 /** A token the pages show as money: its ISO 4217 code, its symbol, and its base units' decimals. */
 export type CurrencyConfig = Record<string, { code: string; symbol: string; decimals: number }>
 export type ScoringConfig = {
@@ -36,13 +35,12 @@ export type Config = {
   chainCommitment: 'finalized' | 'confirmed'
   /** 32 bytes, hex. Both of the index's signing keys come from it. Null in the web process, which never signs. */
   signingSeed: Uint8Array | null
-  /** A folder of market files: the `markets` repo's, or shapes/examples/markets in tests. */
-  marketsDir: string
+  /** Where the `markets` repo's files are read from: the folder holding its `directory.md`, over HTTP(S). */
+  marketsUrl: string
   port: number
   /** Where the pages are published, with no trailing slash: every canonical link, the sitemap and the read skill use it. */
   publicUrl: string
   issuers: IssuerConfig
-  aliases: AliasConfig
   scoring: ScoringConfig
   currencies: CurrencyConfig
 }
@@ -73,13 +71,21 @@ export function publicUrl(raw: string | undefined): string {
   return url.origin
 }
 
+/** The markets repo's own files, on its main branch unless a URL names another branch or a commit. */
+export const MARKETS_URL = 'https://raw.githubusercontent.com/foundationforest/markets/main'
+
+export function marketsUrl(raw: string | undefined): string {
+  const url = new URL(raw || MARKETS_URL)
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new Error('MARKETS_URL must be an http or https URL')
+  return url.href.replace(/\/+$/, '')
+}
+
 /**
  * `seed: false` for the web process: it reads the database and serves pages, and never holds the
  * signing seed.
  */
 export function loadConfig(env: Record<string, string | undefined> = process.env, opts: { seed?: boolean } = {}): Config {
   if (!env.DATABASE_URL) throw new Error('DATABASE_URL is required')
-  if (!env.MARKETS_DIR) throw new Error('MARKETS_DIR is required: a folder of market files')
   const needSeed = opts.seed ?? true
   return {
     databaseUrl: env.DATABASE_URL,
@@ -91,11 +97,10 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     chainPollMs: Number(env.CHAIN_POLL_MS || 5000),
     chainCommitment: env.CHAIN_COMMITMENT === 'confirmed' ? 'confirmed' : 'finalized',
     signingSeed: needSeed ? hexSeed(env.INDEX_SIGNING_SEED) : null,
-    marketsDir: resolve(env.MARKETS_DIR),
+    marketsUrl: marketsUrl(env.MARKETS_URL),
     port: Number(env.PORT || 8080),
     publicUrl: publicUrl(env.PUBLIC_URL),
     issuers: readJson(env.ISSUERS_FILE || join(INDEX_ROOT, 'config/issuers.json'), 'issuers'),
-    aliases: readJson(env.ALIASES_FILE || join(INDEX_ROOT, 'config/aliases.json'), 'aliases'),
     scoring: readScoring(env.SCORING_FILE || join(INDEX_ROOT, 'config/scoring.json')),
     currencies: readJson(env.CURRENCIES_FILE || join(INDEX_ROOT, 'config/currencies.json'), 'currencies'),
   }
