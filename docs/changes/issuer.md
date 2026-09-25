@@ -105,3 +105,73 @@ This session ran in parallel with others and owned `issuer/` only, so its log is
      instead.
   10. **The Didit client is tested against a stand-in built from Didit's documents, not Didit
       itself.** Its first real run should compare a real decision's shape with `parseDecision`.
+
+## 2026-09-25: the issuer, round two: a request limit, and the key from a sealed variable
+
+- **Build order:** a follow-up to the issuer, asked for by Carlos. The first round's pull request
+  (#20) was already merged, so this round is a new pull request from `main`, not an update to #20.
+  Nothing is deployed.
+- **Decided (by Carlos; built here):**
+  - **A simple request limit on opening sessions:** per network address, in memory only, never
+    written to disk or logs, a few per hour. A refused request gets a plain "try later". It exists to
+    stop someone running up the foundation's Didit bill. The README says it resets on restart and is
+    not a security boundary.
+  - **The issuer key on Railway comes as a sealed variable** (`ISSUER_KEYPAIR`, the key file's
+    contents), written at start to a file readable only by the service in a temporary directory,
+    never in the repo or the image. `ISSUER_KEYPAIR_PATH` stays for local runs.
+  - **No change to batching:** hourly or at 50, shuffled. The proof already hides which entry on the
+    list is anyone's, so a minimum batch size adds little. This closes round one's open 3.
+- **Chosen, not decided** (the simplest option; `issuer/README.md`, items 15 to 19):
+  - **Five sessions per address per hour by default** (`SESSION_LIMIT_PER_HOUR`), in a window that
+    starts at the address's first request. Only `/session` is counted, after its body is checked.
+    A refusal is `429 {"error": "try_later"}`, and Didit is not asked.
+  - **An IPv6 address counts by its /64,** since one device or household usually holds a whole
+    /64. An IPv4 address counts alone. `::ffff:`-mapped IPv4 counts as the IPv4 address.
+  - **The limit keeps keyed hashes, not addresses:** HMAC-SHA256 under a random key made at start
+    and never written. Windows whose hour has passed are dropped once an hour.
+  - **The address comes from a proxy's header only when `CLIENT_ADDRESS_HEADER` names one**
+    (`x-real-ip` on Railway). Unset, the connection's own address counts and every such header is
+    ignored, so a client can't choose its own address where no proxy stands in front.
+  - **The key file is deleted as soon as the key is loaded.** Nothing reads it again. The file is in
+    a new directory under the system's temporary directory (0700), holding one file (0600). The
+    variable is taken out of the process's environment once read.
+  - **Setting both key variables is refused,** rather than one silently winning.
+- **Built:**
+  - **`issuer/src/limit.ts`:** the limit and the address grouping.
+  - **In `issuer/src/list.ts`:** `parseKeypair`, whose errors quote none of the key, and
+    `writeKeyFile`. `issuer/src/service.ts` and `issuer/src/server.ts` wire both in.
+  - **A leak fixed on the way:** a malformed key file used to fail with JSON's own parse error,
+    which quotes part of the text it fails on, so a broken key would have printed part of itself to
+    the log. Both key paths now fail with a message naming only the variable or the file.
+  - **Tests:** three new ones without a chain, 21 in all, and the validator test now runs with the
+    key from `ISSUER_KEYPAIR`. All pass.
+    - **The limit over HTTP:** three sessions, then `try_later`, with Didit not asked; another
+      address unaffected; three IPv6 addresses in one /64 share a count, and the next /64 doesn't;
+      a malformed request isn't counted; with no header named, a client's own `x-real-ip` is
+      ignored; no address in the log or the file.
+    - **The limit's clock:** a fresh share after an hour, stale windows dropped, the /64 grouping.
+    - **The key:** from a variable, the file and its directory private to the user and under the
+      temporary directory, removed afterwards; malformed keys refused without quoting them; both
+      variables refused.
+    - **End to end:** on the validator, the service loaded the key from `ISSUER_KEYPAIR`, and its
+      file was gone once the service was up.
+    - Turning the limit off fails two tests; writing the key file readable by all fails one.
+  - **`issuer/README.md`:** "The request limit", the two key variables, Railway's
+    `CLIENT_ADDRESS_HEADER`, and items 15 to 19 of "Chosen, not decided".
+- **Learned:**
+  - **Behind Railway's edge, the connection's address is the edge's,** so a limit that counts it
+    would limit everyone together. Railway puts the client's address in `X-Real-IP` (its networking
+    documents).
+  - **Railway hands sealed variables to builds as well as deployments,** so "not in the image" holds
+    only while no build step reads `ISSUER_KEYPAIR`. None does.
+- **Open:**
+  1. **Shared addresses share one count.** People behind one carrier-grade NAT or one campus address
+     get five sessions an hour between them. Whether that is too few is for real traffic to show;
+     the number is one variable.
+  2. **`/submit` is not limited.** Each submit asks Didit for a decision, which costs nothing but
+     spends Didit's rate limit. Its documents give 600 requests a minute per key in one place
+     ("Retrieve Session") and 100 decision reads a minute in another (its agent skills).
+  3. **The limit's memory grows with the number of addresses in an hour.** One entry each, dropped
+     after the hour. Someone with very many addresses could grow it; not measured.
+  4. Round one's open 1, 2, 4 and 7 to 10 stand. Its 5 (no rate limit) and 6 (the key on Railway)
+     are closed by this round, and its 3 (a minimum batch) by Carlos's decision.

@@ -11,6 +11,7 @@ else: no real face check, no devnet, no Railway.
 
 1. **The app asks for a face check.** `POST /session`: the service opens a Didit session on the
    foundation's workflow and returns the page the person does the check on, and the session's id.
+   One network address may open a few sessions an hour ("The request limit", below).
 2. **The person does the check** on Didit's page: liveness and a duplicate-face search. Didit holds
    the face.
 3. **The app sends two things:** the session id and the person's identity commitment, computed on
@@ -35,6 +36,9 @@ else: no real face check, no devnet, no Railway.
   and checks this.
 - **Never logs a request, an address, a session id or a commitment.** It logs one line per batch
   (how many were inserted) and the kind of an error, never an error's message.
+- **Never writes down an address.** It reads the client's address for one thing only, counting
+  `/session` requests against the limit, and holds even that in memory as a keyed hash, under a key
+  that exists only in the running process.
 - **Never puts anything a person sends in a URL.** All three routes are POST with a JSON body,
   because hosting platforms log every request's path.
 - **Never stores anything at `/session`.** The session's `vendor_data` is a fresh random id that
@@ -65,12 +69,34 @@ Errors are `{"error": "<code>"}`:
   - `no_liveness`, `liveness_not_passed`, `not_approved`
 - **`409`: already used or waiting.**
   - `session_used`, `commitment_queued`, `already_listed`
+- **`429 try_later`: this address has opened its share of sessions for the hour.** Nothing more is
+  said.
 - **Other codes.**
   - `404 not_found`, `405 post_only`, `413 too_large` (bodies are capped at 1 KB)
   - `502 face_check_unavailable`, `500 internal`
 
 A refused or failed submit uses nothing up. The same session can be sent again, for instance once a
 review in Didit's console approves it. CORS is open to any origin.
+
+## The request limit
+
+A session costs the foundation money once someone does the check on it, so one network address may
+open `SESSION_LIMIT_PER_HOUR` sessions (5 unless set) in an hour, counted from its first. After that,
+`POST /session` answers `429 {"error": "try_later"}` and Didit is not asked. Only `/session` is
+counted; a malformed request is refused before it is counted.
+
+- **An IPv6 address counts with the rest of its /64,** which one phone or household usually holds
+  whole, so walking through one's own addresses gets no more. An IPv4 address counts alone.
+- **Behind a proxy, the service needs the proxy's header.** Name it in `CLIENT_ADDRESS_HEADER`
+  (`x-real-ip` on Railway); otherwise every request would come from the proxy and share one count.
+  Unset, the service counts the connection's own address and ignores every such header, since a
+  client can write any header it likes.
+- **In memory only.** Nothing about it is written to the file or the log, and the counts hold no
+  address: each is a keyed hash under a random key made at start.
+- **It resets on restart.** A restart gives every address a fresh share.
+- **It is not a security boundary.** Someone with many addresses, or many /64s, opens many sessions.
+  People behind one shared address (a campus, a carrier's shared address) share one count. It stops
+  one person running up the bill from one place, and nothing more.
 
 ## The Didit workflow it expects
 
@@ -108,8 +134,8 @@ client and a stand-in Didit. The issuer key is the program's placeholder, which 
 for; see `registry/README.md`, deploy checklist step 2.
 
 To run the service by hand against that validator, write a key file (`solana-keygen new -o
-issuer-keypair.json`, or the placeholder as the test does) and set at least the four required
-variables.
+issuer-keypair.json`, or the placeholder as the test does), point `ISSUER_KEYPAIR_PATH` at it, and
+set the other required variables.
 
 ## Environment variables
 
@@ -117,18 +143,22 @@ variables.
 |---|---|---|---|
 | `DIDIT_API_KEY` | yes | | The foundation's Didit API key. A secret. |
 | `DIDIT_WORKFLOW_ID` | yes | | The workflow sessions are opened on; decisions on any other are refused |
-| `ISSUER_KEYPAIR_PATH` | yes | | Path to the issuer's key file (64 numbers, as `solana-keygen` writes). It must be an insert key of the list, and it pays its own inserts, so it holds a little SOL. Never commit it (`.gitignore` covers `*keypair*.json`) |
+| `ISSUER_KEYPAIR` | one of these two | | The issuer's key itself: the contents of a key file, 64 numbers as `solana-keygen` writes them. For Railway, as a sealed variable. At start the service writes it to a new directory under the system's temporary directory, readable by its own user only, loads it, deletes the file, and takes the variable out of its environment. |
+| `ISSUER_KEYPAIR_PATH` | one of these two | | Or a path to the key file, for local runs. Never commit it (`.gitignore` covers `*keypair*.json`). Either way the key must be an insert key of the list, and it pays its own inserts, so it holds a little SOL. |
 | `SOLANA_RPC_URL` | yes | | The RPC the service reads the list from and sends inserts to |
 | `REGISTRY_PROGRAM_ID` | no | the client's `PROGRAM_ID` | The registry program; devnet's is in `devnet/devnet.json` |
 | `LIST_INDEX` | no | `0` | The list this issuer inserts into |
 | `DATABASE_PATH` | no | `./data/issuer.sqlite` | The one file |
 | `BATCH_MAX` | no | `50` | A batch runs as soon as this many are waiting |
 | `BATCH_INTERVAL_SECONDS` | no | `3600` | And on this timer, whatever is waiting |
+| `SESSION_LIMIT_PER_HOUR` | no | `5` | Sessions one address may open in an hour |
+| `CLIENT_ADDRESS_HEADER` | no | none | The header a proxy in front puts the client's address in: `x-real-ip` on Railway. Unset, the connection's own address. |
 | `DIDIT_BASE_URL` | no | `https://verification.didit.me` | For a stand-in |
 | `PORT` | no | `8080` | |
 
-The service refuses to start if a required variable is missing, if the key is not an insert key of
-the list, or if the list is closed.
+The service refuses to start if a required variable is missing, if both key variables are set, if
+the key is not a keypair (the message quotes none of it), if the key is not an insert key of the
+list, or if the list is closed.
 
 ## What running it on Railway will need
 
@@ -146,9 +176,12 @@ Not tried. What the service needs from any host, as it reads on Railway's docume
     a Railpack config file or a Dockerfile. Not tried.
 - **`DIDIT_API_KEY` as a sealed variable.** Railway gives a sealed variable to the service but
   never shows it again.
-- **The key file.** Railway has no secret files. Either the file sits on the volume (then every
-  volume backup holds the key), or the start command writes it from a sealed variable to a path
-  outside the volume. Not decided.
+- **The issuer key as the sealed variable `ISSUER_KEYPAIR`.** Railway has no secret files. The
+  service writes the key at start to a private file in the container's temporary directory, off the
+  volume, loads it and deletes the file. The key is never in the repo. It is not in the image
+  either, as long as no build step reads the variable: Railway does hand sealed variables to builds,
+  and nothing in this service's build uses it.
+- **`CLIENT_ADDRESS_HEADER=x-real-ip`,** so the request limit counts each client, not Railway's edge.
 - **SOL on the issuer key** for its inserts, about 5,000 lamports each.
 - **Railway's HTTP logs.** Railway keeps every request's client address and path for 3 to 90 days,
   depending on plan, and its documents describe no way to turn that off. The service puts nothing
@@ -188,3 +221,11 @@ until something ships, and each is in `docs/changes/issuer.md`.
     `@solana/web3.js`, pinned to the client's version.
 13. **CORS is open to any origin.** The app may be served from anywhere.
 14. **At start, the key must be an insert key of an open list.**
+15. **Five sessions per address per hour by default,** in a window that starts at the address's
+    first request.
+16. **An IPv6 address counts by its /64.**
+17. **The limit holds keyed hashes, not addresses,** under a key made at start and never written.
+18. **The client's address comes from a proxy's header only when `CLIENT_ADDRESS_HEADER` names
+    one,** so a client can't choose its own address where no proxy stands in front.
+19. **The key file from `ISSUER_KEYPAIR` is deleted as soon as the key is loaded,** since nothing
+    reads it again, and the variable is taken out of the process's environment.
