@@ -48,6 +48,7 @@ import {
   optionsFromPost,
   optionsNotAgreed,
   payInOneTap,
+  payInvoiceInOneTap,
   payoutAddress,
   payout,
   randomId,
@@ -346,7 +347,7 @@ test('the timer pays the side it names, and its builder refuses what the program
   assert.equal(timerDueAt(escrowAccount({ ...funded, status: 'ended', timer: { days: 3, to: 'seller' } })), null, 'ended')
 })
 
-test('pay in one tap: the deposit address made first, create, a plain transfer of the amount, and the buyer\'s release', () => {
+test('pay in one tap, and an invoice in one tap: the deposit address made first, create unless the seller opened it, a plain transfer of the amount, and the buyer\'s release', () => {
   const t = terms()
   const k = keysFor({ buyer, mint, terms: t })
   const ixs = payInOneTap({ buyer, payer, mint, terms: t })
@@ -382,6 +383,29 @@ test('pay in one tap: the deposit address made first, create, a plain transfer o
   const funded = createAndFund({ buyer, payer, mint, terms: t })
   assert.deepEqual(funded.map(meta), ixs.slice(0, 3).map(meta))
   assert.deepEqual(createAndFund({ buyer, payer, mint, terms: t, from })[2].keys[0].pubkey, from)
+
+  // An invoice paid in one tap: the seller opened it, so no create; the deposit address made
+  // first all the same, then the transfer of the amount and the buyer's release.
+  const inv = escrowAccount({ creator: 'seller', rentRecipient: seller })
+  const invKeys = keysOf(inv)
+  assert.deepEqual(invKeys.escrow, escrowAddress(seller, 7n), "the invoice is at the seller's address")
+  const paid = payInvoiceInOneTap({ escrow: { ...inv, vault: vaultAddress(invKeys.escrow, mint) }, payer })
+  assert.equal(paid.length, 3)
+  const [invDeposit, invTransfer, invRelease] = paid
+  assert.deepEqual(meta(invDeposit), meta(makeDepositAddressIx({ payer, escrow: invKeys.escrow, mint })))
+  assert.equal(hex(invDeposit.data), '01', 'the idempotent create')
+  assert.deepEqual(invTransfer.programId, TOKEN_PROGRAM_ID)
+  assert.equal(hex(invTransfer.data), '03' + '40420f0000000000')
+  assert.deepEqual(meta(invTransfer), [
+    [associatedTokenAddress(buyer, mint).toBase58(), false, true],
+    [vaultAddress(invKeys.escrow, mint).toBase58(), false, true],
+    [buyer.toBase58(), true, false],
+  ])
+  assert.deepEqual(meta(invRelease), meta(releaseToSellerIx({ keys: keysOf({ ...inv, vault: vaultAddress(invKeys.escrow, mint) }) })))
+  assert.deepEqual(meta(invRelease)[3], [seller.toBase58(), false, true], "the rent back to the seller, who opened it")
+  assert.deepEqual(payInvoiceInOneTap({ escrow: inv, payer, from })[1].keys[0].pubkey, from)
+  assert.throws(() => payInvoiceInOneTap({ escrow: { ...inv, status: 'funded' }, payer }), /already funded/)
+  assert.throws(() => payInvoiceInOneTap({ escrow: { ...inv, status: 'ended' }, payer }), /ended/)
 
   // The buyer's standard account, made when a way out pays the buyer.
   const make = makeRefundAddressIx({ payer, buyer, mint })

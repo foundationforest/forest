@@ -217,7 +217,10 @@ Everything the program does not know.
   transfer of the amount; `payInOneTap` adds `release_to_seller`. The deposit address is made at the
   top of the transaction, not only inside `create`, so a fee payer that checks every transfer's
   destination before it signs (Kora does) finds it made, and can sign "Pay". Put
-  `makeStandardAccountIx` for the seller first if the seller may not hold the token yet.
+  `makeStandardAccountIx` for the seller first if the seller may not hold the token yet. An
+  invoice is paid the same way: `payInvoiceInOneTap` takes the invoice as read off the chain and
+  gives the deposit address made first, the transfer of the amount and `release_to_seller`, for one
+  transaction the buyer signs; it is for an invoice nothing has been paid into yet.
 - **Who fronts the rent.** Whoever signs `create` as the payer: either party, or any key paying for
   them, such as a fee payer that charges the person for it. The program cannot tell and never needs
   to: the rent always comes back to the creator. Every funded escrow keeps one receipt's

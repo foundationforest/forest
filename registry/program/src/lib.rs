@@ -64,8 +64,10 @@ pub const USDC_FEE: u64 = 250_000;
 pub const USDC_DECIMALS: u8 = 6;
 
 /// The longest market name and DID a registration can carry. Both are hashed, so neither is a
-/// limit on what a scope can be; they only bound the instruction and the log.
-pub const MAX_MARKET_NAME: usize = 64;
+/// limit on what a scope can be; they only bound the instruction and the log. A scope of 256 bytes
+/// holds a `category/market/role` of three 64-character slugs with room to spare, and a
+/// registration carrying it and a 64-byte DID still fits one standard transaction.
+pub const MAX_MARKET_NAME: usize = 256;
 pub const MAX_DID: usize = 64;
 
 /// The scope is a hash of a namespaced market name, so a name of any length works and a scope

@@ -17,6 +17,10 @@
 # builds land in devnet/target/forest_registry.so and devnet/target/forest_escrow.so; the LiteSVM
 # tests' own builds in registry/program/target and escrow/program/target are not touched.
 #
+# Both are built for SBPF v3, the newer program format (`cargo build-sbf --arch v3`), which devnet
+# and mainnet already accept and which SIMD-0500 leaves deployable when it stops new deploys of v0
+# to v2. FOREST_SBPF_ARCH=v0 builds the old format instead.
+#
 # Usage: devnet/build.sh    (needs the Solana CLI's cargo-build-sbf on the PATH, and node)
 
 set -euo pipefail
@@ -25,6 +29,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/.." && pwd)
 out="$here/target"
 json="$here/devnet.json"
+arch="${FOREST_SBPF_ARCH:-v3}"
 
 field() { node -e "process.stdout.write(String(require(process.argv[1])$1))" "$json"; }
 
@@ -98,10 +103,14 @@ echo "escrow: the substitution, against the committed source"
 diff -u "$root/escrow/program/src/lib.rs" "$lib" | grep -E '^[-+][^-+]' || true
 only_lib_changed escrow
 
-echo "building the registry (--features devnet) ..."
-build registry forest_registry.so --features devnet
-echo "building the escrow ..."
-build escrow forest_escrow.so
+echo "building the registry (--features devnet, --arch $arch) ..."
+build registry forest_registry.so --features devnet --arch "$arch"
+echo "building the escrow (--arch $arch) ..."
+build escrow forest_escrow.so --arch "$arch"
 
 echo "toolchain: $(solana --version 2>/dev/null || echo 'solana not on PATH'); $(cargo-build-sbf --version | tr '\n' ' ')"
 (cd "$out" && sha256sum forest_registry.so forest_escrow.so && wc -c forest_registry.so forest_escrow.so | head -2)
+# The SBPF version each file declares: the ELF header's e_flags.
+for so in forest_registry.so forest_escrow.so; do
+  echo "$so: SBPF v$(node -e "process.stdout.write(String(require('fs').readFileSync(process.argv[1]).readUInt32LE(0x30)))" "$out/$so")"
+done

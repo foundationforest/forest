@@ -541,6 +541,37 @@ export function payInOneTap(args: {
   return [...createAndFund(args), releaseToSellerIx({ keys: keysFor(args), programId: args.programId })]
 }
 
+/**
+ * Pay an invoice in one tap: the deposit address made first (`makeDepositAddressIx`, the payer
+ * paying if it is missing), a plain transfer of the amount from the buyer into it, and
+ * `release_to_seller`, for one transaction the buyer signs (with the payer). The seller opened the
+ * escrow; `escrow` is it as read off the chain (`decodeEscrow`), after the buyer's app has checked
+ * it (`assertOptionsAgreed`, and that it names the buyer's own key as buyer). The deposit address is
+ * made at the top, as in `createAndFund`, so a fee payer that checks every transfer's destination
+ * before it signs finds it made, and can sign "Pay". It sends the whole amount, so it is for an
+ * invoice nothing has been paid into yet: read the deposit address's balance first (`solanaPayUrl`
+ * does), since every way out pays out the whole balance. Put `makeStandardAccountIx` for the seller
+ * first if the seller may not hold the token yet. The buyer pays from its standard account unless
+ * `from` names another it holds.
+ */
+export function payInvoiceInOneTap(args: {
+  escrow: EscrowAccount
+  payer: PublicKey
+  from?: PublicKey
+  programId?: PublicKey
+}): TransactionInstruction[] {
+  const e = args.escrow
+  if (e.status !== 'open') {
+    throw new Error(`this escrow is ${e.status === 'ended' ? 'ended' : 'already funded'}: nothing to pay`)
+  }
+  const keys = keysOf(e, args.programId)
+  return [
+    makeDepositAddressIx({ payer: args.payer, escrow: keys.escrow, mint: keys.mint }),
+    transferIx({ from: args.from ?? associatedTokenAddress(keys.buyer, keys.mint), to: keys.vault, owner: keys.buyer, amount: e.amount }),
+    releaseToSellerIx({ keys, programId: args.programId }),
+  ]
+}
+
 // ---------------------------------------------------------------------------------------------
 // The account.
 // ---------------------------------------------------------------------------------------------

@@ -58,12 +58,12 @@ import {
   markFundedIx,
   createIx,
   optionsNotAgreed,
+  payInvoiceInOneTap,
   payout,
   payoutAddress,
   recoverLateIx,
   refundAddress,
   releaseToBuyerIx,
-  releaseToSellerIx,
   solanaPayUrl,
   splitIx,
   sweepRentIx,
@@ -285,13 +285,9 @@ test('three deals go through a real validator: a split, an invoice paid in one t
   assert.deepEqual(optionsNotAgreed({ escrow: onChain, me: 'buyer', agreed: null }), [], 'the buyer checks before paying')
   const invoiceVaultRent = await connection.getBalance(inv.deposit)
   const sellerSol = await sol(seller)
-  const paid = await send(
-    [
-      createTransferInstruction(buyerTokens.publicKey, inv.deposit, buyer.publicKey, 2_000_000),
-      releaseToSellerIx({ keys: keysOf(onChain) }),
-    ],
-    [payer, buyer],
-  )
+  // One tap: the deposit address made first (it is already there, so that is a no-op the fee
+  // payer can see), the transfer and the release, in one transaction.
+  const paid = await send(payInvoiceInOneTap({ escrow: onChain, payer: payer.publicKey, from: buyerTokens.publicKey }), [payer, buyer])
   const paidEvents = decodeEvents(await logsOf(paid))
   assert.ok(paidEvents.length === 1 && paidEvents[0].kind === 'ended' && paidEvents[0].outcome === 'releasedToSeller')
   assert.equal(await tokens(sellers), expected.toSeller + 2_000_000n)

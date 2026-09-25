@@ -73,6 +73,14 @@ const wallets = {
 // Two markets from the directory's first example, and one more so a proof can be presented
 // against the wrong name.
 const markets = { tutors: 'online-tutors', cleaning: 'house-cleaning' }
+// The longest scope and DID a registration can carry (the program's MAX_MARKET_NAME and MAX_DID):
+// a scope of 256 bytes, longer than a `category/market/role` of three 64-character slugs, and a
+// 64-byte DID, so a test registers at both bounds at once and measures the largest transaction.
+const longest = {
+  market: ['c'.repeat(84), 'm'.repeat(85), 'r'.repeat(85)].join('/'),
+  did: `did:web:${'a'.repeat(56)}`,
+}
+if (Buffer.byteLength(longest.market) !== 256 || Buffer.byteLength(longest.did) !== 64) throw new Error('the longest case is not 256 and 64 bytes')
 
 // List 0 holds Alice and Bob with two strangers between them, so nobody is at index 0 or the end
 // and the Merkle paths are not all the same shape. List 1 holds Carol, opened later.
@@ -94,6 +102,7 @@ const cases = [
   { name: 'bob-tutors', listIndex: 0, leaves: list0, who: 'bob', secret: secrets.bob, did: dids.bob, market: markets.tutors },
   { name: 'bob-cleaning', listIndex: 0, leaves: list0, who: 'bob', secret: secrets.bob, did: dids.bob, market: markets.cleaning },
   { name: 'carol-tutors-list1', listIndex: 1, leaves: list1, who: 'carol', secret: secrets.carol, did: dids.carol, market: markets.tutors },
+  { name: 'alice-longest', listIndex: 0, leaves: list0, who: 'alice', secret: secrets.alice, did: longest.did, market: longest.market },
 ] as const
 
 const proofs = []

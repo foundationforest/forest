@@ -21,10 +21,11 @@ of it.
 | | |
 |---|---|
 | `program/` | the program. Anchor, Rust, `cargo build-sbf`. |
-| `program/tests-litesvm/` | 47 LiteSVM tests against real proofs, with the wire format written out a second time by hand: `registry.rs` (30), `adversarial.rs` (16, session 10's attacks as sessions 11, 14 and 15 left them) and `invariants.rs` (the property test) (`docs/decisions/adversarial-review-1.md`). |
+| `program/tests-litesvm/` | 48 LiteSVM tests against real proofs, with the wire format written out a second time by hand: `registry.rs` (31), `adversarial.rs` (16, session 10's attacks as sessions 11, 14 and 15 left them) and `invariants.rs` (the property test) (`docs/decisions/adversarial-review-1.md`). |
 | `program/trident-tests/` | the Trident fuzzer, kept as the record of why it cannot run: Trident 0.12 never registers the Poseidon and alt_bn128 syscalls. Its model is still session 10's wire format; `invariants.rs` runs the same model under LiteSVM and is the one kept current. |
 | `client/` | TypeScript, browser and Node: the code, the Merkle path, the proof, the compressed points, the transaction. |
 | `artifacts/` | Semaphore's setup files, pinned. The verification key is committed; the 7.7 MB of proving artifacts are pinned by hash. |
+| `security-checklist.md` | the safe-solana-builder checklist: every rule, how it is applied here, and every known limit. |
 | `FEASIBILITY.md` | session 3's report: whether any of this was possible, and at what cost. |
 | `scratch/` | what produced session 3's numbers. Not a library. |
 
@@ -303,8 +304,12 @@ ships, and each is logged in `docs/changes.md`.
    Same check, same safety argument, and otherwise their deposits would be locked forever, which is
    the exact failure the feasibility report warns about.
 5. **The code tree's depth is 32**, like the list of humans.
-6. **Names and DIDs are bounded at 64 bytes each** in the instruction. Not a limit on what a scope
-   can be — both are hashed — only on what one transaction and one log entry carry.
+6. **A scope is bounded at 256 bytes and a DID at 64** in the instruction. Not a limit on what a
+   scope can be — both are hashed — only on what one transaction and one log entry carry. The
+   scope's bound was 64 until the devnet session of 2026-09-25 raised it, Carlos's choice, since
+   the scope will be `category/market/role`, three slugs of up to 64 characters each. A
+   registration carrying a 256-byte scope and a 64-byte DID is 1,105 bytes, and 1,152 with a fee
+   payer's payment instruction, of the 1,232 limit (`what_a_registration_costs`).
 7. **Sixteen accepted mints and eight issuer keys per list**, fixed, so no account ever changes
    size and the rent sweep always measures against a size that cannot move.
 8. **Zero-copy for the two big accounts** (the list and the code tree), plain Anchor accounts for
