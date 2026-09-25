@@ -1,0 +1,12 @@
+{
+  "name": "@forest/carrier",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The Forest carrier: Bluesky's relay and Jetstream, configured, with no custom code. Reads Forest hosts, checks every commit's signature, and serves indexes JSON they filter to Forest records.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "build": "./build.sh",
+    "test:local": "node --test --test-force-exit test/carrier.test.ts"
+  }
+}
