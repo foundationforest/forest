@@ -49,29 +49,30 @@ test('the escrow is deployed at its recorded id, its upgrade key still the deplo
   assert.equal(new PublicKey(data.subarray(13, 45)).toBase58(), record.keys.deploy)
 })
 
-test('the invoice paid with one tap left its receipt: ended, approved, accepted, the seller paid in full', { skip }, async () => {
+test('the invoice paid with one tap left its receipt: ended, released to the seller, created by the seller', { skip }, async () => {
   const d = record.deals.invoice
   const escrow = escrowAddress(new PublicKey(record.keys.buyer), BigInt(d.id), programId)
   assert.equal(escrow.toBase58(), d.escrow)
   const e = decodeEscrow(new Uint8Array((await account(escrow)).data))
   assert.equal(e.seller.toBase58(), record.keys.seller)
   assert.equal(e.mint.toBase58(), mint.toBase58())
-  assert.deepEqual([e.status, e.outcome, e.amount, e.toSeller, e.toBuyer], ['ended', 'approved', 2_000_000n, 2_000_000n, 0n])
-  assert.ok(e.acceptedAt !== null, 'an invoice is accepted from creation')
+  assert.deepEqual([e.status, e.outcome, e.amount, e.toSeller, e.toBuyer], ['ended', 'releasedToSeller', 2_000_000n, 2_000_000n, 0n])
+  assert.deepEqual([e.creator, e.arbiter, e.timer], ['seller', null, null], 'an invoice, every option off')
   assert.equal(await connection.getAccountInfo(depositAddress(escrow, mint)), null, 'the deposit account is closed')
-  assert.deepEqual(await kinds(d.signatures.invoice), ['created', 'accepted'])
-  assert.deepEqual(await kinds(d.signatures['one tap']), ['approved', 'ended'], 'paid and approved in one transaction')
+  assert.deepEqual(await kinds(d.signatures.invoice), ['created'])
+  assert.deepEqual(await kinds(d.signatures['one tap']), ['ended'], 'paid and released in one transaction')
 })
 
-test('the objected deal left its receipt: ended, agreed, 60/40', { skip }, async () => {
-  const d = record.deals.agreed
+test('the split deal left its receipt: ended, split 60/40 of the whole balance', { skip }, async () => {
+  const d = record.deals.split
   const escrow = escrowAddress(new PublicKey(record.keys.buyer), BigInt(d.id), programId)
   assert.equal(escrow.toBase58(), d.escrow)
   const e = decodeEscrow(new Uint8Array((await account(escrow)).data))
-  assert.deepEqual([e.status, e.outcome, e.amount, e.toSeller, e.toBuyer], ['ended', 'agreed', 3_000_000n, 1_800_000n, 1_200_000n])
+  assert.deepEqual([e.status, e.outcome, e.amount, e.toSeller, e.toBuyer], ['ended', 'split', 3_000_000n, 1_800_000n, 1_200_000n])
+  assert.equal(e.creator, 'buyer')
+  assert.ok(e.fundedAt !== null, 'marked funded')
   assert.equal(await connection.getAccountInfo(depositAddress(escrow, mint)), null, 'the deposit account is closed')
   assert.deepEqual(await kinds(d.signatures.create), ['created'])
-  assert.deepEqual(await kinds(d.signatures.accept), ['accepted', 'funded'])
-  assert.deepEqual(await kinds(d.signatures.object), ['objected'])
-  assert.deepEqual(await kinds(d.signatures.agree), ['agreed', 'ended'])
+  assert.deepEqual(await kinds(d.signatures['mark_funded']), ['funded'])
+  assert.deepEqual(await kinds(d.signatures.split), ['ended'])
 })

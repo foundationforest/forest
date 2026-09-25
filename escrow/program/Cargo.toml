@@ -2,7 +2,7 @@
 name = "forest-escrow"
 version = "0.1.0"
 edition = "2021"
-description = "The Forest escrow: an amount of a classic SPL token held between two keys, released by signatures and time. Sealed per version."
+description = "The Forest escrow: an amount of a classic SPL token held between two keys, out only when the two sides agree. Sealed per version."
 license = "Apache-2.0"
 publish = false
 exclude = ["tests-litesvm"]
@@ -18,10 +18,18 @@ no-entrypoint = []
 no-idl = []
 no-log-ix-name = []
 idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+# Features Anchor's macros test for; declared so the build has no warnings. None is turned on.
+custom-heap = []
+custom-panic = []
+anchor-debug = []
 
 [dependencies]
 anchor-lang = { version = "1.2.0", features = ["init-if-needed"] }
 anchor-spl = { version = "1.2.0", default-features = false, features = ["token", "associated_token"] }
+
+# Arithmetic that overflows panics instead of wrapping, beside the checked math in the source.
+[profile.release]
+overflow-checks = true
 
 [lints.rust.unexpected_cfgs]
 level = "warn"

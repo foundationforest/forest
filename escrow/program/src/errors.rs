@@ -4,74 +4,50 @@ use anchor_lang::prelude::*;
 pub enum EscrowError {
     #[msg("the buyer and the seller must be different keys")]
     SameParty,
-    #[msg("the arbiter cannot be the buyer or the seller")]
-    ArbiterIsAParty,
-    #[msg("a party cannot be the zero key")]
+    #[msg("a party or the arbiter cannot be the zero key")]
     EmptyKey,
+    #[msg("only the buyer or the seller can open an escrow")]
+    NotAParty,
     #[msg("the amount must be above zero")]
     AmountZero,
-    #[msg("silence days must be above zero")]
-    SilenceZero,
-    #[msg("a service time must be a positive unix time")]
-    BadServiceTime,
-    #[msg("an escrow holds at most four cancellation steps")]
-    TooManySteps,
-    #[msg("cancellation steps must have strictly rising deadlines")]
-    StepsUnsorted,
-    #[msg("a refund is between 0 and 10,000 basis points")]
-    StepOverHundred,
-    #[msg("a split is between 0 and 10,000 basis points")]
-    BadSplit,
+    #[msg("a timer runs for at least one day")]
+    TimerZero,
+    #[msg("wrapped SOL is not accepted: a plain SOL transfer to its deposit account would not count")]
+    NativeMint,
     #[msg("the deposit account holds less than the amount")]
     NotFunded,
-    #[msg("the deposit account already holds the amount; this escrow ends by approval, silence, agreement, the arbiter, cancellation, the buyer's withdrawal, or close_unaccepted after its timeout")]
+    #[msg("the deposit account holds the amount: this escrow ends by one of its ways out, not by close_unfunded")]
     StillFunded,
-    #[msg("the funding was already observed")]
+    #[msg("the funding was already marked")]
     AlreadyFunded,
-    #[msg("the escrow is locked by an objection; only agreement or the arbiter can end it")]
-    Locked,
-    #[msg("the clock has not started: the seller has not accepted, or the funding has not been observed (send mark_funded)")]
-    ClockNotStarted,
-    #[msg("the silence period has not ended")]
-    SilenceNotOver,
-    #[msg("the silence period has ended; it is too late to object")]
-    SilenceOver,
-    #[msg("the last cancellation deadline has passed; the buyer cannot cancel alone")]
-    AfterLastDeadline,
-    #[msg("the last cancellation deadline has not passed; the rent payer cannot close yet")]
-    BeforeLastDeadline,
-    #[msg("no arbiter was named at creation")]
-    NoArbiter,
-    #[msg("only the arbiter named at creation can arbitrate")]
-    NotTheArbiter,
+    #[msg("this escrow has ended; its account is the receipt and nothing more happens to it")]
+    Ended,
+    #[msg("this escrow has not ended; money there is part of the deal")]
+    NotEnded,
     #[msg("only the buyer can do this")]
     NotTheBuyer,
     #[msg("only the seller can do this")]
     NotTheSeller,
-    #[msg("only the buyer or the seller can do this")]
-    NotAParty,
-    #[msg("a deadline does not fit in a unix time")]
+    #[msg("no arbiter was named at creation")]
+    NoArbiter,
+    #[msg("only the arbiter named at creation can arbitrate")]
+    NotTheArbiter,
+    #[msg("no timer was set at creation")]
+    NoTimer,
+    #[msg("the funding has not been marked: send mark_funded first; the timer counts from it")]
+    FundingNotMarked,
+    #[msg("the timer is not due yet")]
+    TimerNotDue,
+    #[msg("a time does not fit in a unix time")]
     TimeOverflow,
-    #[msg("the seller has not accepted: only a full approval, the buyer's withdrawal, or close_unaccepted after its timeout can end it")]
-    NotAccepted,
-    #[msg("the seller has already accepted")]
-    AlreadyAccepted,
-    #[msg("this escrow has ended; its account is the receipt and nothing more happens to it")]
-    Ended,
-    #[msg("wrapped SOL is not accepted: a plain SOL transfer to its deposit account would not count")]
-    NativeMint,
-    #[msg("only the buyer, the seller, or the rent payer after the last deadline can close an escrow that never held the amount")]
+    #[msg("a split is between 0 and 10,000 basis points")]
+    BadSplit,
+    #[msg("only the buyer, the seller or the rent payer can close an escrow that never held the amount")]
     NotACloser,
-    // Session 12, appended so every code above keeps its number.
-    #[msg("this escrow has not ended; money above the amount goes back to the buyer when it does")]
-    NotEnded,
+    #[msg("the buyer is paid only at its standard token account for the escrow's mint")]
+    NotTheRefundAddress,
+    #[msg("the seller is paid only at a token account the seller owns, for the escrow's mint")]
+    NotTheSellersAccount,
     #[msg("the escrow account holds no more than its rent-exempt minimum")]
     NothingToSweep,
-    #[msg("the funding has not been observed: send mark_funded first")]
-    FundingNotObserved,
-    #[msg("an escrow the seller never accepted can be sent back only after its last cancellation deadline, or 30 days after its funding when it has no steps")]
-    BeforeTimeout,
-    // Session 14, appended.
-    #[msg("the buyer is paid only at its refund address: its standard token account for the escrow's mint")]
-    NotTheRefundAddress,
 }

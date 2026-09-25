@@ -1,12 +1,12 @@
-// The escrow on devnet, used for real (session 15): two deals between two throwaway parties, in the
-// test dollar the registry script made.
+// The escrow on devnet, used for real: two deals between two throwaway parties, in the test
+// dollar the registry script made.
 //
 //   FOREST_DEVNET_KEYS=<dir> node scripts/devnet.ts        (after registry/client/scripts/devnet.ts)
 //
-// 1. The seller invoices; the buyer pays with one tap (a plain transfer to the deposit address and
-//    the approval, in one transaction); the receipt stays on chain.
-// 2. The buyer proposes; pays by a plain transfer; the seller accepts; the buyer objects; both sign
-//    a 60/40 split; the receipt stays on chain.
+// 1. The seller invoices; the buyer reads it, checks its options, and pays with one tap (a plain
+//    transfer to the deposit address and the release, in one transaction); the receipt stays.
+// 2. The buyer proposes, with every option off; pays by a plain transfer; anyone marks it funded;
+//    both sign a 60/40 split of the whole balance; the receipt stays.
 //
 // A payer key pays every network fee and every rent, the way a fee payer would, so the parties hold
 // only test dollars. <dir> holds the devnet keypairs (payer, buyer, seller), read and never printed.
@@ -21,21 +21,19 @@ import { createTransferInstruction, getAccount, getAssociatedTokenAddressSync } 
 import { Connection, Keypair, PublicKey, Transaction, type TransactionInstruction } from '@solana/web3.js'
 
 import {
-  acceptIx,
-  agreeIx,
-  approveIx,
-  checkTerms,
+  assertOptionsAgreed,
   createIx,
   decodeEscrow,
   decodeEvents,
-  depositAddress,
-  escrowAddress,
   invoice,
-  objectIx,
+  keysFor,
+  keysOf,
+  markFundedIx,
   randomId,
+  releaseToSellerIx,
+  splitIx,
   termsFor,
   type EscrowAccount,
-  type OfferTerms,
 } from '../src/index.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -117,7 +115,7 @@ function receipt(e: EscrowAccount) {
     toBuyer: e.toBuyer.toString(),
     createdAt: e.createdAt.toString(),
     fundedAt: e.fundedAt?.toString() ?? null,
-    acceptedAt: e.acceptedAt?.toString() ?? null,
+    creator: e.creator,
     endedAt: e.endedAt?.toString() ?? null,
     rentPayer: e.rentPayer.toBase58(),
   }
@@ -131,9 +129,8 @@ function deal(name: string, what: string): Record<string, any> {
   return record.deals[name]
 }
 
-// The seller's offer, as a post would carry it: silence (auto-release) after 7 days, no
-// cancellation steps, no arbiter. No service time: the clock starts at funding and acceptance.
-const offer: OfferTerms = { autoReleaseDays: 7 }
+// The seller's post carries no terms: every option off.
+const post = undefined
 
 console.log(`escrow ${programId.toBase58()} on ${rpc}`)
 record.escrow.testDollar = mint.toBase58()
@@ -144,8 +141,8 @@ save()
 // 1. An invoice, paid with one tap.
 
 {
-  const d = deal('invoice', 'the seller invoices 2.00; the buyer pays and approves in one transaction')
-  const terms = termsFor(offer, { seller: seller.publicKey, amount: 2_000_000n, mint, id: BigInt(d.id) })
+  const d = deal('invoice', 'the seller invoices 2.00; the buyer checks it, then pays and releases in one transaction')
+  const terms = termsFor(post, { seller: seller.publicKey, amount: 2_000_000n, id: BigInt(d.id) })
   const inv = invoice({ seller: seller.publicKey, buyer: buyer.publicKey, payer: payer.publicKey, mint, decimals: 6, terms, label: 'Forest devnet', programId })
   d.escrow = inv.escrow.toBase58()
   d.deposit = inv.deposit.toBase58()
@@ -155,26 +152,28 @@ save()
   if (!(await escrowAt(inv.escrow))) {
     const sig = await send([inv.instruction], [payer, seller])
     const kinds = (await events(sig)).map((e) => e.kind)
-    if (kinds.join() !== 'created,accepted') throw new Error(`the invoice logged ${kinds}`)
-    note(d, 'invoice: the seller opens an escrow naming the buyer, 2.00 test dollars, accepted from creation', sig)
+    if (kinds.join() !== 'created') throw new Error(`the invoice logged ${kinds}`)
+    note(d, 'invoice: the seller opens an escrow naming the buyer, 2.00 test dollars, no options', sig)
   }
   let e = (await escrowAt(inv.escrow))!
   if (e.status !== 'ended') {
-    // The buyer's app reads the invoice off the chain and checks its terms before paying.
-    checkTerms(e, { arbiter: null })
+    // The buyer's app reads the invoice off the chain and checks its options before paying.
+    assertOptionsAgreed({ escrow: e, me: 'buyer', agreed: post ?? null })
     const sellerBefore = await tokens(sellerTokens)
-    const accounts = { escrow: inv.escrow, vault: inv.deposit, buyer: buyer.publicKey, mint, sellerTokens, rentPayer: payer.publicKey }
     const sig = await send(
-      [createTransferInstruction(buyerTokens, inv.deposit, buyer.publicKey, e.amount), approveIx({ accounts, buyer: buyer.publicKey, programId })],
+      [
+        createTransferInstruction(buyerTokens, inv.deposit, buyer.publicKey, e.amount),
+        releaseToSellerIx({ keys: keysOf(e, programId), sellerTokens, programId }),
+      ],
       [payer, buyer],
     )
     const kinds = (await events(sig)).map((ev) => ev.kind)
-    if (kinds.join() !== 'approved,ended') throw new Error(`the one tap logged ${kinds}`)
+    if (kinds.join() !== 'ended') throw new Error(`the one tap logged ${kinds}`)
     if ((await tokens(sellerTokens)) !== sellerBefore + e.amount) throw new Error('the seller was not paid the amount')
-    note(d, 'one tap: the buyer pays 2.00 to the deposit address and approves, in one transaction; the seller is paid', sig)
+    note(d, 'one tap: the buyer pays 2.00 to the deposit address and releases it to the seller, in one transaction', sig)
     e = (await escrowAt(inv.escrow))!
   }
-  if (e.status !== 'ended' || e.outcome !== 'approved' || e.acceptedAt === null) throw new Error('the invoice receipt is not ended, approved and accepted')
+  if (e.status !== 'ended' || e.outcome !== 'releasedToSeller' || e.creator !== 'seller') throw new Error('the invoice receipt is not ended, released to the seller, created by the seller')
   d.receipt = receipt(e)
   d.depositClosed = (await connection.getAccountInfo(inv.deposit)) === null
   save()
@@ -182,56 +181,50 @@ save()
 }
 
 // ---------------------------------------------------------------------------------------------
-// 2. A proposal, funded, accepted, objected to, and settled by agreement.
+// 2. A proposal, funded, marked, and split by both.
 
 {
-  const d = deal('agreed', 'the buyer proposes 3.00 and pays; the seller accepts; the buyer objects; both agree to 60/40')
-  const terms = termsFor(offer, { seller: seller.publicKey, amount: 3_000_000n, mint, id: BigInt(d.id) })
-  const escrow = escrowAddress(buyer.publicKey, terms.id, programId)
-  const vault = depositAddress(escrow, mint)
-  d.escrow = escrow.toBase58()
-  d.deposit = vault.toBase58()
+  const d = deal('split', 'the buyer proposes 3.00 and pays; anyone marks it funded; both sign a 60/40 split')
+  const terms = termsFor(post, { seller: seller.publicKey, amount: 3_000_000n, id: BigInt(d.id) })
+  const k = keysFor({ buyer: buyer.publicKey, payer: payer.publicKey, mint, terms, programId })
+  d.escrow = k.escrow.toBase58()
+  d.deposit = k.vault.toBase58()
   save()
 
-  if (!(await escrowAt(escrow))) {
+  if (!(await escrowAt(k.escrow))) {
     const sig = await send([createIx({ buyer: buyer.publicKey, payer: payer.publicKey, mint, terms, programId })], [payer, buyer])
-    note(d, 'create: the buyer proposes an escrow of 3.00 test dollars to the seller', sig)
+    note(d, 'create: the buyer proposes an escrow of 3.00 test dollars to the seller, no options', sig)
   }
-  let e = (await escrowAt(escrow))!
-  if (e.status === 'open' && (await connection.getAccountInfo(vault)) && (await tokens(vault)) < e.amount) {
-    const sig = await send([createTransferInstruction(buyerTokens, vault, buyer.publicKey, e.amount)], [payer, buyer])
+  let e = (await escrowAt(k.escrow))!
+  if (e.status === 'open' && (await tokens(k.vault)) < e.amount) {
+    // The seller reads the escrow off the chain and checks its options before working.
+    assertOptionsAgreed({ escrow: e, me: 'seller', agreed: post ?? null })
+    const sig = await send([createTransferInstruction(buyerTokens, k.vault, buyer.publicKey, e.amount)], [payer, buyer])
     note(d, "fund: the buyer sends 3.00 to the escrow's deposit address by a plain transfer", sig)
   }
   if (e.status === 'open') {
-    checkTerms(e, { arbiter: null })
-    const sig = await send([acceptIx({ account: e, seller: seller.publicKey, arbiter: null, programId })], [payer, seller])
+    const sig = await send([markFundedIx({ escrow: k.escrow, vault: k.vault, programId })], [payer])
     const kinds = (await events(sig)).map((ev) => ev.kind)
-    if (kinds.join() !== 'accepted,funded') throw new Error(`the acceptance logged ${kinds}`)
-    note(d, 'accept: the seller reads the escrow, checks its terms and accepts; the funding is observed', sig)
-    e = (await escrowAt(escrow))!
+    if (kinds.join() !== 'funded') throw new Error(`the mark logged ${kinds}`)
+    note(d, 'mark_funded: the payer marks the funding; nobody else signs', sig)
+    e = (await escrowAt(k.escrow))!
   }
   if (e.status === 'funded') {
-    const sig = await send([objectIx({ escrow, vault, buyer: buyer.publicKey, programId })], [payer, buyer])
-    note(d, 'object: the buyer objects before silence runs out; the escrow locks', sig)
-    e = (await escrowAt(escrow))!
-  }
-  if (e.status === 'locked') {
     const sellerBefore = await tokens(sellerTokens)
-    const accounts = { escrow, vault, buyer: buyer.publicKey, mint, sellerTokens, rentPayer: payer.publicKey }
-    const sig = await send([agreeIx({ accounts, buyer: buyer.publicKey, seller: seller.publicKey, sellerBps: 6_000, programId })], [payer, buyer, seller])
+    const sig = await send([splitIx({ keys: k, sellerBps: 6_000, sellerTokens, programId })], [payer, buyer, seller])
     const kinds = (await events(sig)).map((ev) => ev.kind)
-    if (kinds.join() !== 'agreed,ended') throw new Error(`the agreement logged ${kinds}`)
+    if (kinds.join() !== 'ended') throw new Error(`the split logged ${kinds}`)
     if ((await tokens(sellerTokens)) !== sellerBefore + 1_800_000n) throw new Error('the seller was not paid 60%')
-    note(d, 'agree: buyer and seller both sign a 60/40 split; 1.80 to the seller, 1.20 back to the buyer', sig)
-    e = (await escrowAt(escrow))!
+    note(d, 'split: buyer and seller both sign 60/40; 1.80 to the seller, 1.20 back to the buyer', sig)
+    e = (await escrowAt(k.escrow))!
   }
-  if (e.status !== 'ended' || e.outcome !== 'agreed' || e.toSeller !== 1_800_000n || e.toBuyer !== 1_200_000n) {
-    throw new Error('the second receipt is not ended, agreed, 1.80 and 1.20')
+  if (e.status !== 'ended' || e.outcome !== 'split' || e.toSeller !== 1_800_000n || e.toBuyer !== 1_200_000n) {
+    throw new Error('the second receipt is not ended, split, 1.80 and 1.20')
   }
   d.receipt = receipt(e)
-  d.depositClosed = (await connection.getAccountInfo(vault)) === null
+  d.depositClosed = (await connection.getAccountInfo(k.vault)) === null
   save()
-  console.log(`  receipt ${escrow.toBase58()}: ${e.outcome}, ${e.toSeller} to the seller, ${e.toBuyer} to the buyer`)
+  console.log(`  receipt ${k.escrow.toBase58()}: ${e.outcome}, ${e.toSeller} to the seller, ${e.toBuyer} to the buyer`)
 }
 
 console.log('done')
