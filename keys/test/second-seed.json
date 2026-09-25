@@ -1,0 +1,5 @@
+{
+  "about": "A second fixed test seed, distinct from the one test/vectors.json pins, for scripts that need a second person. deploy/e2e.ts uses it as the person who puts a profile on the devnet host, joins the devnet issuer's list and is badged through the devnet fee payer. It is the recipe's 32-byte seed itself (what seedFromPrf returns), not a PRF output: SHA-256 of the ASCII string in 'derivation'. Public by construction, so every key it derives is public; for tests and devnet only. Nothing in keys/ tests it; test/vectors.json stays the recipe's pinned answers.",
+  "derivation": "SHA-256(\"forest.foundation/test/second-seed/v1\")",
+  "seed": "45d56ae7f320143db53c68822a0ea09ce4da212a50820275ffd68e5f39fa018c"
+}

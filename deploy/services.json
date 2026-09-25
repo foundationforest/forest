@@ -1,0 +1,14 @@
+{
+  "supabase": {
+    "organization": "Forest",
+    "project": "forest-devnet",
+    "ref": "grhoheihzqwgzyiajzkp",
+    "region": "us-west-1",
+    "plan": "free",
+    "pooler": {
+      "host": "aws-0-us-west-1.pooler.supabase.com",
+      "port": 5432,
+      "mode": "session"
+    }
+  }
+}
