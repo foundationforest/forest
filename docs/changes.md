@@ -886,3 +886,1176 @@ Log of what was built, learned, and left open, appended at the end of every sess
   3. **Whether a market file keeps `credentialIssuers`.**
   4. **`escrow/README.md` and `index/README.md` describe the old design;** their sessions own them.
 - **Still standing:** as session 18 listed, with the devnet deploy and run still not done.
+
+## 2026-09-25: issuer, the parallel session's log
+
+From `docs/changes/issuer.md`, as it was written, folded here by the integration session.
+
+### 2026-09-25: the issuer, face check to list, batched
+
+- **Build order:** step 2 of the handoff's "Next", the issuer flow, asked for by Carlos. It runs on
+  a local validator with a stand-in Didit. Nothing is deployed: no real face check, no devnet, no
+  Railway.
+- **Decided (by Carlos, in planning; built here):**
+  - **The issuer also opens the Didit session (`POST /session`).** The task had the app get a session
+    id by itself, but opening a session needs the foundation's API key (`POST /v3/session/`), which
+    an app can't hold. And the handoff rules out the face check as a product-side service. So the
+    service has three routes, not two.
+- **Chosen, not decided:** the fourteen in `issuer/README.md`, "Chosen, not decided". The ones that
+  matter most:
+  - **A random `vendor_data` on every session.**
+  - **`POSSIBLE_DUPLICATED_FACE` refuses.**
+  - **A refused session is not used up.**
+  - **Status is a POST,** so no commitment ever sits in a URL.
+  - **Session ids are kept hashed.**
+  - **`VACUUM` after every batch.**
+  - **One insert per transaction, paid by the issuer key.**
+- **Built:**
+  - **`issuer/`, a small HTTP service in TypeScript** on Node's built-in HTTP and SQLite.
+    - Its one dependency is `@solana/web3.js`, pinned to the registry client's version.
+    - `src/didit.ts`: the `FaceCheck` interface, the Didit v3 client, and `judge`, the one rule.
+    - `src/store.ts`: two tables that share nothing.
+    - `src/list.ts`: the list's members and the insert, through `registry/client`.
+    - `src/batch.ts`: shuffle, the triggers, and the rewrite after each batch.
+    - `src/server.ts`: the three routes. `src/service.ts`: configuration from the environment.
+  - **Tests:** 18 without a chain and one end to end on `solana-test-validator`, all passing.
+    - **Without a chain:** the accepted flow; a failed liveness check refused; a duplicate face
+      refused (both codes, whether Didit's rules declined it or not); a reused session refused,
+      including two requests racing on one session; every other refusal and malformed body;
+      batches shuffled (neither arrival order nor the file's key order); both triggers; no double
+      insert after a crash; a failed batch keeps the rest queued.
+    - **The raw file:** after the batch, the file holds none of 300 commitments in any form, no
+      session id in the clear, only the two tables, and no journal beside it. With `secure_delete`
+      and `VACUUM` turned off, this test fails.
+    - **The Didit client:** tested against a local stand-in answering in the shape of Didit's
+      documents.
+    - **End to end on a validator:** `init`, the service started from environment variables with
+      the real chain client, three people submitted, one batch, and the list's leaves read back
+      with `fetchListLeaves` are exactly those three.
+    - `registry/client`'s own tests still pass (20 of 20).
+  - **`issuer/README.md`:** what the service does and never does, the API, the Didit workflow it
+    expects, how to run it, the environment variables, and what Railway will need.
+- **Learned:**
+  - **Didit's API is version 3.**
+    - Fetching a decision: `GET https://verification.didit.me/v3/session/{id}/decision/` with an
+      `x-api-key` header. Opening a session: `POST /v3/session/`.
+    - A decision carries `liveness_checks[]`, each with its own `status` and `warnings[].risk`.
+    - Didit's own documents write the status both as `Approved` and as `APPROVED`.
+  - **A duplicate face is a risk code, not a status.**
+    - Didit's face search runs inside every liveness step and reports `DUPLICATED_FACE` or
+      `POSSIBLE_DUPLICATED_FACE`, meaning the face was "already verified under a different
+      `vendor_data`".
+    - Its standalone Face Search returns "Approved" for a pure duplicate and leaves the policy to
+      the caller. So the issuer checks the codes itself rather than trusting a status.
+  - **Deleting a Didit session removes its face from the duplicate search,** and the person can
+    then pass again unflagged, under a new secret. A workflow can also turn the face search off
+    (`face_search_enabled: false`), and then no decision says "duplicate". The issuer can see
+    neither. Both are operating rules in the README.
+  - **Didit lets an API key see only its own application's sessions.** A product holding its own
+    Didit key could not hand the foundation a session to check, which is another reason the
+    issuer opens the session.
+  - **Railway's HTTP logs keep every request's client address and path,** for 3 to 90 days by
+    plan, with no documented way to turn them off.
+  - **Deleting a SQLite row does not remove it from the file.** With neither `secure_delete` nor
+    `VACUUM`, 156 of 300 deleted commitments were still readable in the file. Either one alone
+    removed them all.
+  - **The registry takes the same commitment twice**
+    (`finding_an_issuer_can_insert_the_same_commitment_twice`). So a batch re-reads the list first,
+    and waits for each insert until its blockhash expires, never less.
+- **Open:**
+  1. **Losing the seed, against the duplicate check.** The handoff says a person who loses their
+     seed gets back on the list with another face check. But that face is already on the list, so
+     Didit reports a duplicate and this issuer refuses it, forever. Either the handoff's sentence
+     changes, or something decides when a known face may join again. Letting it join again gives
+     one human two secrets, so two badges per market.
+  2. **A passed check that never reached `/submit`** (the device lost between the check and the
+     submit) locks the person out the same way: their face is Didit's, and their session id is
+     gone with the device.
+  3. **A minimum batch size.** An hourly batch of one person is an anonymity set of one for anyone
+     who sees both Didit's session times and the chain. Should a batch wait for at least N?
+  4. **Railway's address logs conflict with "no address logs".** The service keeps none, but
+     Railway keeps every client address for days. This applies to the host and every other
+     Railway service too. It needs a decision: accept it, find a host that does not log, or put
+     something in front.
+  5. **No rate limit on `/session` or `/submit`.** Anyone can open Didit sessions at the
+     foundation's cost (Didit bills per check, beyond a free monthly allowance), and a flood of
+     submits spends Didit's decision rate limit.
+  6. **Where the issuer key file lives on Railway:** on the volume (every backup then holds it), or
+     written at start from a sealed variable. Before mainnet it is the real `FOUNDATION_ISSUER`
+     key, not the placeholder.
+  7. **A manual approval in Didit's console keeps the duplicate warning,** so the issuer still
+     refuses a false duplicate that a person has cleared. Is there a path for a false positive?
+  8. **Two face checks by one person at the same moment** may not see each other in Didit's
+     duplicate search if neither is approved yet. Didit's documents don't say; ask Didit.
+  9. **`fetchListLeaves` reads every transaction that touched the list,** at start and before
+     every batch. Fine at thousands of members, not at millions; an index could serve the members
+     instead.
+  10. **The Didit client is tested against a stand-in built from Didit's documents, not Didit
+      itself.** Its first real run should compare a real decision's shape with `parseDecision`.
+
+### 2026-09-25: the issuer, round two: a request limit, and the key from a sealed variable
+
+- **Build order:** a follow-up to the issuer, asked for by Carlos. The first round's pull request
+  (#20) was already merged, so this round is a new pull request from `main`, not an update to #20.
+  Nothing is deployed.
+- **Decided (by Carlos; built here):**
+  - **A simple request limit on opening sessions:** per network address, in memory only, never
+    written to disk or logs, a few per hour. A refused request gets a plain "try later". It exists to
+    stop someone running up the foundation's Didit bill. The README says it resets on restart and is
+    not a security boundary.
+  - **The issuer key on Railway comes as a sealed variable** (`ISSUER_KEYPAIR`, the key file's
+    contents), written at start to a file readable only by the service in a temporary directory,
+    never in the repo or the image. `ISSUER_KEYPAIR_PATH` stays for local runs.
+  - **No change to batching:** hourly or at 50, shuffled. The proof already hides which entry on the
+    list is anyone's, so a minimum batch size adds little. This closes round one's open 3.
+- **Chosen, not decided** (the simplest option; `issuer/README.md`, items 15 to 19):
+  - **Five sessions per address per hour by default** (`SESSION_LIMIT_PER_HOUR`), in a window that
+    starts at the address's first request. Only `/session` is counted, after its body is checked.
+    A refusal is `429 {"error": "try_later"}`, and Didit is not asked.
+  - **An IPv6 address counts by its /64,** since one device or household usually holds a whole
+    /64. An IPv4 address counts alone. `::ffff:`-mapped IPv4 counts as the IPv4 address.
+  - **The limit keeps keyed hashes, not addresses:** HMAC-SHA256 under a random key made at start
+    and never written. Windows whose hour has passed are dropped once an hour.
+  - **The address comes from a proxy's header only when `CLIENT_ADDRESS_HEADER` names one**
+    (`x-real-ip` on Railway). Unset, the connection's own address counts and every such header is
+    ignored, so a client can't choose its own address where no proxy stands in front.
+  - **The key file is deleted as soon as the key is loaded.** Nothing reads it again. The file is in
+    a new directory under the system's temporary directory (0700), holding one file (0600). The
+    variable is taken out of the process's environment once read.
+  - **Setting both key variables is refused,** rather than one silently winning.
+- **Built:**
+  - **`issuer/src/limit.ts`:** the limit and the address grouping.
+  - **In `issuer/src/list.ts`:** `parseKeypair`, whose errors quote none of the key, and
+    `writeKeyFile`. `issuer/src/service.ts` and `issuer/src/server.ts` wire both in.
+  - **A leak fixed on the way:** a malformed key file used to fail with JSON's own parse error,
+    which quotes part of the text it fails on, so a broken key would have printed part of itself to
+    the log. Both key paths now fail with a message naming only the variable or the file.
+  - **Tests:** three new ones without a chain, 21 in all, and the validator test now runs with the
+    key from `ISSUER_KEYPAIR`. All pass.
+    - **The limit over HTTP:** three sessions, then `try_later`, with Didit not asked; another
+      address unaffected; three IPv6 addresses in one /64 share a count, and the next /64 doesn't;
+      a malformed request isn't counted; with no header named, a client's own `x-real-ip` is
+      ignored; no address in the log or the file.
+    - **The limit's clock:** a fresh share after an hour, stale windows dropped, the /64 grouping.
+    - **The key:** from a variable, the file and its directory private to the user and under the
+      temporary directory, removed afterwards; malformed keys refused without quoting them; both
+      variables refused.
+    - **End to end:** on the validator, the service loaded the key from `ISSUER_KEYPAIR`, and its
+      file was gone once the service was up.
+    - Turning the limit off fails two tests; writing the key file readable by all fails one.
+  - **`issuer/README.md`:** "The request limit", the two key variables, Railway's
+    `CLIENT_ADDRESS_HEADER`, and items 15 to 19 of "Chosen, not decided".
+- **Learned:**
+  - **Behind Railway's edge, the connection's address is the edge's,** so a limit that counts it
+    would limit everyone together. Railway puts the client's address in `X-Real-IP` (its networking
+    documents).
+  - **Railway hands sealed variables to builds as well as deployments,** so "not in the image" holds
+    only while no build step reads `ISSUER_KEYPAIR`. None does.
+- **Open:**
+  1. **Shared addresses share one count.** People behind one carrier-grade NAT or one campus address
+     get five sessions an hour between them. Whether that is too few is for real traffic to show;
+     the number is one variable.
+  2. **`/submit` is not limited.** Each submit asks Didit for a decision, which costs nothing but
+     spends Didit's rate limit. Its documents give 600 requests a minute per key in one place
+     ("Retrieve Session") and 100 decision reads a minute in another (its agent skills).
+  3. **The limit's memory grows with the number of addresses in an hour.** One entry each, dropped
+     after the hour. Someone with very many addresses could grow it; not measured.
+  4. Round one's open 1, 2, 4 and 7 to 10 stand. Its 5 (no rate limit) and 6 (the key on Railway)
+     are closed by this round, and its 3 (a minimum batch) by Carlos's decision.
+
+## 2026-09-25: index, part one, the parallel session's log
+
+From `docs/changes/index.md`, as it was written, folded here by the integration session.
+
+### 2026-09-25: index part one, the data, the scores, JSON
+
+- **Build order:** step 5 of the handoff's "Next" (the index), first half, asked for by Carlos:
+  - ingest records from a firehose and registry and escrow events from the chain;
+  - score uniqueness and trust, each signed twice;
+  - serve JSON.
+
+  Pages, the JSON twin of every page, sitemap, llms.txt, the read skill, the badge and pay link, and
+  the deploy are part two. Ran in parallel with other sessions; touched `index/` and this file
+  only. Nothing is deployed anywhere.
+- **Asked for by Carlos, built as asked:**
+  - Postgres with plain SQL migrations.
+  - Records from the host's firehose, verified against DID documents.
+  - Only the programs' own events.
+  - Escrow events through one adapter, so the rewrite in progress changes one file.
+  - A badge counts only when the profile declares its wallet.
+  - Per-issuer weights in a config file: the foundation's list at 1, others at 0.
+  - Evidence weights in three classes.
+  - Scores never blended, signed with EdDSA-Poseidon and Ed25519.
+  - Market aliases in a config file.
+  - The endpoints listed.
+- **Chosen, not decided** (the simplest option where the handoff is silent; each reversible, since
+  nothing ships):
+  1. **Aliases group posts and URLs, never badges.** A badge counts only under the directory name,
+     byte for byte (adversarial review 1, rule 2). If aliases merged badges, one human could
+     register under two spellings and hold two badges in one market.
+  2. **A reviewer's starting weight is its best uniqueness, with a floor of 0.05 for no counted
+     badge.** "Weighted by the reviewer's own trust" with "everyone starts at zero" leaves every
+     score at zero forever without a seed; the handoff's "an unbadged reviewer's review weighs near
+     zero" supplies it.
+     - The reviewer's weight is `max(u, 0.05) × (1 + t/(|t|+1))`, iterated to a fixed point
+       (tolerance 1e-9, at most 100 rounds).
+     - Uniqueness is only an input to how much a review weighs. The two scores are published
+       separately.
+  3. **Trust is a sum, not an average.** Each review adds `weight × evidence × (rating − 3)/2`, so
+     it can go below zero. No rating counts as neutral (0). Self-reviews are ignored.
+  4. **Dedupe:** per reviewer and subject, one review per deal id with evidence under it, and one in
+     all (the latest) for everything without. Without this, invented deal ids inflate a score for
+     free.
+  5. **Evidence classes:**
+     - paid and accepted (or invoiced): 1
+     - one-tap paid, not accepted: 0.5, or 1 once the seller reviews the same deal id
+     - withdrawn, never accepted, never paid, or no receipt: 0.05
+
+     "Paid" is a `Funded` event or an ending that paid from a full balance (rule 6: an ending proves
+     funding). An escrow in progress that is funded and accepted already counts fully.
+  6. **A receipt counts only when the reviewer and the subject are its two parties by their
+     declared wallets**, either way round, and its token is in `countedMints` (USDC mainnet and
+     devnet). This is the handoff's "the index decides which tokens it counts"; market files no
+     longer list tokens.
+  7. **Uniqueness combines issuers as `1 − Π(1 − w)`.** Two issuers at 0.5 give 0.75: more than
+     either alone, never more than 1. A sum would overclaim; a maximum would ignore a second voucher.
+  8. **The weight follows the list owner the `Registered` entry names**, not whoever owns the list
+     after a handover.
+  9. **A scope is split at the first colon into market and role.** A role must be one of the market
+     file's roles to count. Whether scopes carry roles is still the `markets` repo's call.
+  10. **Categories come from the market files' `category` field**; there are no category files yet.
+  11. **Trust is per profile, not per market**, because a review names no market.
+  12. **Score encoding for signing:**
+      - Values are in millionths.
+      - The Poseidon message is `Poseidon(domain, kind, fieldHash(did), scopeOf(scope), value + 2^63, at)`.
+        The scope is the registry's own `scopeOf`, so a later circuit ties a uniqueness score to the
+        Semaphore scope of that market's badge.
+      - The Ed25519 signature is over a six-line text statement.
+      - Both keys come by HKDF-SHA256 from one seed, `INDEX_SIGNING_SEED`.
+      - A value that did not change keeps its statement and signatures.
+  13. **The index's public keys are served at `/`**, an endpoint not on the list, because without
+      them nobody can check a signature.
+  14. **Offer order: badged sellers first, then trust, then newest.** Two keys side by side, not one
+      blended number.
+  15. **An alias URL answers 301** to the directory name.
+  16. **Search:** substring match over directory market names, aliases, categories and roles, and
+      Postgres full-text search with the `simple` configuration (no language favoured) over live
+      offers.
+  17. **Full recompute on every change**, debounced by 250 ms, one run at a time.
+  18. **Profiles and receipts link by declared wallets.** `/deals/{id}` lists the profiles that
+      declare each party's wallet. That is public data the profiles published.
+  19. **Not acted on in part one:** identity, account and sync events from the firehose; backfill
+      by `getRepo`; photos beyond their CID and type; the unresolved-lock mark (stored as `locked`,
+      not weighed).
+  20. **The resolver uses plain fetch only when `PLC_URL` is `http://`** (local). Otherwise it keeps
+      `@atproto/identity`'s default fetch, which refuses private addresses.
+  21. **The index imports `registry/client`, `escrow/client` and `shapes` by relative path**, not as
+      packages. Node strips TypeScript types only outside `node_modules`, and those packages are not
+      built or published.
+  22. **`CHAIN_COMMITMENT` defaults to `finalized`**; tests read `confirmed`.
+- **Built** (all in `index/`):
+  - **Schema:** `migrations/001_init.sql`: profiles, posts, reviews, credentials,
+    chain_transactions (the log archive), badges, escrow_receipts, cursors, review_weights, scores.
+  - **Record reader:** `src/records/firehose.ts` (`@atproto/sync` 0.4.10, the host pin's own
+    version, with `MemoryRunner` and the cursor in Postgres) and `src/records/store.ts` (the lexicon
+    check with `shapes/src/validate.js`, then upsert or delete).
+  - **Chain reader:** `src/chain/poll.ts`, which pages `getSignaturesForAddress` back to its cursor,
+    archives logs and reads each transaction in one database transaction.
+  - **Adapters:** `src/chain/registry.ts` over `decodeRegisteredEvents`, and `src/chain/escrow.ts`,
+    **the escrow adapter**, over `decodeEvents`, mapping to the index's own `EscrowFact`.
+  - **Scores:** `src/scores/compute.ts` (pure), `sign.ts`, `run.ts`.
+  - **Endpoints:** `src/api/routes.ts` (web-standard `handle(Request)`) and `server.ts`
+    (node:http). `src/main.ts` runs everything; `src/migrate.ts` only migrates.
+  - **Config:** `config/issuers.json`, `aliases.json`, `scoring.json`.
+  - **Tests, 20, all passing here:**
+    - `test/scoring.test.ts` (8): every evidence class, badge counting, the uniqueness
+      combination, dedupe, self-reviews, the fixed point, negative trust.
+    - `test/sign.test.ts` (4): both signatures verify; a changed value or another index's keys fail
+      both.
+    - `test/e2e.test.ts` (1 test, 7 steps), on a local PLC, the host from `host/`, a local
+      validator with both programs, and a throwaway Postgres database. It covers three profiles and
+      two posts (one under an alias); three real badges on list 0, one for an undeclared wallet;
+      a paid deal (open, accept, transfer, mark funded, approve); reviews both ways plus one with a
+      made-up deal id; a forged commit refused for its signature next to a genuine one stored;
+      scores exactly as the formula gives, with both signatures verified from the served JSON; and
+      every endpoint's fields, status codes and cache headers.
+  - **Text:** `index/README.md` and `index/SCORING.md`.
+- **Learned:**
+  - **The firehose consumer does the verification, and does it whole.** A commit for Ana's DID
+    signed with Mallory's key reaches `onError` as a `FirehoseParseError`. Its cause is a
+    `RepoVerificationError`, "Invalid signature on commit", raised after one retry with a fresh key.
+    Nothing from that commit reaches the index's code. Ops whose Merkle proof fails are dropped
+    silently.
+  - **The payment into an escrow is invisible to a reader that follows the escrow program.** A plain
+    token transfer into the deposit address never names the program, so `getSignaturesForAddress`
+    on the program does not return it. The index learns the escrow was paid only from `Funded` or
+    an ending. That makes rule 6 (an ending proves funding) necessary, not just convenient. The
+    test's deal is four escrow transactions, not five.
+  - **Two badged people who review each other once converge to 1.618 each** (x = 1 + x/(x+1)). A
+    pair reinforces itself; trust is not a count of good deals. Worth a look when Carlos weighs the
+    formula.
+  - **EdDSA-Poseidon signing is slow in JavaScript: about 88 ms per score**, and verification
+    about the same (zk-kit 1.0.4 on this machine, both signatures together). 10,000 changed scores
+    take about 15 minutes, inside one database transaction as built. Fine for part one; it needs a
+    worker, batching outside the transaction, or a faster library before it has real traffic.
+  - **Mixing the clients' copy of `@solana/web3.js` with the index's works** on every path used
+    here (instructions, versioned transactions, keys), because web3.js checks shapes, not classes.
+    The adapters still turn everything into strings at the boundary.
+  - **Timings here:** the end-to-end test takes about 29 seconds, of which about 19 are the three
+    registrations (a proof each). The unit tests take about 1 second.
+  - **The machine was reset between turns once:** Postgres had to be started again. A later
+    session should expect to run `pg_ctlcluster 16 main start` first.
+- **Open** (questions for Carlos; not decided here):
+  1. **Where the readers run.** The endpoints fit Vercel functions, but the firehose reader holds a
+     websocket and the chain reader a poll loop, which serverless cannot keep. Railway, like the
+     host and carrier? Part two needs the answer.
+  2. **Collusion by real small deals.** Two real people who accept each other's tiny escrows gain
+     full evidence each time. Candidates: a minimum amount per counted token, less weight for repeat
+     deals between the same two profiles, or both.
+  3. **An unbadged profile can claim someone else's wallet** by declaring it, and so be matched to
+     that wallet's receipts. It gains at most the 0.05 reviewer floor. The stricter rule, "a wallet
+     counts only when a badge proves it", would close it, and would also make an unbadged buyer's
+     receipt count as none.
+  4. **The trust scale.** A raw sum with mutual reinforcement (the 1.618 above). Whether readers
+     need it normalised, or shown as counts beside it, is a part-two question for the pages.
+  5. **No rating counts as neutral.** The handoff's "what is missing weighs less" could also mean a
+     thin review is a small positive vouch.
+  6. **Which tokens count.** Only USDC (mainnet and devnet) is in `countedMints`. Whether the
+     treasury's other accepted tokens should count automatically is Carlos's call.
+  7. **The issuer weights file names the registry's placeholder `FOUNDATION_ISSUER`.** When the
+     registry's placeholder is replaced before mainnet, `config/issuers.json` must change with it.
+  8. **Escrow versions.** One escrow program id is read. New deals move to a new version while old
+     ones finish on theirs, so the reader needs a list of ids, each with its adapter. After the
+     rewrite lands, `src/chain/escrow.ts` is where that goes.
+  9. **Backfill and moves.** Only the firehose from cursor 0. A folder imported on another host, or
+     history older than the firehose keeps, needs `getRepo` and `verifyRepo`; identity and account
+     events (a moved or deactivated folder) are not acted on.
+  10. **Signing at scale** (the 88 ms above), and whether the index's signing seed lives in the
+      deploy's secrets or a key service.
+  11. **The index keeps its own log archive,** but it has only the RPC's word for what the logs say.
+      A second RPC to cross-check, or reading the receipt accounts too, is a choice for the deploy.
+
+## 2026-09-25: escrow, the parallel session's log
+
+From `docs/changes/escrow.md`, as it was written, folded here by the integration session.
+
+### 2026-09-25: the escrow rewritten to "Escrow" in the handoff
+
+- **Task,** from Carlos: rewrite the escrow program, its client, tests and fuzzer to the handoff's
+  new Escrow section (money in, and out only when the two sides agree; every option off by
+  default), using the safe-solana-builder skill, and write its security checklist. One pull
+  request. No deploy.
+- **Base.** This branch starts from `main` at `77dfeed`. The spec (the handoff's new "Escrow"), the
+  skill (`.claude/skills/safe-solana-builder/`) and the post lexicon's new `#terms` are on the
+  unmerged `claude/wonderful-dirac-2b7ysa` ("Plan update: no-clock escrow…"), read from there. The
+  pull request touches only `escrow/` and this file.
+- **Decided (by Carlos, given in the task; written here):**
+  - The ways out once funded: `release_to_seller` (the buyer signs), `release_to_buyer` (the
+    seller signs), `split` (both sign, any split), `arbitrate` (only if an arbiter was named; it
+    signs any split), `timer_release` (only if a timer was set; anyone, once N days have passed
+    since funding; everything to the side it names), and `close_unfunded` for a never-funded escrow
+    (either party or the rent payer, any time, rent to the rent payer). Everything else is removed:
+    acceptance, invoices-as-acceptance, service time, the silence clock, objection and locks,
+    cancellation steps, withdraw-before-accept, the unaccepted timeout.
+  - Kept: create by either party (a seller-created escrow is an invoice), the deposit address,
+    `mark_funded` by anyone, the permanent receipt, `recover_late` to the buyer's standard account,
+    `sweep_rent` to the rent payer, classic SPL tokens only, wrapped SOL refused.
+  - Carlos's four answers, all toward the fewest rules: money to the buyer always lands in the
+    buyer's standard token account for the mint; the arbiter can be anyone, a party included; the
+    escrow records an agreed amount for the receipt, but every way out pays out the whole balance
+    (releases send all of it, `split` and `arbitrate` divide it by percentage; no amount limits, no
+    excess rule); once a timer is due, anyone may trigger it.
+  - These answer four of the escrow questions in the handoff's Open (where money to the buyer lands,
+    whether the arbiter may be a party, where money above the amount goes, who may send the timer).
+- **Chosen, not decided** (the simplest option; each reversible before deploy, each in
+  `escrow/README.md`):
+  1. **Funded means the live balance covers the amount,** checked by every way out; below it the
+     only exit is `close_unfunded`. So a receipt always means the amount was held, and one-tap Pay
+     needs no `mark_funded`.
+  2. **`mark_funded` records a time and nothing else,** and only the timer reads it. No way out
+     records the funding time, so a receipt nobody marked (every one-tap payment) says
+     `funded_at` 0.
+  3. **A split is in basis points** (`u16`, at most 10,000), the seller's share rounded down.
+  4. **The timer is due from the second:** `now ≥ funded_at + days × 86,400`. Days are sixteen bits,
+     1 to 65,535, matching the lexicon.
+  5. **The buyer's account must exist only when the buyer is paid.** It is checked by address, and
+     the token program checks the rest when it pays. So a never-paid escrow closes, and a split of
+     everything to the seller runs, with no buyer account at all.
+  6. **One `Ended` event for every way out,** with the outcome inside. Six events in all: `Created`,
+     `Funded`, `Ended`, `Closed`, `RecoveredLate`, `RentSwept`.
+  7. **The escrow records its creator** (buyer or seller), in the account and in `Created`, for the
+     index's rule that a receipt counts fully when the seller created the escrow. It replaces
+     `accepted_at`.
+  8. **`timer_release` names one account,** the named side's: the buyer's by address, a seller's by
+     holder and mint, checked in the handler.
+  9. **Buyer and seller must differ; no key may be the zero key,** the arbiter's included (the zero
+     key means "no arbiter" in the account).
+  10. **`close_unfunded` has no wait for anyone.** No deadline exists.
+  11. **The pay link takes the deposit account's balance and asks only for what is missing,** and
+      refuses once the amount is there: an overpayment is no longer sent back by the program.
+  12. **`recover_late` and `sweep_rent` are unchanged** from the last version, with their known limits.
+  13. **Seller payouts stay as before:** any token account the seller holds for the mint. Only the
+      buyer's rule was decided.
+  14. **A fresh layout,** 256 bytes after the discriminator (was 311), fields in a new order, errors
+      renumbered: nothing is deployed.
+  15. **`overflow-checks = true`** in the program's release profile, and the three features
+      Anchor's macros test for are declared, so the build has no warnings.
+- **Built:**
+  - **`escrow/program/`:** ten instructions (`create`, `mark_funded`, `release_to_seller`,
+    `release_to_buyer`, `split`, `arbitrate`, `timer_release`, `close_unfunded`, `recover_late`,
+    `sweep_rent`), 24 errors, six events, one `pay_out` and one `end` helper shared by all five ways
+    out. The skill's header block. The build is 311,680 bytes (sha256 `88cbc548…e8cf1e` here), with
+    no warnings and no stack-frame report.
+  - **`escrow/program/tests-litesvm/`:** the harness and the wire format rewritten by hand; 49 tests.
+    - `escrow.rs` (20): every way out with exact balances (an overpaid balance, splits at 0, 1,
+      5,000, 9,999 and 10,000 basis points, the arbiter as a third key and as either party, the timer
+      a second early and at due to each side and at 65,535 days, `close_unfunded` by each allowed
+      closer). Every rejection asked for: the wrong signer on each instruction, `arbitrate` with no
+      arbiter, `timer_release` with no timer, unmarked, early, or marked in the same transaction, a
+      payout to anything but the buyer's standard account (five ways out), a Token-2022 mint,
+      wrapped SOL, a double ending (in one transaction and later, with late money there), late money
+      forwarded, a sweep never below the minimum. Plus the costs.
+    - `adversarial.rs` (27): the attacks from adversarial review 1 that still apply, and new
+      `finding_…` tests pinning what the program accepts by design (a short timer the other side
+      did not set, each way; an overpayment going to the seller; a part payment closed under the
+      buyer; a frozen buyer account; the timer's sender choosing the seller's account; a front-run
+      address).
+    - `one_tap.rs` (2): create, fund and `release_to_seller` in one transaction, measured, with its
+      receipt and rent; a second payment to its link sent back.
+  - **`escrow/program/trident-tests/`:** the model and flows rewritten; twelve invariants (I5, money
+    leaves only with an authority named at creation, checked apart from the model's own verdict;
+    I11, nothing is stuck: every live escrow ends by its parties' signatures at the end of each run;
+    I12, a timer never pays early).
+  - **`escrow/client/`:**
+    - a builder per instruction, plus `payInOneTap`, `transferIx`, `makeStandardAccountIx` and
+      `keysOf` / `keysFor`;
+    - `optionsFromPost` and `termsFor` from a post's optional `terms` block;
+    - `optionsNotAgreed` and `assertOptionsAgreed`, the check before a person works or pays: every
+      arbiter or timer they did not set, whose key an arbiter is, and which side a timer favours;
+    - `whatDiffers`, the check that an escrow is the one meant;
+    - `timerDueAt`, `timerDue`, `payout`;
+    - the pay link takes the balance;
+    - decoding for the new account and events.
+    - Tests: 17 unit tests, and the validator test running three deals (a 70/30 split of an
+      overpaid balance, an invoice paid in one tap, a refund before a timer is due) plus late money
+      and a sweep. `scripts/devnet.ts` and `test/devnet.test.ts` move to the new deals (an invoice
+      paid in one tap; a proposal marked and split 60/40); type-checked, not run.
+  - **`escrow/README.md`** rewritten: the state table, costs, what is sealed, what the app decides.
+    **`escrow/security-checklist.md`:** every rule in the skill's shared base, anchor and LiteSVM
+    references, the high-risk decisions, and fourteen known limits.
+- **Measured** (LiteSVM, twelve runs with fresh keys):
+  - one tap 42,300 to 63,300 compute units and 691 bytes; 55,800 to 84,300 and 733 bytes with the
+    seller's account made in it;
+  - `release_to_seller` 10,782 to 10,799; `split` 15,200 to 21,200; `create` 31,600 to 57,200;
+  - a receipt's rent 1,991,360 lamports ($0.20) at 5,080 a byte and 272,832 ($0.027) at 696, 279,400
+    less than before at today's rate.
+- **Verified:**
+  - all 49 LiteSVM tests, 17 client tests and the validator test pass;
+  - the fuzzer ran 50,000 iterations of 80 flows (4,000,000 flows) in 98 seconds, exit 0, every
+    instruction both accepted and refused thousands of times (`timer_release` accepted 2,753 times).
+    That binary differed from the final one only in how `Closed` adds its two rents (a checked add
+    became a saturating one); 10,000 iterations (800,000 flows) on the final binary, exit 0;
+  - mutation checks: dropping the buyer check on `release_to_seller` and moving the timer a day
+    early, applied together, failed four LiteSVM tests across two files (the wrong-signer test for
+    the first, three timer tests for the second). The early timer alone made the fuzzer exit 99.
+    The program was restored and rebuilt after each check.
+- **Learned:**
+  1. **Anyone can open the address a buyer is about to use.** The address is `["escrow", buyer,
+     id]`, and whoever opens it names the seller, so a front-runner can open it as an invoice to
+     itself with its own options. No money moves (one tap fails whole, the squatted escrow never held
+     anything and the buyer can close it), but an app that pays apart from its own `create` must
+     check `whatDiffers` first. The last version had the same address scheme.
+  2. **Whole-balance payouts turn the pay link into a money question.** A second tap before the end
+     now pays the seller, not the buyer back, so the link asks only for what is missing.
+  3. **Anchor 1.2's duplicate-mutable-account check skips `UncheckedAccount`,** so the buyer's
+     address-checked account can coincide with the seller's if the buyer handed it to the seller;
+     both shares land there, nothing is corrupted. Documented in the checklist (§4), not refused:
+     refusing would let a buyer block the arbiter.
+  4. **The token program refuses to pay an account that does not exist with `InvalidAccountData`**:
+     that is the refusal when a way out pays the buyer and its standard account is missing.
+  5. **The program is smaller:** 311,680 bytes against the old devnet build's 363,120. By session
+     15's own ratio, its devnet deploy costs about 1.58 SOL rather than 1.8455 (estimated, not
+     measured), and `docs/devnet.md`'s escrow size, hash and cost are stale. A clean rebuild here
+     gave the same bytes as the build before it.
+  6. **The skill asks for a framework and a test tool first;** here both are settled (Anchor 1.2,
+     LiteSVM). It asks for a `zz_cu_summary` test; each measuring test prints its own table instead,
+     so the numbers do not depend on test order.
+- **Open** (each a program change, possible only before deploy, unless it says otherwise):
+  1. **Where the seller is paid.** Any token account the seller holds, and for `timer_release` the
+     sender chooses which. Should the seller, like the buyer, be paid only at its standard account?
+  2. **Whether a way out should record the funding time** when nobody marked it, so every receipt
+     says when the money was there.
+  3. **The front-run address** (learned 1). Keep the scheme, or derive the address from both parties
+     and the id? The second would change every client and index.
+  4. **`recover_late` still checks who holds the buyer's standard account** (kept unchanged, as
+     asked), so a buyer who hands it away blocks only its own late money.
+  5. **Frozen accounts:** a classic mint's freeze authority (USDC has one) can stop every way out by
+     freezing the deposit account, or the ways out that pay the buyer by freezing the buyer's.
+  6. **SOL and other-mint tokens sent to an escrow's address,** unchanged from before.
+  7. **For the consolidation session** (not this session's folders):
+     - the handoff's Open has four escrow questions Carlos answered here, and still lists the frozen
+       account, SOL and other-mint items;
+     - `docs/devnet.md` describes the old deals (accept, object, agree), size, hash and cost;
+     - `docs/decisions/adversarial-review-1.md` describes the old escrow;
+     - an index reads `creator` where it read `accepted_at`;
+     - the handoff's build status still calls `escrow/` "the design before 'Escrow' above was
+       rewritten".
+  8. **`shapes/` needs nothing:** the client reads the post's `#terms` as the plan update defined it,
+     and the lexicon's `timer.days` bound matches the program's sixteen bits.
+- **Still standing:** as the plan update listed, with the devnet deploy and run still not done; the
+  escrow half of it would now deploy this version.
+
+### 2026-09-25, round 2: whose address, where the seller is paid, where rent goes, "Pay" through a fee payer
+
+- **Task,** from Carlos, after the first pull request merged: four changes to the escrow, each with a
+  test that fails before and passes after, every suite kept green; the fuzzer's long campaign on
+  the final binary; the costs measured again; the README and checklist updated; `feepayer/`'s local
+  test run end to end against the new escrow ("each deposit charged to the person once, every
+  refund back to them"), editing that test only where the escrow change broke it. No deploy.
+- **Base.** `main` at `6423919` (the plan update, the fee payer and carrier, and the issuer's
+  request limit all merged). The pull request touches `escrow/`, this file and
+  `feepayer/test/feepayer.test.ts`.
+- **Decided (by Carlos, given in the task; written here):**
+  1. **Nobody can take someone else's escrow address.** The address is `["escrow", creator, id]`,
+     from the key of whoever opens it, and the creator signs `create`. `whatDiffers` goes, since its
+     only purpose was that squatting.
+  2. **The seller is paid only at its standard token account for the mint,** like the buyer, on
+     every way out, the timer included.
+  3. **Rent goes back to the person, never to whoever fronted it.** The creator is recorded as the
+     rent recipient at creation; the deposit account's rent at every ending, both rents at
+     `close_unfunded` and every `sweep_rent` go to that key. The reason: a fee payer fronts the
+     deposit in SOL and charges the person for it in dollars.
+  4. **The fee payer can sign "Pay":** every client builder that funds in the same transaction
+     makes the deposit address first, as its own instruction (the associated token program's
+     idempotent create), before `create`. One tap included.
+  - These close round 1's open 1 (where the seller is paid) and open 3 (the front-run address), and
+    `docs/changes/services.md`'s open 1 (option a) and open 2.
+- **Chosen, not decided** (each reversible before deploy):
+  1. **The field keeps its offset and changes its name:** bytes 169..201 are `rent_recipient`, always
+     the creator's key, where they were `rent_payer`. It is redundant with `creator` plus the two
+     party keys, and kept so `has_one` pins it and a reader need not work it out. Whoever fronted
+     the rent is recorded nowhere, the `Created` event included.
+  2. **`close_unfunded` is the parties' only.** The rent payer lost its right to close, since the rent
+     is no longer its own (`NotACloser` for anyone else, the payer included).
+  3. **`recover_late` keeps sending the re-made deposit account's rent to the buyer,** not the
+     creator: that rent was fronted after the end by whoever paid late, almost always the buyer's
+     wallet, not at creation.
+  4. **The seller's slot is checked by address alone,** as the buyer's is: `UncheckedAccount` with
+     `address = escrow.payout_address()`, the token program checking the rest when it pays. So it
+     must exist only when the seller is paid something, and a split of everything to the buyer runs
+     with no seller account.
+  5. **Two error messages changed** (`NotACloser`, `NotTheSellersAccount`); their codes did not.
+  6. **The client:** `escrowAddress(creator, id)`; `creatorKey`, `payoutAddress`,
+     `makeDepositAddressIx` and `createAndFund` (the deposit address, `create`, the transfer) added;
+     `payInOneTap` is `createAndFund` plus the release; `keysFor` takes an optional creator, not a
+     payer; no builder takes a seller account any more; `closeUnfundedIx` refuses a closer who is
+     not a party; `rentPayer` is `rentRecipient` in the account and the events. `invoice()` still
+     sends `create` alone: it funds nothing.
+- **Built:**
+  - **The program:** the seeds, the recorded recipient, `has_one = rent_recipient` and
+    `close = rent_recipient` everywhere, the seller's slot by address in `release_to_seller`, `split`
+    and `arbitrate`, the timer's `to` by address for either side, `check_sellers_account` removed,
+    every signature made with the creator's key (`creator_key`). 303,432 bytes, sha256
+    `46ea84c2…45cc76`, no warnings.
+  - **Tests first.** The harness and the three LiteSVM files were changed before the program. Against
+    the round-1 binary (rebuilt from its source: the same sha256, `88cbc548…`), 24 of 51 failed,
+    among them the new `the_escrow_address_is_the_creators_and_nobody_can_open_someone_elses`
+    (`ConstraintSeeds`: the old seeds are the buyer's), `a_payout_lands_only_at_the_receiving_partys_standard_account`
+    ("paid the Seller elsewhere") and `rent_goes_back_to_the_creator_never_to_whoever_fronted_it`
+    (the payer recorded, not the buyer); both one-tap tests failed, the old program wanting the payer
+    in the rent slot. After the change all 51 pass. The client's one-tap test was written first too: the old `payInOneTap` gave
+    three instructions, the first not the deposit address.
+  - **LiteSVM, 51 tests:** `escrow.rs` 22 (two new: whose the address is, where rent goes), with the
+    closers, the sweep and the payout-address test rewritten for both sides; `adversarial.rs` 27,
+    the front-run finding turned into `nobody_can_open_the_address_a_buyer_is_about_to_use`, the
+    timer's seller-account finding into `timer_whoever_sends_the_sellers_timer_can_pay_only_its_standard_account`,
+    a party handing its standard account away tested for both sides; `one_tap.rs` 2, the deposit
+    address first in every one tap.
+  - **The fuzzer:** I13 (an escrow's address is its creator's; one `create` in twenty aims at
+    another key's address and must be refused); I3 checks rent reaches the creator to the lamport and
+    nobody else, the payer named in the rent slot now and then and refused; I5 checks each party is
+    paid only at its standard account; the payer, the seller or anyone tries `close_unfunded`; two
+    `create`s in three make the deposit address first. Against the round-1 binary it fails at once
+    (I7 at `create`, I3 on the recipient).
+  - **The client** as above; 16 unit tests (the `whatDiffers` test gone). The validator test's
+    buyer and seller hold no SOL, and every refund reaches them: the split's deposit rent to the
+    buyer, the invoice's to the seller, the refund's to the buyer, a swept tip to the seller, and a
+    sweep named to the payer refused. `scripts/devnet.ts` and `test/devnet.test.ts` follow
+    (type-checked, not run).
+  - **`feepayer/test/feepayer.test.ts`:** its escrow part rewritten on the new client (see learned
+    1): pay, release, one tap, and a third escrow opened and closed unfunded, all through Kora, plus
+    a sweep. Its registration part is unchanged.
+  - **`escrow/README.md`** and **`escrow/security-checklist.md`** updated: the addresses, both payout
+    rules, where rent goes, the new costs, fifteen known limits.
+- **Measured** (LiteSVM, twelve runs with fresh keys):
+  - one tap, the deposit address first: 39,400 to 52,900 compute units, 701 bytes; with the seller's
+    account made in it 53,000 to 71,000 and 743 bytes;
+  - `release_to_seller` 11,400 to 14,400 (it now derives the seller's address); `create` 31,600 to
+    49,700; `release_to_buyer`, `arbitrate`, the timer, `close_unfunded` and `sweep_rent` 32 bytes
+    longer, since the creator is a key those transactions did not otherwise carry;
+  - the rents do not change: at 5,080 lamports a byte the payer fronts 3,479,800 in a one tap, the
+    buyer gets the deposit's 1,488,440 back in the same transaction, the receipt keeps 1,991,360.
+  - Through Kora (`feepayer/`, mock prices, one base unit per lamport): pay charged 4,777,650 for
+    4,777,600 spent; the release 10,050 for 10,000; the one tap 4,777,650 for 4,777,600, where the
+    fee payer's session measured 2,039,330 over (the deposit it got back, plus 50); the person got 9,846,160 lamports back (three deposit rents,
+    one escrow rent, a swept tip) and the fee payer none.
+- **Verified:** 51 LiteSVM tests; 16 client tests; the validator test; `feepayer`'s local test end
+  to end with Kora 2.0.5; the fuzzer's long campaign on the final binary (`46ea84c2…`): 50,000
+  iterations of 80 flows (4,000,000 flows), exit 0, every way out accepted thousands of times
+  (`timer_release` 2,772, `arbitrate` 6,048, `close_unfunded` 80,510, `sweep_rent` 48,701).
+- **Learned:**
+  1. **`feepayer`'s local test was broken on `main`.** It merged after round 1 but was written
+     against the escrow client before it (`approveIx`, `OfferTerms`, `rentPayer`), so it could not
+     load. Ported here, as the task allowed.
+  2. **Refunds now arrive as SOL in a wallet that may hold none.** That works: an empty wallet must
+     end at the rent-exempt minimum for an empty account, and every refund but a sweep is larger at
+     any rate (165 and 256 bytes against 0). A small sweep into an empty wallet fails until more has
+     built up; nothing is lost.
+  3. **`throughKora`'s quote is one signature short when the person signs only the payment.** It asks
+     for the price before adding the payment instruction, so a sweep (which needs no signature) was
+     quoted for one signature and refused ("Required 10000 lamports"). The test sends the sweep from another key instead; anyone
+     may. A fee payer client must quote with the payment in place.
+  4. **Every escrow step through Kora is charged exactly what the fee payer spends, plus 50
+     lamports.** With rent no longer coming back to it, Kora 2.0.5's outflow-only price is right,
+     and Kora 2.2's counting of returning rent is no longer needed for the escrow.
+  5. **The round-1 build reproduces:** its source rebuilt here gave the same sha256.
+- **Open:**
+  1. **A party named as the escrow itself** (checklist limit 3): accepted by `create`, and it locks
+     the deal's money. Refuse it at `create` (one more check, before deploy), or leave it to the
+     app? Not tested.
+  2. **Refunds arrive in SOL.** In a fee payer's app the person's wallet holds none otherwise. How is
+     it shown or used without saying "SOL": left in the wallet, paid back out at ramp-out, or taken
+     by the fee payer as payment (Kora could accept SOL as a paid token)?
+  3. **Frozen accounts now include the seller's,** with no way round: the seller can no longer name
+     another account. Every way out that pays a party waits while that party's standard account is
+     frozen.
+  4. Still standing from round 1: whether a way out should record the funding time;
+     `recover_late`'s holder check; SOL and other-mint tokens at an escrow's address.
+  5. **For the consolidation session** (not this session's folders):
+     - the handoff (line 109) says rent above the minimum goes "back to whoever paid it" and that a
+       never-funded escrow closes by "either party or its rent payer": now the creator, and either
+       party only; its Open (line 226) still lists where money to the buyer lands and "SOL … goes to
+       the rent payer";
+     - `feepayer/README.md`'s "The deposit, answered: counted, and never given back" and its open
+       "The refund gap" are answered: every deposit comes back to the person;
+     - `docs/changes/services.md` opens 1 and 2 are closed by this round;
+     - an index derives an invoice's address from the seller's key;
+     - `docs/devnet.md`'s escrow size, hash and cost are stale (303,432 bytes now).
+
+#### Round 2, one more before merge: a party cannot be the escrow itself
+
+- **Task,** from Carlos, on the same pull request: `create` refuses a party equal to the escrow's
+  own address or its deposit address, with a test. This closes round 2's open 1.
+- **Built:**
+  - **The program:** after the zero-key checks, `create` refuses a buyer or seller equal to the
+    escrow account or its deposit account (`PartyIsTheEscrow`, appended as the 25th error so no
+    other code moved). Neither can ever sign, so a party named as either could never give, agree or
+    be paid, and money paid in could leave only by a way out that pays it nothing. 304,912 bytes,
+    sha256 `57e83f6a…36af2c7`, no warnings.
+  - **Test first:** `a_party_cannot_be_the_escrow_itself_or_its_deposit_address` (`escrow.rs`): the
+    escrow and its deposit address as seller in the buyer's escrow, as buyer in the seller's
+    invoice, and once with the deposit address made first in the same transaction (the whole
+    transaction reverts). On the round-2 binary (`46ea84c2…`) it failed at its first case, the escrow
+    accepted as seller; now it passes.
+  - **The fuzzer:** I14. One `create` in twenty names the escrow or its deposit address as the
+    party the creator does not sign for, and the model expects a refusal. Against the round-2
+    binary it fails at once (`I7 create: model says false, program said true`).
+  - **The client:** `createIx` (and so `invoiceIx`, `createAndFund`, `payInOneTap`) throws
+    `PartyIsTheEscrow` before building; its test failed first too.
+- **Chosen, not decided:** the arbiter is not checked the same way. An arbiter nobody can sign for is
+  an option that never runs; the parties can still end the escrow, so nothing is locked.
+- **Measured:** the check costs about 40 compute units at `create` (its least, 31,613, is now
+  31,652). The table is re-measured on this binary; every other row keeps its least, and the most
+  moves only with the keys each run draws.
+- **Verified:** 52 LiteSVM tests, 16 client tests, the validator test, `feepayer`'s local test
+  through Kora (the same charges: pay 4,777,650 for 4,777,600, the release 10,050 for 10,000, the
+  one tap 50 over; 9,846,160 lamports back to the person), and the fuzzer's long campaign on this
+  binary, 50,000 iterations of 80 flows (4,000,000 flows) in 109 seconds, exit 0, `create`
+  refused 83,560 times and accepted 183,406.
+- **Open:** a party key nobody controls in general (a lost key, another program's address, some
+  other token account) cannot be told apart, and stays a known limit (checklist limit 3).
+
+## 2026-09-25: fee payer and carrier, the parallel session's log
+
+From `docs/changes/services.md`, as it was written, folded here by the integration session.
+
+### 2026-09-25: the fee payer and the carrier, configured and run locally
+
+- **Build order:** the handoff's "Next" steps 3 (the fee payer's config) and 4 (the carrier's
+  config), asked for by Carlos together, in one session that owns `feepayer/` and `carrier/` only.
+  Both ran on this machine. Nothing is deployed anywhere: no devnet, no mainnet, no Railway.
+- **Decided (by Carlos, in planning):**
+  - **The carrier is Bluesky's relay plus Jetstream.** The filter to `foundation.forest.*` is each
+    index's subscription parameter, not the carrier's. Chosen over:
+    - Tap, which filters on the server but splits its events between connected clients, so it feeds
+      one index;
+    - the relay alone, with the filter left to the host.
+
+    Because no standard piece filters on the server for more than one subscriber, and nothing custom
+    is allowed.
+- **Closed by this session:** session 14's open 5 ("whether Kora's price counts the storage deposit
+  it puts down inside a program call"). It does (learned 1). What it does not count is the
+  deposit coming back (learned 2, open 1).
+- **Chosen, not decided** (the simplest option where the handoff is silent; each reversible, since
+  nothing is deployed):
+  - **Fee payer:**
+    1. **Kora 2.0.5**, the latest stable release, pinned in `feepayer/KORA`. `main` is 2.2.0-beta.8.
+    2. **Margin 0.** The charge is the cost, plus the 50 lamports Kora adds for the payment
+       instruction. Because nothing inside charges anything but the registry.
+    3. **Paid to the fee payer's own token account** (no separate `payment_address`).
+    4. **At most 0.01 SOL of deposits and three signatures per transaction.**
+    5. **No compute budget program, so no priority fee.** The five programs asked for, and no more.
+    6. **No API key or HMAC.** A browser page cannot keep a secret, and every transaction pays.
+    7. **The local run prices with Kora's mock**, on a copy of `kora.toml` with one line changed.
+  - **Carrier:**
+    1. **The legacy Jetstream** (`jetstream-legacy`), not the rewrite. The rewrite archives the
+       whole network, backfills every host, and serves nothing until it has.
+    2. **Hosts are added by an admin only.** Public `requestCrawl` is off.
+    3. **The relay's strict sync checks**, its default.
+    4. **`JETSTREAM_LIVENESS_TTL=24h`**, and events kept 24 hours.
+    5. **SQLite and files on disk.**
+    6. **Both pins are today's latest commits:** indigo `dbcca561…`, jetstream-legacy `8a65de4e…`.
+    7. **For the local run only, the host is written into the relay's `host` table.** The admin
+       endpoint cannot add a loopback host (learned 8).
+- **Built:**
+  - **`feepayer/`:**
+    - `KORA`, `build.sh` (`cargo install kora-cli --locked`);
+    - `kora.toml`: five programs, USDC, margin 0, and the fee payer's key allowed only to fund new
+      accounts;
+    - `signers.toml` (the key from `FOREST_FEEPAYER_KEY`);
+    - `run.sh`, which refuses a key file inside the repo;
+    - `test/feepayer.test.ts`;
+    - `README.md`, rewritten.
+  - **`carrier/`:**
+    - `UPSTREAM`, `build.sh` (`go build` of `cmd/relay` and `cmd/jetstream` at the pins);
+    - `relay.env.example`, `jetstream.env.example`, `run.sh`;
+    - `test/carrier.test.ts`;
+    - `README.md`, rewritten.
+  - **The fee payer's local run** (about 20 seconds):
+    - A validator with both programs and a test dollar at USDC's address. Kora 2.0.5 through
+      `run.sh`, its key read from a file path outside the repo.
+    - A wallet that never holds a lamport registers once, then pays for two escrows (pay then
+      release, and one tap), all in the test dollar.
+    - Seven refusals, each with nothing landing and nothing moving.
+    - Every balance checked.
+  - **The carrier's local run** (about 8 seconds):
+    - The host from `host/` and a local directory of DIDs, the relay, and Jetstream, run from the
+      two `.env.example` files.
+    - A device writes: a genesis; a profile (with a photo) and a post; an `app.bsky.feed.post`; a
+      commit holding a second post and a second non-Forest record.
+    - An index subscribed for `foundation.forest.*` gets the identity event, the account event, the
+      profile and both posts, each exactly as written, and neither non-Forest record. An
+      unfiltered subscriber gets all five records.
+    - The relay logs no warning and skips no signature check.
+    - Both runs passed twice in a row.
+- **Learned:**
+  1. **Kora's price counts storage deposits, including ones made inside a program call.** It
+     simulates each transaction, reads every inner instruction, and counts each System
+     `CreateAccount` the fee payer funds. Measured, in lamports:
+     - registration: charged 963,570 = network fee 10,000 + code account 953,520 + 50;
+     - escrow pay: charged 5,160,450 = 10,000 + escrow account 3,111,120 + deposit address 2,039,280
+       + 50.
+
+     A registration paying only the network fee is refused ("Insufficient token payment. Required
+     963520 lamports"). The fee payer paid for nobody, in every case.
+  2. **Kora does not count what comes back, and the escrow gives the person's deposits to the fee
+     payer.** The escrow records the transaction's payer as its rent payer and returns rent only to
+     that key. So:
+     - when an escrow ends, its deposit address's rent (2,039,280 here; $0.149 on mainnet today at
+       $100 a SOL; $0.020 after the rent cuts) goes to the fee payer, though the person paid for it;
+     - a one-tap escrow is charged that rent for an address it makes and closes itself. Tested to
+       the lamport: the charge minus the cost is 2,039,280 + 50;
+     - after the rent cuts, anyone may sweep a receipt's rent above the new minimum to the fee payer:
+       $0.196 per escrow made at today's rate.
+
+     Up to about $0.35 per escrow in all. The registration has no such gap: a code account never
+     closes.
+  3. **Kora 2.0.5 refuses an escrow's "Pay" as the escrow client builds it.** It looks up the
+     destination of every token transfer before signing. The deposit address does not exist until
+     the escrow program makes it inside `create`, so Kora answers "Account … not found".
+     - It accepts an account made in the same transaction only by a top-level associated-token-account
+       instruction (`token/token.rs`, `find_ata_creation_for_destination`).
+     - Putting `CreateIdempotent` for the deposit address, paid by the fee payer, before `create`
+       fixes it, about 10 bytes more. The escrow's `init_if_needed` accepts the account already made.
+  4. **Kora's mock prices every mint but devnet USDC and wrapped SOL at 0.001 SOL a token**, about a
+     tenth of a dollar's worth. So the local run's test dollar is worth one lamport a base unit, and
+     the person starts with 100 of them.
+  5. **Kora simulates before it checks anything.** A transaction that fails simulation is refused with
+     the simulation's error, not the rule it breaks. The first draft of the "take the payment back"
+     refusal failed for lack of tokens before the fee payer policy was reached.
+  6. **Kora 2.0.5 reads the key from a path; `main` does not.** Built `--locked`, it uses
+     solana-keychain 0.1.0, which reads the variable as a file path first, then as a JSON array or
+     base58. `main` uses 1.4.0, which takes the key itself only. Railway, with no files, passes the
+     key itself either way.
+  7. **`kora config validate` warns three times:**
+     - no auth;
+     - `allow_create_account`, which is priced, capped at 0.01 SOL and tested;
+     - Token-2022's permanent delegate, which cannot arise, since that program is not on the list.
+  8. **The relay cannot add a loopback host.** Its reachability check uses a client that refuses
+     loopback and private addresses and any port but 80 and 443 (its SSRF guard, with no switch).
+     The admin `requestCrawl` for `localhost:2583` answers "host server unreachable". Its WebSocket
+     dial skips that guard for plain-http hosts, and the local run writes the host row directly. On
+     Railway the relay must reach Forest hosts at their public https addresses, never over the
+     private network.
+  9. **The relay checks history only from an account's second commit.** It checks the first
+     commit's signature only, and logs "not verifying prevData or MST inversion for first commit
+     from account" (once, in the test). When it cannot resolve a DID, its code passes a commit on
+     with no signature check and a log line (read in `verify.go`, not provoked).
+  10. **Jetstream exits after 15 seconds with no new event**, expecting to be restarted, and trims
+      its store on the same clock. Fine for Bluesky's whole network; for a new one it means
+      restarts every quiet minute. Hence 24 hours.
+  11. **Jetstream splits a commit into its records**, so a commit holding a Forest record and
+      another record delivers the Forest one alone to a filtered index.
+  12. **Toolchain here:**
+      - Solana CLI 4.2.2 from `release.anza.xyz`;
+      - Kora 2.0.5 in about 12 minutes of Rust;
+      - the relay and Jetstream in about 5 minutes, Go fetching the 1.26 toolchain itself;
+      - `host/build.sh` in about 10 minutes.
+
+      All four built at once on four cores. Nothing needed was blocked.
+- **Open:**
+  1. **The escrow's rent goes to the fee payer, not the person** (learned 2). The fix must land
+     before the escrow deploys, and these three are the options:
+     - (a) **An escrow program change:** a rent-refund key, the buyer's wallet, recorded apart from
+       the key that funds the rent, so every close and sweep pays the person.
+     - (b) **An outside refund:** whoever runs the fee payer hands back what returns to it. Custom
+       code in a product, and trust.
+     - (c) **Accept it:** say the deposits are the fee payer's. That contradicts "nothing inside
+       charges anything".
+  2. **The escrow's one tap through a fee payer needs the deposit address made at the top**
+     (learned 3). `escrow/client` has no builder for "Pay" and its tests compose it without that
+     instruction. The escrow session or Roots adds it. Not changed here: not this session's folder.
+  3. **Priority fees.** With the compute budget program off the list, no transaction carries a
+     priority fee, and under congestion one may land late. Allowing it lets the person set one and
+     pay for it: Kora's price includes it. Keep the five programs, or add the sixth?
+  4. **Kora 2.2, once stable.** It hardens the fee payer against being drained, counts a closed
+     account's rent coming back (which may close half of open 1), and no longer reads the key from a
+     path. Read, not run.
+  5. **A payment address apart from the fee payer's key**, so the dollars it collects sit under a
+     colder key.
+  6. **Who runs the fee payer, and its operations loop.** Someone must keep SOL on its key and turn
+     collected dollars back into SOL. With margin 0, anyone who makes and then closes an account
+     they own gets SOL at the price source's rate: the fee payer is a SOL seller at the oracle, with
+     no margin for the oracle's error. The handoff has Roots run an instance; Carlos to confirm
+     (session 14's open 6).
+  7. **"Forest records only" is the index's filter, and "registered profiles only" is nobody's.**
+     Neither piece can do either without custom code. Options:
+     - the index filters both, reading the registry itself;
+     - or the host refuses records outside `foundation.forest.*`, which makes the relay's stream
+       Forest-only at the source, and verifiable. That is a host change, for the host session.
+  8. **The relay passes a commit unchecked when a DID stops resolving** (learned 9). Accept, or have
+     indexes that must be sure read the relay's own stream and check signatures themselves.
+  9. **Who decides what a Forest host is.** Now an admin adds each one. A list the foundation keeps?
+     Open `requestCrawl`, leaving the rest to the indexes' filters?
+  10. **A relay admits 100 active folders per host by default.** Raise it per host, or list trusted
+      hosts, before any host grows past that.
+  11. **jetstream-legacy has had no commit since April 2026.** If Bluesky retires it, the rewrite
+      (or Tap per index) replaces it.
+- **Still standing:** nothing is deployed anywhere, and the handoff's "Before mainnet" list stands.
+  The lawyer pass it names covers the fee payer.
+
+## 2026-09-25: index, part two, the parallel session's log
+
+From `docs/changes/index-2.md`, as it was written, folded here by the integration session.
+
+### 2026-09-25: index part two, pages for people and machines
+
+- **Build order:** step 5 of the handoff's "Next" (the index), second half, asked for by Carlos.
+  The same data as open pages, for people and for machines, with no login anywhere. Ran in parallel
+  with other sessions; touched `index/` and this file only. Nothing is deployed anywhere.
+- **Asked for by Carlos, built as asked:**
+  - **Pages for people,** rendered on the server as plain HTML with no JavaScript: home
+    (categories), category, market (offers, sellers ranked), profile, deal (the receipt). No crypto
+    words anywhere a person reads.
+  - **For machines:**
+    - schema.org JSON-LD on every page;
+    - a JSON twin of every page at the same URL with `.json`, linked from the page;
+    - `sitemap.xml`, and a `robots.txt` that allows everyone;
+    - `llms.txt`;
+    - the read skill at `/skill.md`.
+  - **The badge shown plainly** ("Verified real person, one per market", and who vouched), and a
+    **Pay link** on every offer in one documented format (`index/PAYLINK.md`).
+  - **The split for hosting:** readers and pages as two processes on one database, documented for
+    Railway and, for the pages, Vercel (`index/HOSTING.md`). No deploy.
+  - **The tests listed:** every page renders, the JSON-LD validates, each twin matches its page,
+    the sitemap lists every page, the skill's URLs resolve, and no banned words.
+- **Found on `main`, and fixed here because part two stands on it:**
+  1. **Part one did not fit the escrow that merged after it (#22).**
+     - `src/chain/escrow.ts` no longer type-checked.
+     - An ended deal made the chain reader write `to_timestamp(NaN)` and stop.
+     - Every real payment scored "nobody said yes", because the accept step is gone.
+
+     Asked mid-session whether to fix it here; **Carlos chose to fix it here.**
+  2. **Part one crashed on the current market file.** `online-tutors.json` no longer lists
+     `roles`, and `badgeScope` and `/search` called `roles.includes` on undefined. A unit test
+     already failed on `main`. Fixed with shapes' own `rolesOf` (seller and buyer when absent).
+  3. **Part one split a badge scope at `:`.** `CLAUDE.md` and `shapes/README.md` recommend
+     `market/role` (`online-tutors/seller`). Now only `/`. Never both, since two spellings are two
+     codes, so two badges for one human in one market.
+- **Chosen, not decided** (the simplest option where the handoff is silent; each reversible, since
+  nothing ships):
+  1. **The pages own the bare paths; part one's JSON moved to the `.json` twins.** The spec puts
+     the twin at the page's URL with `.json`, and part one's JSON sat at those URLs:
+     - `/` became `/index.json`, which also carries the public keys;
+     - `/categories` folded into `/index.json`;
+     - `/markets/{m}/offers` folded into `/markets/{m}.json`;
+     - `/profiles/{did}/reviews` folded into `/profiles/{did}.json`.
+
+     Nothing called them.
+  2. **One model per page.** A data function returns an object; that object is the twin, and the
+     HTML is rendered from it. That is what keeps the twin and the page from saying different
+     things.
+  3. **Evidence under the rewritten escrow is the handoff's words, literally.**
+     - Paid and created by the seller (an invoice): 1.
+     - Paid and created by the buyer: 0.5, or 1 once the seller reviews the deal.
+     - Not paid: 0.05.
+     - "Paid" is a funding mark or any ending, since every way out needs the full amount.
+
+     A split (both sign) or a release back to the buyer (the seller signs) is not read as the
+     seller saying yes; see Open 1.
+  4. **The Pay link is an https link at the index:**
+
+         {PUBLIC_URL}/pay?v=1&offer=<at-uri>&cid=<cid>&price.amount=…&price.mint=…&price.per=…[&terms.arbiter=…][&terms.timer.days=…&terms.timer.to=…]
+
+     - Every parameter after `cid` is the post record's own field, by its path.
+     - The parameters come in one fixed order, and unknown ones are ignored.
+     - **No seller key, on purpose.** The app reads it from the seller's profile, so a forged link
+       cannot redirect money.
+     - The link checks against the record by `cid`.
+     - A browser shows the terms, an app can take the link, and an AI can parse it.
+     - The handoff's "one-time Solana Pay link naming the escrow's address" is the next step, after
+       an escrow exists; the escrow client makes it (`solanaPayUrl`, `invoice`). Both are in
+       `PAYLINK.md`.
+     - The link shows only on a live offer whose profile names a key.
+  5. **JSON-LD shapes:**
+     - A profile is a `ProfilePage` about a `Person`, or a `LocalBusiness` when a live offer names
+       a place. Its offers are `Offer`s of a `Service`, priced with `UnitPriceSpecification`.
+     - Reviews and the rating are nodes of their own, with `itemReviewed` pointing at the
+       profile. schema.org's `review` and `aggregateRating` do not take a `Person`.
+     - A market is a `CollectionPage` with an `OfferCatalog`.
+     - A deal is a `PayAction`. `MoneyTransfer` does not take `recipient`.
+  6. **`AggregateRating` from trust alone, on 1 to 5, as `3 + 2·t/(|t|+1)`.**
+     - It uses the same curve the reviewer weight uses.
+     - `reviewCount` is the counted rated reviews.
+     - `ratingExplanation` says it is not an average of stars.
+     - With no counted rated review there is no rating.
+  7. **How the pages show the scores:**
+     - Trust as its number, with the counts beside it ("1.62 · from 2 reviews, 1 backed by a
+       payment"). This answers part one's open question 4 for now.
+     - Uniqueness as a percentage on each badge.
+     - The two are never on one line as one number.
+  8. **Money:**
+     - A new `config/currencies.json` maps a token to a currency for display (USDC mainnet and
+       devnet as `$`, 6 decimals).
+     - Any other token shows as "a price in a currency this index doesn't show", with no number.
+  9. **Dates** are `en-GB` in UTC ("5 Sept 2026"), the same for every reader. The pages are in
+     English only.
+  10. **`noindex` pages:**
+      - search results, pay links, and deals with no receipt;
+      - these are open to all but kept out of the sitemap;
+      - the sitemap is one `urlset` (fine under 50,000 pages).
+  11. **The web process holds no seed.** The readers write the public keys to a new `index_meta`
+      table when they start; the pages read them.
+  12. **Processes:**
+      - `node src/main.ts readers | web`, or both with no argument.
+      - `PUBLIC_URL` is an origin (default `https://forest.foundation`).
+      - `llms.txt` and `skill.md` are written for forest.foundation and served with `PUBLIC_URL`
+        in its place.
+  13. **The read skill's profile, deal and Pay link examples are the test data's fixed ids.**
+      Nothing is live, so the only real URLs are local ones. The skill says so.
+  14. **Validating against schema.org means its vocabulary.**
+      - The vocabulary is release 30.1 (sha256 pinned), cut to classes, properties, domains,
+        ranges and enumeration members: 190 KB in `index/test/schemaorg/`, with the script that
+        makes it.
+      - The check is strict: every type is a class, every property's domain takes the node, and
+        every value fits the range.
+      - It does not check any search engine's own rich-result rules.
+  15. **Banned words, checked in each page's visible text and shown attributes:** wallet, USDC,
+      chain, blockchain, gas, crypto, token, Solana, mint. The read skill (for machines) names
+      Solana in its "check it yourself" parts, and tells agents not to say those words to people.
+  16. **An empty search's twin answers with no results** (part one's `/search` answered 400), so
+      every page has a twin.
+  17. **Profile photos are not shown.** Only the blob's id is kept; see Open 7.
+- **Built** (all in `index/`):
+  - **Pages:**
+    - `src/web/`: `data.ts` (page models, with part one's queries moved in), `pages.ts`,
+      `html.ts`, `words.ts`, `jsonld.ts`, `paylink.ts`, `pay.ts`, `machine.ts`, `routes.ts`, and
+      `server.ts` moved from `src/api/`. `src/api/` is gone.
+    - `skill.md`, `llms.txt`, `PAYLINK.md`, `HOSTING.md`.
+  - **Readers and pages:** `src/main.ts` starts the readers, the pages, or both. The config gains
+    `PUBLIC_URL` and `CURRENCIES_FILE`, and the seed is optional for the pages.
+  - **Escrow fit:**
+    - `src/chain/escrow.ts` maps `Created` (with `creator`, `arbiter`, `timer`), `Funded`,
+      `Ended` and `Closed`, and ignores `RecoveredLate` and `RentSwept`.
+    - `src/chain/poll.ts` stores them.
+    - `migrations/002_pages.sql`: receipts gain `creator`, `arbiter`, `timer_days` and `timer_to`,
+      and lose `accepted_at` and `locked`; plus `index_meta`.
+    - `src/scores/compute.ts` and `run.ts`: the evidence rule above.
+    - `SCORING.md`: the evidence table, the `market/role` scope, and how the pages show scores.
+  - **Tests, 29, all passing here:**
+    - `test/scoring.test.ts` (8, evidence rewritten for the new escrow, `/` scopes and default
+      roles) and `test/sign.test.ts` (4).
+    - `test/pages.test.ts` (1 test, 8 steps) over `test/fixture.ts`: part one's story (Ana, Ben,
+      Cleo; two offers, one under an alias, one with a timer; three badges, Cleo's for an
+      undeclared key; one invoice paid in one tap; three reviews) written into a fresh database.
+      Records go through part one's own `applyRecordOp` and scores come from the real recompute.
+      It checks all six things asked for, plus the Pay link's round trip and its `check`
+      (`matches`, `changed`, `differs`, `notFound`, `invalid`).
+    - `test/e2e.test.ts` (1 test, 7 steps), moved to the new escrow client and the twins. Ana
+      invoices Ben; Ben pays and releases in one transaction. The scores are the same as part
+      one's (Ben 1.618, Ana 1.618 − 0.0025); both signatures verify from the served JSON; the
+      receipt says `creator: seller`, `releasedToSeller` and no funding mark. **Run here**, not
+      only type-checked.
+  - `npm run check` is clean (it failed on `main`).
+- **Verified:**
+  - `npm test`, 29 of 29, three full runs after the last fix; about 30 s, 19 of them three
+    registration proofs.
+  - The page tests alone, 15 runs in a row.
+  - Readers and pages as two separate processes on one database: the readers wrote the keys, and
+    the pages, holding no seed, served them in `/index.json`.
+  - The vocabulary extractor, run against the network, gives the vendored file byte for byte.
+- **Learned:**
+  - **Parallel sessions can break each other through the merge order.** Part one merged against
+    the old escrow client; the escrow rewrite merged after it. Nothing ran the index's
+    type-check, so `main` carried an index that didn't compile. Each package's own check isn't
+    enough; the consolidation session (or a CI job) should run every package's `check` after each
+    merge.
+  - **pg's pool resolves `end()` before its sockets close.** A test that then drops its database
+    `with (force)` sometimes kills a closing connection, which reports an error nobody listens for:
+    about 1 run in 12 here. Waiting for `pg_stat_activity` to empty first fixed it (15 of 15). Part
+    one's end-to-end test had the same race; fixed the same way.
+  - **schema.org has no rating or review on a Person.** `itemReviewed` takes any Thing, so
+    standalone `Review` and `AggregateRating` nodes are how a person-to-person marketplace says it
+    in valid schema.org. `recipient` is not a `MoneyTransfer` property; `PayAction` has it.
+  - **The whole end-to-end test runs on a fresh machine of this kind** (setup not timed) after:
+    - the Solana CLI 4.2.2 from Anza's installer;
+    - `cargo build-sbf` for both programs. The escrow build came out at 311,680 bytes, the size
+      the escrow session logged;
+    - `host/build.sh`;
+    - `npm run fetch` for the proving files.
+  - **Node's `en-GB` dates now write "Sept",** not "Sep".
+  - **An invoice paid in one tap is two transactions** the index sees (the create, then
+    pay-and-release), and no funding mark: the ending alone proves the payment.
+- **Open** (questions for Carlos; not decided here):
+  1. **Does a seller's signature on the way out count as the seller saying yes?** A split needs
+     both signatures, and a release back to the buyer is signed by the seller. Today, on a
+     buyer-created escrow, both still count half until the seller reviews, because the handoff
+     names only "created the escrow or reviewed the deal".
+  2. **The 1 to 5 rating made from trust.** Is putting trust on schema.org's scale acceptable, or
+     should machines get only the raw trust and counts? It is trust alone, never blended with
+     uniqueness.
+  3. **Address logs at the hosting platforms.** The index logs no visitor address, but Railway's
+     HTTP logs and Vercel's request logs are the platforms' own. What they record about a visitor,
+     and whether it can be turned off, was not checked, and must be before any deploy ("No address
+     logs").
+  4. **Which apps open a Pay link.** An https link at forest.foundation opens in a browser. For an
+     app to take it directly, the domain must list that app (Apple's and Android's app-link files),
+     much like the passkey's related-origins file. Which apps the foundation lists, and on what
+     rule, is Carlos's call. Until then, a person opens the link in their app by hand.
+  5. **The index claims forest.foundation's root.** The pages live at `/`. The passkey's
+     `/.well-known/webauthn` (related origins), and any app-link files, must be served by the same
+     deployment or routed around it.
+  6. **Languages.** "Global from day one" and English-only pages. Which languages, and whether a
+     page follows the reader's browser or its own URL.
+  7. **Photos.** A profile's photo is a blob on its own host. Showing it means linking to that host
+     (which then sees each visitor's address) or the index fetching and serving it. Not shown yet.
+  8. **A plain `market` badge and `market/role` badges both count.** One human can hold
+     `online-tutors`, `online-tutors/seller` and `online-tutors/buyer`: three badges in one market.
+     Should a plain `market` scope count when the market has roles? This is the `markets` repo's
+     call, or Carlos's.
+  9. **Scale:**
+     - a profile page lists every review;
+     - the sitemap is one file;
+     - offers are ranked with correlated subqueries;
+     - every page is computed per request behind a 30-second cache;
+     - the pool is 10 connections, where a serverless instance wants 1 (HOSTING.md).
+
+     All fine at test size; each is later work.
+  10. **The read skill's examples are test data.** Swap them for real ones once a real market has
+      profiles.
+  11. **The market page's "verified real people" count includes buyers' badges.** It counts every
+      counted badge in the market, not only sellers'.
+  12. **Part one's open questions stand,** except the trust scale (Open 4 there), answered for now
+      by showing counts beside the number.
+
+## 2026-09-25: integration, everything tested together, automatic checks, plan up to date
+
+- **Build order:** asked for by Carlos once the five parallel sessions (escrow, issuer, fee payer and carrier, index parts one and two) had merged: run every package together and fix what broke, add automatic checks, make his small decisions, fold the logs, and bring the handoff in line with the code. One pull request; no deploy. Touched `index/`, `shapes/`, `testsite/`, `names/`, `docs/`, `feepayer/README.md`, `keys/SPEC.md`, `CLAUDE.md` and a new `.github/`; the two programs, their clients, the issuer, the host and the carrier are unchanged.
+- **Decided (by Carlos; built here):**
+  - The index counts badges only under market names in the `markets` repo's directory, read from that repo and never copied, and groups posts with that repo's alias table; its own alias list goes. Badges under any other name carry no weight in it.
+  - Only `market/role` badges count; a plain `market` badge counts for nothing.
+  - A seller's signature on a split, a refund or an invoice counts as the seller saying yes, fully.
+  - `remote` is optional on posts.
+  - The escrow's `create` refuses a party equal to the escrow or its deposit address: already built by the escrow session (`PartyIsTheEscrow`), so nothing changed.
+  - `testsite/`: the handover experiment goes, its idea dropped; the keys page stays. `names/README.md` is one line. `docs/devnet.md`'s escrow numbers are marked stale.
+  - A lost seed cannot rejoin the same issuer's list; the 24 words are the only backup.
+  - What is next (devnet; services online; the full loop on devnet by script; an independent AI attack pass on both programs; then Roots) and the mainnet checklist (real keys, placeholders replaced, the newer program format, the attack pass, the entity owning the Didit account and the domain, sealing). Asked in planning, Carlos kept the paid review, the lawyer pass and the three devnet markets in the checklist too.
+- **Everything run together.** On one machine (4 cores, Solana CLI 4.2.2, Node 22.22, Postgres 16, Kora 2.0.5, the host and carrier at their pins), on the merged `main` (`d49b7ab`) and again after the fixes:
+
+  | Package | What ran | Result |
+  |---|---|---|
+  | `shapes/` | tests | 43 pass (42 on `main`, plus the `remote` test) |
+  | `keys/` | type-check, tests | clean, 30 pass |
+  | `registry/program/` | `cargo build-sbf`; 47 LiteSVM tests; the property test at 200 iterations | 329,136 bytes; 47 pass; 8,000 flows, every invariant held |
+  | `registry/client/` | type-check, 20 unit tests, the validator test | clean, all pass |
+  | `escrow/program/` | `cargo build-sbf`; 52 LiteSVM tests; the fuzzer at 2,000 iterations | 304,912 bytes, sha256 `57e83f6a…36af2c7`; 52 pass; 160,000 flows, exit 0 |
+  | `escrow/client/` | type-check, 16 unit tests, the validator test | clean, all pass |
+  | `issuer/` | type-check, 21 tests, the validator test | clean, all pass |
+  | `host/` | `build.sh`, `test.sh` | upstream's 58 and 97 pass, Forest's 7 pass |
+  | `carrier/` | `build.sh`, the local run | passes |
+  | `feepayer/` | `build.sh`, the local run through Kora | passes; the charges the escrow session measured, to the lamport |
+  | `index/` | type-check; unit, page and end-to-end tests | **broken on `main`**; after the fix clean, 34 pass, nothing skipped |
+
+  Not run, on purpose: both clients' `test:devnet` (nothing is deployed on devnet, so they fail by design) and the registry's Trident fuzzer (it cannot run; `invariants.rs` stands in for it).
+- **What broke, and why:**
+  1. **The index did not type-check or pass end to end against the escrow client.** Its end-to-end test called `releaseToSellerIx({ keys, sellerTokens })`, and escrow round 2 took the seller's account out of every builder, since the seller is paid only at its standard account for the mint. The test never made that account, so on `main` the release failed with `InvalidAccountData`, and the scoring and page steps after it failed too (three of seven steps). Why: index part two (#25) merged before escrow round 2 (#26), each green on its own, and nothing ran one against the other. Fixed in the test: it makes Ana's standard account (`makeStandardAccountIx`) before the release, which now takes only the keys.
+  2. **The fee payer's test did not break:** escrow round 2 had already ported it. Its README did: it still said the deposits went to the fee payer and that the escrow client could not make the deposit address first. Both were fixed by round 2; the README follows the code, with this run's numbers.
+- **Chosen, not decided** (each reversible, since nothing ships):
+  1. **The index reads the directory from raw files:** `directory.md` from `MARKETS_URL` (default `https://raw.githubusercontent.com/foundationforest/markets/main`; a commit in place of `main` pins it), then each market file it links. GitHub's API is rate-limited per address without a key, and both it and the tarball endpoint answer 403 from this session; raw files answer.
+  2. **A market counts when `directory.md` lists it** and its file validates at `<category>/<name>.json` under the same name. A file the page does not list counts for nothing.
+  3. **The Aliases table is read the way the markets repo's `check.sh` reads it.**
+  4. **A file that cannot be fetched stops the index's start;** a file that fetches but is not valid is refused and reported, and the rest count. So a network failure never drops a market quietly.
+  5. **Read once, at start,** like the index's other configuration.
+  6. **A plain-market badge is not counted with its own reason, `noRole`,** so the page says why ("registered for the market without a side").
+  7. **The seller's signature is read from the ending:** `split` and `releasedToBuyer` count fully; `arbitrated`, `timerReleased` and `releasedToSeller` on a buyer-created escrow stay one-sided until the seller reviews.
+  8. **A post with no `remote` is stored with `remote` null** (`index/migrations/003_remote_optional.sql`); the twin says null and the page shows no place.
+  9. **The tests' markets repo is a stand-in** in `index/test/markets/` (one market, `online-tutors`, and its aliases), served over local HTTP, so the tests read it through the same fetch as the real one.
+  10. **The checks:** one workflow, `.github/workflows/checks.yml`. On every pull request and push to `main`: each Node package's type-check and fast tests (shapes, keys, both clients, the issuer), the index's type-check, unit and page tests on a Postgres service, and both programs built with their LiteSVM tests. Nightly and by hand: the three validator tests, the fuzzers' long campaigns (the registry's 1,000 iterations, the escrow's 50,000), and the host, carrier, fee payer and index end to end. The LiteSVM tests run on every pull request: they need no validator, and they are the sealed programs' main check; they took about 5 and 2.5 minutes here with other builds running. A skipped test fails its step. The actions are pinned to their newest major versions.
+  11. **The logs were folded as they were written,** each under a dated heading for its topic, one level down, without their notes to the folding session.
+  12. **`CLAUDE.md`'s Kora line** says the fee payer charges the network fee and any storage deposit it puts down, as the handoff and `kora.toml` do; read alone it made the deposits a sponsorship.
+  13. **`testsite/dist/` rebuilt,** which also refreshes its stale keys bundle.
+- **Corrections to the handoff, where it disagreed with the code:**
+  1. Layers, carrier: the relay serves every record on the hosts it reads, and each index keeps Forest's types; "carries registered profiles only" is nobody's.
+  2. Layers, index: the readers run on Railway (a websocket and a poll loop cannot run on Vercel); the pages on Railway or Vercel; one Postgres. The badge and pay link run with the pages.
+  3. Layers and the fee payer: it charges the network fee and every storage deposit it puts down, with no margin, not the network fee alone.
+  4. Escrow: the address is the creator's, each side is paid only at its standard account, rent goes back to the creator, a never-funded escrow is closed by a party only, funded means the live balance, every way out pays the whole balance, and a party cannot be the escrow. The handoff said rent went back to whoever paid it and that the rent payer could close.
+  5. Who said yes: anything else weighs near zero (0.05 in the index), not nothing.
+  6. Reputation: trust is over the reviews a profile received, not given and received.
+  7. Issuers: an index weighs which issuers count (the foundation's by its issuer weights), not the market; how a market could name its issuers stays open.
+  8. The index: it reads the relay's own stream and checks every signature itself; it does not read Jetstream. Its Pay link is an https link at the index naming the offer; the Solana Pay link naming the escrow's address comes from the escrow client once an escrow exists.
+  9. The carrier, index, fee payer and issuer were "planned"; all are built and tested locally.
+  10. Build status: `escrow/` is the program "Escrow" describes; `testsite/` has no handover page; the devnet deploy needs about 3.2 SOL at the escrow's present size, not 3.53 (an estimate from its size).
+  11. Keys: a lost seed cannot rejoin the same issuer's list (the handoff said a new face check puts the person back); the 24 words are the only backup. `keys/SPEC.md` said the same and is corrected too.
+  12. Open: dropped as answered, whether Kora counts a deposit made inside a program call (it does), the four escrow questions Carlos answered in round 1, whether the markets validator reuses `shapes/`' (its `check.sh` runs it), what a category page holds (a heading and a paragraph in `directory.md`, and the index's category page), and where the index's readers run.
+- **Built:**
+  - `index/`: `src/markets.ts` (`Directory.fetch`, `parseDirectory`, `market/role` only), `src/config.ts` (`MARKETS_URL`; `MARKETS_DIR`, `ALIASES_FILE` and `config/aliases.json` gone), `src/main.ts`, `src/scores/compute.ts` (`noRole`; seller-signed endings), `src/web/words.ts`, `src/records/store.ts`, `src/web/data.ts`, `migrations/003_remote_optional.sql`; `test/markets.test.ts` (4), `test/markets-repo.ts`, `test/markets/`; `test/scoring.test.ts` (9), `test/fixture.ts` and `test/e2e.test.ts` on `market/role` badges, a post with no `remote`, and the escrow client's builders; `README.md`, `SCORING.md`, `HOSTING.md`, `skill.md`.
+  - `shapes/`: `remote` optional in the post lexicon, a test, `README.md`.
+  - `.github/workflows/checks.yml`, checked with actionlint 1.7.12.
+  - `feepayer/README.md`, `keys/SPEC.md`, `testsite/` (handover removed, `dist/` rebuilt), `names/README.md`, `docs/devnet.md`.
+  - The five logs folded above; `docs/changes/` keeps a one-line `README.md`.
+  - `docs/handoff.md` as above, with one Open list; `CLAUDE.md`'s Kora line.
+- **Learned:**
+  - **Merge order broke the index twice:** part one against escrow round 1, part two against round 2. Each pull request was green alone. The workflow runs every package on every pull request from here.
+  - **The escrow build reproduces byte for byte:** 304,912 bytes and sha256 `57e83f6a…36af2c7` here, the escrow session's own on another machine of this kind.
+  - **The carrier and the index were built toward different streams.** The carrier session put Jetstream in front for indexes; the index reads the relay's stream with Bluesky's consumer and checks every signature itself, which is the stronger of the two.
+  - **The real directory:** 18 markets in three categories and 62 aliases, all read and valid through the index's new loader. `online-tutors`, the tests' market, is an alias of `tutoring` there.
+  - **The `markets` repo recommends `market:role` with a colon,** following index part one's colon; the plan, `shapes/` and index part two use the slash, and the foundation's index counts only the slash.
+  - **Node's TAP summary reads `# skipped 0`,** which is what the workflow checks.
+  - **A post with no `remote` stopped the index's store** on its `not null` column; no record could have one until this change.
+- **Open** (new here; the whole list, deduplicated and tagged, is the handoff's Open):
+  1. The `markets` repo moves to `market/role` with a slash, and its `check.sh` checks that every file is listed in `directory.md`. *Mechanical,* in that repo.
+  2. Whether the carrier keeps Jetstream, now that the foundation's index reads the relay's stream. *Needs Carlos.*
+  3. The index refreshes the directory on a timer, not only at start. *Mechanical.*
+  4. The workflow's first runs on GitHub's machines, and the nightly jobs' first run after merge. *Mechanical.*
+  5. `keys/` and its test pages call the 24 words a "paper export". *Mechanical.*
+- **Still standing:** nothing is deployed anywhere; the devnet deploy key holds 2.0 SOL of about 3.4 needed.
