@@ -13,7 +13,7 @@ Plain words first, then the exact steps. The library in `src/` implements the st
 5. One more wallet belongs to the person, not to any profile: the central wallet, where money enters from a ramp and leaves to one. It has its own label and no profile index, so it is unrelated to every profile's keys.
 6. A profile's name is a did:plc. The control key signs the profile's first directory record (the genesis operation), and the name is a hash of that record. The signing key is the one the record names for signing the profile's folder.
 7. A second passkey can open the same seed through a seed file: the seed encrypted under the second passkey's secret, stored under a label the second passkey can recompute. Whoever stores the file learns nothing.
-8. The seed can also be written as 24 English words: the optional backup, and the way to carry the seed anywhere. They are a backup, not a login: the one way in is a passkey.
+8. The seed can also be written as 24 English words: the only backup, and the way to carry the seed anywhere. They are a backup, not a login: the one way in is a passkey.
 
 ## 1. The passkey and its secret
 
@@ -161,7 +161,7 @@ A change to any value here is a new version with a new suffix. The old version k
 ## 10. What this does not do
 
 - No recovery without a passkey or the words. Lose every passkey and the paper, and the seed is gone. Nobody can reset it, because nobody else has it.
-- No way back into the registry once the seed is gone. The identity secret comes from the seed, so losing the seed loses the identity: the badges stay on the chain, nobody else can use them, and the person cannot be put on the list again without another face check.
+- No way back into the registry once the seed is gone. The identity secret comes from the seed, so losing the seed loses the identity: the badges stay on the chain, nobody else can use them, and the same issuer's list does not take the person again, because its face check finds the face already there. The 24 words are the only backup.
 - No server. The recipe never sends anything anywhere; sending a genesis operation to the directory is a separate call the app makes on purpose.
 - No email, no phone, no account. There is nothing to sign up for.
 - No storage inside the library. The app decides where a seed file goes; the library only makes and opens them.

@@ -6,6 +6,11 @@ form the scripts and the smoke tests read. Nothing is shipped, and devnet is not
 
 ## Status (session 18): keys that last, funding short, nothing deployed
 
+**Stale: every escrow number on this page.** The escrow's size, hash and deploy cost below (363,120
+bytes, 1.8455 SOL) are of an older escrow. The escrow on `main` builds to 304,912 bytes (sha256
+`57e83f6a…36af2c7` with the committed placeholder id), and its devnet deals are those in
+`escrow/client/scripts/devnet.ts`. The devnet session rewrites this page.
+
 **Nothing is deployed on devnet.** The deploy key holds 2.0 SOL, from two faucet grants. Both
 deploys need about 3.53 SOL, and the payer about 0.2 more (see "What the deploy costs"). Nobody
 could get more: not the faucet from the session's machine, and not Carlos from faucet.solana.com.
@@ -102,7 +107,7 @@ program's data account while the second uploads.
 | | Bytes | Program data rent | Program account | Write fees (about) | Kept |
 |---|---|---|---|---|---|
 | registry | 329,136 | 1.6729 SOL | 0.0008 | 0.0017 | 1.6737 |
-| escrow | 363,120 | 1.8455 SOL | 0.0008 | 0.0018 | 1.8464 |
+| escrow (stale, see Status) | 363,120 | 1.8455 SOL | 0.0008 | 0.0018 | 1.8464 |
 | both, one after the other | | | | | about 3.53 |
 
 This comes from reading the CLI's source, not from a devnet deploy. If it is wrong, a deploy
@@ -175,7 +180,7 @@ rustc 1.89.0 (session 15's toolchain):
 | | Bytes | sha256 |
 |---|---|---|
 | `forest_registry.so` (devnet) | 329,136 | `303957136883acbab9e80e4eda04f4a5a525af29dfdd68d8dbb1fe659b1de79b` |
-| `forest_escrow.so` (devnet) | 363,120 | `9dbe2a62a319f6b35ee5a11248e591ab87ad79b8bb897b0f5d1e90c9bf152888` |
+| `forest_escrow.so` (devnet, stale, see Status) | 363,120 | `9dbe2a62a319f6b35ee5a11248e591ab87ad79b8bb897b0f5d1e90c9bf152888` |
 
 - **Session 15's builds** had the same sizes and other hashes, because they named other keys.
 - **The next session should get these hashes.** It uses the same phrase, the same source and
