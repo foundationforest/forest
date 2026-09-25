@@ -37,7 +37,8 @@
 //!      creator's close), and every unit comes out;
 //!   I12 a timer never pays before it is due: never before `timer_days` whole days after the mark;
 //!   I13 an escrow's address is its creator's: `create` lands only at `["escrow", creator, id]`
-//!      with the creator signing, so nobody opens an escrow at an address another key will use.
+//!      with the creator signing, so nobody opens an escrow at an address another key will use;
+//!   I14 no party is the escrow's own address or its deposit address: `create` refuses either.
 //!
 //! Run: `cargo run --release --bin fuzz_escrow` from this directory (after `cargo build-sbf` in
 //! `escrow/program`). `FOREST_FUZZ_ITERATIONS` and `FOREST_FUZZ_FLOWS` set the size;
@@ -273,7 +274,18 @@ impl FuzzTest {
         let vault = ata(&escrow, &mint);
         // An address is taken while a deal there is live, and for good once one has ended.
         let taken = self.deals.iter().any(|d| d.escrow == escrow && !d.closed);
+        // Now and then the creator names the escrow itself or its deposit address as the other
+        // party (I14).
+        let (buyer, seller) = match (self.pick(40), creator == buyer) {
+            (0, true) => (buyer, escrow),
+            (1, true) => (buyer, vault),
+            (0, false) => (escrow, seller),
+            (1, false) => (vault, seller),
+            _ => (buyer, seller),
+        };
+        let not_the_escrow = [buyer, seller].iter().all(|p| *p != escrow && *p != vault);
         let valid = escrow == own
+            && not_the_escrow
             && seller != buyer
             && seller != Pubkey::default()
             && (creator == buyer || creator == seller)

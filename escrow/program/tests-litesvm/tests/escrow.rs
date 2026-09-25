@@ -772,6 +772,50 @@ fn bad_terms_are_refused_at_creation() {
 }
 
 #[test]
+fn a_party_cannot_be_the_escrow_itself_or_its_deposit_address() {
+    // Neither key can sign or hold anything for itself: a party named as either would be paid at
+    // an address only the deposit account itself answers to, so money could leave only by a way
+    // out that pays that party nothing. `create` refuses it, from either creator, and with the
+    // deposit address made first in the same transaction, as the client does.
+    let mut h = Harness::new();
+    let buyer = h.buyer.insecure_clone();
+    let seller = h.seller.insecure_clone();
+    let (buyer_key, seller_key) = (buyer.pubkey(), seller.pubkey());
+    let own = escrow_address(&buyer_key, 1);
+    let own_deposit = vault_address(&own, &h.mint);
+    let invoiced = escrow_address(&seller_key, 1);
+    let invoiced_deposit = vault_address(&invoiced, &h.mint);
+
+    // The buyer opens it, naming as seller the escrow's own address, then its deposit address.
+    for (what, party) in [("the escrow as seller", own), ("its deposit address as seller", own_deposit)] {
+        let t = Terms { seller: party, ..h.terms(1) };
+        let err = h.send(&[create_ix(&t, &h.create_accounts())], &[&buyer]).err().unwrap_or_else(|| panic!("{what}: must be refused"));
+        assert!(err.contains("PartyIsTheEscrow"), "{what}: {err}");
+        assert!(!h.exists(&own), "{what}: nothing written");
+    }
+    // The same with the deposit address made first, as `createAndFund` and one tap send it: the
+    // whole transaction reverts, the deposit address with it.
+    let t = Terms { seller: own, ..h.terms(1) };
+    let (make, _) = create_ata_idempotent_ix(h.payer.pubkey(), own, h.mint);
+    let err = h.send(&[make, create_ix(&t, &h.create_accounts())], &[&buyer]).expect_err("made first");
+    assert!(err.contains("PartyIsTheEscrow"), "{err}");
+    assert!(!h.exists(&own) && !h.exists(&own_deposit), "nothing written, the deposit address included");
+
+    // The seller invoices, naming as buyer the escrow's own address, then its deposit address.
+    for (what, party) in [("the escrow as buyer", invoiced), ("its deposit address as buyer", invoiced_deposit)] {
+        let a = CreateAccounts { buyer: party, ..h.create_accounts() };
+        let err = h.send(&[invoice_ix(&h.terms(1), &a)], &[&seller]).err().unwrap_or_else(|| panic!("{what}: must be refused"));
+        assert!(err.contains("PartyIsTheEscrow"), "{what}: {err}");
+        assert!(!h.exists(&invoiced), "{what}: nothing written");
+    }
+
+    // The same ids with the real parties open at once.
+    h.create(&h.terms(1)).expect("the buyer's escrow");
+    h.invoice(&h.terms(1)).expect("the seller's invoice");
+    println!("rejected as expected: the escrow's own address or its deposit address as either party, from either creator");
+}
+
+#[test]
 fn a_split_over_ten_thousand_basis_points_is_refused() {
     let mut h = Harness::new();
     let mut t = h.terms(1);

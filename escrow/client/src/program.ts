@@ -271,7 +271,8 @@ const rw = (pubkey: PublicKey, isSigner = false): AccountMeta => ({ pubkey, isSi
  * `create`. The creator signs: the buyer (the default), or the seller, invoicing (`invoiceIx`).
  * The escrow's address comes from the creator's key. The payer signs and fronts both rents; every
  * rent refund goes to the creator, never to the payer. The terms are checked against the
- * program's rules (`validateTerms`) before anything is built.
+ * program's rules (`validateTerms`, and neither party the escrow itself or its deposit address)
+ * before anything is built.
  */
 export function createIx(args: {
   buyer: PublicKey
@@ -290,11 +291,17 @@ export function createIx(args: {
   }
   if (args.mint.equals(NATIVE_MINT)) throw new Error('NativeMint: wrapped SOL is not accepted')
   const escrow = escrowAddress(creator, args.terms.id, programId)
+  const vault = vaultAddress(escrow, args.mint)
+  for (const party of [args.buyer, args.terms.seller]) {
+    if (party.equals(escrow) || party.equals(vault)) {
+      throw new Error("PartyIsTheEscrow: neither party can be the escrow's own address or its deposit address")
+    }
+  }
   return new TransactionInstruction({
     programId,
     keys: [
       rw(escrow),
-      rw(vaultAddress(escrow, args.mint)),
+      rw(vault),
       ro(creator, true),
       rw(args.payer, true),
       ro(args.mint),

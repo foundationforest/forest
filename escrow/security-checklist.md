@@ -11,7 +11,7 @@ how this program applies it or why it does not apply, and every limit known toda
 |---|---|
 | Program | `forest_escrow`, v1, `FoRE4JYRAxFpqRoPBzuPZZ9Yfn6ovtkBfUggynex3MKT` for local work |
 | Framework | Anchor 1.2, `cargo build-sbf` (Solana CLI 4.2.2, platform-tools v1.54), no IDL |
-| Testing | LiteSVM (51 tests), a local validator (the client's `test:validator`, and `feepayer/`'s local test through Kora), a Trident fuzzer (thirteen invariants) |
+| Testing | LiteSVM (52 tests), a local validator (the client's `test:validator`, and `feepayer/`'s local test through Kora), a Trident fuzzer (fourteen invariants) |
 | Risk level | 🟡 Medium by the skill's table (a simple escrow: token transfers, basic CPI, PDAs, no admin). Treated as 🔴 **Critical**, because it is sealed at deploy and holds other people's money, so this checklist carries a High-Risk Decisions section. |
 | Upgrade authority | Removed at mainnet deploy with `solana program set-upgrade-authority --final` (`README.md`). No admin key, no config, no pause, no fee. A v2 is a new program at a new address. |
 
@@ -158,7 +158,8 @@ hold the same mint. Tested by `a_token_2022_mint_and_wrapped_sol_are_refused`.
   `release_to_seller` in one transaction; two ways out in one transaction revert together
   (`an_escrow_ends_once`).
 - **8.2 Compute. Applied.** No loop over input beyond the two payouts. The heaviest single
-  instruction measured is 49,736 units, the one tap 70,950 (`README.md`).
+  instruction measured is 52,137 units (`recover_late`, making the buyer's account), the one tap
+  76,989 (`README.md`).
 - **8.3 Address lookup tables. Does not apply.**
 - **8.4 Durable nonces. Does not apply.**
 
@@ -210,9 +211,13 @@ which is under "Known limits".
 ### 18. Input validation
 
 **Applied:** amount above zero, timer days above zero (the `u16` bounds the top), no zero keys,
-buyer and seller different, creator a party and the signer the address is derived from, mint
-classic and not wrapped SOL. No strings. Any
-classic mint is accepted by decision (High-risk decision 6). Tested by `bad_terms_are_refused_at_creation`.
+buyer and seller different, creator a party and the signer the address is derived from, neither
+party the escrow's own address or its deposit address (`PartyIsTheEscrow`: neither can ever sign,
+so a party named as either could never give, agree or be paid), mint classic and not wrapped SOL.
+No strings. Any
+classic mint is accepted by decision (High-risk decision 6). Tested by `bad_terms_are_refused_at_creation`
+and `a_party_cannot_be_the_escrow_itself_or_its_deposit_address` (from either creator, and with the
+deposit address made first in the same transaction); fuzzer I14.
 
 ### 19. Type narrowing. Applied.
 
@@ -325,7 +330,7 @@ Every way out drains the whole balance and closes the deposit account; nothing i
   so each rule and its error sit in the instruction's own text.
 - **§4 Tokens.** Classic only; `transfer`, not `transfer_checked` (7). Decimals unused.
 - **§5 CPI.** `Program<Token>`; seeds from the stored bump.
-- **§6 Errors.** `#[error_code]` with a message on each of 24 errors; the `require!` family throughout.
+- **§6 Errors.** `#[error_code]` with a message on each of 25 errors (`PartyIsTheEscrow` appended last, so no other code moved); the `require!` family throughout.
 - **§8 Tooling.** Anchor 1.2 against platform-tools v1.54; `overflow-checks = true`; the features
   Anchor's macros test for (`custom-heap`, `custom-panic`, `anchor-debug`) are declared, so the
   build has no warnings.
@@ -373,13 +378,10 @@ ones marked open are questions in `docs/changes/escrow.md`.
    without reading an invoice can lose to a one-day timer to the seller. `optionsNotAgreed` exists
    for this; the program cannot know what was agreed (`finding_an_invoice_with_a_short_timer…`,
    `finding_a_buyers_short_timer…`).
-3. **A party named as the escrow itself.** Nothing stops a creator naming the escrow's own address
-   as the other party. That party's standard account is then the deposit account, so every way out
-   that pays it anything fails, and money paid in leaves only by one that pays it nothing (an
-   arbiter's split to the other side, or a timer to the other side, if the creator set either).
-   A buyer who does this locks its own money. An invoice naming the escrow as its buyer locks the
-   money of whoever pays it without checking it names them, which the app checks before paying.
-   The last version had the same gap. Found in this round's review; not tested; open.
+3. **A party key nobody controls.** `create` refuses the two it can see, the escrow's own address
+   and its deposit address (`PartyIsTheEscrow`). Any other key nobody can sign for (a lost key,
+   another program's address, some other token account) cannot be told apart, and a party named as
+   one locks what it would be paid, as in any transfer. The app names parties by keys people hold.
 4. **A part payment can be closed under the buyer** by the seller, at any time. The part comes
    back; a second part sent to the closed address waits for the creator to reopen the id
    (`finding_a_part_payment_can_be_closed_under_the_buyer_by_the_seller`).

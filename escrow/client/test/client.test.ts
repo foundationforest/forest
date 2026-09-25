@@ -227,6 +227,14 @@ test('create carries exactly the bytes the program reads', () => {
   assert.throws(() => createIx({ buyer, payer, mint, terms: t, creator: arbiter }), /NotAParty/)
   assert.throws(() => createIx({ buyer, payer, mint: NATIVE_MINT, terms: t }), /NativeMint/)
   assert.throws(() => invoiceIx({ seller: arbiter, buyer, payer, mint, terms: t }), /its own seller/)
+
+  // Neither party may be the escrow itself or its deposit address, from either creator.
+  for (const party of [escrow, vaultAddress(escrow, mint)]) {
+    assert.throws(() => createIx({ buyer, payer, mint, terms: terms({ seller: party }) }), /PartyIsTheEscrow/)
+  }
+  for (const party of [invoiced, vaultAddress(invoiced, mint)]) {
+    assert.throws(() => invoiceIx({ seller, buyer: party, payer, mint, terms: t }), /PartyIsTheEscrow/)
+  }
 })
 
 test('bad terms fail before a transaction is built, with the program\'s own error names', () => {

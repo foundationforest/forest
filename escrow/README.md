@@ -35,8 +35,8 @@ there is no admin, no config account, no pause and no fee.
 | | |
 |---|---|
 | `program/` | the program. Anchor 1.2, Rust, `cargo build-sbf`. |
-| `program/tests-litesvm/` | 51 LiteSVM tests with the clock moved by hand, and the wire format written out a second time: `escrow.rs` (22: every way out with exact balances, every rejection, whose the address is, where rent goes, the costs), `adversarial.rs` (27: the attacks, and the `finding_…` tests that pin what the program accepts by design) and `one_tap.rs` (2: the one-tap payment, its receipt and its rent, and a second payment to its link). |
-| `program/trident-tests/` | a Trident fuzzer: random flows against the built program, a model of every escrow beside it, thirteen invariants checked after every step and at the end of every run. |
+| `program/tests-litesvm/` | 52 LiteSVM tests with the clock moved by hand, and the wire format written out a second time: `escrow.rs` (23: every way out with exact balances, every rejection, whose the address is, who may not be a party, where rent goes, the costs), `adversarial.rs` (27: the attacks, and the `finding_…` tests that pin what the program accepts by design) and `one_tap.rs` (2: the one-tap payment, its receipt and its rent, and a second payment to its link). |
+| `program/trident-tests/` | a Trident fuzzer: random flows against the built program, a model of every escrow beside it, fourteen invariants checked after every step and at the end of every run. |
 | `client/` | TypeScript, browser and Node: a builder for every instruction, the terms from a post's optional terms block, the check a person runs before working or paying, the timer, the deposit address and its pay link, the account and the events decoded. |
 | `security-checklist.md` | the safe-solana-builder checklist: every rule, how it is applied here, and every known limit. |
 
@@ -55,7 +55,7 @@ cd escrow/client    && npm run test:devnet                # read-only, against d
 
 | From | Instruction | Signs | Needs | To |
 |---|---|---|---|---|
-| nothing | `create` | the buyer or the seller as creator, and whoever fronts the rent | the address is `["escrow", creator, id]`; buyer and seller differ; no zero keys; amount above zero; a timer, if any, of at least one day; a classic SPL Token mint, not wrapped SOL; the address never held an escrow that is still there | open, the creator recorded as where rent goes back |
+| nothing | `create` | the buyer or the seller as creator, and whoever fronts the rent | the address is `["escrow", creator, id]`; buyer and seller differ; no zero keys; neither party is the escrow's own address or its deposit address; amount above zero; a timer, if any, of at least one day; a classic SPL Token mint, not wrapped SOL; the address never held an escrow that is still there | open, the creator recorded as where rent goes back |
 | open | `mark_funded` | nobody | the deposit account holds at least the amount | funded, `funded_at` = now |
 | open, funded | `release_to_seller` | the buyer | the deposit account holds at least the amount | ended: the whole balance to the seller's standard account |
 | open, funded | `release_to_buyer` | the seller | the same | ended: the whole balance to the buyer's standard account |
@@ -87,27 +87,28 @@ instruction (`what_each_way_out_costs` and `one_tap.rs`):
 
 | | Compute units | Of 1,400,000 | Bytes on the wire | Of 1,232 |
 |---|---|---|---|---|
-| `create`, no options | 31,600 to 45,100 | 2 to 3% | 595 | 48% |
-| `create`, an arbiter and a timer | 31,700 to 49,700 | 2 to 4% | 630 | 51% |
+| `create`, no options | 31,700 to 48,200 | 2 to 3% | 595 | 48% |
+| `create`, an arbiter and a timer | 33,300 to 51,300 | 2 to 4% | 630 | 51% |
 | `mark_funded` | 4,154 | 0.3% | 283 | 23% |
-| `release_to_seller` | 11,400 to 14,400 | 0.8 to 1.0% | 447 | 36% |
-| `release_to_buyer` | 11,600 to 16,100 | 0.8 to 1.1% | 479 | 39% |
-| `split` | 15,700 to 20,200 | 1.1 to 1.4% | 579 | 47% |
-| `arbitrate` | 15,600 to 20,100 | 1.1 to 1.4% | 514 | 42% |
-| `timer_release`, to the seller | 11,400 to 14,400 | 0.8 to 1.0% | 382 | 31% |
-| `timer_release`, to the buyer | 11,400 to 15,900 | 0.8 to 1.1% | 382 | 31% |
-| `close_unfunded`, nothing paid | 8,900 to 13,400 | 0.6 to 1.0% | 479 | 39% |
-| `recover_late`, making the buyer's account | 29,600 to 43,100 | 2 to 3% | 578 | 47% |
+| `release_to_seller` | 11,400 to 15,900 | 0.8 to 1.1% | 447 | 36% |
+| `release_to_buyer` | 11,600 to 19,100 | 0.8 to 1.4% | 479 | 39% |
+| `split` | 15,700 to 23,200 | 1.1 to 1.7% | 579 | 47% |
+| `arbitrate` | 15,600 to 23,100 | 1.1 to 1.6% | 514 | 42% |
+| `timer_release`, to the seller | 11,400 to 15,900 | 0.8 to 1.1% | 382 | 31% |
+| `timer_release`, to the buyer | 11,400 to 18,900 | 0.8 to 1.3% | 382 | 31% |
+| `close_unfunded`, nothing paid | 8,900 to 16,400 | 0.6 to 1.2% | 479 | 39% |
+| `recover_late`, making the buyer's account | 29,600 to 52,100 | 2 to 4% | 578 | 47% |
 | `sweep_rent` | 4,230 | 0.3% | 283 | 23% |
-| one tap: the deposit address made, `create`, a plain transfer in, `release_to_seller` | 39,400 to 52,900 | 3 to 4% | 701 | 57% |
-| the same, the seller's account made first in it | 53,000 to 71,000 | 4 to 5% | 743 | 60% |
-| the same, an arbiter and a timer | 39,500 to 56,000 | 3 to 4% | 736 | 60% |
-| an invoice paid in one tap: the transfer and `release_to_seller` | 11,700 to 17,700 | 0.8 to 1.3% | 526 | 43% |
+| one tap: the deposit address made, `create`, a plain transfer in, `release_to_seller` | 39,500 to 62,000 | 3 to 4% | 701 | 57% |
+| the same, the seller's account made first in it | 53,000 to 77,000 | 4 to 6% | 743 | 60% |
+| the same, an arbiter and a timer | 41,100 to 53,100 | 3 to 4% | 736 | 60% |
+| an invoice paid in one tap: the transfer and `release_to_seller` | 11,700 to 22,200 | 0.8 to 1.6% | 526 | 43% |
 
 Most rows vary because they derive an address, and a derivation tries bump seeds until one lands
 off the curve at 1,500 units a try; the keys decide how many tries. `create` derives the escrow's
 address and its deposit account; every instruction that pays a party checks that party's standard
-account by address, which is one derivation.
+account by address, which is one derivation. `create`'s check that neither party is the escrow or
+its deposit address costs about 40 units (its least, 31,613 before, is 31,652).
 
 Some rows are 32 bytes longer than the last version's: the rent recipient is now the creator, a key
 the transaction does not otherwise carry when someone else signs (the seller releasing the buyer's

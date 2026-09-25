@@ -305,3 +305,36 @@ consolidation session to fold into `docs/changes.md` and `docs/handoff.md`.
      - `docs/changes/services.md` opens 1 and 2 are closed by this round;
      - an index derives an invoice's address from the seller's key;
      - `docs/devnet.md`'s escrow size, hash and cost are stale (303,432 bytes now).
+
+### Round 2, one more before merge: a party cannot be the escrow itself
+
+- **Task,** from Carlos, on the same pull request: `create` refuses a party equal to the escrow's
+  own address or its deposit address, with a test. This closes round 2's open 1.
+- **Built:**
+  - **The program:** after the zero-key checks, `create` refuses a buyer or seller equal to the
+    escrow account or its deposit account (`PartyIsTheEscrow`, appended as the 25th error so no
+    other code moved). Neither can ever sign, so a party named as either could never give, agree or
+    be paid, and money paid in could leave only by a way out that pays it nothing. 304,912 bytes,
+    sha256 `57e83f6a…36af2c7`, no warnings.
+  - **Test first:** `a_party_cannot_be_the_escrow_itself_or_its_deposit_address` (`escrow.rs`): the
+    escrow and its deposit address as seller in the buyer's escrow, as buyer in the seller's
+    invoice, and once with the deposit address made first in the same transaction (the whole
+    transaction reverts). On the round-2 binary (`46ea84c2…`) it failed at its first case, the escrow
+    accepted as seller; now it passes.
+  - **The fuzzer:** I14. One `create` in twenty names the escrow or its deposit address as the
+    party the creator does not sign for, and the model expects a refusal. Against the round-2
+    binary it fails at once (`I7 create: model says false, program said true`).
+  - **The client:** `createIx` (and so `invoiceIx`, `createAndFund`, `payInOneTap`) throws
+    `PartyIsTheEscrow` before building; its test failed first too.
+- **Chosen, not decided:** the arbiter is not checked the same way. An arbiter nobody can sign for is
+  an option that never runs; the parties can still end the escrow, so nothing is locked.
+- **Measured:** the check costs about 40 compute units at `create` (its least, 31,613, is now
+  31,652). The table is re-measured on this binary; every other row keeps its least, and the most
+  moves only with the keys each run draws.
+- **Verified:** 52 LiteSVM tests, 16 client tests, the validator test, `feepayer`'s local test
+  through Kora (the same charges: pay 4,777,650 for 4,777,600, the release 10,050 for 10,000, the
+  one tap 50 over; 9,846,160 lamports back to the person), and the fuzzer's long campaign on this
+  binary, 50,000 iterations of 80 flows (4,000,000 flows) in 109 seconds, exit 0, `create`
+  refused 83,560 times and accepted 183,406.
+- **Open:** a party key nobody controls in general (a lost key, another program's address, some
+  other token account) cannot be told apart, and stays a known limit (checklist limit 3).

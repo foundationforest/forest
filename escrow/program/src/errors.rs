@@ -50,4 +50,6 @@ pub enum EscrowError {
     NotTheSellersAccount,
     #[msg("the escrow account holds no more than its rent-exempt minimum")]
     NothingToSweep,
+    #[msg("neither party can be the escrow's own address or its deposit address")]
+    PartyIsTheEscrow,
 }

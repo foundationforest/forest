@@ -93,6 +93,16 @@ pub mod forest_escrow {
         require_keys_neq!(args.seller, buyer, EscrowError::SameParty);
         require_keys_neq!(buyer, Pubkey::default(), EscrowError::EmptyKey);
         require_keys_neq!(args.seller, Pubkey::default(), EscrowError::EmptyKey);
+        // Neither party may be the escrow itself or its deposit account. Neither can ever sign, so
+        // a party named as either could never give, agree or be paid: the escrow's standard
+        // account is the deposit account itself, and the deposit account's is a token account no
+        // key can move anything out of. Money paid in would leave only by a way out that pays that
+        // party nothing, if the creator set one.
+        let escrow_key = ctx.accounts.escrow.key();
+        let vault_key = ctx.accounts.vault.key();
+        for party in [buyer, args.seller] {
+            require!(party != escrow_key && party != vault_key, EscrowError::PartyIsTheEscrow);
+        }
         let creator_key = ctx.accounts.creator.key();
         let creator = if creator_key == buyer {
             Side::Buyer
