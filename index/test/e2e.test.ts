@@ -273,11 +273,10 @@ test('the index, end to end', { timeout: 600_000 }, async (t) => {
       wallet,
       createdAt: now(),
     })
-    const offer = (market: string, description: string, terms?: unknown) => ({
+    // A post names no market or side: they are its author profile's (Ana's: online-tutors/seller).
+    const offer = (description: string, terms?: unknown) => ({
       $type: 'foundation.forest.post',
       direction: 'offer',
-      market,
-      role: 'seller',
       description,
       price: { amount: '25', mint: USDC_MINT.toBase58(), per: 'hour' },
       ...(terms ? { terms } : {}),
@@ -296,17 +295,17 @@ test('the index, end to end', { timeout: 600_000 }, async (t) => {
     await t.test('1. profiles and two posts, written on the host, read off its firehose', async () => {
       await ana.device!.write([
         create('foundation.forest.profile', profileRecord('Ana', ana.wallet.publicKey.toBase58()), 'self'),
-        create('foundation.forest.post', offer(MARKET, 'Portuguese conversation for adults, A1 to B2.')),
-        create('foundation.forest.post', offer(MARKET, 'Spanish grammar, one hour, homework optional.', { timer: { days: 7, to: 'seller' } })),
+        create('foundation.forest.post', offer('Portuguese conversation for adults, A1 to B2.')),
+        create('foundation.forest.post', offer('Spanish grammar, one hour, homework optional.', { timer: { days: 7, to: 'seller' } })),
       ])
       await ben.device!.write([create('foundation.forest.profile', profileRecord('Ben', ben.wallet.publicKey.toBase58(), BUYER), 'self')])
       await cleo.device!.write([create('foundation.forest.profile', profileRecord('Cleo', cleoDeclared), 'self')])
       await waitFor(async () => (await count('select count(*) n from profiles')) === 3 && (await count('select count(*) n from posts')) === 2, 30_000, 'three profiles and two posts')
-      const { rows } = await index.db.query('select market_written, market from posts order by market_written')
+      const { rows } = await index.db.query('select pr.market, pr.role from posts p join profiles pr on pr.did = p.did')
       assert.deepEqual(rows, [
-        { market_written: MARKET, market: MARKET },
-        { market_written: MARKET, market: MARKET },
-      ], 'both under the directory name')
+        { market: MARKET, role: 'seller' },
+        { market: MARKET, role: 'seller' },
+      ], "both in their author's market, as her side: the posts name neither")
     })
 
     let escrow: PublicKey
@@ -447,7 +446,6 @@ test('the index, end to end', { timeout: 600_000 }, async (t) => {
       const seen: [string, Outcome][] = []
       const reader = await startRecordReader({
         db: index.db,
-        directory: index.directory,
         firehoseUrl: `ws://127.0.0.1:${(wss.address() as AddressInfo).port}`,
         plcUrl: plc.url,
         onChange: () => index.scorer.schedule(),
@@ -529,7 +527,7 @@ test('the index, end to end', { timeout: 600_000 }, async (t) => {
       assert.deepEqual([market.body.market.sides, market.body.market.labels, market.body.market.roles], ['two', { seller: 'tutor', buyer: 'student' }, ['seller', 'buyer']])
       assert.deepEqual(market.body.counts, { offers: 2, requests: 0, badgedProfiles: 2 }, 'Ana and Ben; not Cleo')
       assert.equal(market.body.total, 2)
-      const OFFER = ['uri', 'cid', 'did', 'name', 'profileUrl', 'direction', 'market', 'marketUrl', 'marketWritten', 'role', 'description', 'price', 'terms', 'availability', 'remote', 'location', 'expires', 'createdAt', 'uniqueness', 'rating', 'standing', 'payLink']
+      const OFFER = ['uri', 'cid', 'did', 'name', 'profileUrl', 'direction', 'market', 'marketUrl', 'role', 'description', 'price', 'terms', 'availability', 'remote', 'location', 'expires', 'createdAt', 'uniqueness', 'rating', 'standing', 'payLink']
       for (const o of market.body.offers) {
         hasKeys(o, OFFER, 'an offer')
         assert.equal(o.did, ana.did)
@@ -581,7 +579,7 @@ test('the index, end to end', { timeout: 600_000 }, async (t) => {
       const s = await get('/search.json?q=portuguese')
       hasKeys(s.body, ['kind', 'url', 'json', 'q', 'near', 'markets', 'offers', 'total'], '/search.json')
       assert.equal(s.body.total, 1)
-      assert.equal(s.body.offers[0].marketWritten, MARKET)
+      assert.deepEqual([s.body.offers[0].market, s.body.offers[0].role], [MARKET, 'seller'], "the author profile's market and side")
       assert.deepEqual((await get('/search.json?q=tutor')).body.markets.map((m: any) => [m.name, m.matched]), [[MARKET, 'name']])
 
       // And the same pages for people.

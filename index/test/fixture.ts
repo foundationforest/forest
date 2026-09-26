@@ -1,8 +1,8 @@
 // Part one's story, as data, for the page tests: Ana tutors; Ben is her student; Cleo is a
 // stranger. The same people, badges, deal and reviews the end-to-end test makes on real pieces,
 // written straight into a fresh database, so the pages can be tested with nothing but Postgres.
-// Markets v1 adds a one-sided market with no money, where Dara offers a language exchange in a
-// place, with no price. Every profile lives in one market, as one side of it.
+// Markets v1 adds a one-sided market, where Dara offers a language exchange in a place, with no
+// price. Every profile lives in one market, as one side of it.
 //
 //   - Records go in through part one's own `applyRecordOp`, so each is checked against its lexicon
 //     exactly as a record off the firehose is.
@@ -28,7 +28,7 @@ export const MARKET = 'online-tutors'
 export const SELLER_SCOPE = `${MARKET}/seller`
 export const BUYER_SCOPE = `${MARKET}/buyer`
 export const FOLDER = 'freelance-work'
-/** A one-sided market with no money: Ben is a peer in it, and his offer there names no price. */
+/** A one-sided market: Dara is a peer in it, and her offer there names no price. */
 export const EXCHANGE = 'language-exchange'
 export const PEER_SCOPE = `${EXCHANGE}/peer`
 /** Where Ben's exchange offer is, rounded to 2 km. */
@@ -77,7 +77,7 @@ export async function makeFixture(adminUrl: string): Promise<Fixture> {
   // Migrations and the public keys; no firehose and no chain, so no reader starts.
   const readers = await startReaders(db, config())
   const put = async (did: string, collection: string, rkey: string, cid: string, record: Record<string, unknown>) => {
-    const out = await applyRecordOp(db, readers.directory, { event: 'create', did, collection, rkey, cid, rev: '3kzq2vrffxb2a', record })
+    const out = await applyRecordOp(db, { event: 'create', did, collection, rkey, cid, rev: '3kzq2vrffxb2a', record })
     if (out.result !== 'stored') throw new Error(`fixture record ${did}/${collection}/${rkey} not stored: ${JSON.stringify(out)}`)
   }
 
@@ -98,11 +98,10 @@ export async function makeFixture(adminUrl: string): Promise<Fixture> {
   await put(cleo.did, 'foundation.forest.profile', 'self', 'bafyreiexamplecleoprofile222222', profile(cleo, SELLER_SCOPE, null, 3))
   await put(dara.did, 'foundation.forest.profile', 'self', 'bafyreiexampledaraprofile222222', profile(dara, PEER_SCOPE, 'English teacher, learning Portuguese.', 3))
 
-  const offer = (market: string, description: string, amount: string, extra: Record<string, unknown>) => ({
+  // A post names no market or side: they are its author profile's.
+  const offer = (description: string, amount: string, extra: Record<string, unknown>) => ({
     $type: 'foundation.forest.post',
     direction: 'offer',
-    market,
-    role: 'seller',
     description,
     price: { amount, mint: USDC, per: 'hour' },
     remote: true,
@@ -110,13 +109,13 @@ export async function makeFixture(adminUrl: string): Promise<Fixture> {
     ...extra,
   })
   await put(ana.did, 'foundation.forest.post', OFFERS.portuguese.rkey, OFFERS.portuguese.cid,
-    offer(MARKET, 'Portuguese conversation for adults, A1 to B2.', '25', { availability: 'Weekday evenings, Lisbon time.', subjects: ['portuguese'] }))
-  // With a timer that sends the money back to the buyer, which the pages flag, and saying nothing of
-  // where (`remote` is optional).
-  const { remote: _, ...spanish } = offer(MARKET, 'Spanish grammar, one hour, homework optional.', '12.50', { terms: { timer: { days: 30, to: 'buyer' } }, subjects: ['spanish'] })
+    offer('Portuguese conversation for adults, A1 to B2.', '25', { availability: 'Weekday evenings, Lisbon time.', subjects: ['portuguese'] }))
+  // With a timer that sends the money back to the buyer (which no page speaks of), and saying
+  // nothing of where (`remote` is optional).
+  const { remote: _, ...spanish } = offer('Spanish grammar, one hour, homework optional.', '12.50', { terms: { timer: { days: 30, to: 'buyer' } }, subjects: ['spanish'] })
   await put(ana.did, 'foundation.forest.post', OFFERS.spanish.rkey, OFFERS.spanish.cid, spanish)
-  // Dara's offer in a market with no money: no price, a peer, and a place.
-  const { price: __, remote: ___, ...exchange } = offer(EXCHANGE, 'English for Portuguese, an hour each way, in a café.', '0', { role: 'peer', location: LISBON, speaks: ['en'] })
+  // Dara's offer: in her market, the language exchange; no price, and a place.
+  const { price: __, remote: ___, ...exchange } = offer('English for Portuguese, an hour each way, in a café.', '0', { location: LISBON, speaks: ['en'] })
   await put(dara.did, 'foundation.forest.post', OFFERS.exchange.rkey, OFFERS.exchange.cid, exchange)
 
   // Five badges on list 0, vouched for by the foundation's issuer. Cleo's is for a key her profile

@@ -27,7 +27,7 @@ export const SHAPES = ['profile', 'post', 'review', 'credential']
  * The keys a market file must have. A market file describes a market and restricts no deal: the
  * arbiter, the timer, the token and the amount are the seller's, per offer.
  */
-export const MARKET_REQUIRED_KEYS = ['name', 'folder', 'description', 'sides', 'money', 'evidenceTypes', 'offerFields', 'ratings', 'howDealsGo']
+export const MARKET_REQUIRED_KEYS = ['name', 'folder', 'description', 'sides', 'evidenceTypes', 'offerFields', 'ratings', 'howDealsGo']
 
 /** The keys a market file may have. Nothing else belongs in one. */
 export const MARKET_KEYS = [...MARKET_REQUIRED_KEYS, 'labels', 'reviewFields']
@@ -96,10 +96,10 @@ export function loadLexiconDocs() {
  * A post's terms are optional and checked by the lexicon alone.
  *
  * With a market file, the record is also checked against that market: a
- * profile against the market it lives in (its name and a role its sides allow);
- * a post against the market it names (the same, its offer fields, and a price
- * when the market has money); a review against the market of the profile it is
- * about (its review fields). The caller finds that market.
+ * profile against the market it lives in (its name and a role its sides
+ * allow); a post against its author profile's market (its offer fields); a
+ * review against the market of the profile it is about (its review fields).
+ * The caller finds that market. A post names no market or side of its own.
  * Nothing in a market file limits a post's terms or token, a review may use
  * any rating name, and evidence is not checked: it weighs, it never rejects.
  */
@@ -134,8 +134,8 @@ export function validateRecord(record, { market } = {}) {
 
 /**
  * Check a market file's structure, and nothing more. Returns { ok, errors }.
- * Required: name, folder, description, sides, money, evidenceTypes,
- * offerFields, ratings, howDealsGo. Optional: labels (two sides only) and
+ * Required: name, folder, description, sides, evidenceTypes, offerFields,
+ * ratings, howDealsGo. Optional: labels (two sides only) and
  * reviewFields. Nothing else.
  */
 export function validateMarket(market) {
@@ -177,10 +177,6 @@ export function validateMarket(market) {
         if (!isOneLine(labels[side], MAX_LABEL)) errors.push(`labels/${side} must be one line of text, at most ${MAX_LABEL} characters`)
       }
     }
-  }
-
-  if (typeof market.money !== 'boolean') {
-    errors.push('money must be true or false: whether deals in this market are paid')
   }
 
   if (!Array.isArray(market.evidenceTypes)) {
@@ -384,24 +380,18 @@ function base58Length(s) {
   return bytes
 }
 
-// Cross-checks a profile or a post against the market file it names: its name
-// and a role the market's sides allow, and for a post a price when the market
-// has money. A post's extra fields were merged into the lexicon above, and a
-// review's too; nothing else about a review is checked against its market.
+// Cross-checks a profile against the market file it names: its name and a role
+// the market's sides allow. A post's and a review's extra fields were merged into
+// the lexicon above; nothing else about them is checked against a market.
 function marketRules(shape, record, market) {
   const errors = []
-  if (shape === 'profile' || shape === 'post') {
+  if (shape === 'profile') {
     if (record.market !== market.name) {
       errors.push(`Record/market must be "${market.name}", got ${JSON.stringify(record.market)}`)
     }
     const roles = rolesOf(market)
     if (!roles.includes(record.role)) {
       errors.push(`Record/role must be one of (${roles.join('|')}), got ${JSON.stringify(record.role)}`)
-    }
-  }
-  if (shape === 'post') {
-    if (market.money && record.price === undefined) {
-      errors.push(`Record must have the property "price": deals in ${market.name} are paid`)
     }
   }
   return errors

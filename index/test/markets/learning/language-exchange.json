@@ -3,7 +3,6 @@
   "folder": "learning",
   "description": "Two people teach each other their languages, in person or online.",
   "sides": "one",
-  "money": false,
   "evidenceTypes": [],
   "offerFields": {
     "properties": {

@@ -33,7 +33,7 @@ In planning:
 
 1. **Decimals in records are text:** `"8.5"`, `"38.72"`, as `price.amount` already is.
 2. **Standing is today's trust score renamed**, and its algorithm is unchanged. It is renamed everywhere, the signed statement's `kind` word included.
-3. **`price` is optional on a post.** The validator requires it only when the market file says `money` is true.
+3. **`price` is optional on a post.** The validator requires it only when the market file says `money` is true. *Superseded in the follow-up: `money` is gone, and price is optional always.*
 4. **No aliases anywhere.** The index no longer reads the Aliases table: a market is its one name.
 5. **Any rating name.** A review may use any rating name. The file's `ratings` only suggests; nothing is refused for a name outside it.
 6. **Exact points are allowed.** `lat` and `lon` take up to 4 decimals, and `precisionKm` runs from 0 (exact, for a shop or a venue) to 20000. The app rounds.
@@ -187,11 +187,17 @@ PR #29 merged, and Carlos answered its open items. This is a fresh change on the
    - The options stay as plain data in the JSON twins (`terms` on an offer; `arbiter` and `timer` on a receipt). What to say about them is each app's call.
    - This withdraws the first round's options sentence and flag.
 
+Then, on the same PR (#31), three simplifications:
+
+5. **A post names no market or role.** A post's market and side are its author profile's, and the index reads them from the profile.
+6. **The market file has no `money`.** A price is optional on every post, always; no rule ties it to anything.
+7. **No rule about a profile changing its scope.** A badge counts only when the profile's scope matches it. Nothing else is said or checked.
+
 ### Built
 
 - **`shapes/`:**
   - The profile lexicon requires `market` and `role`, each at most 64 characters.
-  - Checked against a market file, a profile must name that market and a role its sides allow, as a post must.
+  - Checked against a market file, a profile must name that market and a role its sides allow.
   - The profile example lives in `online-tutors` as a seller.
   - `README.md`, and 49 tests.
 - **`index/`:**
@@ -206,13 +212,29 @@ PR #29 merged, and Carlos answered its open items. This is a fresh change on the
     - a new profile, Dara (`language-exchange/peer`), holds the priceless offer with a place.
   - Page test 9 checks that no page a person reads says "arbiter" or "timer", and that the options are still in the twins.
   - Docs: `SCORING.md` (a fourth badge rule), `README.md`, `skill.md`.
-- **Run here:**
-  - shapes 49 of 49;
+- **The three simplifications (5 to 7):**
+  - `shapes/`:
+    - The post lexicon loses `market` and `role`.
+    - `money` leaves the market template; the validator's price rule and its post market-and-role check go. A post checked against its author's market file gets that market's `offerFields`, nothing more.
+    - The post example and both market files lose the keys.
+    - `README.md`, and 48 tests.
+  - `index/`:
+    - Migration `005` also drops `posts.market_written`, `posts.market` and `posts.role`, and rebuilds the search column on `description` and `area`.
+    - Every offer query reads the market and side from the author's profile. An offer is live only when that profile's market is in the directory, byte for byte; the directory's names go to Postgres as one array parameter.
+    - `marketWritten` leaves the offer twin. The store and the record reader no longer take the directory, and `Directory.postMarket` is gone.
+    - `SCORING.md` rule 2 no longer says anything about a profile changing its scope.
+    - `skill.md`, `README.md` and `PAYLINK.md` follow.
+- **Run here, after the simplifications:**
+  - shapes 48 of 48;
   - the index's whole `npm test`, end to end included: 40 of 40, none skipped;
   - the host's `test.sh`: 58 and 97 jest tests, and 7 of 7 of its own.
 
 ### Open
 
-1. **A post names its own market and role.** Must they be its profile's, or is a post under another scope still listed? Today it is listed under the market it names, and its seller's badge shows only when that is the profile's own market. *Needs Carlos.*
-2. **A profile's record can change its market or role.** Its old badge then stops counting, as a changed wallet's does, and a badge under the new scope needs a new registration. Is changing it allowed, or should the app never offer it? *Needs Carlos.*
-3. **The handoff:** Record shapes (a profile's `market` and `role`), Markets (one scope per profile), and the index paragraph (no word on the options). This is for the consolidation session. *Mechanical.*
+1. ~~A post names its own market and role.~~ Closed by 5: it names neither.
+2. ~~A profile's record can change its market or role.~~ Closed by 7: nothing is said or checked.
+3. **The `markets` repo must drop `money`.** This validator refuses a market file with any key outside the ten. Until that repo's files lose `money`, the index refuses every one of them and lists no market. *Mechanical,* in that repo.
+4. **The handoff**, for the consolidation session. *Mechanical.*
+   - Record shapes: a profile's `market` and `role`; a post with no market or role; price optional always.
+   - Markets: one scope per profile; no `money`.
+   - The index paragraph: no word on the options.

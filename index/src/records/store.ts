@@ -9,7 +9,6 @@ import { lexToJson } from '@atproto/lex'
 import { validateRecord } from '../../../shapes/src/validate.js'
 
 import type { Db } from '../db.ts'
-import type { Directory } from '../markets.ts'
 
 export const COLLECTIONS = {
   profile: 'foundation.forest.profile',
@@ -27,7 +26,7 @@ export type Outcome = { result: 'stored' | 'deleted' | 'ignored' } | { result: '
 
 const ts = (v: unknown): string | null => (typeof v === 'string' ? v : null)
 
-export async function applyRecordOp(db: Db, directory: Directory, op: RecordOp): Promise<Outcome> {
+export async function applyRecordOp(db: Db, op: RecordOp): Promise<Outcome> {
   const uri = `at://${op.did}/${op.collection}/${op.rkey}`
   if (!FOREST_COLLECTIONS.includes(op.collection)) return { result: 'ignored' }
 
@@ -69,12 +68,10 @@ export async function applyRecordOp(db: Db, directory: Directory, op: RecordOp):
     }
     case COLLECTIONS.post: {
       await db.query(
-        `insert into posts (uri, did, rkey, cid, record, direction, market_written, market, role, description,
-                            price_amount, price_mint, price_per, remote, lat, lon, precision_km, area, expires, created_at,
-                            indexed_at)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, now())
+        `insert into posts (uri, did, rkey, cid, record, direction, description, price_amount, price_mint, price_per,
+                            remote, lat, lon, precision_km, area, expires, created_at, indexed_at)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, now())
          on conflict (uri) do update set cid = excluded.cid, record = excluded.record, direction = excluded.direction,
-           market_written = excluded.market_written, market = excluded.market, role = excluded.role,
            description = excluded.description, price_amount = excluded.price_amount, price_mint = excluded.price_mint,
            price_per = excluded.price_per, remote = excluded.remote, lat = excluded.lat, lon = excluded.lon,
            precision_km = excluded.precision_km, area = excluded.area,
@@ -86,9 +83,6 @@ export async function applyRecordOp(db: Db, directory: Directory, op: RecordOp):
           op.cid,
           r,
           r.direction,
-          r.market,
-          directory.postMarket(r.market),
-          r.role,
           r.description,
           r.price?.amount ?? null,
           r.price?.mint ?? null,

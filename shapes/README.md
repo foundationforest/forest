@@ -18,7 +18,7 @@ node bin/validate.js market examples/markets/online-tutors.json
 
 A profile lives in one market, as one side of it: its record names `market` and `role`, both required, such as `online-tutors` and `seller`. A profile is one folder in one market by design; a person in two markets, or on both sides of one, holds two profiles. A badge counts for a profile only under that scope, `market/role`. Checked against a market file, a profile must name that market and a role its sides allow.
 
-A post may carry a `terms` block, fully optional, on an offer or a request. It holds only the options an escrow made from the post is created with, each off unless set: `arbiter`, a Solana key that may decide any split, and `timer`, `{ days, to }`: that many whole days after funding, everything goes to `to`, which is `seller` or `buyer`. With no terms, the only ways out of an escrow are the ones the two sides sign. The post's `price` names its token by `mint`, the token's address on Solana: any classic token works, and which tokens an index weighs is the index's call. `price` is optional in the shape; checked against a market file, it is required when the file says `money` is true.
+A post names no market or side: its market and side are its author profile's. A post may carry a `terms` block, fully optional, on an offer or a request. It holds only the options an escrow made from the post is created with, each off unless set: `arbiter`, a Solana key that may decide any split, and `timer`, `{ days, to }`: that many whole days after funding, everything goes to `to`, which is `seller` or `buyer`. With no terms, the only ways out of an escrow are the ones the two sides sign. The post's `price` names its token by `mint`, the token's address on Solana: any classic token works, and which tokens an index weighs is the index's call. `price` is optional on every post, in every market.
 
 A post's `remote` and `location` are both optional: a post may say it happens online, name a place, or say neither. A `location` is `{ lat, lon, precisionKm, area }`, all four required inside it:
 
@@ -35,19 +35,18 @@ A review requires only `subject`, the DID it is about (and `createdAt`, as every
 
 A review names no market. Its market is the `market` of the profile it is about; an app passes that market's file to check the review against it.
 
-A market file has nine required keys and two optional ones. Nothing else belongs in one:
+A market file has eight required keys and two optional ones. Nothing else belongs in one:
 
 - `name`, the market's spelling, a lowercase slug. Anyone can use any market name; the `markets` repo lists the spellings the foundation recommends.
 - `folder`, where the file sits in the `markets` repo's directory (`<folder>/<name>.json`), a slug. Folders group markets for reading; they are never a program concept.
 - `description`, one line of text, at most 300 characters.
 - `sides`, `two` or `one`. A market's roles come from it: `seller` and `buyer` when two, `peer` when one. The recommended badge scope is `market/role`, such as `online-tutors/seller`.
 - `labels`, optional, only when `sides` is `two`: `{ "seller": …, "buyer": … }`, the plain words pages use for the two sides (`tutor`, `student`). A label is a word, not a role: posts and badges still say `seller` and `buyer`.
-- `money`, true or false: whether deals in this market are paid. When true, a post in it must carry a price.
 - `evidenceTypes` lists the evidence that applies to deals in this market (`escrow` is the one defined so far). It is metadata for indexes, which weigh a deal by the evidence under it; it never makes a record invalid.
-- `offerFields`, the extra fields a post in this market carries, and `reviewFields`, optional, the extra fields a review of a profile in it carries: each `{ properties, required }`, flat fields (string, integer, boolean, or an array of those) in lexicon field syntax. A market may mark its own fields required. It cannot add a shape, nest anything, or redefine a base field.
+- `offerFields`, the extra fields a post by a profile in this market carries, and `reviewFields`, optional, the extra fields a review of a profile in it carries: each `{ properties, required }`, flat fields (string, integer, boolean, or an array of those) in lexicon field syntax. A market may mark its own fields required. It cannot add a shape, nest anything, or redefine a base field.
 - `ratings`, the rating names a review in this market usually carries, `overall` always among them. It suggests; a review may use other names too.
 - `howDealsGo`, plain text on how deals in this market usually go, at most 3000 characters.
 
-A market file restricts no deal: the arbiter, the timer, the token and the amount are the seller's, per offer. With a market file the validator checks a profile's or a post's market name and that its role is one the market's sides allow; a post's offer fields, and its price when the market has money; and a review's review fields. It checks a market file's structure, nothing more.
+A market file restricts no deal: the arbiter, the timer, the token and the amount are the seller's, per offer. With a market file the validator checks a profile's market name and that its role is one the market's sides allow; a post's offer fields, against its author profile's market; and a review's review fields, against the market of the profile it is about. It checks a market file's structure, nothing more.
 
 Design choices made here without a decision behind them are logged in `docs/changes.md` as "chosen, not decided".

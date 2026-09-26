@@ -31,7 +31,9 @@ export type Offer = ReturnType<typeof offerOut>
 
 function offerOut(ctx: Ctx, row: any) {
   const r = row.record
-  const live = row.direction === 'offer' && row.market !== null && (row.expires === null || new Date(row.expires) > new Date())
+  // A post names no market or side: they are its author profile's.
+  const market = ctx.directory.markets.has(row.profile_market) ? (row.profile_market as string) : null
+  const live = row.direction === 'offer' && market !== null && (row.expires === null || new Date(row.expires) > new Date())
   return {
     uri: row.uri,
     cid: row.cid,
@@ -39,12 +41,12 @@ function offerOut(ctx: Ctx, row: any) {
     name: (row.name as string | null) ?? null,
     profileUrl: ctx.urls.profile(row.did),
     direction: row.direction as 'offer' | 'request',
-    market: row.market as string | null,
-    marketUrl: row.market ? ctx.urls.market(row.market) : null,
-    marketWritten: row.market_written as string,
-    role: row.role as string,
+    /** The author profile's market, when this index's directory has it; its side there. */
+    market,
+    marketUrl: market ? ctx.urls.market(market) : null,
+    role: (row.profile_role ?? null) as string | null,
     description: row.description as string,
-    /** Null in a market with no money. */
+    /** Optional on every post. */
     price: (r.price ?? null) as PayLink['price'] | null,
     /** The escrow's two options as the post writes them, plain data; what to say about them is an app's. */
     terms: (r.terms ?? null) as PayLink['terms'],
@@ -63,15 +65,22 @@ function offerOut(ctx: Ctx, row: any) {
   }
 }
 
-const OFFER_SELECT = `select p.*, pr.name, pr.wallet as declared,
+const OFFER_SELECT = `select p.*, pr.name, pr.wallet as declared, pr.market as profile_market, pr.role as profile_role,
        (select max(s.value_micro) from scores s where s.did = p.did and s.kind = 'uniqueness'
-          and split_part(s.scope, '/', 1) = p.market) as uniqueness,
+          and split_part(s.scope, '/', 1) = pr.market) as uniqueness,
        (select s.value_micro from scores s where s.did = p.did and s.kind = 'standing' and s.scope = '') as standing,
        (select s.value_micro from scores s where s.did = p.did and s.kind = 'rating' and s.scope = '') as rating,
        (select (s.details->>'reviews')::int from scores s where s.did = p.did and s.kind = 'rating' and s.scope = '') as rating_reviews
      from posts p left join profiles pr on pr.did = p.did`
 
-const LIVE = `p.direction = 'offer' and p.market is not null and (p.expires is null or p.expires > now())`
+/**
+ * A live offer: an offer, not expired, whose author profile lives in a market this index's directory
+ * lists, byte for byte. Adds the directory's names to `params` as one array.
+ */
+function liveWhere(ctx: Ctx, params: unknown[]): string {
+  params.push([...ctx.directory.markets.keys()])
+  return `p.direction = 'offer' and pr.market = any($${params.length}) and (p.expires is null or p.expires > now())`
+}
 
 /**
  * Within `km` of a point: the great-circle distance to the post's own point (as the post rounded
@@ -89,9 +98,10 @@ function nearWhere(near: Near, params: unknown[]): string {
 /** Live offers, badged sellers first, then by standing, then newest: two keys side by side. */
 async function offers(ctx: Ctx, where: string, params: unknown[], limit: number, offset: number, near: Near | null) {
   const all = [...params]
+  const live = liveWhere(ctx, all)
   const clause = near ? `${where} and ${nearWhere(near, all)}` : where
   const { rows } = await ctx.db.query(
-    `select * , count(*) over () as total from (${OFFER_SELECT} where ${LIVE} and ${clause}) o
+    `select * , count(*) over () as total from (${OFFER_SELECT} where ${live} and ${clause}) o
      order by (coalesce(o.uniqueness, 0) > 0) desc, coalesce(o.standing, 0) desc, o.created_at desc nulls last, o.uri
      limit ${limit} offset ${offset}`,
     all,
@@ -195,7 +205,12 @@ function marketOut(ctx: Ctx, m: MarketFile, counts: Map<string, number>) {
 }
 
 async function liveOfferCounts(ctx: Ctx): Promise<Map<string, number>> {
-  const { rows } = await ctx.db.query(`select p.market, count(*)::int as n from posts p where ${LIVE} group by p.market`)
+  const params: unknown[] = []
+  const live = liveWhere(ctx, params)
+  const { rows } = await ctx.db.query(
+    `select pr.market, count(*)::int as n from posts p join profiles pr on pr.did = p.did where ${live} group by pr.market`,
+    params,
+  )
   return new Map(rows.map((r) => [r.market, r.n]))
 }
 
@@ -254,7 +269,8 @@ export async function market(ctx: Ctx, name: string, offset: number, near: Near 
   if (!file) return null
   const [posts, badges, page] = await Promise.all([
     ctx.db.query(
-      `select direction, count(*)::int as n from posts where market = $1 and (expires is null or expires > now()) group by direction`,
+      `select p.direction, count(*)::int as n from posts p join profiles pr on pr.did = p.did
+       where pr.market = $1 and (p.expires is null or p.expires > now()) group by p.direction`,
       [name],
     ),
     ctx.db.query(
@@ -262,7 +278,7 @@ export async function market(ctx: Ctx, name: string, offset: number, near: Near 
        from badges b join profiles p on p.did = b.did where b.market = $1`,
       [name],
     ),
-    offers(ctx, 'p.market = $1', [name], PAGE_SIZE, offset, near),
+    offers(ctx, 'pr.market = $1', [name], PAGE_SIZE, offset, near),
   ])
   const counted = new Set(
     badges.rows

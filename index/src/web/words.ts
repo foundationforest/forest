@@ -57,7 +57,7 @@ export function moneyFromBase(base: string, mint: string, currencies: CurrencyCo
 
 export const PER: Record<string, string> = { hour: 'per hour', day: 'per day', job: 'for the job' }
 
-/** An offer's price in words, or null when it names none (a market with no money). */
+/** An offer's price in words, or null when it names none. */
 export function price(p: { amount: string; mint: string; per: string } | null, currencies: CurrencyConfig): string | null {
   if (!p) return null
   const m = money(p.amount, p.mint, currencies)

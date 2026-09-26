@@ -11,14 +11,12 @@ import { IdResolver } from '@atproto/identity'
 import { type Event, Firehose, MemoryRunner } from '@atproto/sync'
 
 import { type Db, getCursor, setCursor } from '../db.ts'
-import type { Directory } from '../markets.ts'
 import { FOREST_COLLECTIONS, type Outcome, applyRecordOp } from './store.ts'
 
 export type RecordReader = { stop: () => Promise<void> }
 
 export async function startRecordReader(args: {
   db: Db
-  directory: Directory
   firehoseUrl: string
   plcUrl: string
   onChange: () => void
@@ -54,8 +52,8 @@ export async function startRecordReader(args: {
       const base = { did: evt.did, collection: evt.collection, rkey: evt.rkey, rev: evt.rev }
       const outcome =
         evt.event === 'delete'
-          ? await applyRecordOp(args.db, args.directory, { ...base, event: 'delete' })
-          : await applyRecordOp(args.db, args.directory, { ...base, event: evt.event, cid: evt.cid.toString(), record: evt.record })
+          ? await applyRecordOp(args.db, { ...base, event: 'delete' })
+          : await applyRecordOp(args.db, { ...base, event: evt.event, cid: evt.cid.toString(), record: evt.record })
       args.onRecord?.(evt.uri.toString(), outcome)
       if (outcome.result === 'refused') args.onError(new Error(`refused ${evt.uri}: ${outcome.why}`))
       if (outcome.result === 'stored' || outcome.result === 'deleted') args.onChange()

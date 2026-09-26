@@ -344,13 +344,15 @@ test('pages for people and machines', { timeout: 120_000 }, async (t) => {
       assert.deepEqual([daraTwin.profile.side, daraTwin.scores.uniqueness.map((u: any) => u.scope)], [null, [`${EXCHANGE}/peer`]])
       assert.match(readable(rendered.get(`/profiles/${dara.did}`)!), /In\s+Language exchange/, 'a one-sided market names no side')
 
-      // A market with no money: no price, no Pay link, and the page says how deals go.
+      // An offer with no price has no Pay link; the market page says how deals go. The offer names
+      // no market or side: they are Dara's profile's.
       const exchange = await json(`/markets/${EXCHANGE}.json`)
-      assert.equal(exchange.market.money, false)
+      assert.equal('money' in exchange.market, false)
       assert.deepEqual(exchange.market.roles, ['peer'])
       assert.deepEqual(exchange.counts, { offers: 1, requests: 0, badgedProfiles: 1 })
       const [daraOffer] = exchange.offers
       assert.deepEqual([daraOffer.uri, daraOffer.price, daraOffer.payLink, daraOffer.location], [OFFERS.exchange.uri, null, null, LISBON])
+      assert.deepEqual([daraOffer.market, daraOffer.role, 'marketWritten' in daraOffer], [EXCHANGE, 'peer', false])
       assert.ok(readable(rendered.get(`/markets/${EXCHANGE}`)!).includes('Arroios, Lisbon (within 2 km)'))
       assert.equal(
         (await json(`/pay.json?v=1&offer=${encodeURIComponent(OFFERS.exchange.uri)}&cid=${OFFERS.exchange.cid}&price.amount=1&price.mint=${portuguese.price.mint}&price.per=job`)).check,

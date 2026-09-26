@@ -219,7 +219,7 @@ const PAY_CHECK: Record<PayModel['check'], string> = {
   changed: 'The offer has changed since this link was made. Check the terms below, which are the offer’s as it is now.',
   differs: 'This link doesn’t match the offer it names: its price or terms were changed. Don’t pay from it.',
   notLive: 'This offer isn’t open any more.',
-  noPrice: 'This offer names no price: deals in its market aren’t paid.',
+  noPrice: 'This offer names no price.',
   noKey: 'This seller hasn’t named how to be paid yet.',
   notFound: 'This index has no offer at the address in this link.',
   invalid: 'This isn’t a complete pay link.',

@@ -42,8 +42,7 @@ function offerNode(o: Offer, currencies: Currencies, seller: Node): Node {
     seller,
     itemOffered: {
       '@type': 'Service',
-      name: o.market ? title(o.market) : title(o.marketWritten),
-      serviceType: o.market ?? o.marketWritten,
+      ...(o.market ? { name: title(o.market), serviceType: o.market } : {}),
       description: o.description,
       provider: seller,
       ...(o.remote ? {} : o.location ? { areaServed: o.location.area } : {}),

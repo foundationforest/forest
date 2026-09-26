@@ -29,8 +29,7 @@ if all four are true:
 2. **It is the profile's own scope.** A profile is one folder in one market, as one side of it: its
    record names `market` and `role`, and a badge counts for it only under exactly that
    `market/role`. A badge under any other scope counts for nothing here, whoever holds it; a person
-   in a second market, or on the other side of the same one, holds a second profile. Change the
-   record's market or role and its old badge stops counting at once.
+   in a second market, or on the other side of the same one, holds a second profile.
 3. **The profile declares its wallet.** The entry names the wallet that signed the registration.
    The profile's own record must name the same wallet. Change the record's wallet and the badge
    stops counting at once.

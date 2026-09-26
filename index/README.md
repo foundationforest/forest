@@ -35,7 +35,8 @@ of DIDs, a local validator and a local Postgres, and nowhere else. Nothing is de
 - **The market directory**, from the `markets` repo itself, over HTTPS (`MARKETS_URL`, its main
   branch by default), never copied: its `directory.md` and each market file that page links, at
   `<folder>/<name>.json`, checked with `shapes/`' validator. A market has one name: there are no
-  aliases, and a post under any other spelling is stored and never listed. It is read once at
+  aliases. A post names no market; it is listed in its author profile's market, and only when the
+  directory has that market, byte for byte. It is read once at
   start, so a change in the `markets` repo reaches the index at its next restart. The tests serve
   a stand-in from `test/markets/`.
 

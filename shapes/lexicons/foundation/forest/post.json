@@ -4,26 +4,16 @@
   "defs": {
     "main": {
       "type": "record",
-      "description": "An offer or a request in one market.",
+      "description": "An offer or a request. It names no market or side: those are its author profile's.",
       "key": "tid",
       "record": {
         "type": "object",
-        "required": ["direction", "market", "role", "description", "createdAt"],
+        "required": ["direction", "description", "createdAt"],
         "properties": {
           "direction": {
             "type": "string",
             "description": "Offering something, or asking for it.",
             "enum": ["offer", "request"]
-          },
-          "market": {
-            "type": "string",
-            "description": "Standard market name from the markets directory.",
-            "maxLength": 64
-          },
-          "role": {
-            "type": "string",
-            "description": "The poster's role: seller or buyer in a two-sided market, peer in a one-sided one.",
-            "maxLength": 64
           },
           "description": {
             "type": "string",
@@ -66,7 +56,7 @@
     },
     "price": {
       "type": "object",
-      "description": "The price block, optional: required only in a market whose file says money is true. Per hour, per day, per job: the app multiplies before funding, one escrow per payment.",
+      "description": "The price block. Optional. Per hour, per day, per job: the app multiplies before funding, one escrow per payment.",
       "required": ["amount", "mint", "per"],
       "properties": {
         "amount": {

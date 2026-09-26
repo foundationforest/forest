@@ -4,7 +4,6 @@
   "description": "Lessons and tutoring held online, one to one.",
   "sides": "two",
   "labels": { "seller": "tutor", "buyer": "student" },
-  "money": true,
   "evidenceTypes": ["escrow"],
   "offerFields": {
     "properties": {

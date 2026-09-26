@@ -12,7 +12,7 @@ people as pages and to you as JSON.
   twin is `/index.json`. The twin is the exact data the page shows.
 - Answers may be up to 30 seconds old.
 - Amounts in receipts are base units, as text. A price in an offer is whole units, as text
-  (`"25"`, `"12.50"`). An offer in a market with no money has no price at all.
+  (`"25"`, `"12.50"`). A price is optional: an offer may name none.
 - In records, decimals are text: a price, a rating (`"8.5"`), a point's degrees (`"38.72"`). In
   the JSON twins, ratings and scores are plain numbers.
 - Start anywhere below; every answer links onward with full URLs (`url`, `profileUrl`,
@@ -39,15 +39,16 @@ offers whose point is within N km, and leaves out offers that name no place.
 
 The market file comes with its market (`market`): `description`, `sides` (`two`: a seller and a
 buyer; `one`: peers), `labels` (the plain words for seller and buyer, such as tutor and student),
-`money` (whether deals are paid), `ratings` (the rating names reviews there usually give),
+`ratings` (the rating names reviews there usually give),
 `howDealsGo` (how deals there usually go, in plain text), and the extra fields offers and reviews
 there carry.
 
 Each offer carries `description`, `price` (`amount`, the currency as `mint`, and `per`: hour, day
-or job; null in a market with no money), `terms` (optional: an `arbiter`, and a `timer` of `days`
+or job; null when it names none), `terms` (optional: an `arbiter`, and a `timer` of `days`
 to the `seller` or `buyer`; absent, neither), `availability`, `remote` and `location` (`lat`, `lon`,
 `precisionKm`, `area`; either may be missing), `expires`, the seller's `did`, `name` and
-`profileUrl`, the seller's `uniqueness`, `rating` and `standing`, and a `payLink`.
+`profileUrl`, its `market` and `role` (its author profile's: a post names neither), the seller's
+`uniqueness`, `rating` and `standing`, and a `payLink` (none when it names no price).
 
 ## Read a profile
 

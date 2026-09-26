@@ -3,11 +3,10 @@
 // `<folder>/<name>.json`, which is checked with shapes/' validator. There are no aliases: a market
 // is its one directory name, byte for byte.
 //
-// Two different questions, answered by two functions:
-//   postMarket(name)   which directory market a post belongs to: its name exactly, or none
-//   badgeScope(scope)  whether a registry scope counts as a badge: `market/role` only, the market a
-//                      directory name byte for byte and the role one its sides allow (seller and
-//                      buyer when two, peer when one). A plain `market` counts for nothing.
+// badgeScope(scope) says whether a registry scope can count as a badge: `market/role` only, the
+// market a directory name byte for byte and the role one its sides allow (seller and buyer when
+// two, peer when one). A plain `market` counts for nothing. A post names no market: it is in its
+// author profile's.
 
 // @ts-expect-error shapes/ is plain JavaScript with no type declarations
 import { rolesOf, validateMarket } from '../../shapes/src/validate.js'
@@ -22,7 +21,6 @@ export type MarketFile = {
   sides: 'two' | 'one'
   /** The plain words pages use for the two sides of a two-sided market. */
   labels?: { seller: string; buyer: string }
-  money: boolean
   evidenceTypes: string[]
   offerFields: FieldBlock
   reviewFields?: FieldBlock
@@ -83,11 +81,6 @@ export class Directory {
     const directory = new Directory(files)
     directory.refused.push(...refused)
     return directory
-  }
-
-  /** The directory market a post's `market` belongs to: that very name, or none. */
-  postMarket(name: string): string | null {
-    return this.markets.has(name) ? name : null
   }
 
   /**

@@ -49,14 +49,11 @@ test('a record of an unknown shape is rejected', () => {
   assertRejected(validateRecord('not an object'), /must be a JSON object/)
 })
 
-test('a post may leave out its price; a market with money asks for one', () => {
+test('a price is optional on every post, in any market', () => {
   const post = example('post')
   delete post.price
   assert.deepEqual(validateRecord(post), { ok: true, shape: 'post', errors: [] })
-  assertRejected(validateRecord(post, { market: market() }), /must have the property "price": deals in online-tutors are paid/)
-  const unpaid = { ...market(), money: false }
-  assert.deepEqual(validateRecord(post, { market: unpaid }), { ok: true, shape: 'post', errors: [] }, 'no money: no price needed')
-  assert.deepEqual(validateRecord(example('post'), { market: unpaid }), { ok: true, shape: 'post', errors: [] }, 'and a price is not refused')
+  assert.deepEqual(validateRecord(post, { market: market() }), { ok: true, shape: 'post', errors: [] })
 })
 
 const LISBON = { lat: '38.72', lon: '-9.14', precisionKm: 2, area: 'Alfama, Lisbon' }
@@ -233,9 +230,9 @@ test('the online-tutors market file is valid', () => {
   assert.deepEqual(validateMarket(market()), { ok: true, errors: [] })
 })
 
-test('a market file has nine required keys, two optional ones, and nothing else', () => {
-  assert.deepEqual(MARKET_KEYS, ['name', 'folder', 'description', 'sides', 'money', 'evidenceTypes', 'offerFields', 'ratings', 'howDealsGo', 'labels', 'reviewFields'])
-  for (const key of ['name', 'folder', 'description', 'sides', 'money', 'evidenceTypes', 'offerFields', 'ratings', 'howDealsGo']) {
+test('a market file has eight required keys, two optional ones, and nothing else', () => {
+  assert.deepEqual(MARKET_KEYS, ['name', 'folder', 'description', 'sides', 'evidenceTypes', 'offerFields', 'ratings', 'howDealsGo', 'labels', 'reviewFields'])
+  for (const key of ['name', 'folder', 'description', 'sides', 'evidenceTypes', 'offerFields', 'ratings', 'howDealsGo']) {
     const missing = market()
     delete missing[key]
     assertRejected(validateMarket(missing), new RegExp(`missing "${key}"`))
@@ -244,7 +241,7 @@ test('a market file has nine required keys, two optional ones, and nothing else'
   delete bare.labels
   delete bare.reviewFields
   assert.deepEqual(validateMarket(bare), { ok: true, errors: [] }, 'no labels and no review fields')
-  for (const key of ['category', 'fields', 'roles', 'credentialIssuers', 'aliases', 'pricing']) {
+  for (const key of ['category', 'fields', 'roles', 'credentialIssuers', 'aliases', 'money', 'pricing']) {
     assertRejected(validateMarket({ ...market(), [key]: [] }), new RegExp(`unknown key "${key}"`))
   }
 })
@@ -267,16 +264,16 @@ test('roles come from sides: seller and buyer when two, peer when one', () => {
   const two = market()
   assert.deepEqual(rolesOf(two), ['seller', 'buyer'])
   for (const role of ['seller', 'buyer']) {
-    assert.deepEqual(validateRecord({ ...example('post'), role }, { market: two }), { ok: true, shape: 'post', errors: [] }, role)
+    assert.deepEqual(validateRecord({ ...example('profile'), role }, { market: two }), { ok: true, shape: 'profile', errors: [] }, role)
   }
-  assertRejected(validateRecord({ ...example('post'), role: 'tutor' }, { market: two }), /role must be one of \(seller\|buyer\), got "tutor"/, 'a label is a word for pages, not a role')
+  assertRejected(validateRecord({ ...example('profile'), role: 'tutor' }, { market: two }), /role must be one of \(seller\|buyer\), got "tutor"/, 'a label is a word for pages, not a role')
 
   const one = { ...market(), sides: 'one' }
   delete one.labels
   assert.deepEqual(validateMarket(one), { ok: true, errors: [] })
   assert.deepEqual(rolesOf(one), ['peer'])
-  assert.deepEqual(validateRecord({ ...example('post'), role: 'peer' }, { market: one }), { ok: true, shape: 'post', errors: [] })
-  assertRejected(validateRecord(example('post'), { market: one }), /role must be one of \(peer\), got "seller"/)
+  assert.deepEqual(validateRecord({ ...example('profile'), role: 'peer' }, { market: one }), { ok: true, shape: 'profile', errors: [] })
+  assertRejected(validateRecord(example('profile'), { market: one }), /role must be one of \(peer\), got "seller"/)
 
   for (const sides of ['three', 2, 'Two', null]) {
     assertRejected(validateMarket({ ...market(), sides }), /sides must be "two" \(a seller and a buyer\) or "one" \(peers\)/)
@@ -292,11 +289,6 @@ test('labels are the plain words for seller and buyer, in a two-sided market onl
   for (const buyer of ['', 'two\nlines', 'x'.repeat(65), 7]) {
     assertRejected(validateMarket({ ...market(), labels: { seller: 'tutor', buyer } }), /labels\/buyer must be one line of text, at most 64 characters/)
   }
-})
-
-test('money is true or false', () => {
-  assert.deepEqual(validateMarket({ ...market(), money: false }), { ok: true, errors: [] })
-  for (const money of ['yes', 1, null]) assertRejected(validateMarket({ ...market(), money }), /money must be true or false/)
 })
 
 test('ratings name what reviews usually rate, overall always among them', () => {
@@ -412,13 +404,15 @@ test('a profile lives in one market, as one side of it', () => {
   assertRejected(validateRecord(example('profile'), { market: one }), /role must be one of \(peer\), got "seller"/)
 })
 
-test('a post must use the market name and one of its roles', () => {
+test("a post names no market or side: those are its author profile's", () => {
   const post = example('post')
-  post.market = 'plumbers'
-  post.role = 'chef'
-  const result = validateRecord(post, { market: market() })
-  assertRejected(result, /market must be "online-tutors", got "plumbers"/)
-  assertRejected(result, /role must be one of \(seller\|buyer\), got "chef"/)
+  assert.equal('market' in post || 'role' in post, false)
+  const shape = loadLexiconDocs().post.defs.main.record
+  assert.equal('market' in shape.properties || 'role' in shape.properties, false)
+  assert.deepEqual(shape.required, ['direction', 'description', 'createdAt'])
+  // Checked against its author's market file, a post gets that market's offer fields, and nothing
+  // is checked of a market or role it might still carry.
+  assert.deepEqual(validateRecord({ ...post, market: 'plumbers', role: 'chef' }, { market: market() }), { ok: true, shape: 'post', errors: [] })
 })
 
 test("a market file limits no offer's token or terms", () => {
