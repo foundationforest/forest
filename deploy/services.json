@@ -187,5 +187,193 @@
       "hostDid": "did:web:host-production-22a4.up.railway.app"
     },
     "finishedAt": "2026-09-25T22:46:14.921Z"
+  },
+  "loop": {
+    "market": "https://raw.githubusercontent.com/foundationforest/markets/main/education/tutoring.json",
+    "host": {
+      "url": "https://host-production-22a4.up.railway.app",
+      "did": "did:web:host-production-22a4.up.railway.app"
+    },
+    "feePayer": {
+      "url": "https://feepayer-production.up.railway.app",
+      "key": "9CKUm2s7nwT7HrCpjtaffNH3PnUUVyQr2gELjHrWYBUd"
+    },
+    "proof": {
+      "person": "keys/test/second-seed.json, profile 0",
+      "did": "did:plc:zefdl6huirvjcnefpybzrzhp",
+      "handle": "forest-seed2-p0.host-production-22a4.up.railway.app",
+      "wallet": "Ux7wKu7VMpDnkMFn1LxYDzv5SykSyyRNUXcDPLVG2WU",
+      "commitment": "12320236330478641936781802142443378236731250063022611120734225829319609112781",
+      "plc": "https://plc.directory/did:plc:zefdl6huirvjcnefpybzrzhp",
+      "profilePage": "https://index-production-1b6e.up.railway.app/profiles/did:plc:zefdl6huirvjcnefpybzrzhp",
+      "profileJson": "https://index-production-1b6e.up.railway.app/profiles/did:plc:zefdl6huirvjcnefpybzrzhp.json",
+      "name": "Devnet test person 2",
+      "host": {
+        "profile": "at://did:plc:zefdl6huirvjcnefpybzrzhp/foundation.forest.profile/self",
+        "post": "at://did:plc:zefdl6huirvjcnefpybzrzhp/foundation.forest.post/3mwetspeunk2v",
+        "folder": "https://host-production-22a4.up.railway.app/xrpc/com.atproto.sync.getRepo?did=did:plc:zefdl6huirvjcnefpybzrzhp",
+        "commit": "bafyreidxgzzmbdjusivi6t6flf5auugg3ljg44yalfhwxg377mntnrg3ja"
+      },
+      "index": {
+        "market": "tutoring",
+        "role": "seller",
+        "badgeCounted": true,
+        "offersListed": 1,
+        "marketPage": "https://index-production-1b6e.up.railway.app/markets/tutoring"
+      }
+    },
+    "seconds": {
+      "proof": 7,
+      "sellerProfile": 7,
+      "faceCheck": 333,
+      "sellerBadge": 8,
+      "buyer": 13,
+      "invoice": 3,
+      "pay": 8,
+      "reviews": 6
+    },
+    "seller": {
+      "person": "keys/test/third-seed.json, profile 0",
+      "did": "did:plc:wdmngk2i2wj6x5imlwytn6ik",
+      "handle": "forest-seed3-p0.host-production-22a4.up.railway.app",
+      "wallet": "31zEpfk1vQp3Bob3DFNXmvJwtgM7DSqhHH96n6X9n67x",
+      "commitment": "1346789220767776419926245555024760855748731755560010769479057017479885879851",
+      "plc": "https://plc.directory/did:plc:wdmngk2i2wj6x5imlwytn6ik",
+      "profilePage": "https://index-production-1b6e.up.railway.app/profiles/did:plc:wdmngk2i2wj6x5imlwytn6ik",
+      "profileJson": "https://index-production-1b6e.up.railway.app/profiles/did:plc:wdmngk2i2wj6x5imlwytn6ik.json",
+      "name": "Devnet test seller",
+      "host": {
+        "profile": "at://did:plc:wdmngk2i2wj6x5imlwytn6ik/foundation.forest.profile/self",
+        "post": "at://did:plc:wdmngk2i2wj6x5imlwytn6ik/foundation.forest.post/3mwh2oieysk2f",
+        "folder": "https://host-production-22a4.up.railway.app/xrpc/com.atproto.sync.getRepo?did=did:plc:wdmngk2i2wj6x5imlwytn6ik",
+        "commit": "bafyreifmyygss6dsmjeyeopsfp2gpynm6b3row7cnc74d25sip6mpnrfdq"
+      },
+      "issuer": {
+        "url": "https://issuer-production-fd68.up.railway.app",
+        "list": "7PMx9JpaP7ZwewZ78833FomUbHQgDFFERM9WuvyRurjD",
+        "member": 2,
+        "insert": "5w6T44qChMwaY2Hxd222omwdhbGQEJuHKqQj6T8n9TWhXyBV88W86pqjj7hoPvAmMn6X684KwoFcgRn6C5ALjMFd",
+        "acceptedAfterSeconds": 229,
+        "listedAfterSeconds": 102
+      },
+      "funding": {
+        "tokens": "EFXKNmzWtG2ARHsEVYYYmZK7iDaFbx75TpPJHfPRLb9p",
+        "minted": "5000000",
+        "signature": "55SgiUPQUQ3eaxPZ6i8LXsUEhLqayTDoD9Bx4uNrKdeRKQC9Lg5VEsqM6gdoAnnVTNDR4URr7asFnBDtbPtsy5Yn"
+      },
+      "badge": {
+        "scope": "tutoring/seller",
+        "registration": "3caThkaYTzpYCaCiNqvS4d1q7f3sMbAkJNbGVHYLa5sAT2biT7DejqZCeHRVkQqJXR12A9joKmKz83FhKMuJuFwe",
+        "charge": "706010 test-dollar base units (706010 lamports at the mock price)",
+        "bytes": 841,
+        "computeUnits": 135510,
+        "networkFee": 10000,
+        "provingSeconds": 1.394,
+        "code": "13852595412c86c413f306b8f16c6c4296b762eaca5f920811f6fc0226c4ea75",
+        "codeAccount": "4PwFhkM7Wyb8SKAtHEovG61vPLmzcPYx8MaXGTGumnz4",
+        "root": "1ab178019e724814a72f223ce57c38cbd5ae44a400f7629c56d92a633a6d85df"
+      },
+      "index": {
+        "badgeCounted": true
+      }
+    },
+    "buyer": {
+      "funding": {
+        "tokens": "5RXmTgQuwcmRFwH2V4ufEh2DfzPi7QQmpsXUT9xp3ZHG",
+        "minted": "12000000",
+        "signature": "KpTxJD7wd7iy7C5FjeGSBGw4UwhHSoq4B2MHG3vpirZ4Q3GNHin6vKRCSqPifW4WPfX4RaHXrkTMsuXuPMMVGFf"
+      },
+      "badge": {
+        "scope": "tutoring/buyer",
+        "registration": "3HKpNijuD7pJFFo7EqYVLirbvENbRjMYZKUBL1rzzJHs1BpVF3HySEvjBQtrLUYqptmZvrqGB1UPaDe4kEWz4rhq",
+        "charge": "706010 test-dollar base units (706010 lamports at the mock price)",
+        "bytes": 840,
+        "computeUnits": 136331,
+        "networkFee": 10000,
+        "provingSeconds": 0.979,
+        "code": "2b798988845f474da05a5524a91d899e5c579a7d0ef25338b6c0b9fdb1b0a4bc",
+        "codeAccount": "CxbtG3hobRgRQNWy1g8xp3h3m8nika5PvfUifkJcqPZv",
+        "root": "1ab178019e724814a72f223ce57c38cbd5ae44a400f7629c56d92a633a6d85df"
+      },
+      "person": "keys/test/second-seed.json, profile 1",
+      "did": "did:plc:smufpq5kribdr4mheawtintt",
+      "handle": "forest-seed2-p1.host-production-22a4.up.railway.app",
+      "wallet": "E9zbbdiFz73xwqhCiW7E9VSvuJDvhL1yecmdRmCrBXa7",
+      "commitment": "12320236330478641936781802142443378236731250063022611120734225829319609112781",
+      "plc": "https://plc.directory/did:plc:smufpq5kribdr4mheawtintt",
+      "profilePage": "https://index-production-1b6e.up.railway.app/profiles/did:plc:smufpq5kribdr4mheawtintt",
+      "profileJson": "https://index-production-1b6e.up.railway.app/profiles/did:plc:smufpq5kribdr4mheawtintt.json",
+      "name": "Devnet test buyer",
+      "host": {
+        "profile": "at://did:plc:smufpq5kribdr4mheawtintt/foundation.forest.profile/self",
+        "folder": "https://host-production-22a4.up.railway.app/xrpc/com.atproto.sync.getRepo?did=did:plc:smufpq5kribdr4mheawtintt",
+        "commit": "bafyreihbjoy65qt5n5sjjc6wneje22p5tm7ge7ykw6k3snuyv22jf4roea"
+      },
+      "index": {
+        "badgeCounted": true
+      }
+    },
+    "deal": {
+      "escrow": "GUbXZG6Cbto9TuouAE5hJnkDJYHomZkKk2TzFTzSh4Q3",
+      "deposit": "Ex1RzwgDp5cjBWcP4BUK1uGf6UMSAhi36b6DwHcRdkU4",
+      "id": "16850276214498466287",
+      "amount": "10000000",
+      "offer": "at://did:plc:wdmngk2i2wj6x5imlwytn6ik/foundation.forest.post/3mwh2oieysk2f",
+      "payLink": "solana:GUbXZG6Cbto9TuouAE5hJnkDJYHomZkKk2TzFTzSh4Q3?amount=10&spl-token=J2QBACfPPb1ys2UyGx3ecXHgCr4hWuHFT3C2Nr6TSVSa&reference=GUbXZG6Cbto9TuouAE5hJnkDJYHomZkKk2TzFTzSh4Q3",
+      "page": "https://index-production-1b6e.up.railway.app/deals/GUbXZG6Cbto9TuouAE5hJnkDJYHomZkKk2TzFTzSh4Q3",
+      "pageJson": "https://index-production-1b6e.up.railway.app/deals/GUbXZG6Cbto9TuouAE5hJnkDJYHomZkKk2TzFTzSh4Q3.json",
+      "invoice": {
+        "signature": "iELKYCkUYCVzcgkcfp1noqczHC8pZGNaBaMNNzCbECsveBiPs2U433aeuXUrwFq77QDaRHB8DUJqNm5EitR1LdS",
+        "charge": "3489850 test-dollar base units (3489850 lamports at the mock price)",
+        "bytes": 646,
+        "computeUnits": 29569,
+        "networkFee": 10000
+      },
+      "pay": {
+        "signature": "5SpTfT3Z4B1zPsHvBk3dgjT35iCw3t6DBNAiqFcBUGDuWf4kDiQV6Bp6n6gVcmnXWRTe7GpDjczgQZTS9Y1Hx46f",
+        "charge": "10050 test-dollar base units (10050 lamports at the mock price)",
+        "bytes": 641,
+        "computeUnits": 18998,
+        "networkFee": 10000
+      },
+      "receipt": {
+        "status": "ended",
+        "outcome": "releasedToSeller",
+        "creator": "seller",
+        "toSeller": "10000000",
+        "toBuyer": "0",
+        "transaction": "5SpTfT3Z4B1zPsHvBk3dgjT35iCw3t6DBNAiqFcBUGDuWf4kDiQV6Bp6n6gVcmnXWRTe7GpDjczgQZTS9Y1Hx46f"
+      }
+    },
+    "reviews": {
+      "byBuyer": "at://did:plc:smufpq5kribdr4mheawtintt/foundation.forest.review/3mwh2zjnuo32f",
+      "bySeller": "at://did:plc:wdmngk2i2wj6x5imlwytn6ik/foundation.forest.review/3mwh2zjvlqd2f"
+    },
+    "index": {
+      "seller": {
+        "review": "at://did:plc:smufpq5kribdr4mheawtintt/foundation.forest.review/3mwh2zjnuo32f",
+        "ratings": {
+          "clarity": 8.5,
+          "overall": 9
+        },
+        "evidence": "both",
+        "contribution": 1.25123680589403,
+        "rating": 9,
+        "standing": 1.251237
+      },
+      "buyer": {
+        "review": "at://did:plc:wdmngk2i2wj6x5imlwytn6ik/foundation.forest.review/3mwh2zjvlqd2f",
+        "ratings": {
+          "clarity": 9,
+          "overall": 10
+        },
+        "evidence": "both",
+        "contribution": 1.55579972865467,
+        "rating": 10,
+        "standing": 1.5558
+      },
+      "dealReviews": 2
+    },
+    "finishedAt": "2026-09-26T19:57:49.225Z"
   }
 }

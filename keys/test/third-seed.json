@@ -1,0 +1,5 @@
+{
+  "about": "A third fixed test seed, next to second-seed.json, for scripts that need a third person. deploy/e2e.ts uses it as the seller in the loop: a new person who puts a profile and an offer on the devnet host, passes a real face check through the devnet issuer, is badged through the devnet fee payer, and invoices the second seed's buyer profile. It is the recipe's 32-byte seed itself (what seedFromPrf returns), not a PRF output: SHA-256 of the ASCII string in 'derivation'. Public by construction, so every key it derives is public; for tests and devnet only. Nothing in keys/ tests it; test/vectors.json stays the recipe's pinned answers.",
+  "derivation": "SHA-256(\"forest.foundation/test/third-seed/v1\")",
+  "seed": "5deed2eee5f9686e169f57347704d579de624d99dfe073809e1507798de178eb"
+}
