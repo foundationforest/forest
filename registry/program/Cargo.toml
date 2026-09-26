@@ -29,6 +29,12 @@ groth16-solana = "0.2.0"
 solana-poseidon = { version = "3.1.14", features = ["agave-unstable-api"] }
 solana-keccak-hasher = "3.1.0"
 
+# Arithmetic that overflows panics instead of wrapping, beside the checked math in the source.
+# The three unchecked increments (list_count + 1, code_tree.count + 1, leaf_count += 1) are
+# unreachable in practice (2^32 lists, 2^64 leaves); this makes an overflow abort, never wrap.
+[profile.release]
+overflow-checks = true
+
 [lints.rust.unexpected_cfgs]
 level = "warn"
 check-cfg = ['cfg(target_os, values("solana"))']

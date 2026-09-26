@@ -2619,3 +2619,80 @@ month of Railway usage (`deploy/README.md`).
   2. Whether the workflow's face search runs: shown only when a second check with the same face is refused. *Needs Carlos.*
   3. The workflow runs IP analysis, so Didit keeps the checking phone's address next to the face: keep it or turn it off. *Needs Carlos.*
 - **Still standing:** nothing is shipped and nothing is on mainnet; on devnet both programs stay upgradeable by whoever holds the phrase.
+
+## 2026-09-26: attack pass — the programs, the services, and the duplicate face
+
+- **Task:** the next step in the handoff. Break both sealed programs and the five public devnet
+  services from outside, with overflow checks on, and confirm a duplicate face is refused. Assume
+  every earlier session was wrong. One pull request; do not subscribe. Full write-up in
+  `docs/attack-pass.md`.
+- **Built:**
+  1. **Overflow checks on.** `registry/program/Cargo.toml` gained `[profile.release] overflow-checks
+     = true` (the escrow already had it). Rebuilt both SBPF v3 (and the escrow v0 for Trident) with
+     Solana CLI 4.2.2 / platform-tools v1.54. The registry binary changes as expected (default
+     mainnet-USDC build: `c33310b7…` → `49b4a6af…`, 304,928 → 307,280 bytes); the escrow's does not.
+     Behaviour changes only at unreachable edges (2^32 lists, 2^64 leaves): a plain-`+` increment now
+     aborts instead of wrapping. No test regressed.
+  2. **Seven new program tests, at edges the earlier suites left.** Registry (`adversarial.rs`):
+     `tree_full_at_depth_32_is_the_sealed_bound` (the sealed depth, forced with `set_account`),
+     `register_pays_the_fee_at_one_base_unit_and_at_the_maximum`,
+     `wrapped_sol_is_a_classic_mint_the_registry_treats_like_any_other`. Escrow (`adversarial.rs`):
+     `finding_a_reused_deposit_address_adopts_a_stranger_buyers_money`,
+     `finding_a_frozen_deposit_account_blocks_every_way_out`,
+     `finding_a_frozen_seller_account_blocks_only_the_ways_out_that_pay_the_seller`,
+     `close_unfunded_after_a_sweep_returns_what_is_left_to_the_creator`.
+  3. **Every suite re-run on the new binaries:** registry LiteSVM 51 (was 48), escrow LiteSVM 56 (was
+     52), the registry property test at 1,000 iterations, and the escrow Trident fuzzer at 50,000
+     iterations on the v0 build (as CI does) — all green, no invariant broke. A 2,000-iteration
+     metrics run confirmed the fuzzer actually executes (~2,000 invariant checks, every instruction
+     exercised, zero panics).
+  4. **The public services, attacked from outside** (`docs/attack-pass.md` has the tables): the
+     issuer refuses every malformed / oversized / forged / replayed request and lists none of it; the
+     fee payer refuses an unknown program (Memo), a transfer of its own SOL, and a priority fee
+     (ComputeBudget), nothing landing; the index returns 404 on forged reads and weighs the real deal
+     correctly. A live hostile-record test through the public host: a throwaway non-party reviewer
+     (DID `did:plc:cccvt7u6zqnycjkdjk4ccga7`, an unused profile of the third test seed) posted a
+     well-formed review of the real deal and a malformed one — the index refused the malformed one
+     entirely and credited the non-party one no evidence (`kind: none`, `notTheParties`, the 0.05
+     reviewer floor only, never `both`).
+  5. **The duplicate face, with Carlos.** A fresh Didit session opened through the public issuer;
+     Carlos redid the check on his phone; it was **declined as a duplicate** (`403 duplicate_face`).
+     The decision structure, read with no personal data: `status Declined`, `decided_by LIVENESS`,
+     cause `DUPLICATED_FACE` "Duplicated face from other approved session". This settles the handoff's
+     open question: the foundation's workflow does run the face search the issuer reads.
+  6. **Both security checklists and `docs/attack-pass.md`** updated with the above, the new binary
+     hashes, and the reruns.
+- **Chosen, not decided** (each reversible, since nothing ships):
+  1. **The registry sweep-after-handover and duplicate-account edges were already covered**
+     (`a_lists_owner_hands_it_over_in_two_steps…`, `the_treasury_cannot_register_for_free`), so no
+     duplicate test was added; they are cited instead.
+  2. **The live index attack used an unused profile of a public test seed** (seed 3, profile 1), so
+     its keys are public and the test is reproducible; its DID and folder persist on devnet as test
+     data.
+  3. **The one-off index-write script was not committed** — a script that writes to the live host is
+     a hazard to keep around; the attack, its DIDs and its results are in `docs/attack-pass.md`
+     instead. The program attacks are committed as tests.
+- **Learned:**
+  - **No new exploitable hole in either sealed program.** The earlier sessions' work held up under a
+    fresh adversarial pass; the additions are edge pins and `finding_` records, not fixes.
+  - **The duplicate-face guarantee works end to end** on the public services, and the workflow's face
+    search is confirmed to run.
+  - **The issuer's per-address rate limit could not be exercised from here:** nine `POST /session` in
+    a row all returned 201, no 429. Consistent with the README's "not a security boundary" — the
+    agent proxy this container egresses through does not present one stable client address, so the
+    per-address counter never accumulates. Nine uncompleted Didit sessions were created (free, but
+    console clutter).
+  - **The index refuses a malformed record at ingestion** even though the host stores it unvalidated,
+    and a non-party review is capped at the 0.05 reviewer floor with no evidence credit.
+- **Open** (new here; the whole list is the handoff's Open):
+  1. Nine uncompleted Didit sessions were opened against the foundation's application during the
+     rate-limit probe; Carlos may want to delete them in Didit's console. *Needs Carlos.*
+  2. The throwaway attacker DID `did:plc:cccvt7u6zqnycjkdjk4ccga7` and its folder (a profile and two
+     review records, one malformed) persist on the public devnet host and plc.directory. Leave as
+     test data, or clean up. *Needs Carlos.*
+  3. The 0.05 reviewer floor lets an unbadged non-party review contribute a sliver, and the counted
+     duplicate among reviews is chosen by the record's own `createdAt` (a future date wins) — both in
+     the index's open scoring, already open items, not program holes. *Needs Carlos.*
+- **Still standing:** nothing is shipped and nothing is on mainnet; on devnet both programs stay
+  upgradeable by whoever holds the phrase, and the registry's placeholder treasury and issuer keys
+  are still anyone's until a real deploy substitutes them.
