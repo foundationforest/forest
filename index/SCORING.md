@@ -17,7 +17,7 @@ from the `markets` repo (`MARKETS_URL`). Another index may weigh everything diff
 ## Badges: which ones count
 
 A badge is one `Registered` entry the registry program itself wrote. It counts for a profile only
-if all three are true:
+if all four are true:
 
 1. **It is `market/role`, and its market is in the directory, byte for byte.** Such as
    `tutoring/seller`. The name before the slash must be the name of a market the `markets` repo's
@@ -26,10 +26,14 @@ if all three are true:
    market file's labels (`tutor`, `student`) are words for pages, never roles. A plain `market`,
    with no role, counts for nothing, and so does any other separator. If other spellings counted,
    one person could register under two and hold two badges in one market.
-2. **The profile declares its wallet.** The entry names the wallet that signed the registration.
+2. **It is the profile's own scope.** A profile is one folder in one market, as one side of it: its
+   record names `market` and `role`, and a badge counts for it only under exactly that
+   `market/role`. A badge under any other scope counts for nothing here, whoever holds it; a person
+   in a second market, or on the other side of the same one, holds a second profile.
+3. **The profile declares its wallet.** The entry names the wallet that signed the registration.
    The profile's own record must name the same wallet. Change the record's wallet and the badge
    stops counting at once.
-3. **The profile exists** in this index.
+4. **The profile exists** in this index.
 
 ## Uniqueness
 

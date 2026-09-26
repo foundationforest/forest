@@ -16,7 +16,7 @@ export type PayModel = {
    *   changed   the offer was edited since (another cid); `offer` shows it as it is now
    *   differs   same cid, other price or terms: the link was altered
    *   notLive   the offer expired or is no longer an offer in a directory market
-   *   noPrice   the offer names no price: it is in a market where deals are not paid
+   *   noPrice   the offer names no price, so it has no Pay link
    *   noKey     the seller's profile names no key to be paid at
    *   notFound  no offer at that address in this index
    *   invalid   not a complete link

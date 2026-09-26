@@ -1,8 +1,8 @@
 // Part one's story, as data, for the page tests: Ana tutors; Ben is her student; Cleo is a
 // stranger. The same people, badges, deal and reviews the end-to-end test makes on real pieces,
 // written straight into a fresh database, so the pages can be tested with nothing but Postgres.
-// Markets v1 adds a one-sided market with no money, where Ben offers a language exchange in a
-// place, with no price.
+// Markets v1 adds a one-sided market, where Dara offers a language exchange in a place, with no
+// price. Every profile lives in one market, as one side of it.
 //
 //   - Records go in through part one's own `applyRecordOp`, so each is checked against its lexicon
 //     exactly as a record off the firehose is.
@@ -28,7 +28,7 @@ export const MARKET = 'online-tutors'
 export const SELLER_SCOPE = `${MARKET}/seller`
 export const BUYER_SCOPE = `${MARKET}/buyer`
 export const FOLDER = 'freelance-work'
-/** A one-sided market with no money: Ben is a peer in it, and his offer there names no price. */
+/** A one-sided market: Dara is a peer in it, and her offer there names no price. */
 export const EXCHANGE = 'language-exchange'
 export const PEER_SCOPE = `${EXCHANGE}/peer`
 /** Where Ben's exchange offer is, rounded to 2 km. */
@@ -43,13 +43,15 @@ export const cleo = {
   badgeWallet: 'AoVsGaj8MSJ6xwKxfFxo9iZWH3enC8RRTXKH2fx2F8os',
   name: 'Cleo',
 }
+/** A peer in the language exchange: another market, so another profile. */
+export const dara = { did: 'did:plc:exampledara2222222222222', wallet: 'EdmxWPmx2WH6WgFfTdu9xfkYf3k1g5wD1zccTVySEEh1', name: 'Dara Mensah' }
 /** Ana invoiced Ben; Ben paid in one tap and released it to her. */
 export const DEAL = 'CJfRUQxyonG6B5mnztsNUqxknbFT89DJdrdrzV9F96mU'
 export const MADE_UP_DEAL = 'cd'.repeat(32)
 export const OFFERS = {
   portuguese: { rkey: '3kzq2vrffxb2c', cid: 'bafyreiexampleanaportuguese2222', uri: `at://${ana.did}/foundation.forest.post/3kzq2vrffxb2c` },
   spanish: { rkey: '3kzq2vrffxb2d', cid: 'bafyreiexampleanaspanish2222222', uri: `at://${ana.did}/foundation.forest.post/3kzq2vrffxb2d` },
-  exchange: { rkey: '3kzq2vrffxb2e', cid: 'bafyreiexamplebenexchange222222', uri: `at://${ben.did}/foundation.forest.post/3kzq2vrffxb2e` },
+  exchange: { rkey: '3kzq2vrffxb2e', cid: 'bafyreiexampledaraexchange22222', uri: `at://${dara.did}/foundation.forest.post/3kzq2vrffxb2e` },
 }
 /** The photo Ben's review carries. The index never fetches it. */
 export const PHOTO = { $type: 'blob', ref: { $link: 'bafkreicx54kjfbjopw56j2bwh7zphoa5ejyyx7e6wazjsfr3u2q33d65he' }, mimeType: 'image/jpeg', size: 20 }
@@ -75,29 +77,31 @@ export async function makeFixture(adminUrl: string): Promise<Fixture> {
   // Migrations and the public keys; no firehose and no chain, so no reader starts.
   const readers = await startReaders(db, config())
   const put = async (did: string, collection: string, rkey: string, cid: string, record: Record<string, unknown>) => {
-    const out = await applyRecordOp(db, readers.directory, { event: 'create', did, collection, rkey, cid, rev: '3kzq2vrffxb2a', record })
+    const out = await applyRecordOp(db, { event: 'create', did, collection, rkey, cid, rev: '3kzq2vrffxb2a', record })
     if (out.result !== 'stored') throw new Error(`fixture record ${did}/${collection}/${rkey} not stored: ${JSON.stringify(out)}`)
   }
 
-  const profile = (p: { name: string; wallet: string }, about: string | null, d: number) => ({
+  const profile = (p: { name: string; wallet: string }, scope: string, about: string | null, d: number) => ({
     $type: 'foundation.forest.profile',
     name: p.name,
+    market: scope.split('/')[0],
+    role: scope.split('/')[1],
     wallet: p.wallet,
     ...(about ? { about } : {}),
     createdAt: day(d),
   })
   await put(ana.did, 'foundation.forest.profile', 'self', 'bafyreiexampleanaprofile2222222', {
-    ...profile(ana, 'Portuguese and Spanish tutor. Ten years teaching adults online.', 1),
+    ...profile(ana, SELLER_SCOPE, 'Portuguese and Spanish tutor. Ten years teaching adults online.', 1),
     contact: 'Message me here first; video calls after a first reply.',
   })
-  await put(ben.did, 'foundation.forest.profile', 'self', 'bafyreiexamplebenprofile2222222', profile(ben, 'Learning Portuguese for a move to Lisbon.', 2))
-  await put(cleo.did, 'foundation.forest.profile', 'self', 'bafyreiexamplecleoprofile222222', profile(cleo, null, 3))
+  await put(ben.did, 'foundation.forest.profile', 'self', 'bafyreiexamplebenprofile2222222', profile(ben, BUYER_SCOPE, 'Learning Portuguese for a move to Lisbon.', 2))
+  await put(cleo.did, 'foundation.forest.profile', 'self', 'bafyreiexamplecleoprofile222222', profile(cleo, SELLER_SCOPE, null, 3))
+  await put(dara.did, 'foundation.forest.profile', 'self', 'bafyreiexampledaraprofile222222', profile(dara, PEER_SCOPE, 'English teacher, learning Portuguese.', 3))
 
-  const offer = (market: string, description: string, amount: string, extra: Record<string, unknown>) => ({
+  // A post names no market or side: they are its author profile's.
+  const offer = (description: string, amount: string, extra: Record<string, unknown>) => ({
     $type: 'foundation.forest.post',
     direction: 'offer',
-    market,
-    role: 'seller',
     description,
     price: { amount, mint: USDC, per: 'hour' },
     remote: true,
@@ -105,17 +109,18 @@ export async function makeFixture(adminUrl: string): Promise<Fixture> {
     ...extra,
   })
   await put(ana.did, 'foundation.forest.post', OFFERS.portuguese.rkey, OFFERS.portuguese.cid,
-    offer(MARKET, 'Portuguese conversation for adults, A1 to B2.', '25', { availability: 'Weekday evenings, Lisbon time.', subjects: ['portuguese'] }))
-  // With a timer that sends the money back to the buyer, which the pages flag, and saying nothing of
-  // where (`remote` is optional).
-  const { remote: _, ...spanish } = offer(MARKET, 'Spanish grammar, one hour, homework optional.', '12.50', { terms: { timer: { days: 30, to: 'buyer' } }, subjects: ['spanish'] })
+    offer('Portuguese conversation for adults, A1 to B2.', '25', { availability: 'Weekday evenings, Lisbon time.', subjects: ['portuguese'] }))
+  // With a timer that sends the money back to the buyer (which no page speaks of), and saying
+  // nothing of where (`remote` is optional).
+  const { remote: _, ...spanish } = offer('Spanish grammar, one hour, homework optional.', '12.50', { terms: { timer: { days: 30, to: 'buyer' } }, subjects: ['spanish'] })
   await put(ana.did, 'foundation.forest.post', OFFERS.spanish.rkey, OFFERS.spanish.cid, spanish)
-  // Ben's offer in a market with no money: no price, a peer, and a place.
-  const { price: __, remote: ___, ...exchange } = offer(EXCHANGE, 'English for Portuguese, an hour each way, in a café.', '0', { role: 'peer', location: LISBON, speaks: ['en'] })
-  await put(ben.did, 'foundation.forest.post', OFFERS.exchange.rkey, OFFERS.exchange.cid, exchange)
+  // Dara's offer: in her market, the language exchange; no price, and a place.
+  const { price: __, remote: ___, ...exchange } = offer('English for Portuguese, an hour each way, in a café.', '0', { location: LISBON, speaks: ['en'] })
+  await put(dara.did, 'foundation.forest.post', OFFERS.exchange.rkey, OFFERS.exchange.cid, exchange)
 
-  // Four badges on list 0, vouched for by the foundation's issuer; Cleo's for a key her profile does
-  // not declare. Ben holds two, in two markets, so he lives in no one market.
+  // Five badges on list 0, vouched for by the foundation's issuer. Cleo's is for a key her profile
+  // does not declare. Ben's second is under another scope than his profile's, so it does not count
+  // for it: a second market is a second profile, as Dara's is.
   const badge = async (i: number, did: string, wallet: string, scope: string) => {
     const [market, role] = scope.split('/')
     const signature = `ExampleRegistration${i}`.padEnd(88, '1')
@@ -133,6 +138,7 @@ export async function makeFixture(adminUrl: string): Promise<Fixture> {
   await badge(2, ben.did, ben.wallet, BUYER_SCOPE)
   await badge(3, cleo.did, cleo.badgeWallet, SELLER_SCOPE)
   await badge(4, ben.did, ben.wallet, PEER_SCOPE)
+  await badge(5, dara.did, dara.wallet, PEER_SCOPE)
 
   // The receipt: $25 from Ben to Ana, which she asked for, released to her.
   await db.query(

@@ -8,8 +8,18 @@
       "key": "literal:self",
       "record": {
         "type": "object",
-        "required": ["name", "createdAt"],
+        "required": ["name", "market", "role", "createdAt"],
         "properties": {
+          "market": {
+            "type": "string",
+            "description": "The one market this profile lives in, as the markets directory spells it. A profile is one folder in one market; a badge counts for it only under market/role.",
+            "maxLength": 64
+          },
+          "role": {
+            "type": "string",
+            "description": "Its side in that market: seller or buyer in a two-sided market, peer in a one-sided one.",
+            "maxLength": 64
+          },
           "name": {
             "type": "string",
             "description": "Display name.",

@@ -57,7 +57,6 @@ export async function startReaders(db: Db, config: Config, opts: Opts = {}): Pro
   const records = config.firehoseUrl
     ? await startRecordReader({
         db,
-        directory,
         firehoseUrl: config.firehoseUrl,
         plcUrl: config.plcUrl,
         onChange: () => scorer.schedule(),

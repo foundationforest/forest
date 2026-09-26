@@ -33,7 +33,7 @@ In planning:
 
 1. **Decimals in records are text:** `"8.5"`, `"38.72"`, as `price.amount` already is.
 2. **Standing is today's trust score renamed**, and its algorithm is unchanged. It is renamed everywhere, the signed statement's `kind` word included.
-3. **`price` is optional on a post.** The validator requires it only when the market file says `money` is true.
+3. **`price` is optional on a post.** The validator requires it only when the market file says `money` is true. *Superseded in the follow-up: `money` is gone, and price is optional always.*
 4. **No aliases anywhere.** The index no longer reads the Aliases table: a market is its one name.
 5. **Any rating name.** A review may use any rating name. The file's `ratings` only suggests; nothing is refused for a name outside it.
 6. **Exact points are allowed.** `lat` and `lon` take up to 4 decimals, and `precisionKm` runs from 0 (exact, for a shop or a venue) to 20000. The app rounds.
@@ -58,14 +58,14 @@ Each is the simplest reading, and each is reversible; nothing is deployed.
 - **The signal from `overall`** is `(overall − 5.5) / 4.5`: 10 is +1, 5.5 is 0, 1 is −1. It is the straight-line version of the old stars (5 was +1, 3 was 0, 1 was −1). The golden-ratio worked example stands with overalls of 10 and 1.
 - **The rating** averages `overall` over the reviews standing counts, weighted by reviewer weight × evidence weight, the weights standing uses. When no counted review gives an `overall`, there is no rating (not zero).
 - **The rating is signed** like every score, as a third kind: code 3, value in millionths. Standing keeps trust's code 2.
-- **A profile's market** is the one market its counted badges name, or none when they name zero or more than one. The index reads it from the last recompute's uniqueness rows.
+- **A profile's market** is the one market its counted badges name, or none when they name zero or more than one. The index reads it from the last recompute's uniqueness rows. *Superseded in the follow-up below: the profile record names its market.*
   - It gives a review its market's `reviewFields`, shown on the review.
   - It gives a receipt page its labels, through the seller's profile.
 - **JSON-LD:**
   - The profile's `AggregateRating` is the rating, with `bestRating` 10.
   - Each `Offer` also carries its seller's `aggregateRating`, and standing as a `PropertyValue` named `standing`. schema.org gives a Person neither.
   - The trust-squashed 1-to-5 rating is gone.
-- **The options sentence:**
+- **The options sentence** (*withdrawn in the follow-up below: no page says anything about the options*):
   - The wording: "No arbiter, no timer."; "Money goes back to the {buyer} after N days automatically."; "Money goes to the {seller} after N days automatically."; "An arbiter may decide how the money is split." Two options are joined with a semicolon.
   - On an offer, "the arbiter is one of the two sides" means the arbiter is the poster's declared key, since the other side is unknown until someone pays. On a receipt, it means the arbiter is the buyer or the seller.
   - Every offer shows the sentence, including an offer in a no-money market ("No arbiter, no timer.").
@@ -162,10 +162,79 @@ Each is the simplest reading, and each is reversible; nothing is deployed.
    - its Aliases table is no longer read.
 
    Any file that differs is refused by the index, with the reason in `Directory.refused`. *Mechanical,* in that repo.
-3. **A profile badged in two markets lives in no one market.** Its reviews get no review fields, and its receipts no labels. Does a profile's one scope get enforced, or chosen by the profile? *Needs Carlos.*
-4. **The validator cannot tell whether a point was rounded.** An app that writes a home at `precisionKm` 0 publishes the address. Should apps, or the validator, warn about an exact point that is not a shop or venue? *Needs Carlos.*
-5. **`video/mp4` in `media`** sits against CLAUDE.md's "video hosting out of scope for v1". A host that takes a review's video is hosting it, and the host's blob upload limit decides in practice. *Needs Carlos.*
+3. ~~A profile badged in two markets lives in no one market.~~ Closed: one scope per profile, built in the follow-up.
+4. ~~The validator cannot tell whether a point was rounded.~~ Closed: the app warns; the validator does not judge.
+5. ~~`video/mp4` in `media`.~~ Closed: it stays allowed.
 6. **Fuzzing tests the old format.** The escrow fuzzer runs a v0 build of the same source, not the v3 format devnet runs. A Trident with v3 enabled, or with a settable feature set, closes the gap. *Mechanical.*
 7. **The security checklists** (`escrow/security-checklist.md` item 13, and `registry/security-checklist.md`'s framework line) still describe v0 as the build. They are outside this session's folders. *Mechanical.*
-8. **An offer in a no-money market still says "No arbiter, no timer."** The ask says every offer carries its options, but there no escrow is made. *Needs Carlos,* if it should say nothing there.
+8. ~~An offer in a no-money market still says "No arbiter, no timer."~~ Closed: no page says anything about the options, built in the follow-up.
 9. **`near` scans every live offer in the market**, with no index on the point: fine at this size. *Mechanical,* later.
+
+## Follow-up (2026-09-26): one scope per profile, and no word on the options
+
+PR #29 merged, and Carlos answered its open items. This is a fresh change on the same branch name.
+
+### Decided (by Carlos; built here)
+
+1. **One scope per profile.**
+   - A profile is one folder in one market by design, so the profile record names its `market` and `role`.
+   - A badge under any other scope does not count for it.
+   - People get no new choice to make: the app writes the scope when it makes the folder.
+2. **Exact points.** The app warns when someone is about to publish a home address; the validator does not judge. That is Roots' job.
+3. **Video** stays allowed in a review's `media`; the host's upload limit decides in practice.
+4. **Nothing is said about the escrow options, anywhere.**
+   - No offer and no receipt says "no arbiter, no timer" or any sentence about its options, and nothing is flagged.
+   - The options stay as plain data in the JSON twins (`terms` on an offer; `arbiter` and `timer` on a receipt). What to say about them is each app's call.
+   - This withdraws the first round's options sentence and flag.
+
+Then, on the same PR (#31), three simplifications:
+
+5. **A post names no market or role.** A post's market and side are its author profile's, and the index reads them from the profile.
+6. **The market file has no `money`.** A price is optional on every post, always; no rule ties it to anything.
+7. **No rule about a profile changing its scope.** A badge counts only when the profile's scope matches it. Nothing else is said or checked.
+
+### Built
+
+- **`shapes/`:**
+  - The profile lexicon requires `market` and `role`, each at most 64 characters.
+  - Checked against a market file, a profile must name that market and a role its sides allow.
+  - The profile example lives in `online-tutors` as a seller.
+  - `README.md`, and 49 tests.
+- **`index/`:**
+  - Migration `005_profile_scope.sql` adds `profiles.market` and `profiles.role`.
+  - `badgeStatus` takes the profile's wallet and its own scope, and refuses a badge under another scope with a new reason, `notProfileScope`.
+  - A profile's market is its record's, when the directory has it. It gives a review its review fields, and a receipt its labels.
+  - The profile twin gains `market`, `marketUrl`, `role` and `side`. The page says "Tutor in Online tutors", or "In Language exchange" in a one-sided market.
+  - The options sentence and flag are gone from the words, the models and the pages: `options`, and the offer's `sides`. The receipt page has no "Terms" row.
+  - The fixture:
+    - every profile names its scope;
+    - Ben keeps a `language-exchange/peer` badge that does not count for his `online-tutors/buyer` profile;
+    - a new profile, Dara (`language-exchange/peer`), holds the priceless offer with a place.
+  - Page test 9 checks that no page a person reads says "arbiter" or "timer", and that the options are still in the twins.
+  - Docs: `SCORING.md` (a fourth badge rule), `README.md`, `skill.md`.
+- **The three simplifications (5 to 7):**
+  - `shapes/`:
+    - The post lexicon loses `market` and `role`.
+    - `money` leaves the market template; the validator's price rule and its post market-and-role check go. A post checked against its author's market file gets that market's `offerFields`, nothing more.
+    - The post example and both market files lose the keys.
+    - `README.md`, and 48 tests.
+  - `index/`:
+    - Migration `005` also drops `posts.market_written`, `posts.market` and `posts.role`, and rebuilds the search column on `description` and `area`.
+    - Every offer query reads the market and side from the author's profile. An offer is live only when that profile's market is in the directory, byte for byte; the directory's names go to Postgres as one array parameter.
+    - `marketWritten` leaves the offer twin. The store and the record reader no longer take the directory, and `Directory.postMarket` is gone.
+    - `SCORING.md` rule 2 no longer says anything about a profile changing its scope.
+    - `skill.md`, `README.md` and `PAYLINK.md` follow.
+- **Run here, after the simplifications:**
+  - shapes 48 of 48;
+  - the index's whole `npm test`, end to end included: 40 of 40, none skipped;
+  - the host's `test.sh`: 58 and 97 jest tests, and 7 of 7 of its own.
+
+### Open
+
+1. ~~A post names its own market and role.~~ Closed by 5: it names neither.
+2. ~~A profile's record can change its market or role.~~ Closed by 7: nothing is said or checked.
+3. **The `markets` repo must drop `money`.** This validator refuses a market file with any key outside the ten. Until that repo's files lose `money`, the index refuses every one of them and lists no market. *Mechanical,* in that repo.
+4. **The handoff**, for the consolidation session. *Mechanical.*
+   - Record shapes: a profile's `market` and `role`; a post with no market or role; price optional always.
+   - Markets: one scope per profile; no `money`.
+   - The index paragraph: no word on the options.

@@ -14,7 +14,8 @@
 import type { IssuerConfig, ScoringConfig } from '../config.ts'
 import { type Directory, splitScope } from '../markets.ts'
 
-export type ProfileIn = { did: string; wallet: string | null }
+/** A profile, with the wallet it declares and the one scope it lives in (`market/role`, from its record). */
+export type ProfileIn = { did: string; wallet: string | null; scope: string | null }
 export type BadgeIn = { did: string; wallet: string; scope: string; listOwner: string }
 export type ReceiptIn = {
   escrow: string
@@ -58,20 +59,26 @@ export type Settings = {
 
 export type BadgeStatus =
   | { counted: true; market: string; role: string }
-  | { counted: false; why: 'notInDirectory' | 'noRole' | 'walletNotDeclared' }
+  | { counted: false; why: 'notInDirectory' | 'noRole' | 'notProfileScope' | 'walletNotDeclared' }
 
 /**
  * A badge counts for its profile only when its scope is `market/role`, the market a directory
- * market byte for byte and the role one of that market's roles, and the profile's own record
- * declares the wallet the registry's entry names. A plain `market` scope counts for nothing.
+ * market byte for byte and the role one of that market's roles; when that is the profile's own
+ * scope, the one market and side its record names; and when the profile's record declares the
+ * wallet the registry's entry names. A plain `market` scope counts for nothing.
  */
-export function badgeStatus(badge: BadgeIn, declaredWallet: string | null, directory: Directory): BadgeStatus {
+export function badgeStatus(
+  badge: BadgeIn,
+  profile: { wallet: string | null; scope: string | null },
+  directory: Directory,
+): BadgeStatus {
   const scope = directory.badgeScope(badge.scope)
   if (!scope) {
     const { market, role } = splitScope(badge.scope)
     return { counted: false, why: role === null && directory.markets.has(market) ? 'noRole' : 'notInDirectory' }
   }
-  if (declaredWallet === null || declaredWallet !== badge.wallet) return { counted: false, why: 'walletNotDeclared' }
+  if (badge.scope !== profile.scope) return { counted: false, why: 'notProfileScope' }
+  if (profile.wallet === null || profile.wallet !== badge.wallet) return { counted: false, why: 'walletNotDeclared' }
   return { counted: true, ...scope }
 }
 
@@ -95,11 +102,12 @@ export type Uniqueness = {
  * and never more than 1; an issuer at 0 adds nothing.
  */
 export function uniqueness(inputs: Pick<Inputs, 'profiles' | 'badges'>, settings: Settings): Uniqueness[] {
-  const wallets = new Map(inputs.profiles.map((p) => [p.did, p.wallet]))
+  const profiles = new Map(inputs.profiles.map((p) => [p.did, p]))
   const groups = new Map<string, { did: string; scope: string; market: string; role: string; owners: Set<string> }>()
   for (const b of inputs.badges) {
-    if (!wallets.has(b.did)) continue
-    const status = badgeStatus(b, wallets.get(b.did) ?? null, settings.directory)
+    const profile = profiles.get(b.did)
+    if (!profile) continue
+    const status = badgeStatus(b, profile, settings.directory)
     if (!status.counted) continue
     const key = `${b.did}\u0000${b.scope}`
     const g = groups.get(key) ?? { did: b.did, scope: b.scope, market: status.market, role: status.role, owners: new Set() }

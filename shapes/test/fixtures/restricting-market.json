@@ -3,7 +3,6 @@
   "folder": "freelance-work",
   "description": "Lessons and tutoring held online, one to one.",
   "sides": "two",
-  "money": true,
   "evidenceTypes": ["escrow"],
   "offerFields": {},
   "ratings": ["overall"],

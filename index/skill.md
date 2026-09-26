@@ -12,7 +12,7 @@ people as pages and to you as JSON.
   twin is `/index.json`. The twin is the exact data the page shows.
 - Answers may be up to 30 seconds old.
 - Amounts in receipts are base units, as text. A price in an offer is whole units, as text
-  (`"25"`, `"12.50"`). An offer in a market with no money has no price at all.
+  (`"25"`, `"12.50"`). A price is optional: an offer may name none.
 - In records, decimals are text: a price, a rating (`"8.5"`), a point's degrees (`"38.72"`). In
   the JSON twins, ratings and scores are plain numbers.
 - Start anywhere below; every answer links onward with full URLs (`url`, `profileUrl`,
@@ -39,16 +39,16 @@ offers whose point is within N km, and leaves out offers that name no place.
 
 The market file comes with its market (`market`): `description`, `sides` (`two`: a seller and a
 buyer; `one`: peers), `labels` (the plain words for seller and buyer, such as tutor and student),
-`money` (whether deals are paid), `ratings` (the rating names reviews there usually give),
+`ratings` (the rating names reviews there usually give),
 `howDealsGo` (how deals there usually go, in plain text), and the extra fields offers and reviews
 there carry.
 
 Each offer carries `description`, `price` (`amount`, the currency as `mint`, and `per`: hour, day
-or job; null in a market with no money), `terms` (optional: an `arbiter`, and a `timer` of `days`
-to the `seller` or `buyer`), `options` (the terms in one plain sentence, and a `flag` with `why`:
-`arbiterIsParty` or `timerToBuyer`), `availability`, `remote` and `location` (`lat`, `lon`,
+or job; null when it names none), `terms` (optional: an `arbiter`, and a `timer` of `days`
+to the `seller` or `buyer`; absent, neither), `availability`, `remote` and `location` (`lat`, `lon`,
 `precisionKm`, `area`; either may be missing), `expires`, the seller's `did`, `name` and
-`profileUrl`, the seller's `uniqueness`, `rating` and `standing`, and a `payLink`.
+`profileUrl`, its `market` and `role` (its author profile's: a post names neither), the seller's
+`uniqueness`, `rating` and `standing`, and a `payLink` (none when it names no price).
 
 ## Read a profile
 
@@ -57,7 +57,9 @@ to the `seller` or `buyer`), `options` (the terms in one plain sentence, and a `
 A profile is one folder of signed records, named by its permanent ID (a DID). One person may hold
 several profiles; they are linked only if the person chose to link them. The answer carries:
 
-- `profile`: `name`, `about`, `contact`, and the key it is paid at.
+- `profile`: `name`, the one `market` it lives in and its `role` there (with `side`, the market's
+  word for it), `about`, `contact`, and the key it is paid at. A profile is one folder in one
+  market; a person in two markets holds two profiles.
 - `badges`: every badge registered for this profile, counted or not.
 - `scores`: `uniqueness` (one per counted badge), `rating` and `standing`, each signed.
 - `offers` and `requests`: its live posts.
@@ -76,13 +78,15 @@ accountable, not good.
 
 In `badges[]`:
 
-- `counted: true` means this index counts it. It counts only if all three hold:
+- `counted: true` means this index counts it. It counts only if all four hold:
   - its `scope` is a directory market and a role its sides allow, exactly
     (`online-tutors/seller`, `language-exchange/peer`); a plain market with no role counts for
     nothing;
+  - it is the profile's own scope: `profile.market` and `profile.role`;
   - the profile declares the key the badge was registered with (`wallet` equals `profile.wallet`);
   - the profile exists here.
-- `why` says why not when it doesn't: `notInDirectory`, `noRole` or `walletNotDeclared`.
+- `why` says why not when it doesn't: `notInDirectory`, `noRole`, `notProfileScope` (registered
+  under another market or side than the one the profile lives in) or `walletNotDeclared`.
 - `issuer` is who vouched (the owner of the list the person is on), with the weight this index
   gives it. `scores.uniqueness[]` combines the issuers of each counted badge into one number from
   0 to 1.
@@ -101,8 +105,7 @@ and its record stays forever as a receipt.
 - `receipt`: `buyer` and `seller` (keys) with the profiles that declare them
   (`buyerProfiles`, `sellerProfiles`, each with its `rating` and `standing`), `creator` (who
   started it; `seller` means the seller asked for the payment), `amount`, `mint`, `arbiter` and
-  `timer` if set, `options` (as on an offer; the flag also rises when the arbiter is the buyer or
-  the seller), `createdAt`, `fundedAt`, `endedAt`, `outcome`, `toSeller` and `toBuyer`.
+  `timer` if set, `createdAt`, `fundedAt`, `endedAt`, `outcome`, `toSeller` and `toBuyer`.
 - `outcome`: `releasedToSeller`, `releasedToBuyer`, `split`, `arbitrated`, `timerReleased`, or
   null while it is held.
 - `receipt: null` means this index has no payment for the deal; the reviews that name it are still
@@ -168,8 +171,7 @@ matches the offer (`check`: `matches`, `changed`, `differs`, `notLive`, `noPrice
 
 People reading your answer don't need the machinery. Say "payment", "dollars", "verified real
 person", "receipt". Don't say wallet, USDC, chain or gas. A score is evidence, not a verdict:
-say what backs it ("2 reviews, 1 backed by a payment"). Don't combine the scores into one. Say
-the options as the offer's `options.text` says them, and mention its flag.
+say what backs it ("2 reviews, 1 backed by a payment"). Don't combine the scores into one.
 
 ## Examples
 
