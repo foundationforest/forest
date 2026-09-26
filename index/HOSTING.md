@@ -1,7 +1,8 @@
 # Hosting the index
 
-**Nothing is deployed.** This page says what each part would need. It has run only on one machine,
-as one process and as two.
+**Nothing is shipped.** This page says what each part needs. On devnet the index runs as one
+process on Railway, with its Postgres on Supabase (`docs/services.md`); as two processes it has run
+only on one machine.
 
 The index is two processes over one Postgres database:
 
@@ -120,6 +121,6 @@ The readers cannot run on Vercel: a function cannot keep a websocket or a poll l
 ## No address logs
 
 Neither process writes a visitor's address anywhere: the pages log only a failed request's path
-and its error, never an address or a query. Railway and Vercel keep request logs of their own;
-what they record about the visitor, and whether it can be turned off, is not checked here and must
-be before anything is deployed (`docs/changes/index-2.md`, open).
+and its error, never an address or a query. Railway and Vercel keep request logs of their own:
+Railway's keep each request's client address and path, with no documented way to turn it off, and
+Vercel's are not checked (`docs/handoff.md`, Open).

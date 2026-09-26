@@ -1,6 +1,6 @@
-# Forest: foundation handoff (September 25, 2026)
+# Forest: foundation handoff (September 26, 2026)
 
-The plan for the `forest` repo, as the design stands in the code today. Claude Code reads `CLAUDE.md` and this file before every session. Nothing is shipped: everything below is design, and "Build status and order" says what exists and where it has run. The reason behind each choice is in `docs/changes.md`. When something here turns out wrong, change it and say what changed there.
+The plan for the `forest` repo, as the design stands in the code today. Claude Code reads `CLAUDE.md` and this file before every session. Nothing is shipped: everything below is design, and "Build status and order" says what exists and where it runs. The reason behind each choice is in `docs/changes.md`. When something here turns out wrong, change it and say what changed there.
 
 ## What Forest is
 
@@ -21,7 +21,7 @@ A passkey on your phone unlocks a secret seed that never leaves the device. From
 Three rungs of one ladder. There are no accounts anywhere.
 
 1. **A key.** From a passkey, the one way in: the passkey makes the seed, and the 24 words are the only backup and the way to carry the seed anywhere. With a key you can pay, and pay into escrow.
-2. **A profile.** A folder with a permanent name (a DID). Free, unlimited, nothing on chain. Needed before a badge. Reviews live in profiles, so a review needs one; an unbadged reviewer's review weighs near zero.
+2. **A profile.** A folder with a permanent name (a DID), in one market as one side of it. Free, unlimited, nothing on chain. Needed before a badge. Reviews live in profiles, so a review needs one; an unbadged reviewer's review weighs near zero.
 3. **A badge.** A face check once, then one registry entry per market. Reviews carry weight both ways.
 
 ## Layers
@@ -61,7 +61,7 @@ Four slots are open to anyone: issuers, indexes, evidence types and apps. The fo
 | Badge and pay link on forest.foundation | Ramp: exchange instructions and a prefilled ramp page in v0; Crossmint (self-serve on staging; production once they accept a sole proprietor) or Onramper |
 | | The door: an MCP server that holds no keys and forwards signing to the app |
 
-Repos: `foundationforest/forest` (all foundation code, Apache 2.0) and `foundationforest/markets` (the directory: market files in category folders, CC0). The product org holds `roots`. Forest lives at forest.foundation; Roots at Roots' own domain (not bought yet).
+Repos: `foundationforest/forest` (all foundation code, Apache 2.0) and `foundationforest/markets` (the directory: market files in folders, CC0). The product org holds `roots`. Forest lives at forest.foundation; Roots at Roots' own domain (not bought yet).
 
 ## Keys
 
@@ -86,15 +86,15 @@ A sealed Solana program that gives one verified human one badge per market, with
 - **A registration** is one transaction: the market name, the profile's DID, one proof whose scope is the market name, the list root the proof is made against, the code, and the fee. The code is the proof's nullifier: the same for one human in one market, unguessable for anyone else. An account at an address derived from the code is what makes it once per human per market.
 - **The fee.** One rule: 25 cents in USDC, always; other accepted tokens at the fee set for them. USDC's address and its 0.25 fee are program constants that nothing can change or remove. The treasury may accept up to fifteen more classic tokens, each at a fee above zero set once in that token's own units and meant to be worth 25 cents; nothing changes a token's fee and nothing removes a token. There are no free slots, no numbered codes and no vouchers in the program.
 - **The profile signs.** The profile's wallet signs every registration, whoever pays, and the proof's message names that wallet and the DID, so a proof counts for one market, one profile and one wallet. The entry in the log names the wallet; a badge counts for a profile only when its profile record declares that wallet. A human who holds another profile's wallet can still badge it; the later circuit under "Open" closes that.
-- **Names are hashed.** The scope is a hash of the namespaced market name, and the message a hash of the wallet and the namespaced DID, so a name or a DID can be any length. The program recomputes both. It accepts any scope. The recommended scope is `market/role`, such as `plumbing/seller` (see "Markets").
+- **Names are hashed.** The scope is a hash of the namespaced market name, and the message a hash of the wallet and the namespaced DID. The program recomputes both, from a scope of at most 256 bytes and a DID of at most 64. It accepts any scope within that bound. The recommended scope is `market/role`, such as `plumbing/seller` (see "Markets").
 - **Everyone pays.** The program charges everyone: the 25 cents come from the fee authority's tokens, and the network fee and the storage deposit from the transaction's payer, while the profile's wallet signs. Whoever signs to pay, pays. A payer may pay for someone else; the program cannot tell and never needs to. Nothing in the foundation is built to pay on anyone's behalf.
 - **The treasury.** The first treasury is a program constant, and `init` writes only constants, whoever sends it. One treasury key receives every fee and every sweep but a list's, and turns every dial. It moves in two steps: the current treasury proposes a key, and nothing moves until that key signs to accept; until then the old key keeps everything and may change or clear the proposal. A treasury key, and a list owner's, holds a little SOL before it can receive a small sweep.
 - **The dials.** The treasury accepts a token at a fee and hands itself over, and every rent sweep but a list's pays it. Nothing else: each list is its owner's. Proofs against a closed list stay valid forever, and nothing deletes a list.
 - **Recent roots.** A proof against any of a list's last 128 roots is accepted, so a proof made just before someone else joins still lands.
 - **No removals.** Once a human is in a list, they stay. Removing an insert key removes no one. A duplicate that passes the face check cannot be undone in v1.
 - **The rent sweep.** Anyone may send `sweep_rent`. It moves only what a registry account holds above its current rent-exempt minimum: a list's to the list's owner, whoever paid its rent (whoever pays should get it back, and the program records the owner), and the config's, the code tree's and a code account's to the treasury; it touches nothing else. Solana is cutting the rent rate in steps, and only the owning program can move the difference.
-- **Size.** A registration is 832 bytes of the 1,232 limit (v0 transaction) and 9.5 to 9.7% of the compute limit: compressed proof points, a standard transaction, no address lookup table.
-- **Sealed per version.** The upgrade key is removed after deploy. A v2 is a new program with new lists, so v1 must be right. First sellers use v1 on devnet before mainnet.
+- **Size.** A registration is about 835 bytes of the 1,232 limit (v0 transaction), 1,105 at the longest scope and 1,152 with a fee payer's payment instruction, and 9.5 to 9.8% of the compute limit: compressed proof points, a standard transaction, no address lookup table.
+- **Sealed per version.** The upgrade key is removed after deploy. A v2 is a new program with new lists, so v1 must be right.
 - **The completeness proof, later, from the same data.** Every code also goes into an append-only tree the program keeps (`docs/decisions/used-code-storage.md`). Later, a person can show "my badges, none hidden" with one small proof per market in the directory, each saying "my code is present" or "absent", all sharing one proving key. Absence is proven against a sorted list the verifier (a buyer's app or an index) rebuilds itself and checks against the program's tree, so nothing is trusted. That circuit and its ceremony come later; the registry does not wait for them.
 
 ## Escrow
@@ -124,36 +124,37 @@ Moves between the central wallet and a profile wallet are where profiles could b
 - **Every interaction is a deal** with a deal id: 32 random bytes chosen at creation. When an escrow exists, its address is the deal id.
 - **A review is a signed claim** by one profile about another, usually about one deal. A review can be as thin as pointing at a person; what is missing weighs less; nothing is refused. Two reviews across one deal id are the two sides' receipts; no other record is needed for that.
 - **Evidence** shows a deal happened beyond the parties' word. There is one evidence type so far: the escrow's permanent receipt. A market file lists the evidence types that apply. Evidence weighs, it never rejects: a review without it is valid and weighs near zero.
-- **Indexes weigh, programs never interpret.** An index weighs a review by the reviewer's own trust and by the evidence under its deal, and decides which tokens it counts.
+- **Indexes weigh, programs never interpret.** An index weighs a review by the reviewer's own standing and by the evidence under its deal, and decides which tokens it counts.
 - **Who said yes.** An index weighs a receipt by who agreed to the deal. It counts fully when the seller signed for it: created the escrow (an invoice), signed its ending (a split, or a release back to the buyer), or reviewed the deal. A payment the seller signed nothing for is a real receipt, but one-sided. Anything else weighs near zero.
-- **No co-presence proof.** No evidence proves two people met in person: two people who agree to lie can relay their devices from anywhere, and no phone signs a physical measurement. Collusion is bounded by identity (one badge per human per market) and by reviewer trust.
+- **No co-presence proof.** No evidence proves two people met in person: two people who agree to lie can relay their devices from anywhere, and no phone signs a physical measurement. Collusion is bounded by identity (one badge per human per market) and by reviewers' standing.
 - **Every payment can have a receipt.** A product may make every payment an escrow, even one released in the same second, so each payment has an address a review can point at. That is a product default, not a program rule.
 
 ## Reputation
 
-- **Two scores per profile, never blended:** uniqueness (which issuers vouched) and trust (an open algorithm over the reviews a profile received, each weighted by its reviewer's own trust and by the evidence under its deal). Everyone starts at zero; a badge means real and accountable, not good.
+- **Two numbers per profile, one per badge, never blended.** A profile shows its **rating**, from 1.0 to 10.0: the `overall` ratings of the reviews it received, averaged, each weighed by its reviewer (their badge, then their own standing) and by the evidence under its deal; and its **standing**: the same reviews summed, weighed the same way, starting at zero. Each badge carries its **uniqueness**: which issuers vouched. An open algorithm computes all three (`index/SCORING.md`). A badge means real and accountable, not good.
 - **Three tiers across one person's profiles,** each the user's choice. Public linking: a signed record in each profile pointing at the others. Private disclosure to one buyer: the seller's app signs "these profiles are mine" with each profile key, encrypts it to the buyer's key, and shows, for every other market in the directory, either the badge or that no code of theirs exists there; the buyer checks the chain; disclosing to a buyer is disclosing. And later, a zero-knowledge aggregate.
 - **Signatures ready for later.** The index signs every score with a ZK-friendly signature (EdDSA over Poseidon) alongside the normal one, so the later circuit never needs an expensive signature check.
 
 ## Record shapes
 
-Four shapes, shared by every market, as AT Protocol lexicons in `shapes/`. Market files add fields, never new shapes.
+Four shapes, shared by every market, as AT Protocol lexicons in `shapes/`. Market files add fields, never new shapes. A record holds no fractional number, so decimals are text (`"8.5"`, `"38.72"`), as a price's amount is.
 
-- **Profile:** name, photo, contact, what I do, declared wallet. One per folder.
-- **Post:** direction (offer or request), market, role, description, price (an amount, the token named by its mint, and per hour, day or job), and optional terms, availability, remote, location and expiry. The terms hold only the escrow's two options, each off unless set: an arbiter key, and a timer (days from funding, and whether it pays the seller or the buyer).
-- **Review:** about whom (a DID), the one required field; and, all optional, a rating from 1 to 5, text, and a deal id (`dealId`): the escrow's address when an escrow exists, else 32 random bytes as hex. A review can be as thin as pointing at a person; what is missing weighs less; nothing is refused.
+- **Profile:** its market and role, both required: one scope per profile, the one its badges count under. Name, photo, contact, what I do, declared wallet. One per folder.
+- **Post:** direction (offer or request) and description; optional price (an amount, the token named by its mint, and per hour, day or job), terms, availability, remote, location and expiry. A post names no market or role: they are its author profile's. The terms hold only the escrow's two options, each off unless set: an arbiter key, and a timer (days from funding, and whether it pays the seller or the buyer). A location is a point and a place: `lat` and `lon` in degrees; a precision the person chooses, in whole kilometres (0 for an exact point, such as a shop), to which the app rounds the point before writing; and the area in words.
+- **Review:** about whom (a DID), the one required field; and, all optional, named ratings from 1.0 to 10.0 (any name; `overall` is the one indexes read), text, up to ten photos and short videos, and a deal id (`dealId`): the escrow's address when an escrow exists, else 32 random bytes as hex. A review names no market: its market is the reviewed profile's. A review can be as thin as pointing at a person; what is missing weighs less; nothing is refused.
 - **Credential:** a W3C verifiable credential with its issuer's DID, one copy per profile. Nobody issues credentials yet; the shape exists so nothing changes when they arrive.
 
-A market file holds its name, its category, an optional one-line description, its roles (seller and buyer unless it names others), extra fields, the evidence types that apply and the credential issuers it recognizes. It says nothing about money or time. Records are validated on the device before they are written.
+A market file has ten keys: `name`; `folder`, where it sits in the directory; a one-line `description`; `sides`, `two` (roles seller and buyer) or `one` (role peer); optional `labels`, the plain words pages use for seller and buyer in a two-sided market (tutor and student); `evidenceTypes`; `offerFields` and optional `reviewFields`, the extra fields a post or a review in the market carries; `ratings`, the rating names a review there usually carries, `overall` always among them; and `howDealsGo`, plain text on how deals there usually go. It holds nothing about money or time and restricts no deal. Records are validated on the device before they are written.
 
 ## Markets
 
-- Anyone can make any market. A market is a name; a badge is a code made from your secret and that name; the registry accepts any name. Nothing is excluded, prohibited or approved by the foundation.
-- The `markets` repo is the foundation's directory: the spellings it recommends so one trade doesn't split into ten names, grouped in categories for reading, with a table of each market's other spellings (its aliases). An index reads the directory from that repo, never from a copy of it.
-- The recommended scope for a badge is `market/role`, with a slash, for example `plumbing/seller` and `plumbing/buyer`, so a person can hold two profiles in one market, one per side.
-- The foundation's index counts a badge only under `market/role`, the market a name in the directory byte for byte and the role one of that market's roles. A plain `market` badge, a badge under an alias and a badge under any other name carry no weight in it. It groups posts written under an alias with their market. Any other index weighs as it chooses.
-- A market file names the market, its category, its description, the evidence types that apply, and the extra fields an offer in it usually carries. It suggests nothing about money or time; those are the seller's per offer.
-- Categories are folders and pages, never a program concept. Later shapes are new folders.
+- Anyone can make any market. A market is a name; a badge is a code made from your secret and a scope; the registry accepts any scope. Nothing is excluded, prohibited or approved by the foundation.
+- The `markets` repo is the foundation's directory: the spellings it recommends so one trade doesn't split into ten names, in folders for reading. A market has one name; there are no aliases. An index reads the directory from that repo, never from a copy of it.
+- The recommended scope for a badge is `market/role`, with a slash, the role one the market's sides allow: `plumbing/seller` and `plumbing/buyer` in a two-sided market, `peer` in a one-sided one.
+- One scope per profile. A profile's record names its market and role, and the app writes them when it makes the folder. A person on both sides of a market, or in two markets, holds two profiles.
+- The foundation's index counts a badge only under its profile's own `market/role`, the market a name in the directory byte for byte. A plain `market` badge and a badge under any other scope carry no weight in it. Any other index weighs as it chooses.
+- A market file restricts no deal. The price, the token, the escrow's options and the amount are the seller's, per offer, and a price is optional on every post. A label is a word for pages, never a role: posts and badges say seller and buyer.
+- Folders group markets for reading; they are never a program concept.
 
 ## Names
 
@@ -163,13 +164,13 @@ A market file holds its name, its category, an optional one-line description, it
 
 ## Host, carrier, index, fee payer, issuer flow
 
-All five are built and tested on one machine, and none is deployed.
+All five are built, tested, and running on devnet (see "Build status and order").
 
 **Host.** Bluesky's reference PDS at a pinned commit plus five patches in `host/`. Every commit is signed on the device in two phases: the host prepares the unsigned commit, the device signs it with the profile's signing key, and the host checks the signature against the DID document before storing it. A folder is created by its first device-signed commit, from a DID made on the device. The host holds no signing key for any folder, needs no account, email or password (the device signs a short token per call), and keeps no address in its logs. A folder moves to another host by pointing the DID there and importing its export. It runs on plain SQLite files and a folder of photos.
 
 **Carrier.** Bluesky's relay and Jetstream, configured, with no Forest code (`carrier/`). The relay reads only the hosts an admin adds, checks every commit against its DID document, and serves every record on them as one stream. Jetstream turns that stream into JSON, and an index that wants JSON asks it for Forest's record types (`foundation.forest.*`), plus the account and identity events. Neither piece knows which profiles are registered, and neither drops a record outside Forest's types; each index does both.
 
-**Index.** Two processes on one Postgres (`index/`). The readers take records from the relay's own stream with Bluesky's consumer, checking every commit's signature against its DID document themselves and keeping only Forest's record types, each checked against `shapes/`; and they take the registry's and escrow's events from the chain, only those the programs themselves wrote. They score every profile and sign each score twice, with Ed25519 and with EdDSA over Poseidon. They run on Railway, since they hold a websocket and a poll loop. The pages serve the same data two ways at the same open URLs with no login: pages for people (category, market, profile, deal, search), plain HTML with no JavaScript and no crypto words, and for machines schema.org data on every page, a JSON twin of every page (the same URL with `.json`), a sitemap, `llms.txt` and the read skill (`skill.md`). They run on Railway or Vercel. The index reads the market directory and its aliases from the `markets` repo at start. It counts a badge only under `market/role` in that directory and only when the entry's wallet is the profile's declared wallet, weighs a badge by the list owner the entry names, weighs deals by who said yes, and counts only the tokens its config names (USDC). The reading rules adversarial review 1 found (only log entries the programs themselves wrote, market names compared byte for byte, its own archive of the logs) are in `docs/decisions/adversarial-review-1.md`. Every offer has a Pay link: an https link at the index naming the offer's record and its content id, and its price and terms, with no seller key, so an app reads the seller from the profile and a forged link cannot redirect money (`index/PAYLINK.md`). Once an escrow exists, the escrow client's Solana Pay link names the escrow's address, from which the wallet finds the deposit address.
+**Index.** Two processes on one Postgres (`index/`). The readers take records from the relay's own stream with Bluesky's consumer, checking every commit's signature against its DID document themselves and keeping only Forest's record types, each checked against `shapes/`; and they take the registry's and escrow's events from the chain, only those the programs themselves wrote. They score every badge (uniqueness) and every profile (rating and standing), and sign each score twice, with Ed25519 and with EdDSA over Poseidon. They run on Railway, since they hold a websocket and a poll loop. The pages serve the same data two ways at the same open URLs with no login: pages for people (folder, market, profile, deal, search), plain HTML with no JavaScript and no crypto words, and for machines schema.org data on every page, a JSON twin of every page (the same URL with `.json`), a sitemap, `llms.txt` and the read skill (`skill.md`). They run on Railway or Vercel. The pages state facts and advise nothing: an offer's escrow options and a receipt's are plain data in the twins, and what to say about them, or about a Pay link, is each app's. A market page or a search can keep only the offers near a point (`near=lat,lon&km=N`), measured to each post's own rounded point. The index reads the market directory from the `markets` repo at start. It counts a badge only under its profile's own `market/role` in that directory and only when the entry's wallet is the profile's declared wallet, weighs a badge by the list owner the entry names, weighs deals by who said yes, and counts only the tokens its config names (USDC). The reading rules adversarial review 1 found (only log entries the programs themselves wrote, market names compared byte for byte, its own archive of the logs) are in `docs/decisions/adversarial-review-1.md`. Every offer with a price has a Pay link: an https link at the index naming the offer's record and its content id, and its price and terms, with no seller key, so an app reads the seller from the profile and a forged link cannot redirect money (`index/PAYLINK.md`). Once an escrow exists, the escrow client's Solana Pay link names the escrow's address, from which the wallet finds the deposit address.
 
 **Fee payer.** Kora 2.0.5, configured, with no custom code (`feepayer/`): it co-signs a person's transaction as its payer and charges, in their dollar token, exactly what it spends, the network fee plus every storage deposit it puts down, plus Kora's fixed 50 lamports for the payment instruction, and no margin. It allows five programs and no priority fee, and refuses to let its own key move SOL or tokens. It holds none of the person's keys and decides nothing. In a registration it is the transaction's payer, of the network fee and the code account's storage deposit, while the profile's wallet pays the 25 cents and signs; nothing it sees lets it take a badge. In an escrow it fronts the rent, which comes back to the person as the creator.
 
@@ -180,49 +181,53 @@ All five are built and tested on one machine, and none is deployed.
 - The keys recipe as a library; the host fork; the fee payer's config; the record shapes and validator; the issuer's three routes (open a face check, submit, status); the registry client (build a proof on the device, send it through a fee payer); the escrow client (every payment with the deposit address made first, and the check a person runs before working or paying); the index's pages, twins and Pay link.
 - Roots adds only its page, its host instance, its seed-file store, its instance of the fee payer, the ramp and pool it offers, and the door (MCP).
 - At creation Roots gives each folder the random name the folder software requires, under Roots' own domain; nobody sees it.
+- Roots rounds a post's point to the precision the person chooses, and warns before an exact point at a home is published; nothing in the foundation judges a point.
 - Money follows "Wallets": ramp links pay into and out of the central wallet only; every deal is paid from and to profile wallets only.
 - Roots waits a random interval, minutes to hours, between a person joining the list and their first registration, and the issuer inserts identities in batches, so a badge cannot be matched to a face check by timing.
 - A write from Roots needs only the seed unlocked for the session, never a passkey gesture per write.
 
 ## Build status and order
 
-How work splits: a chat with Carlos decides (stress tests, searches, anything that isn't code). Claude Code builds: one task per session, plan mode first; "should we" questions go to `docs/changes.md` as open items, not decisions. Carlos does what only he can: accounts, passwords, money, the entity, the first sellers. At the end of every session `docs/changes.md` gets three lists, built, learned and open; this file never marks design as done.
+How work splits: a chat with Carlos decides (stress tests, searches, anything that isn't code). Claude Code builds: one task per session, plan mode first; where the plan is silent it chooses the option that adds no rule and no text a person reads and logs it as chosen, and it asks only when a choice changes a sealed program or spends money. Carlos does what only he can: accounts, passwords, money, the entity, the first sellers. At the end of every session `docs/changes.md` gets three lists, built, learned and open; this file never marks design as done.
 
-**Built and tested locally, nowhere else.** Nothing is deployed: no devnet, no mainnet, no Railway or Vercel service, no Kora in front of a real network, no real face check, no proof on a phone. Every package's checks and tests pass together on one machine, and `.github/workflows/checks.yml` runs them in GitHub Actions: each package's type-check and fast tests, and both programs' LiteSVM tests, on every pull request and on `main`; the validator tests, the fuzzers' long campaigns and the end-to-end runs (host, carrier, fee payer, index) nightly and by hand.
+**Built, and online on devnet.** Nothing is shipped, and nothing is on mainnet. Both programs run on Solana devnet, and the five services run on Railway against them. Every package's checks and tests pass together, and `.github/workflows/checks.yml` runs them in GitHub Actions: each package's type-check and fast tests, and both programs built as SBPF v3 with their LiteSVM tests, on every pull request and on `main`; every package's type-check again on `main` after each merge; the validator tests, the fuzzers' long campaigns and the end-to-end runs (host, carrier, fee payer, index) nightly and by hand.
 
 - `shapes/`: the four lexicons, the market template, the validator and its command line, one example of each.
 - `keys/`: the recipe spec and library with pinned test vectors. A passkey-derived seed came out identical on iPhone and Mac; the library's tests on Apple, Android and Windows devices are not run.
-- `registry/`: the program, the client, the pinned ceremony files; tests under LiteSVM and on a local validator, and a property test.
-- `escrow/`: the program and the client, as "Escrow" above; tests under LiteSVM and on a local validator, a fuzzer, and the security checklist.
-- `issuer/`: the service, against a stand-in Didit and a local validator.
+- `registry/`: the program, the client, the pinned ceremony files; tests under LiteSVM and on a local validator, a property test, and the security checklist.
+- `escrow/`: the program and the client, as "Escrow" above; tests under LiteSVM and on a local validator, a fuzzer (on an SBPF v0 build, the one format Trident's runtime runs), and the security checklist.
+- `issuer/`: the service, tested against a stand-in Didit and a local validator; on devnet it opens Didit's real face check.
 - `feepayer/`: Kora's configuration, run in front of a local validator: a wallet with no SOL registers and pays for escrows in a test dollar, charged once for each deposit, every refund back to it.
-- `carrier/`: the relay and Jetstream, configured, run against a local host.
+- `carrier/`: the relay and Jetstream, configured, run against a local host; on devnet, the relay alone.
 - `index/`: the readers, the scores and their signatures, the pages and their twins, the read skill, `llms.txt` and the Pay link, end to end on a local host, validator and Postgres, with the directory read from the `markets` repo.
 - `host/`: the fork, with end-to-end tests against a local directory and two local hosts.
-- `devnet/`: the devnet build (keys put into a copy of the source), deploy script, key script (every key derived from one phrase), and the public record; the run itself is in the two clients' `scripts/devnet.ts`, with read-only smoke tests (`npm run test:devnet`). The deploy key holds 2.0 SOL; both deploys need about 3.2 at the escrow's present size, and the payer 0.2 more (estimated; `docs/devnet.md`, whose escrow numbers are stale).
+- `devnet/`: the devnet build (keys put into a copy of the source), the deploy script (each deploy's exact cost), the key script (every key derived from one phrase), and the public record; the run itself is in the two clients' `scripts/devnet.ts`, with read-only smoke tests (`npm run test:devnet`).
+- `deploy/`: the five services on Railway and the index's Postgres on Supabase: a Dockerfile per service, the devnet settings, a stand-in Didit that runs only when no Didit key is set, and the scripts that drive Railway, Supabase, the funding and the end-to-end proof.
 - `testsite/`: a static site for trying the keys page on real phones; not online.
-- The `markets` repo: the directory, 18 markets in three categories, each with its aliases.
+- The `markets` repo: the directory, 57 markets in 17 folders.
 - Reports: `registry/FEASIBILITY.md` and `docs/decisions/` (used-code storage, the host, adversarial review 1 of both programs).
+
+**On devnet** (read September 26, 2026; every address and signature is in `docs/devnet.md` and `docs/services.md`):
+
+- **The programs:** the registry at `8sUyd9JXRGEUqf2hYVnLCybi74549VG27dAK6YvbbU3i` and the escrow at `3vAVLwiwFkCUG4AHV3gK3t15HoyRSuKNEuBFvvy9CbeR`, both SBPF v3, upgradeable by the devnet deploy key.
+- **The registry:** `init`; a test dollar accepted at 0.25; list 0, owned by the devnet issuer key, with two members; two badges. `freelance/seller`, for the keys recipe's test seed: `freelance` is not a directory market, so the foundation's index counts it for no profile. `tutoring/seller`, for the second test seed: its profile record names no market or role, so the index does not count the badge for that profile (`notProfileScope`).
+- **The escrow:** two deals, an invoice paid and released in one tap (2.00 to the seller) and a buyer's escrow split 60/40 by both sides.
+- **The keys:** the deploy key holds 1.80 SOL, the fee payer's key 1.13, the issuer's 0.00995 (about 2,000 inserts), the treasury 0.01.
+- **The services,** in the Railway project `forest-devnet` on the Hobby plan, each built from `main` and redeployed on every push to it; every devnet RPC they use is Helius's:
+
+| Service | URL |
+|---|---|
+| Host | https://host-production-22a4.up.railway.app |
+| Carrier (the relay) | https://carrier-production-f88f.up.railway.app |
+| Index (readers and pages in one process; Postgres on Supabase) | https://index-production-1b6e.up.railway.app |
+| Issuer (Didit's real face check) | https://issuer-production-fd68.up.railway.app |
+| Fee payer (Kora 2.0.5) | https://feepayer-production.up.railway.app |
 
 **Next, in order.**
 
-1. **Devnet.** Fund the deploy key, deploy both programs as they are, and run `docs/devnet.md`, rewritten for the escrow as it is.
-2. **Services online.** The host, the carrier, the index (its pages at forest.foundation), the fee payer and the issuer, on Railway and Vercel, against devnet.
-3. **The full loop on devnet, by script:** verify, register, post, get found, get paid, get reviewed, through the services.
-4. **An independent AI attack pass on both programs.**
-5. **Then Roots.** Names come after Roots.
-
-**Before mainnet.**
-
-- **Real keys, placeholders replaced.** A real treasury key and the foundation's issuer key replace the registry's two placeholders, which anyone with this repo can sign for, everywhere they are written (the program, its tests, the client, and the index's issuer weights); fresh program ids; the fee payer's, the issuer's and the index's own keys.
-- **The newer program format.** Both programs build as SBPF v0, which deploys today. Once SIMD-0500 activates, a sealed v1 must be deployed first or rebuilt and tested for a later SBPF version.
-- **The attack pass** above, and then one paid review of both programs and the key handling by someone who has shipped Solana programs.
-- **One lawyer pass** over the escrow program, the fee payer, the ramp referral and biometric data responsibility.
-- **Three markets** with sellers who ran the loop on devnet.
-- **The foundation entity** (a UK company limited by guarantee; it forms before the first stranger's real face or the first grant application), owning the Didit account and the forest.foundation domain.
-- **Sealing.** Each program's upgrade authority removed the day it deploys (`--final`), and "Authority: none" checked.
-
-Done when one stranger, with their own USDC, completes verify, register, post, get found, get paid, get reviewed, alone.
+1. **The full loop over the public services, by script:** verify, register, post, get found, get paid, get reviewed.
+2. **The attack pass on both programs,** with overflow checks turned on.
+3. **Then Roots.** Names come after Roots.
 
 ## Building in parallel
 
@@ -233,18 +238,14 @@ Done when one stranger, with their own USDC, completes verify, register, post, g
 
 ## Open
 
-One list. Each item says what it waits on: **needs Carlos** (a decision, an account, money or a person) or **mechanical** (work anyone can do without a decision). An escrow or registry item marked "program" can change only before that program deploys.
+One list. Each item says what it waits on: **needs Carlos** (a decision, an account, money or a person) or **mechanical** (work anyone can do without a decision). An escrow or registry item marked "program" can change only before that program is sealed.
 
 **Markets**
 
-- Which three markets launch first. *Needs Carlos.*
 - Whether a review also points at the post it is about. *Needs Carlos.*
-- The registry takes a scope of at most 64 bytes, while a market file allows a name and a role of 64 characters each, so a long `market/role` can never be registered: the market validator refuses such a pair, or the registry's bound rises (program). *Needs Carlos.*
-- Whether a market file keeps `credentialIssuers`. *Needs Carlos.*
 - How a change to an existing market file is merged: renaming a market strands every badge under the old name. *Needs Carlos.*
-- Whether the market page's count of verified real people counts sellers only; it counts every counted badge in the market, buyers' included. *Needs Carlos.*
-- The `markets` repo recommends `market:role` with a colon (`directory.md`, `README.md`, `CLAUDE.md`), which the foundation's index does not count; it moves to the slash. *Mechanical.*
-- The `markets` repo's `check.sh` does not check that every market file is listed in `directory.md`, which is what the index reads, and checks the alias table as it stands in the pull request, not against `main`; the repo runs no check on pull requests. *Mechanical.*
+- Whether the market page's count of verified real people counts sellers only; it counts every profile in the market with a counted badge, buyers' included. *Needs Carlos.*
+- The `markets` repo's `check.sh` does not check that every market file is listed in `directory.md`, which is what the index reads, and the repo runs no check on pull requests. *Mechanical.*
 - The index reads the directory once, at start, so a change in the `markets` repo reaches it at its next restart; a refresh on a timer. *Mechanical.*
 
 **Money and the fee payer**
@@ -266,17 +267,17 @@ One list. Each item says what it waits on: **needs Carlos** (a decision, an acco
 - Confirm the wallet in the proof's message, and the index rule on the declared wallet. *Needs Carlos.*
 - A code account's rent above its minimum sweeps to the treasury, though whoever registered paid it; sweeping it to the payer means recording the payer (program). *Needs Carlos.*
 - Whether a mainnet build refuses to compile with the placeholder treasury and issuer key (program). *Needs Carlos.*
+- Whether the sealed builds are SBPF v3, as on devnet: mainnet accepts v3, and SIMD-0500, which stops deploys of the older formats, is active on neither network. *Needs Carlos.*
 - The treasury can accept a token it mints itself, a voucher by another name; only its discipline, a multisig and a public policy stand against that. *Needs Carlos.*
 - Anyone can open lists without limit, each at its opener's rent, and an index grows with them. *Needs Carlos.*
 - When the foundation opens a second list of its own. *Needs Carlos.*
-- How an index reads extra vouches from a folder, and how a market names the issuers it counts. *Needs Carlos.*
+- How an index reads extra vouches from a folder, and whether a market file names the issuers it counts. *Needs Carlos.*
 - Whether the registry also emits an attestation other Solana apps can read (parked). *Needs Carlos.*
 - The per-market completeness circuit and its ceremony, which needs real independent contributors and so waits for a public, and the proof that a sorted list matches the program's code tree: not built or costed. *Needs Carlos, later.*
 - A later circuit proving the profile's key and the identity secret come from one seed, which closes badge selling entirely. *Needs Carlos, later.*
 - How long Roots' random wait before a first registration is, sized from real joining rates. *Needs Carlos, later.*
 - Whether the Semaphore team publishes a transcript for the later artifacts. *Mechanical.*
 - A phone and the issuer find a list's members by reading every transaction that touched it: fine at thousands, not at millions. The issuer or an index publishes the members, checked against the root as the client already does. *Mechanical.*
-- Both programs built for a later SBPF version (`cargo build-sbf --arch v3`) with Anchor 1.2, groth16-solana and the Poseidon syscall, which nobody has tried. *Mechanical.*
 - Whether the devnet builds are byte for byte reproducible on another machine. *Mechanical.*
 - `registry/program/trident-tests/` keeps a stale model and cannot run; `invariants.rs` is the one kept current. Update it or remove it. *Mechanical.*
 
@@ -287,36 +288,45 @@ One list. Each item says what it waits on: **needs Carlos** (a decision, an acco
 - `recover_late` checks who holds the buyer's standard account, so a buyer who hands it away blocks only its own late money (program). *Needs Carlos.*
 - SOL sent to an escrow's address goes to the creator by `sweep_rent`, not back to whoever sent it, and tokens of another mint sent there are not recovered (program). *Needs Carlos.*
 - Whether the wallets people use accept a program-derived address as a Solana Pay recipient; not tried on a phone. *Mechanical.*
+- The escrow fuzzer runs an SBPF v0 build of the same source, not the v3 format devnet runs, because Trident's runtime turns every feature off. A Trident with v3 enabled, or with a settable feature set, closes the gap. *Mechanical.*
+- The escrow README's cost table holds v0 measurements; v3's compute differs slightly. *Mechanical.*
 
 **Issuer and face check**
 
+- The scripted loop's verify step meets Didit's real face check on devnet, which needs a person: someone does the check once per run, or the script puts its person on list 0 another way, as the devnet run did through the issuer key. *Needs Carlos.*
 - A passed face check that never reached the issuer, the device lost between the check and the submit, locks the person out: the face is Didit's, and the session is gone with the device. *Needs Carlos.*
 - A manual approval in Didit's console keeps the duplicate warning, so the issuer still refuses a false duplicate a person has cleared: a path for a false positive. *Needs Carlos.*
 - `/submit` has no limit: each one asks Didit for a decision, which spends Didit's rate limit. *Needs Carlos.*
 - Whether two face checks by one person at the same moment see each other in Didit's duplicate search; ask Didit. *Mechanical.*
-- The Didit client is tested against a stand-in built from Didit's documents; its first real run compares a real decision with `parseDecision`. *Mechanical.*
+- The Didit client is tested against a stand-in built from Didit's documents. The first real decision, once a person does the check on the page in `docs/services.md`, is compared with `parseDecision`, and shows whether the foundation's workflow runs the liveness steps and the face search the issuer's rule reads. *Needs Carlos.*
 - The request limit: people behind one shared address share five face checks an hour, and its memory grows with the number of addresses in an hour; both for real traffic to size. *Mechanical.*
 
 **Hosting and privacy**
 
-- Address logs at the hosting platforms: Railway keeps every request's client address and path for 3 to 90 days, with no documented way to turn it off, and Vercel's request logs are not checked. That conflicts with "no address logs" for every service: accept it, find a host that does not log, or put something in front. *Needs Carlos.*
+- Address logs at the hosting platforms: Railway keeps every request's client address and path for its log retention, with no documented way to turn it off, on every devnet service, and Vercel's request logs are not checked. That conflicts with "no address logs": accept it, find a host that does not log, or put something in front. *Needs Carlos.*
 - Which apps open a Pay link: for an app to take the https link directly, the domain must list it in Apple's and Android's app-link files, like the passkey's related origins. Which apps, and on what rule. *Needs Carlos.*
-- Where the index's signing seed lives: the deploy's secrets, or a key service. *Needs Carlos.*
+- Where the index's signing seed lives: the deploy's secrets, or a key service. On devnet it is sealed in Railway with the host's and the relay's admin passwords, and no other copy exists: adding a second host to the relay means rotating its admin password first. *Needs Carlos.*
+- Whether the Supabase project `forest` (paused, `us-west-2`, from May) is kept; what it is for is not recorded. *Needs Carlos.*
+- Helius's plan against the load: the index alone makes about 520,000 requests a month. *Needs Carlos.*
 - The index claims forest.foundation's root, so the passkey's `/.well-known/webauthn` and any app-link files are served by the same deployment or routed around it. *Mechanical.*
+- The index's readers and pages as two services, the pages on the read-only `index_pages` role and holding no signing seed; `deploy/railway.ts` does not do it. *Mechanical.*
+- Every service restarts on failure, at most ten times, not always; Jetstream, which exits by design, would need always. *Mechanical.*
+- `node deploy/railway.ts variables` on a machine without the deploy's secrets folder makes every missing secret anew: the host's and the relay's admin passwords and the index's signing seed, which is a rotation. `set` changes single variables; `variables` could refuse to make a secret Railway already holds. *Mechanical.*
+- The host serves no `did.json` for its own `did:web`, as upstream doesn't; whether anything needs it. *Mechanical.*
+- Railway's Infrastructure as Code (`.railway/railway.ts`) would replace `deploy/railway.ts`'s settings; not tried. *Mechanical.*
 
 **Index**
 
 - Collusion by real small deals: two real people who pay each other small escrows gain full evidence each time. A minimum amount per counted token, less weight for repeat deals between the same two, or both. *Needs Carlos.*
 - An unbadged profile can declare someone else's wallet and be matched to that wallet's receipts, gaining at most the 0.05 floor. "A wallet counts only when a badge proves it" closes that, and makes an unbadged buyer's receipt count as none. *Needs Carlos.*
-- A review with no rating counts as neutral; "what is missing weighs less" could also mean a thin review is a small positive vouch. *Needs Carlos.*
-- The 1 to 5 rating machines get, made from trust alone as `3 + 2·t/(|t|+1)`: acceptable, or only the raw trust and its counts. *Needs Carlos.*
+- A review with no `overall` counts as neutral in standing and is left out of the rating; "what is missing weighs less" could also mean a thin review is a small positive vouch. *Needs Carlos.*
 - Languages: the pages are in English only. Which languages, and whether a page follows the reader's browser or its own URL. *Needs Carlos.*
-- Photos: showing a profile's photo means linking to its host, which then sees each visitor's address, or the index fetching and serving it. *Needs Carlos.*
+- Photos and videos: showing a profile's photo or a review's media means linking to their host, which then sees each visitor's address, or the index fetching and serving them. *Needs Carlos.*
 - Escrow versions: the reader follows one escrow program id; new versions need a list of ids, each with its adapter. *Mechanical.*
 - Backfill and moves: records come from the firehose from the index's cursor on; a folder imported on another host, or history older than the firehose keeps, needs `getRepo` and `verifyRepo`, and identity and account events are not acted on. *Mechanical.*
 - Signing takes about 88 ms a score in JavaScript, inside one database transaction: a worker, batching outside it, or a faster library before real traffic. *Mechanical.*
 - The index's log archive has only the RPC's word for what the logs say: a second RPC to cross-check, or reading the receipt accounts too. *Mechanical.*
-- Scale: a profile page lists every review, the sitemap is one file, offers are ranked with correlated subqueries, every page is computed per request behind a 30-second cache, and the pool takes 10 connections where a serverless instance wants 1. *Mechanical.*
+- Scale: a profile page lists every review, the sitemap is one file, offers are ranked with correlated subqueries, `near` scans every live offer in a market with no index on the point, every page is computed per request behind a 30-second cache, and the pool takes 10 connections where a serverless instance wants 1 and Supabase's session pooler sets its own limit. *Mechanical.*
 - The read skill's examples are the tests' data; they change to real ones once a real market has profiles. *Mechanical.*
 
 **Carrier, host and keys**
@@ -336,8 +346,8 @@ One list. Each item says what it waits on: **needs Carlos** (a decision, an acco
 
 **Devnet and checks**
 
-- Funding the devnet deploy: about 1.4 SOL more on the deploy key (`2mz33wBK7FKRXoAi7LptGGTwVQJDbrSyrVwbYRCqwP3A`), from faucet.solana.com signed in with GitHub, anyone holding devnet SOL, or a Helius or Ankr key given to the session. *Needs Carlos.*
-- The checks' first runs: the pull-request jobs first ran on the pull request that added them, and the nightly jobs run first after it merges. Whether they pass on GitHub's machines as they do locally, and how long the programs job takes there. *Mechanical.*
+- `deploy/e2e.ts`, the scripted proof, writes a profile with no market or role and reads `freelance-work/tutoring.json`, which the `markets` repo does not have; and nothing has run the invoice paid in one tap through the fee payer. The full loop starts from both. *Mechanical.*
+- `host/`, `carrier/` and `feepayer/` have TypeScript tests and no type-check of their own, so the check after each merge leaves them out. *Mechanical.*
 
 ## Don't resurrect
 

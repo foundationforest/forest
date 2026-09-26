@@ -363,7 +363,7 @@ signatures.
 ## Known limits
 
 Each is reported, not fixed, because fixing it would change a rule Carlos decided or add one. The
-ones marked open are questions in `docs/changes/escrow.md`.
+ones marked open are questions in `docs/changes.md`.
 
 1. **A frozen token account.** A classic mint's freeze authority (USDC has one) can freeze:
    - the deposit account, which stops every way out until it is thawed, since each moves tokens out
@@ -404,10 +404,10 @@ ones marked open are questions in `docs/changes/escrow.md`.
 11. **A one-sided receipt.** A buyer can release money to a seller who never signed anything, for one
     base unit. The receipt says the buyer created it; an index weighs it as one-sided.
 12. **Solana Pay to a program-derived address** has not been tried in a wallet on a phone.
-13. **SBPF v0.** The program builds as SBPF v0. Once SIMD-0500 activates (no more v0 deploys), a
-    sealed v1 must already be deployed, or be rebuilt for a later SBPF version, which nobody has
-    tried with this program.
-14. **Unaudited.** No paid review, no lawyer pass; `docs/handoff.md`'s "Before mainnet" stands.
+13. **The fuzzer runs SBPF v0.** The program builds, passes its tests and runs on devnet as SBPF v3
+    (`cargo build-sbf --arch v3`). Trident's runtime turns every feature off and runs only v0
+    programs, so the fuzzer runs a v0 build of the same source.
+14. **Unaudited.** No paid review, no lawyer pass.
 15. **Refunds arrive in SOL.** In a fee payer's app the creator's wallet may hold no SOL, and pays
     for each storage deposit in dollars. The refund comes back as SOL in that wallet. How the app
     shows or uses it, without saying "SOL", is the app's choice and open.

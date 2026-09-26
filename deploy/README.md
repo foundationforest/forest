@@ -16,8 +16,8 @@ stand-in face check, and the scripts that drive Railway, Supabase and the proof.
 |---|---|---|---|---|
 | Host | `host` | `host/Dockerfile`: Node 22.22.2, pnpm through corepack, `host/build.sh` | `host/run.sh` on port 2583 | SQLite and photos on a volume at `/data` |
 | Carrier (relay only) | `carrier` | `carrier/Dockerfile`: Go 1.26, `carrier/build.sh`; ships `bin/relay` | `relay serve` on 2470 | SQLite and event files on a volume at `/data` |
-| Index | `index` | `index/Dockerfile`: Node 22.22.2, `npm ci` in shapes, both clients, index | `node src/main.ts`: readers and pages in one process (the trial allows five services) | Supabase Postgres |
-| Issuer | `issuer` | `issuer/Dockerfile`: Node 22.22.2, `npm ci` in registry/client and issuer | `issuer/start.sh`: the stand-in Didit when no Didit key is set, then `npm start` | SQLite on a volume at `/data` |
+| Index | `index` | `index/Dockerfile`: Node 22.22.2, `npm ci` in shapes, both clients, index | `node src/main.ts`: readers and pages in one process, the pages holding the signing seed | Supabase Postgres |
+| Issuer | `issuer` | `issuer/Dockerfile`: Node 22.22.2, `npm ci` in registry/client and issuer | `issuer/start.sh`: the stand-in Didit when no Didit key is set (on devnet it is set), then `npm start`; a batch every 120 seconds | SQLite on a volume at `/data` |
 | Fee payer | `feepayer` | `feepayer/Dockerfile`: `ghcr.io/solana-foundation/kora:v2.0.5` by digest; the devnet `kora.toml` made by `feepayer/devnet-config.sh` | `feepayer/run.sh` | none |
 | Postgres | Supabase `forest-devnet` | Supabase | session pooler, TLS verified against `index/supabase-root-2021.crt` | the index's tables |
 
@@ -29,7 +29,7 @@ Railway has deprecated `railway.json`, so `railway.ts` sets these through the AP
 
 | | |
 |---|---|
-| `railway.ts` | Railway through its GraphQL API: `provision`, `variables`, `deploy`, `status`, `sealed`, `rotate`, `wire`, `track` |
+| `railway.ts` | Railway through its GraphQL API: `provision`, `variables`, `set`, `deploy`, `status`, `sealed`, `rotate`, `wire`, `track` |
 | `supabase.ts` | Supabase through its Management API: `create`, `lockdown`, `url` |
 | `fund.ts` | devnet: 1 SOL to the fee payer's key, its test-dollar account, test dollars for the proof's person |
 | `e2e.ts` | the seven-step proof on the public URLs |
@@ -44,7 +44,9 @@ Railway has deprecated `railway.json`, so `railway.ts` sets these through the AP
   Supabase's passwords, are made by the scripts, 32 random bytes each.
 - **Where they are kept.** In `~/.forest-devnet/services/` (`FOREST_SERVICES_SECRETS`), directory 700,
   files 600, outside the repo, for this machine's own admin calls; they go when the machine goes.
-  `lib/secrets.ts` refuses a folder inside the repo.
+  `lib/secrets.ts` refuses a folder inside the repo. On a machine without this folder, `variables`
+  makes every missing secret anew, which rotates them all (the index's signing identity included),
+  so change single variables there with `set`.
 - **How they reach Railway.** Sealed, through `environmentPatchCommit` with `isSealed`. A sealed value
   reaches the build and the running service and can never be read back, by the dashboard or the API.
 - **Nothing prints one.** Every message from Railway's API is redacted against every secret the run
@@ -86,26 +88,24 @@ skips what is done.
 
 ## Redeploying
 
-- **Now:** `node railway.ts deploy [service…]` builds the tracked branch's pushed commit (it refuses when
-  local `HEAD` is not what GitHub holds). `node railway.ts status` shows each latest deployment.
-- **A push redeploys nothing yet.** The services track `claude/zen-ritchie-9yl3w3`. Railway cloned the
-  repo because it is public, but builds on push need Railway's GitHub app installed on
-  `foundationforest/forest`. After that, and once this is merged:
-
-  ```
-  node railway.ts track main               # every service builds from main; each push to main redeploys
-  ```
-- **Variables alone:** `node railway.ts variables`, then `deploy` the services they belong to.
+- **Every push to `main` redeploys every service.** Each service builds from `main` of
+  `foundationforest/forest` through Railway's GitHub app (`node railway.ts track main` connects them).
+- **By hand:** `node railway.ts deploy [service…]` builds the current branch's pushed commit (it refuses
+  when local `HEAD` is not what GitHub holds). `node railway.ts status` shows each latest deployment.
+- **Variables alone:** `node railway.ts set SERVICE VAR…` sets only the named variables, made as
+  `variables` makes them, then `deploy` that service. `node railway.ts variables` sets every
+  service's variables from this machine's secrets folder.
 
 ## Rotating a secret
 
 | Secret | How |
 |---|---|
 | `PDS_JWT_SECRET`, `PDS_ADMIN_PASSWORD`, `RELAY_ADMIN_PASSWORD`, `INDEX_SIGNING_SEED` | `node railway.ts rotate NAME`: a new value, sealed, and a redeploy of its service. A new `INDEX_SIGNING_SEED` is a new signing identity for the index: every score is signed again under new public keys |
-| `PDS_PLC_ROTATION_KEY_K256_PRIVATE_KEY_HEX` | no Forest DID names it (`host/README.md`); delete it from the secrets folder, run `variables`, `deploy host` |
-| `DATABASE_URL` | reset the database password in Supabase, write it to `supabase-db-password` in the secrets folder, `node supabase.ts url`, `node railway.ts variables`, `deploy index` |
+| `PDS_PLC_ROTATION_KEY_K256_PRIVATE_KEY_HEX` | no Forest DID names it (`host/README.md`); delete it from the secrets folder, `node railway.ts set host PDS_PLC_ROTATION_KEY_K256_PRIVATE_KEY_HEX`, `deploy host` |
+| `DATABASE_URL` | reset the database password in Supabase, write it to `supabase-db-password` in the secrets folder, `node supabase.ts url`, `node railway.ts set index DATABASE_URL`, `deploy index` |
 | `ISSUER_KEYPAIR`, `FOREST_FEEPAYER_KEY` | they are devnet keys from the phrase. A new issuer key must first be made an insert key of list 0 by its owner; a new fee payer key needs SOL and a test-dollar account (`fund.ts`) |
-| The Helius key, Didit's | set the new value in the environment, `node railway.ts variables`, `deploy` the index, issuer and fee payer (Helius) or the issuer (Didit) |
+| Didit's key and workflow | set the new values in the environment, `node railway.ts set issuer DIDIT_API_KEY DIDIT_WORKFLOW_ID`, `deploy issuer` |
+| The Helius key | set the new value in the environment, `node railway.ts set index SOLANA_RPC_URL`, `set issuer SOLANA_RPC_URL`, `set feepayer RPC_URL`, then `deploy` the three |
 
 A sealed value cannot be read back, so check a new credential works (the service's health, its logs)
 before revoking the old one.
@@ -126,10 +126,8 @@ Measured on 2026-09-25 with the services idle after the proof, against Railway's
 
 - **Railway usage: about $5.3 a month.** Memory $5.10, CPU $0.10, the three volumes at most $0.23 (500 MB
   each, 33 MB used), egress a few cents.
-- **On the trial (now):** the one-time $5 credit covers about four weeks of this, inside the trial's 30
-  days. Then the account falls to the Free plan ($1 a month, 0.5 GB per service), and the services stop.
-- **On Hobby:** $5 a month, which includes $5 of usage, so about $5.30 a month in all. Splitting the
-  index's pages into a sixth service adds about 0.1 GB, about $1.
+- **On Hobby, the workspace's plan:** $5 a month, which includes $5 of usage, so about $5.30 a month
+  in all. Splitting the index's pages into a sixth service adds about 0.1 GB, about $1.
 - **Supabase:** $0 on the free plan (500 MB database). Supabase pauses a free project after a week
   without activity. The index queries it every 10 seconds, which should count; not watched for a week.
 - **Helius:** its plan is Carlos's and not checked here. The index alone makes about 2 requests every
@@ -137,31 +135,12 @@ Measured on 2026-09-25 with the services idle after the proof, against Railway's
 - **Devnet SOL:** free, but not on tap (`docs/devnet.md`, "Funding"). Kora's key holds about 1.1 SOL; a
   registration costs it 0.0007 and it is paid back in test dollars.
 
-## Different from a mainnet setup
+## As it runs
 
-| Here (devnet) | Mainnet |
-|---|---|
-| The devnet program ids, unsealed, from `docs/devnet.md` | Fresh ids, sealed the day each deploys |
-| The test dollar the devnet run mints; Kora prices it with its mock (one base unit buys one lamport) | USDC; Kora prices it through Jupiter (`JUPITER_API_KEY`) |
-| Keys from a devnet phrase: issuer, fee payer (the `payer` key), treasury | The foundation's issuer key, a fee payer key with an operations loop, the charter's treasury |
-| A stand-in face check that approves everyone | Didit, on the foundation's workflow |
-| The issuer batches every 120 seconds | Every hour or at 50 (its defaults), so a list entry can't be matched to a face check by time |
-| The index's readers and pages in one process, the pages holding the signing seed | Two services; the pages hold no seed and read through `index_pages` |
-| Railway's domains | forest.foundation for the index |
-| A trial account: no redeploy on push, 1 GB per service, restarts on failure only (10 at most), 7 days of logs | Hobby or Pro, with Railway's GitHub app on the repo |
-| Railway's request logs keep each client's address and path (7 days here) | The same, unless something changes: open in `docs/handoff.md` |
-| Helius's devnet RPC | A mainnet RPC that allows `simulateTransaction` with inner instructions (Kora) |
-
-## What the trial blocked
-
-- **Six services.** The trial allows five across the workspace. The index runs as one service, and a
-  throwaway project from an earlier session (`devnet-airdrop-temp`) was deleted, with Carlos's yes, to
-  free the fifth slot for the fee payer.
-- **Two projects** at most, and one new volume per 30 seconds (`provision` waits).
-- **Restart always.** Asked for; Railway set every service to restart on failure instead.
-
-Once the account is on Hobby and Railway's GitHub app is on the repo:
-1. `node railway.ts track main`;
-2. split the index: a `pages` service from the same Dockerfile, starting `node src/main.ts web` with
-   `DATABASE_URL_PAGES` (the `index_pages` role) and no seed, and the `index` service starting
-   `node src/main.ts readers` with its public domain moved to `pages`. `railway.ts` does not do this yet.
+- **One index service.** Readers and pages run as one process, so the pages hold the signing seed.
+  The split: a `pages` service from the same Dockerfile, starting `node src/main.ts web` with
+  `DATABASE_URL_PAGES` (the `index_pages` role) and no seed, and the `index` service starting
+  `node src/main.ts readers` with its public domain moved to `pages`. `railway.ts` does not do this yet.
+- **Restarts on failure.** Every service restarts on failure, at most ten times; `provision` asks
+  for always.
+- **One new volume per 30 seconds,** so `provision` waits between volumes.

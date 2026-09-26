@@ -2132,3 +2132,456 @@ Carlos asked for seven things in one session: longer badge scopes, the newer pro
   - Nothing is on mainnet, and nothing is shipped.
   - On devnet both programs stay upgradeable by whoever holds the phrase.
   - No Kora, no face check and no services are in front of either program.
+
+## 2026-09-25: markets v1, the parallel session's log
+
+From `docs/changes/markets-v1.md`, as it was written, folded here by the tidy session.
+
+### 2026-09-25: markets v1, shapes and index
+
+A parallel session. It owns `shapes/`, `index/` and `.github/`, and edits nothing else. Carlos asked for four things:
+
+- the new market template;
+- the review and post shapes;
+- the index to match;
+- the checks to build both programs in the newer format (SBPF v3).
+
+The `markets` repo is being rewritten to the same schema at the same time, so the schema here comes from Carlos's text, not from that repo.
+
+#### Decided (by Carlos; built here)
+
+In the task:
+
+- **The market file:**
+  - The keys are exactly `name`, `folder`, `description`, `sides` (`two` or `one`), `labels`, `money`, `evidenceTypes`, `offerFields`, `reviewFields`, `ratings` and `howDealsGo`.
+  - `labels` is optional and two-sided only. `reviewFields` is optional. `ratings` always includes `overall`.
+  - Roles come from sides: `seller` and `buyer`, or `peer`.
+  - `roles`, `credentialIssuers`, `category` and `fields` are gone, and with `fields` the profile fields go too.
+- **A review:** `ratings` is a map of names to 1.0 to 10.0, and `media` is a list of photos and short videos. Only `subject` is required.
+- **A post:** `location` is `{ lat, lon, precisionKm, area }`.
+- **The index:**
+  - folders in place of categories;
+  - a badge counts only under a role its market's sides allow;
+  - a rating (the weighted `overall`, 1.0 to 10.0) beside standing, on every page, twin and structured data;
+  - `near=lat,lon&km=N`;
+  - the escrow options in one sentence, with a flag;
+  - the market's labels on pages.
+- **CI:** build as SBPF v3; keep an old-format build only if something needs it.
+
+In planning:
+
+1. **Decimals in records are text:** `"8.5"`, `"38.72"`, as `price.amount` already is.
+2. **Standing is today's trust score renamed**, and its algorithm is unchanged. It is renamed everywhere, the signed statement's `kind` word included.
+3. **`price` is optional on a post.** The validator requires it only when the market file says `money` is true. *Superseded in the follow-up: `money` is gone, and price is optional always.*
+4. **No aliases anywhere.** The index no longer reads the Aliases table: a market is its one name.
+5. **Any rating name.** A review may use any rating name. The file's `ratings` only suggests; nothing is refused for a name outside it.
+6. **Exact points are allowed.** `lat` and `lon` take up to 4 decimals, and `precisionKm` runs from 0 (exact, for a shop or a venue) to 20000. The app rounds.
+7. **A review's market is its subject profile's market**, the one scope that profile lives in. The review gets no new field.
+
+#### Chosen, not decided
+
+Each is the simplest reading, and each is reversible; nothing is deployed.
+
+- **The market file:**
+  - `description` is required, because the text marked only `labels` and `reviewFields` optional. It stays one line of at most 300 characters.
+  - `labels` is exactly `{ seller, buyer }`, one line of at most 64 characters each, and is refused on a one-sided market.
+  - `ratings` names are camelCase, at most 64 characters, like field names.
+  - `howDealsGo` is non-empty text of at most 3000 characters, and may span lines.
+- **The review:**
+  - A rating name is 1 to 64 characters and must not start with `$`, which atproto reserves.
+  - `media` holds at most 10 blobs: `image/png`, `image/jpeg` or `video/mp4`, at most 50 MB each.
+- **The post:**
+  - All four location keys are required inside `location`.
+  - `precisionKm` is a whole number of kilometres.
+- **The validator checks a blob's type and size** against its lexicon's `accept` and `maxSize`: a review's media, and a profile's photo too. The lexicon library checks neither (see Learned).
+- **The signal from `overall`** is `(overall − 5.5) / 4.5`: 10 is +1, 5.5 is 0, 1 is −1. It is the straight-line version of the old stars (5 was +1, 3 was 0, 1 was −1). The golden-ratio worked example stands with overalls of 10 and 1.
+- **The rating** averages `overall` over the reviews standing counts, weighted by reviewer weight × evidence weight, the weights standing uses. When no counted review gives an `overall`, there is no rating (not zero).
+- **The rating is signed** like every score, as a third kind: code 3, value in millionths. Standing keeps trust's code 2.
+- **A profile's market** is the one market its counted badges name, or none when they name zero or more than one. The index reads it from the last recompute's uniqueness rows. *Superseded in the follow-up below: the profile record names its market.*
+  - It gives a review its market's `reviewFields`, shown on the review.
+  - It gives a receipt page its labels, through the seller's profile.
+- **JSON-LD:**
+  - The profile's `AggregateRating` is the rating, with `bestRating` 10.
+  - Each `Offer` also carries its seller's `aggregateRating`, and standing as a `PropertyValue` named `standing`. schema.org gives a Person neither.
+  - The trust-squashed 1-to-5 rating is gone.
+- **The options sentence** (*withdrawn in the follow-up below: no page says anything about the options*):
+  - The wording: "No arbiter, no timer."; "Money goes back to the {buyer} after N days automatically."; "Money goes to the {seller} after N days automatically."; "An arbiter may decide how the money is split." Two options are joined with a semicolon.
+  - On an offer, "the arbiter is one of the two sides" means the arbiter is the poster's declared key, since the other side is unknown until someone pays. On a receipt, it means the arbiter is the buyer or the seller.
+  - Every offer shows the sentence, including an offer in a no-money market ("No arbiter, no timer.").
+- **`near`:**
+  - It is a haversine in plain SQL, measured to the post's own rounded point.
+  - Offers that name no point are left out.
+  - `km` must be above 0 and at most 20000; a malformed `near` or `km` answers 400.
+  - A market page filtered by `near` is `noindex` and is not in the sitemap.
+- **Smaller changes:**
+  - The pay page's check gains `noPrice`.
+  - The migration deletes old `trust` rows so the next recompute signs them afresh as `standing`.
+  - `@atproto/syntax` leaves `shapes/`: it only checked `credentialIssuers`.
+- **What pages show of a review:** its ratings, its review fields, and a count of photos and videos. The photos themselves are not shown, which is the same open question as the profile photo.
+
+#### Built
+
+- **`shapes/`:**
+  - Lexicons:
+    - `post`: `price` optional, and `#location`.
+    - `review`: `ratings`, an object that declares `overall`; `media`.
+  - `validate.js`:
+    - the market template: the eleven keys, sides, labels, money, ratings, howDealsGo, and both field blocks;
+    - the rating and degree rules;
+    - the blob rules;
+    - price required when a market has money;
+    - review fields merged from the market passed in.
+  - Examples:
+    - the online-tutors market in the new schema, with labels tutor and student and a `sessions` review field;
+    - a review with `ratings` and `sessions`.
+  - `README.md`, and 48 tests.
+- **`index/`:**
+  - The directory: folders, sides, labels, no aliases. The migration `004_markets_v1.sql`.
+  - The store: location and optional price; `overall`.
+  - Scores: standing and the signed rating.
+  - Pages and twins:
+    - folders; two numbers; options and flag; labels;
+    - `near`; how deals go; no price and no Pay link in a no-money market;
+    - review ratings, fields and media;
+    - JSON-LD.
+  - The test markets repo gains a one-sided, no-money market, `learning/language-exchange`.
+  - The fixture gives Ben a priceless peer offer with a place and a `language-exchange/peer` badge. Ana's Spanish offer has a timer to the buyer.
+  - Tests:
+    - page test 9 covers two numbers, the options and the flag, labels, near in and out, no price, and review fields;
+    - scoring tests cover the rating, the signal and peer badges;
+    - the sign test covers the new kinds.
+  - `e2e.test.ts` is updated.
+  - Docs: `SCORING.md`, `README.md`, `skill.md`, `llms.txt` and `PAYLINK.md`.
+- **`.github/workflows/checks.yml`:**
+  - The programs job builds both programs with `--arch v3` and fails unless each `.so` says SBPF v3.
+  - The fuzz job rebuilds only the escrow, as v0, for Trident (see Learned).
+
+#### Learned
+
+- **AT Protocol refuses fractional numbers when it encodes a record**: "Non-integer numbers (1.5) are not supported by the AT Data Model", from `@atproto/lex-cbor`.
+  - `@atproto/lexicon`'s check lets a float through in an undeclared or `unknown` field.
+  - It also takes an array where an object is declared.
+  - So the validator checks every rating value itself, and refuses an array for `ratings`.
+- **`@atproto/lexicon` checks only that a blob is a blob**, not its `accept` or `maxSize`. The host checks nothing for a collection it has no lexicon for.
+- **The host test writes `shapes/examples/review.json` to a real host**, and a host refuses a record that points at a blob it does not hold. So the examples carry no `media`; the shapes test builds its own.
+- **SBPF v3, run here on this session's v3 builds:**
+  - Both LiteSVM suites pass: registry 48 and escrow 52.
+  - The registry property test passes: 100 iterations, 4,000 flows.
+  - The validator tests of the registry client, the escrow client and the issuer pass, each 1 of 1 with none skipped.
+  - The fee payer's local test passes (Kora 2.0.5 in front of a validator), 1 of 1.
+  - The index's whole `npm test` passes, the end-to-end test included: 39 of 39, none skipped.
+  - The host's `test.sh` passes: its jest suites, and 7 of 7 of its own tests, which write the new shapes examples.
+  - The carrier's test was not run here: it reads only the profile and post examples, which did not change, and it needs the relay built.
+  - The v3 builds' sha256: registry `c33310b7…`, escrow `53f32c43…`.
+- **Trident 0.12 runs only v0 programs.**
+  - Its runtime (trident-svm 0.2.0, on solana-svm 2.3.13) starts with `SVMFeatureSet::default()`, every feature off.
+  - With the v3 escrow, 1,952 of 2,000 iterations broke invariant I7 on `create` ("model says true, program said false").
+  - The same seed (`c76897c2…`) on a v0 build of the same source broke nothing.
+  - That is the one old-format build kept.
+- **Trident prints its failures through its progress bar**, which says nothing without a terminal. In CI a broken invariant shows only as exit 99, with no message; `script -qec '…' /dev/null` shows them.
+
+#### Open
+
+1. **The handoff and `docs/changes.md`, for the consolidation session:**
+   - Sections to update:
+     - Record shapes: review `ratings` and `media`; the post's `location` and optional `price`;
+     - Markets: the template, folders, sides, no aliases;
+     - Reputation: rating and standing, three scores;
+     - the Index paragraph;
+     - Build status: CI builds v3, and the fuzzer uses v0.
+   - Handoff Open items this answers or changes:
+     - "Whether a market file keeps `credentialIssuers`": it does not;
+     - "The 1 to 5 rating machines get": replaced by the rating, out of 10;
+     - "CI builds v0": done;
+     - "A review with no rating counts as neutral": still so, now "no `overall`".
+   *Mechanical.*
+2. **The `markets` repo must match**:
+   - the eleven keys, spelled as above;
+   - the directory line format this index reads, ``- [`name`](folder/name.json): …``, with the file at `<folder>/<name>.json`;
+   - its Aliases table is no longer read.
+
+   Any file that differs is refused by the index, with the reason in `Directory.refused`. *Mechanical,* in that repo.
+3. ~~A profile badged in two markets lives in no one market.~~ Closed: one scope per profile, built in the follow-up.
+4. ~~The validator cannot tell whether a point was rounded.~~ Closed: the app warns; the validator does not judge.
+5. ~~`video/mp4` in `media`.~~ Closed: it stays allowed.
+6. **Fuzzing tests the old format.** The escrow fuzzer runs a v0 build of the same source, not the v3 format devnet runs. A Trident with v3 enabled, or with a settable feature set, closes the gap. *Mechanical.*
+7. **The security checklists** (`escrow/security-checklist.md` item 13, and `registry/security-checklist.md`'s framework line) still describe v0 as the build. They are outside this session's folders. *Mechanical.*
+8. ~~An offer in a no-money market still says "No arbiter, no timer."~~ Closed: no page says anything about the options, built in the follow-up.
+9. **`near` scans every live offer in the market**, with no index on the point: fine at this size. *Mechanical,* later.
+
+### 2026-09-26: markets v1 follow-up, one scope per profile, and no word on the options
+
+PR #29 merged, and Carlos answered its open items. This is a fresh change on the same branch name.
+
+#### Decided (by Carlos; built here)
+
+1. **One scope per profile.**
+   - A profile is one folder in one market by design, so the profile record names its `market` and `role`.
+   - A badge under any other scope does not count for it.
+   - People get no new choice to make: the app writes the scope when it makes the folder.
+2. **Exact points.** The app warns when someone is about to publish a home address; the validator does not judge. That is Roots' job.
+3. **Video** stays allowed in a review's `media`; the host's upload limit decides in practice.
+4. **Nothing is said about the escrow options, anywhere.**
+   - No offer and no receipt says "no arbiter, no timer" or any sentence about its options, and nothing is flagged.
+   - The options stay as plain data in the JSON twins (`terms` on an offer; `arbiter` and `timer` on a receipt). What to say about them is each app's call.
+   - This withdraws the first round's options sentence and flag.
+
+Then, on the same PR (#31), three simplifications:
+
+5. **A post names no market or role.** A post's market and side are its author profile's, and the index reads them from the profile.
+6. **The market file has no `money`.** A price is optional on every post, always; no rule ties it to anything.
+7. **No rule about a profile changing its scope.** A badge counts only when the profile's scope matches it. Nothing else is said or checked.
+
+#### Built
+
+- **`shapes/`:**
+  - The profile lexicon requires `market` and `role`, each at most 64 characters.
+  - Checked against a market file, a profile must name that market and a role its sides allow.
+  - The profile example lives in `online-tutors` as a seller.
+  - `README.md`, and 49 tests.
+- **`index/`:**
+  - Migration `005_profile_scope.sql` adds `profiles.market` and `profiles.role`.
+  - `badgeStatus` takes the profile's wallet and its own scope, and refuses a badge under another scope with a new reason, `notProfileScope`.
+  - A profile's market is its record's, when the directory has it. It gives a review its review fields, and a receipt its labels.
+  - The profile twin gains `market`, `marketUrl`, `role` and `side`. The page says "Tutor in Online tutors", or "In Language exchange" in a one-sided market.
+  - The options sentence and flag are gone from the words, the models and the pages: `options`, and the offer's `sides`. The receipt page has no "Terms" row.
+  - The fixture:
+    - every profile names its scope;
+    - Ben keeps a `language-exchange/peer` badge that does not count for his `online-tutors/buyer` profile;
+    - a new profile, Dara (`language-exchange/peer`), holds the priceless offer with a place.
+  - Page test 9 checks that no page a person reads says "arbiter" or "timer", and that the options are still in the twins.
+  - Docs: `SCORING.md` (a fourth badge rule), `README.md`, `skill.md`.
+- **The three simplifications (5 to 7):**
+  - `shapes/`:
+    - The post lexicon loses `market` and `role`.
+    - `money` leaves the market template; the validator's price rule and its post market-and-role check go. A post checked against its author's market file gets that market's `offerFields`, nothing more.
+    - The post example and both market files lose the keys.
+    - `README.md`, and 48 tests.
+  - `index/`:
+    - Migration `005` also drops `posts.market_written`, `posts.market` and `posts.role`, and rebuilds the search column on `description` and `area`.
+    - Every offer query reads the market and side from the author's profile. An offer is live only when that profile's market is in the directory, byte for byte; the directory's names go to Postgres as one array parameter.
+    - `marketWritten` leaves the offer twin. The store and the record reader no longer take the directory, and `Directory.postMarket` is gone.
+    - `SCORING.md` rule 2 no longer says anything about a profile changing its scope.
+    - `skill.md`, `README.md` and `PAYLINK.md` follow.
+- **Run here, after the simplifications:**
+  - shapes 48 of 48;
+  - the index's whole `npm test`, end to end included: 40 of 40, none skipped;
+  - the host's `test.sh`: 58 and 97 jest tests, and 7 of 7 of its own.
+
+#### Open
+
+1. ~~A post names its own market and role.~~ Closed by 5: it names neither.
+2. ~~A profile's record can change its market or role.~~ Closed by 7: nothing is said or checked.
+3. **The `markets` repo must drop `money`.** This validator refuses a market file with any key outside the ten. Until that repo's files lose `money`, the index refuses every one of them and lists no market. *Mechanical,* in that repo.
+4. **The handoff**, for the consolidation session. *Mechanical.*
+   - Record shapes: a profile's `market` and `role`; a post with no market or role; price optional always.
+   - Markets: one scope per profile; no `money`.
+   - The index paragraph: no word on the options.
+
+## 2026-09-25: services online, the parallel session's log
+
+From `docs/changes/services-online.md`, as it was written, folded here by the tidy session.
+
+### 2026-09-25: services online
+
+A parallel session: it owns `deploy/` and `docs/services.md`, and writes only this log. It put the
+host, the carrier's relay, the index, the issuer and the fee payer on Railway against Solana devnet,
+with the index's Postgres on Supabase, and proved them end to end on their public URLs. Devnet only;
+nothing is shipped.
+
+Carlos decided, during the session:
+- **Go on Railway's trial as it is:** five services, the index's readers and pages in one, no redeploy
+  on push, and record what the trial blocks.
+- **Kora signs with the devnet `payer` key**, after 1 SOL from the deploy key.
+- **A second fixed test seed is the whole person of the proof:** a documented constant in the keys
+  fixtures; its profile 0, its identity, its badge.
+- **Delete `devnet-airdrop-temp`,** a throwaway Railway project from an earlier session, to free the
+  fifth service slot.
+
+#### Built
+
+- **Five services on Railway, at public URLs** (project `forest-devnet`; `docs/services.md` has every
+  URL, id and signature):
+  - the host, with SQLite and photos on a volume;
+  - the relay, reading the host;
+  - the index, readers and pages in one process, on Supabase;
+  - the issuer, with the stand-in face check, on a volume;
+  - the fee payer, Kora 2.0.5 from its own image, on the devnet rules.
+- **Every secret sealed through Railway's API** and checked against Railway's list of names and seal
+  flags: 11 in all. The RPC URLs are sealed too, because they hold the Helius key.
+- **Supabase `forest-devnet`** (free plan, `us-west-1`):
+  - the Data API turned off, and `anon`/`authenticated` stripped of every right on `public`, now and for
+    new tables;
+  - the read-only role `index_pages`;
+  - the index connects through the session pooler with `sslmode=verify-full`, against Supabase's root CA
+    shipped in the image;
+  - the index ran its migrations itself.
+- **The wiring:** the relay reads the host (admin `requestCrawl`); the index reads the relay; the
+  index, issuer and fee payer read devnet through Helius; everything names the ids in `docs/devnet.md`.
+- **`deploy/`:**
+  - a Dockerfile per service, each reusing its folder's own build and run scripts unchanged;
+  - the devnet opinions for the index (issuer weights, currencies, counted mints);
+  - `feepayer/devnet-config.sh`, which makes the devnet `kora.toml` from `feepayer/kora.toml` with
+    exactly five lines changed;
+  - `issuer/fake-didit.ts`, a stand-in for Didit's API v3, started only when no Didit key is set;
+  - `railway.ts`, `supabase.ts`, `fund.ts`, `e2e.ts`, and `README.md`: what runs where, redeploying,
+    rotating, cost, and how it differs from mainnet.
+- **`keys/test/second-seed.json`:** the second fixed test seed, SHA-256 of a documented string. It is
+  outside this session's folders, at Carlos's request; nothing in `keys/` tests it.
+- **Devnet:**
+  - 1 SOL from the deploy key to the payer;
+  - the payer's test-dollar account (Kora's payment address);
+  - 2.00 test dollars to seed 2's wallet.
+- **The proof, all seven steps passed on the public URLs, and a rerun sent nothing:**
+  1. seed 2's DID `did:plc:zefdl6huirvjcnefpybzrzhp`, in plc.directory, naming the public host;
+  2. its profile and a `tutoring` offer, signed here and stored by the host;
+  3. both on the index's pages, through the relay;
+  4. its commitment inserted into list 0 by the issuer's batch (member 1);
+  5. a `tutoring/seller` badge registered through the public fee payer: 841 bytes, 135,503 compute
+     units; Kora charged 706,010 base units, exactly the fee, the code account's deposit and its 50;
+  6. the badge counted on the profile page, weight 1, uniqueness 1, signed twice;
+  7. the DID document and the host (`did:web:host-production-22a4.up.railway.app`) both naming the
+     public URL.
+
+#### Learned
+
+**Railway.** Railway's API behaved like this, as seen here:
+- **Config files are deprecated.** `railway.json` is refused ("Config as Code … is deprecated. Use
+  Infrastructure as Code (.railway/railway.ts)"). The settings go through `serviceInstanceUpdate`, and
+  the Dockerfile path through the `RAILWAY_DOCKERFILE_PATH` variable. The builder enum has no
+  `DOCKERFILE`.
+- **A public repo builds without Railway's GitHub app,** but nothing redeploys on push.
+  `serviceInstanceDeployV2` with a commit builds that commit.
+- **The trial's limits:** 2 projects, 5 services counted across the workspace, 3 volumes of 500 MB,
+  1 GB and 2 vCPU per service, builds cut at 20 minutes, one new volume per 30 seconds, 7 days of logs.
+  Asking for more answers "Free plan resource provision limit exceeded". Railway also set every
+  service's restart policy to "on failure", overriding "always".
+- **Health checks call `PORT`,** whatever port the service listens on and the domain targets. The host
+  and relay failed until `PORT` matched.
+- **Variables changes are workflows,** applied one after another, sometimes minutes later.
+  - Sealing an existing unsealed variable fails ("An unknown error occurred").
+  - Removing it through the config (`null`) and sending it again sealed works.
+  - Changing a sealed variable's value keeps it sealed.
+  - A change for a service made seconds before can wait behind others; waiting for the workflow is what
+    works.
+- **The API's `projects` query lists none of a workspace's projects;** `workspace { projects }` does. A
+  rerun that relied on the first tried to make a second project and was refused, harmlessly.
+- **Railway's variable list has no value field,** so checking seals can never show a secret.
+
+**Supabase.**
+- **The pooler endpoint lists only transaction mode (6543);** session mode is the same host on 5432.
+- **node-postgres treats `sslmode=require` as full verification,** and Supabase's pooler chains to
+  Supabase's own root CA, which Node doesn't carry. Adding it with `NODE_EXTRA_CA_CERTS` fixed it with no
+  change to the index. `verify-full` is now written out, because the next major version of `pg` weakens
+  `require`.
+- **By default Supabase gives its public API roles every right on new tables in `public`.** Without the
+  revokes, anyone holding the project's public key could have written the index's tables.
+
+**The services.**
+- **Kora publishes `v2.0.5` as an image** (Debian, `/usr/local/bin/kora`), so the fee payer needs no
+  Rust build, and `feepayer/run.sh` runs in it unchanged.
+- **The host's image builds from `host/build.sh` inside the 20-minute limit.** Locally it took 309 s on
+  four cores and makes 1.5 GB.
+- **Upstream's PDS serves no `/.well-known/did.json` for its own `did:web`.** Its identity shows in
+  `describeServer`. Nothing in the proof needed the document; adding one would change the host's logic.
+- **Kora's price is exactly as designed.** The fee payer's charge on devnet was the network fee (10,000),
+  the code account's deposit (137 bytes at 5,080 lamports a byte: 695,960) and 50, with no margin.
+- **A process that makes a proof does not exit by itself;** the prover's worker threads keep Node
+  alive. `e2e.ts` exits explicitly.
+- **The environment changed during the session:** `HELIUS_API_KEY` and `DIDIT_API_KEY` appeared,
+  `DIDIT_WORKFLOW_ID` did not. So Helius serves every devnet RPC, and the issuer keeps the stand-in:
+  it can't open a real session without the workflow.
+
+**Cost.** Measured idle: 0.51 GB of memory and under 0.005 vCPU for all five. That is about $5.30 a
+month of Railway usage (`deploy/README.md`).
+
+#### Open
+
+- **Railway's plan.** The trial's $5 credit lasts about four weeks at this usage; then the services
+  stop. Hobby is about $5.30 a month in all. *Needs Carlos.*
+- **Redeploy on push.** It needs Railway's GitHub app installed on `foundationforest/forest`. Then
+  `node deploy/railway.ts track main` after this merges. *Needs Carlos, then mechanical.*
+- **Split the index into readers and pages** once a sixth service is allowed, the pages on
+  `index_pages` and with no signing seed. `railway.ts` doesn't do it yet. *Mechanical.*
+- **A real face check.** `DIDIT_WORKFLOW_ID` is missing, so the issuer runs the stand-in, which
+  approves everyone: anyone can put a commitment on devnet's list 0, five sessions an hour per address,
+  each insert paid by the devnet issuer key (0.01 SOL, about 2,000 inserts). And a real face check needs
+  a person, so the scripted proof can't pass through one. *Needs Carlos.*
+- **Secrets only Railway now holds.** The relay's and the host's admin passwords, and the index's signing
+  seed, are sealed, and their only other copies sit on this session's machine, which goes away. Adding
+  a second host to the relay means `rotate RELAY_ADMIN_PASSWORD` first. Where the index's seed should
+  live is already open in `docs/handoff.md`. *Needs Carlos.*
+- **Restart policy "on failure", not "always."** It holds for crashes. Jetstream, which exits by design
+  and so needs "always", is not deployed. *Mechanical, on a paid plan.*
+- **Address logs.** Railway keeps every request's client address and path for 7 days on this plan: the
+  handoff's open item, now live. *Needs Carlos.*
+- **Seed 2's DID is permanent in plc.directory, and anyone can change it,** since the seed is public. A
+  public test DID naming a Forest host is fine for devnet; worth knowing before anything reads it as
+  real. *Mechanical, no action.*
+- **The host serves no `did.json` for its own `did:web`,** as upstream doesn't. Whether anything will
+  need it. *Mechanical.*
+- **Railway's Infrastructure as Code** (`.railway/railway.ts` at the repo root) would replace
+  `deploy/railway.ts`'s settings. It is outside this session's folders and not tried. *Mechanical.*
+- **The Supabase project `forest`** (paused, `us-west-2`, from May) is untouched; what it was for isn't
+  recorded here. *Needs Carlos.*
+- **Helius's plan against the load:** the index alone makes about 520,000 requests a month. *Needs
+  Carlos.*
+- **The index's pool** takes 10 connections per process, against the session pooler's limits on the
+  free plan. Fine at one process; check before scaling. *Mechanical.*
+
+## 2026-09-26: tidy, a real face check wired, auto-deploy from main, the plan current
+
+- **Build order:** asked for by Carlos in seven parts, one pull request, nothing running in parallel: wire what is real (Didit, Railway's GitHub app, Helius), the index only shows, one more automatic check, one rule in `CLAUDE.md`, the two parallel logs folded, the handoff matching the code, and status, next and one Open list.
+- **Decided (by Carlos; built or written here):**
+  - **The index shows, apps advise.** The page test's ban on "arbiter" and "timer" covers the index's own words only; a market's "how deals go" is content and may say anything. Index wording that advises, warns or recommends goes; the machine view keeps the data.
+  - **One rule for future sessions** in `CLAUDE.md`: "When the plan is silent, choose the option that adds no rule and no text a person reads; log it as chosen. Ask only when the choice changes a sealed program or spends money." Asked in planning, Carlos chose that it **replaces** "When unsure whether something is settled, don't decide it: write the question in `docs/changes.md` and stop."; the handoff's "How work splits" says the same.
+  - **Markets v1 in the handoff with `market/role` scopes, with a slash.** That answers the devnet session's open 1 (a `category/market/role` scope): the scope is `market/role`.
+  - **Launch and mainnet checklists live outside the repo.**
+  - **Next:** the full loop over the public services by script; the attack pass on both programs, with overflow checks turned on; then Roots.
+- **Built:**
+  1. **Didit's real face check on the devnet issuer.** `DIDIT_API_KEY` and `DIDIT_WORKFLOW_ID` sealed on the issuer through a new `node deploy/railway.ts set issuer DIDIT_API_KEY DIDIT_WORKFLOW_ID`, checked against Railway's list (names and seal flags only). The issuer's deployment from `main` starts no stand-in. One real session opened through the public issuer: `POST /session` answered 201 with a `verify.didit.me` page, recorded in `docs/services.md` for Carlos to try on his phone.
+  2. **Every service built from `main`, redeployed on every push.** Railway's GitHub app was already installed on the repo (Railway's `githubRepos` lists `foundationforest/forest`), but no service had a deploy trigger. `node deploy/railway.ts track main` connected all five to `main`, which made a GitHub trigger on `main` for each and built `main`'s `1c4b5e2` everywhere: all five deployments succeeded, in about four minutes. On their URLs: the host and the relay healthy, the relay still reading the host (one account, active), the fee payer live, the index serving 17 folders and 57 markets from the `markets` repo with no file refused, and the issuer on Didit.
+  3. **Helius: nothing to change.** The index's, issuer's and fee payer's RPC variables are sealed, and `railway.ts` seals the RPC only when it holds Helius's URL; the fee payer reads the chain through its own (Kora's `getBlockhash`), the index's chain loop runs, and the current key answers.
+  4. **`deploy/railway.ts set SERVICE VAR…`:** only the named variables of one service, made as `variables` makes them, with each value made only when it is sent. `rotate` uses the same lazy values.
+  5. **The index:**
+     - the test market `online-tutors` says, in its "how deals go", what a timer to the tutor does, as real markets do;
+     - page test 9 strips every directory market's "how deals go" from a page before the ban, and checks every way a receipt can end, in the index's own words, for either word;
+     - a receipt ended by its timer reads "The time they set ran out: …";
+     - the pay page says "The offer has changed since this link was made. Below is the offer as it is now." and "This link doesn't match the offer it names: its price or terms were changed.", with no "Check the terms" and no "Don't pay from it"; step 8 checks both;
+     - `skill.md` loses "Talking to people about it", and its Paying paragraph states what the link carries instead of what an app must do;
+     - `PAYLINK.md` loses "Don't pay from it" and ": stop", and names `optionsNotAgreed` alone (`whatDiffers` left the escrow client in its round 2);
+     - `SCORING.md`, `README.md` and `compute.ts` no longer say the handoff calls standing trust; `README.md` points at `docs/changes.md` for the part one and two logs.
+  6. **CI:** a `types` job on every push to `main`, which is every merge: the host built, then every package's type-check at once on the merged commit (keys, both clients, the issuer, the index, and `deploy/`, whose check had never run in CI).
+  7. **`CLAUDE.md`:** the rule above.
+  8. **The two logs folded above,** `docs/changes/markets-v1.md` and `docs/changes/services-online.md`, then deleted; `docs/changes/` keeps its one-line README.
+  9. **`docs/handoff.md`:** markets v1 (record shapes, the market file's ten keys, markets), rating and standing, the index paragraph, the services running on devnet, build status as it is, the devnet state with the service URLs, Next, and one Open list; "Before mainnet" and "Done when" removed.
+  10. **The rest:** `registry/README.md` loses its "Deploy checklist"; `deploy/README.md` loses "Different from a mainnet setup" and follows Hobby, the push trigger and `set`; `docs/services.md` follows all of it; the READMEs' status lines say where each part runs; both security checklists and every pointer to a folded log follow.
+- **Chosen, not decided** (each reversible, since nothing ships):
+  1. **`set`, not a one-off script.** `deploy/README.md` sent anyone changing Didit's or Helius's key to `variables`, which on a machine without the deploy's secrets folder (this one) makes the host's and the relay's passwords and the index's signing seed anew, and then stops on `DATABASE_URL`. `set` changes only what it names, from any machine; the README's rotate rows use it.
+  2. **The services were deployed from `main` as it is,** before this pull request merges, since the connect builds the branch's head. So the index runs markets v1 on the devnet database: migrations 004 and 005 applied, run first against a scratch Postgres with the real `markets` repo (57 markets, none refused).
+  3. **The session id stays out of the repo;** only the check page is recorded, and the page's address carries a token, not the id, so nobody else can submit Carlos's check.
+  4. **The devnet program scripts and smoke tests keep the public endpoint as their default,** with `FOREST_DEVNET_RPC` to point them at Helius: they print their endpoint, and a keyed URL would print the key.
+  5. **The page test's narrowing** removes only the market files' "how deals go" from what it checks; everything else on a page stays under the ban. A receipt's outcome sentences are checked directly, since the fixture ends its one deal by a release.
+  6. **Kept on the pages:** the warning colour on the facts it marks (a link that does not match, a badge or a review not counted), which is how the page shows them, not wording; and the lines on how to use a page ("To pay, open this link in the app you pay with", the search hint).
+  7. **The `types` job runs on pushes to `main` only,** as asked; pull requests keep each package's own check, five packages, since `deploy/`'s check needs the host built, about five minutes more per pull request.
+  8. **The logs were folded as they were written,** headings one level down and the entry titles date first, as the integration session did.
+  9. **Removed with the checklists:** the Open item "which three markets launch first", and the Registry line "First sellers use v1 on devnet before mainnet". The sealing commands stay in both READMEs: they say how sealing works. The registry README keeps the checklist's facts as facts: the placeholder keys anyone can sign for, and a little SOL on a key before a sweep.
+  10. **Handoff corrections where the code disagreed:** the registry bounds a scope at 256 bytes and a DID at 64 (the handoff said any length, and so did `registry/README.md`); a registration's size as measured on devnet; standing, not trust, for the score a reviewer's weight uses; the `markets` repo's folders, not categories; every offer with a price has a Pay link, not every offer.
+  11. **The Open list** keeps every item still open, word for word unless an answer changed it, drops what is closed, and adds what this session found; each says *Needs Carlos* or *Mechanical*.
+- **Learned:**
+  - **Railway made no deploy trigger for a service created from a public repo,** even with its GitHub app installed afterwards. `serviceConnect` with the app installed makes the trigger, and starts a build of the branch's head.
+  - **The workspace is on Hobby,** and every service still restarts on failure, at most ten times: the trial's setting stayed.
+  - **The markets v1 index took Supabase's data as it was:** the proof's profile of 2026-09-25 names no market or role, so its `tutoring/seller` badge shows as not counted (`notProfileScope`) and its offer is in no market.
+  - **`deploy/e2e.ts` predates markets v1:** its profile names no market or role, and it reads `freelance-work/tutoring.json`, which the `markets` repo no longer has (`tutoring` is in `education/`). `freelance`, the devnet run's badge, is not a directory market.
+  - **A Didit session's page is `https://verify.didit.me/session/<token>`,** a token apart from the session id.
+  - **The index's chain reader logged one 401 from Helius** (2026-09-26, 07:15 UTC) and kept polling; its loop catches each error and tries again.
+  - **Every checks run on GitHub has passed,** pull requests and pushes, and the first nightly run passed in 15 minutes.
+  - **`deploy/`'s type-check passes** with the host built; it had not run in CI.
+  - **Run here:** the index's type-check and its unit and page tests, 32 of 32; the type-checks of keys, both clients, the issuer and `deploy/`, after `host/build.sh`; actionlint 1.7.12 on the workflow. The index's end-to-end test was not run here (it needs both programs built and a validator); nothing it checks changed, and the nightly job runs it.
+- **Open** (new here; the whole list, deduplicated and tagged, is the handoff's Open):
+  1. The scripted loop's verify step meets Didit's real face check, which needs a person. *Needs Carlos.*
+  2. The first real Didit decision, once someone does the check, against `parseDecision`, and whether the workflow runs the liveness and face search the issuer reads. *Needs Carlos.*
+  3. `deploy/e2e.ts` moves to markets v1 and the directory as it is. *Mechanical.*
+  4. `variables` could refuse to make a secret Railway already holds. *Mechanical.*
+  5. `host/`, `carrier/` and `feepayer/` have no type-check of their own. *Mechanical.*
+- **Still standing:** nothing is shipped and nothing is on mainnet; on devnet both programs stay upgradeable by whoever holds the phrase.

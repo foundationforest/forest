@@ -6,8 +6,8 @@ So people never need SOL, and the fee payer pays for nobody. It is Kora 2.0.5, c
 custom code. It holds none of the person's keys and decides nothing about the person, the market or
 the deal.
 
-**Nothing here is shipped.** It has run on this machine only, in front of a local validator. No
-devnet, no mainnet, no Railway.
+**Nothing here is shipped.** It runs on devnet, on Railway, in front of both programs
+(`docs/services.md`), and its tests run in front of a local validator. Nothing is on mainnet.
 
 ## What it does
 
@@ -200,7 +200,7 @@ betas) takes the key itself only, not a path.
 
 ## What running it on Railway will need
 
-None of this has been tried; nothing is deployed.
+`deploy/` does this on devnet (`deploy/README.md`).
 
 - **A build:** a Dockerfile that runs `build.sh` (Rust, about 12 minutes on four cores), or Kora's
   own image at 2.0.5 (`ghcr.io/solana-foundation/kora`, not checked for that tag), plus
@@ -221,7 +221,7 @@ None of this has been tried; nothing is deployed.
 ## Chosen, not decided
 
 Where the handoff was silent the simplest option was taken. Each is reversible, since nothing is
-deployed, and each is in `docs/changes/services.md`.
+deployed, and each is in `docs/changes.md`.
 
 1. **Kora 2.0.5**, the latest stable release, not the 2.2 betas on `main`. The betas harden the fee
    payer against draining, change the price, and no longer read the key from a path.
@@ -242,7 +242,8 @@ deployed, and each is in `docs/changes/services.md`.
 
 ## What is not done
 
-- **Devnet, mainnet, Railway.** Nothing deployed. Jupiter's price was not called.
+- **Mainnet.** Nothing deployed; on devnet Kora prices the test dollar with its mock, and Jupiter's
+  price was not called.
 - **Kora 2.2.** It hardens the fee payer against being drained and no longer reads the key from a
   path. It was read, not run.
 - **Load, rate limits, several fee payer keys**, and the operations loop that turns collected

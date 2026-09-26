@@ -1,8 +1,9 @@
 # Services on devnet
 
 The foundation's five services, running on Railway against Solana devnet, with the index's Postgres on
-Supabase, and proved end to end on their public URLs on 2026-09-25. **Devnet only, and nothing is
-shipped:** test keys, a test dollar, a stand-in face check, a trial Railway account. `deploy/README.md`
+Supabase, proved end to end on their public URLs on 2026-09-25, and built from `main` and redeployed
+on every push to it since 2026-09-26. **Devnet only, and nothing is shipped:** test keys, a test
+dollar, Didit's real face check in front of a devnet list. `deploy/README.md`
 says how it runs and how to change it; `deploy/services.json` holds the same record in the form the
 scripts read.
 
@@ -13,7 +14,7 @@ scripts read.
 | Host (`host/`) | https://host-production-22a4.up.railway.app | `/xrpc/_health` → `{"version":"0.5.34"}`; the host's DID is `did:web:host-production-22a4.up.railway.app` (`com.atproto.server.describeServer`) |
 | Carrier: the relay (`carrier/`) | https://carrier-production-f88f.up.railway.app | `/xrpc/_health`; indexes read `wss://carrier-production-f88f.up.railway.app/xrpc/com.atproto.sync.subscribeRepos` |
 | Index, readers and pages in one process (`index/`) | https://index-production-1b6e.up.railway.app | every page and its `.json` twin, `/sitemap.xml`, `/llms.txt`, `/skill.md` |
-| Issuer (`issuer/`) | https://issuer-production-fd68.up.railway.app | `POST /session`, `/submit`, `/status`; the face check is the stand-in (below) |
+| Issuer (`issuer/`) | https://issuer-production-fd68.up.railway.app | `POST /session`, `/submit`, `/status`; the face check is Didit's (below) |
 | Fee payer, Kora 2.0.5 (`feepayer/`) | https://feepayer-production.up.railway.app | Kora's JSON-RPC at `/`, `/liveness`; signs as `9CKUm2s7nwT7HrCpjtaffNH3PnUUVyQr2gELjHrWYBUd` |
 
 **Jetstream is not deployed.** The foundation's index reads the relay's own stream; whether the carrier
@@ -23,11 +24,11 @@ keeps Jetstream is open (`docs/handoff.md`).
 
 | | |
 |---|---|
-| Workspace | Carlos Islas's Projects, on the **trial** (subscription type `trial`) |
+| Workspace | Carlos Islas's Projects, on the **Hobby** plan |
 | Project | `forest-devnet`, `d222014f-0f90-4695-961e-c6ba803102d7`; environment `production`, `59c63b74-7845-4638-bc65-5fa46ec22aed` |
-| Source | `foundationforest/forest`, branch `claude/zen-ritchie-9yl3w3`, commit `b829cbef` deployed; built from `deploy/<service>/Dockerfile` with the repo root as context |
-| Redeploys on push | **No.** Railway's GitHub app is not installed on the repo; Railway cloned it because it is public. `node deploy/railway.ts deploy` builds the branch's pushed commit |
-| Restart policy | On failure (Railway set it; the trial allows 10 restarts) |
+| Source | `foundationforest/forest`, branch `main`; commit `1c4b5e2` deployed to all five on 2026-09-26; built from `deploy/<service>/Dockerfile` with the repo root as context |
+| Redeploys on push | **Yes.** Railway's GitHub app is installed on the repo, and each service has a deploy trigger on `main` (`node deploy/railway.ts track main`) |
+| Restart policy | On failure, at most 10 restarts |
 | Region | Railway's default (the API reports none) |
 
 | Service | Service id | Volume | Sealed variables |
@@ -35,7 +36,7 @@ keeps Jetstream is open (`docs/handoff.md`).
 | host | `1f59a363-75d8-4d30-afc8-4c836e9c0cb1` | `/data`, 500 MB (34 MB used) | `PDS_JWT_SECRET`, `PDS_ADMIN_PASSWORD`, `PDS_PLC_ROTATION_KEY_K256_PRIVATE_KEY_HEX` |
 | carrier | `a3d89a6e-ca40-4348-a61f-a3b76c2b7d34` | `/data`, 500 MB (33 MB used) | `RELAY_ADMIN_PASSWORD` |
 | index | `37f23042-b2a0-4ff0-90c6-e0521fc811d2` | none | `DATABASE_URL`, `INDEX_SIGNING_SEED`, `SOLANA_RPC_URL` |
-| issuer | `a1ce9fdf-ad09-4bf5-a016-bab97ce8be81` | `/data`, 500 MB (33 MB used) | `ISSUER_KEYPAIR`, `SOLANA_RPC_URL` |
+| issuer | `a1ce9fdf-ad09-4bf5-a016-bab97ce8be81` | `/data`, 500 MB (33 MB used) | `DIDIT_API_KEY`, `DIDIT_WORKFLOW_ID`, `ISSUER_KEYPAIR`, `SOLANA_RPC_URL` |
 | feepayer | `8eda2bc9-4966-4e9c-8fcb-664efe976c37` | none | `FOREST_FEEPAYER_KEY`, `RPC_URL` |
 
 - **Every secret is sealed, set through Railway's API** (`environmentPatchCommit` with `isSealed`), and
@@ -66,7 +67,20 @@ keeps Jetstream is open (`docs/handoff.md`).
 | Index, issuer, fee payer → devnet | Helius's devnet RPC (the key was set during the session) |
 | Programs | registry `8sUyd9JXRGEUqf2hYVnLCybi74549VG27dAK6YvbbU3i`, escrow `3vAVLwiwFkCUG4AHV3gK3t15HoyRSuKNEuBFvvy9CbeR` (`docs/devnet.md`) |
 | Fee payer's rules | `feepayer/kora.toml` with five lines changed by `deploy/feepayer/devnet-config.sh`: the two program ids, the test dollar `J2QBACfPPb1ys2UyGx3ecXHgCr4hWuHFT3C2Nr6TSVSa` as the paid token (twice), and Kora's mock price |
-| Face check | the stand-in `deploy/issuer/fake-didit.ts`, inside the issuer's container: every session it opens passes. `DIDIT_API_KEY` appeared during the session but `DIDIT_WORKFLOW_ID` did not, so the real one is not set |
+| Face check | Didit's, on the foundation's workflow: `DIDIT_API_KEY` and `DIDIT_WORKFLOW_ID` sealed on the issuer on 2026-09-26, so `deploy/issuer/start.sh` starts no stand-in |
+
+## The face check
+
+A real Didit session, opened through the public issuer on 2026-09-26 at 17:56 UTC (`POST /session`
+answered 201). Its check page, to open on a phone:
+
+https://verify.didit.me/session/_Gq_qtCJqtle
+
+- **Anyone with this link can use it, once.** Its session id is not recorded here, so the check alone
+  puts nobody on list 0.
+- **Doing the check puts that face in Didit's duplicate search** for the foundation's application. A
+  later check with the same face is then refused as a duplicate, unless this session is deleted in
+  Didit's console (`issuer/README.md`).
 
 ## The end-to-end proof
 
@@ -85,6 +99,11 @@ by construction.
 | 5. The badge, through the public fee payer | `tutoring/seller`, registration `5QetLo4KtqypuGZTTkV36phj7y4nVWBj681QgFq4inYHQo1hhA3VNpvKqDZKn7zPtzBNo2x7pc5hP5gCZfQpGN5A`: Kora signed as payer and sent it; the profile's wallet signed and paid the 0.25 and Kora's charge |
 | 6. The badge on the index | on the profile page, **counted**, vouched by "Forest Foundation (devnet key)" at weight 1; uniqueness 1 in `tutoring/seller`, signed with Ed25519 and EdDSA-Poseidon |
 | 7. Names the public URL | the DID document's `atproto_pds` is `https://host-production-22a4.up.railway.app`, and the host calls itself `did:web:host-production-22a4.up.railway.app` |
+
+Since 2026-09-26 the index runs markets v1, where a profile's record names its market and role and a
+badge counts only under that scope. This proof's profile names neither, so its `tutoring/seller`
+badge shows as not counted (`notProfileScope`) and its offer is in no market. The full loop runs the
+proof again on the shapes as they are (`docs/handoff.md`, Open).
 
 **The registration, measured:**
 
@@ -131,14 +150,10 @@ curl -X POST https://feepayer-production.up.railway.app -H 'content-type: applic
 
 ## What this is not
 
-- **Not auto-deployed.** A push to `main` redeploys nothing until Railway's GitHub app is installed on
-  the repo and the services track `main` (`deploy/README.md`).
-- **Not a real face check.** The stand-in approves every session, so anyone can put a commitment on
-  devnet's list 0, five sessions an hour per address, each insert paid by the devnet issuer key.
-- **Not split as designed.** The index's pages run in the readers' process and so hold the signing seed,
-  because the trial allows five services.
+- **No face check done by a person yet.** The face check is Didit's, and no session has been done and
+  submitted; the proof's commitment above came through the stand-in on 2026-09-25.
+- **Not split as designed.** The index's pages run in the readers' process and so hold the signing seed
+  (`deploy/README.md`, "As it runs").
 - **Not at forest.foundation.** Railway's own domains.
 - **Not free of address logs.** Railway keeps every request's client address and path for its log
-  retention (7 days on this plan); open in `docs/handoff.md`.
-- **Not lasting.** The trial's $5 credit runs out in about a month at the usage measured
-  (`deploy/README.md`, "What it costs"); then the services stop.
+  retention; open in `docs/handoff.md`.

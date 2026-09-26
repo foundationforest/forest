@@ -7,8 +7,9 @@ ways at the same open URLs, with no session and no login: pages for people, plai
 JavaScript, and for machines schema.org JSON-LD on every page, a JSON twin of every page, a
 sitemap, `robots.txt`, `llms.txt` and the read skill.
 
-**Nothing here is shipped.** It has run on this machine against a local host, a local directory
-of DIDs, a local validator and a local Postgres, and nowhere else. Nothing is deployed.
+**Nothing here is shipped.** It runs on devnet, its readers and pages in one process on Railway and
+its Postgres on Supabase (`docs/services.md`); its tests run against a local host, a local directory
+of DIDs, a local validator and a local Postgres.
 
 ## What it reads
 
@@ -56,7 +57,7 @@ In [SCORING.md](SCORING.md), in plain words. In short:
   A plain `market` counts for nothing.
 - **Uniqueness** combines the weights this index gives the issuers vouching for a badge. The
   weights are in `config/issuers.json`: the foundation's list starts at 1, everyone else at 0.
-- **Standing** (the handoff's trust) sums the reviews received, from each one's `overall`
+- **Standing** sums the reviews received, from each one's `overall`
   rating. Each weighs by its reviewer (their badge, then their own standing) and by what is under
   its deal id:
   - a paid receipt the seller signed for (created it as an invoice, or signed a split or a refund): 1
@@ -200,5 +201,4 @@ that too).
 | `PAYLINK.md` | The Pay link's one format |
 | `HOSTING.md` | The two processes: what each needs on Railway, and what the pages need on Vercel |
 
-The choices made where the handoff was silent, and the open questions, are in
-`docs/changes/index.md` (part one) and `docs/changes/index-2.md` (part two).
+The choices made where the handoff was silent, and the open questions, are in `docs/changes.md`.

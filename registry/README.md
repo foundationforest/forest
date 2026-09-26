@@ -3,10 +3,9 @@
 The sealed Solana program that gives one verified human one badge per market without saying who,
 and the client a device uses to get one.
 
-**Nothing here is shipped.** It has run on a local validator and under LiteSVM, and nowhere else.
-No devnet, no mainnet, no Kora. Its devnet run is built, scripted and rehearsed, and stopped at the
-deploy for lack of test SOL (sessions 15 and 18, `docs/devnet.md`). Its devnet keys now come from
-one phrase, so a later session resumes where this one stopped.
+**Nothing here is shipped.** It runs on devnet, built as SBPF v3, with real badges, one of them
+registered through the public fee payer (`docs/devnet.md`, `docs/services.md`). Nothing is on
+mainnet.
 
 A registration is one transaction. It carries the market name, the profile's DID, one Semaphore
 proof with its points compressed, the list root the proof was made against, and the code, and the
@@ -100,7 +99,7 @@ These cannot change after v1 deploys. A change breaks every existing proof, code
   namespaces `forest.foundation/market/v1/` and `forest.foundation/profile/v1/`. The scope hashes
   the market name. The message hashes the profile's wallet, its 32 bytes, then the DID: the wallet
   that must sign `register` (session 11). Because names are hashed rather than padded into 32 bytes,
-  a market name or a DID can be any length.
+  only the instruction bounds them: a scope of at most 256 bytes, a DID of at most 64.
 - **The code.** A code is the circuit's nullifier, `Poseidon(scope, secret)`. The rule is "the
   account at the address derived from this code must not already exist".
 - **The account layouts, the seed strings and the instruction bytes.** Clients and indexes read
@@ -124,7 +123,13 @@ These cannot change after v1 deploys. A change breaks every existing proof, code
   constant, the foundation's issuer key; `init` takes no argument and no treasury signer, so
   whoever sends it, once, writes the same bytes, with an empty pending-treasury slot. It refuses a
   USDC mint that does not count in six decimals, since 250,000 is 0.25 only at six. A deploy race has
-  nothing to win.
+  nothing to win. In the source, the treasury and the foundation's issuer key are placeholders
+  derived from public seeds (`REPLACE-BEFORE-DEPLOY-treasury-0`, `REPLACE-BEFORE-DEPLOY-issuer-000`)
+  so the tests can sign for them, which means anyone with this repo can sign for them too
+  (`finding_the_placeholder_treasury_is_anyones_key`, `finding_the_placeholder_issuer_key_is_anyones_key`).
+  Each is written by hand in `program/src/lib.rs`, `program/tests-litesvm/src/lib.rs` and
+  `client/src/program.ts`, and a client test fails if the three disagree; devnet builds put devnet
+  keys in their place (`devnet/build.sh`).
 - **The identity derivation on the device.** Semaphore's own BLAKE-512, pruning and shift, from
   the 32 bytes `keys/`'s `identitySecret(seed)` returns. Not in the program, but a change makes
   every existing commitment unreachable.
@@ -150,8 +155,11 @@ each list is its owner's (below).
   Two steps because a one-step handover has no undo: a typo in the new address would have frozen
   every dial and sent every fee to nobody, forever. Now a key nobody holds can be proposed but
   never accepted, and the treasury stays where it was. The zero key and the current key are
-  refused as proposals. A new treasury key must hold a little SOL before it can receive a small
-  sweep; see the deploy checklist.
+  refused as proposals. A treasury key must hold a little SOL before it can receive a small sweep:
+  the runtime refuses any transaction that leaves an account it credits below its rent-exempt
+  minimum, so a sweep into a key holding no SOL fails whole unless the swept excess alone covers an
+  empty account's rent, and nothing is lost
+  (`finding_a_sweep_into_a_treasury_holding_no_sol_fails_until_someone_funds_it`).
 - Where `sweep_rent` pays for the config, the code tree and every code account: the treasury,
   whoever sends it. A list's excess goes to the list's owner instead (below).
 
@@ -173,7 +181,7 @@ treasury. Because whoever paid the rent should get it back, and the issuer openi
 one paying for it, directly or through a fee payer it pays. The program records the owner, not the
 payer, so where the two are different keys the owner gets it: list 0's rent is paid by whoever
 sends `init` and goes to `FOUNDATION_ISSUER`. A list owner's key must hold a little SOL before it
-can take a small sweep, like the treasury's (deploy checklist, step 4).
+can take a small sweep, like the treasury's (above).
 
 **A list's owner can hand over** (session 15, Carlos's decision), in two steps like the treasury.
 The owner proposes a key (`propose_list_owner`), and nothing moves: it still manages the insert
@@ -223,44 +231,6 @@ solana program show <PROGRAM_ID>        # "Authority: none"
 v2 is a new program at a new address with a fresh list. That is the point: a registry that one key
 could rewrite is not a registry anyone should stake a name on.
 
-## Deploy checklist
-
-In this order, for mainnet. Nothing here has been done there, and nothing is deployed anywhere.
-Devnet rehearses steps 1 to 5 with test keys derived from one phrase (`devnet/keys.sh`) and put
-into a copy of the source at build time (`devnet/build.sh`), and leaves out step 6 on purpose: a
-devnet program stays upgradeable. How to derive the keys, build, deploy and run it there, what it
-costs (about 3.53 SOL for both programs), and what sessions 15 and 18 got done (everything but the
-deploy, which ran out of test SOL), is in `docs/devnet.md`.
-
-1. **Replace the placeholder treasury.** `TREASURY` in `program/src/lib.rs` is derived from the
-   public seed `REPLACE-BEFORE-DEPLOY-treasury-0` so the tests can sign for it, which means anyone
-   with this repo can sign for it too: deployed as it is, a stranger takes every fee and every
-   dial (`finding_the_placeholder_treasury_is_anyones_key`). Replace it with the charter's treasury
-   address, and the same constant where it is repeated by hand, in
-   `program/tests-litesvm/src/lib.rs` and `client/src/program.ts`; a client test fails if the three
-   disagree. The tests that sign as the treasury then need a treasury key they can sign with.
-2. **Replace the placeholder issuer key.** `FOUNDATION_ISSUER`, list 0's owner, is derived the same
-   way from `REPLACE-BEFORE-DEPLOY-issuer-000`: deployed as it is, a stranger owns list 0, names its
-   own insert key and adds humans who do not exist, whose badges every index would read as vouched
-   for by the foundation (`finding_the_placeholder_issuer_key_is_anyones_key`). Replace it with the
-   foundation's issuer key, in the same three places; a client test fails if they disagree.
-3. **Build for the right cluster.** `USDC_MINT` is mainnet's USDC by default and devnet's under
-   `--features devnet`. `init` will refuse a USDC mint that does not count in six decimals.
-4. **Fund the treasury address with a little SOL before the first sweep.** About 0.001 SOL. The
-   runtime refuses any transaction that leaves an account it credits below its rent-exempt
-   minimum, so a sweep into a treasury holding no SOL fails whole unless the swept excess alone
-   covers an empty account's rent (890,880 lamports at the old rate, 650,240 today, 89,088 after
-   the cuts). Nothing is lost; the sweep can be sent again once the treasury holds SOL. Do the same
-   for every key the treasury is handed over to, before it accepts, and for `FOUNDATION_ISSUER`
-   and every list owner, whose key a list's sweep pays (session 15). No one-line program change
-   fixes this: the rule is the runtime's, not the program's
-   (`finding_a_sweep_into_a_treasury_holding_no_sol_fails_until_someone_funds_it`).
-5. **Deploy, then send `init`**, from anyone. It writes the constants and nothing else, and a
-   second `init` fails. Check the config: the treasury, USDC as `mints[0]` at 250,000, and list 0
-   open, owned by the foundation's issuer key.
-6. **Seal it**, with the two commands above, and check "Authority: none".
-7. **Only then** accept other tokens. List 0's owner adds its insert keys; anyone opens other lists.
-
 `FEASIBILITY.md` says the same thing about the alternatives: compressed accounts would have put the
 registry's storage inside four programs that share one plain-key upgrade authority, which is not
 sealed whatever this program does.
@@ -306,8 +276,9 @@ ships, and each is logged in `docs/changes.md`.
 5. **The code tree's depth is 32**, like the list of humans.
 6. **A scope is bounded at 256 bytes and a DID at 64** in the instruction. Not a limit on what a
    scope can be — both are hashed — only on what one transaction and one log entry carry. The
-   scope's bound was 64 until the devnet session of 2026-09-25 raised it, Carlos's choice, since
-   the scope will be `category/market/role`, three slugs of up to 64 characters each. A
+   scope's bound was 64 until the devnet session of 2026-09-25 raised it, Carlos's choice, for a
+   `category/market/role` scope of three slugs of up to 64 characters each; the recommended scope
+   is `market/role` (`docs/handoff.md`, "Markets"), and 256 bytes holds either. A
    registration carrying a 256-byte scope and a 64-byte DID is 1,105 bytes, and 1,152 with a fee
    payer's payment instruction, of the 1,232 limit (`what_a_registration_costs`).
 7. **Sixteen accepted mints and eight issuer keys per list**, fixed, so no account ever changes
@@ -377,8 +348,6 @@ ships, and each is logged in `docs/changes.md`.
 
 ## What this does not do
 
-No devnet deploy yet (`docs/devnet.md`), no mainnet, no Kora, no address lookup table, no proof on
-a phone. The 4.0.0 ceremony
-is pinned but nothing has been confirmed with PSE. The permutation proof the code tree exists for
-has not been built. No paid review has happened, and `docs/handoff.md`'s "Before mainnet" list
-still stands in full.
+Nothing on mainnet, no address lookup table, no proof on a phone. The 4.0.0 ceremony is pinned but
+nothing has been confirmed with PSE. The permutation proof the code tree exists for has not been
+built. No paid review has happened.

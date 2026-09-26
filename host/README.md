@@ -4,8 +4,8 @@ The Forest host: Bluesky's reference PDS with its write path forked so that ever
 on the owner's device and the host holds no signing key for any folder. It stores folders, serves
 them to the carrier, and never signs.
 
-**Nothing here is shipped.** It has run on this machine, against a local directory of DIDs, and
-nowhere else. No Railway, no public instance, no relay has read it.
+**Nothing here is shipped.** It runs on devnet, on Railway, and the carrier's relay reads it
+(`docs/services.md`); its tests run against a local directory of DIDs and local hosts.
 
 | | |
 |---|---|

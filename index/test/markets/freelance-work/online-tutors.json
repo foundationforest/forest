@@ -33,5 +33,5 @@
     }
   },
   "ratings": ["overall", "patience", "preparation"],
-  "howDealsGo": "The student pays for a block of sessions up front. The money is held until the student releases it after the last session. A missed session is made up, or its share goes back to the student."
+  "howDealsGo": "The student pays for a block of sessions up front. The money is held until the student releases it after the last session. A missed session is made up, or its share goes back to the student. A timer to the tutor, set past the last session, pays for the sessions given if the student goes quiet."
 }

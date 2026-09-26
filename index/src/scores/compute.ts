@@ -4,7 +4,6 @@
 // Three scores, never blended into one number:
 //   uniqueness  per badge: which issuers' lists vouch for it, by this index's issuer weights
 //   standing    per profile: reviews received, each weighed by its reviewer and by its evidence
-//               (the handoff calls it trust)
 //   rating      per profile: the reviews' `overall`, averaged with the same weights, 1.0 to 10.0
 //
 // Uniqueness enters standing only as the starting weight of a reviewer (the handoff: "an unbadged

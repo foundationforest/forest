@@ -9,7 +9,8 @@
 //   7. no crypto word anywhere a person reads;
 //   8. the Pay link reads back to the offer's own terms, and the pay page checks it;
 //   9. markets v1: two numbers, one scope per profile, labels, near, no price, review fields, and no
-//      word on an offer's or a receipt's options.
+//      word of the index's own on an offer's or a receipt's options (a market's own text may say
+//      anything).
 //
 //   DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/postgres npm test
 
@@ -294,15 +295,28 @@ test('pages for people and machines', { timeout: 120_000 }, async (t) => {
       gone.searchParams.set('offer', `at://${ben.did}/foundation.forest.post/3kzq2vrffxb9z`)
       assert.equal(await check(gone.toString()), 'notFound')
       assert.equal(await check(`${base}/pay?v=1`), 'invalid')
-      assert.match(readable(rendered.get(altered.pathname + altered.search)!), /Don’t pay from it/)
+      const alteredPage = readable(rendered.get(altered.pathname + altered.search)!)
+      assert.match(alteredPage, /its price or terms were changed\./)
+      assert.doesNotMatch(alteredPage, /Don’t pay/, 'the index shows; the app advises')
     })
 
     await t.test('9. markets v1: two numbers, one scope per profile, labels, near, no price, review fields', async () => {
-      // An offer's and a receipt's options are plain data in the twins; no page says a word about
-      // them, not even for Ana's offer whose timer sends the money back to the buyer.
+      // An offer's and a receipt's options are plain data in the twins; the index's own words say
+      // nothing about them, not even for Ana's offer whose timer sends the money back to the buyer.
+      // A market's "how deals go" is the market file's text, content that may say anything: the
+      // tutors' market names a timer.
       assert.deepEqual([portuguese.terms, spanish.terms], [null, { timer: { days: 30, to: 'buyer' } }])
       assert.equal('options' in spanish, false)
-      for (const [path, html] of rendered) assert.doesNotMatch(readable(html), /arbiter|timer/i, path)
+      const names: string[] = (await json('/index.json')).folders.flatMap((f: any) => f.markets.map((m: any) => m.name))
+      const content = (await Promise.all(names.map(async (n) => (await json(`/markets/${n}.json`)).market.howDealsGo as string))).flatMap((text) => text.split(/\n+/))
+      assert.ok(content.some((line) => /timer/i.test(line)), 'the test market’s own text names a timer')
+      for (const [path, html] of rendered) {
+        const own = content.reduce((text, line) => text.split(line).join(' '), readable(html))
+        assert.doesNotMatch(own, /arbiter|timer/i, path)
+      }
+      for (const o of ['releasedToSeller', 'releasedToBuyer', 'split', 'arbitrated', 'timerReleased', 'unknown']) {
+        assert.doesNotMatch(w.outcome(o, { buyer: 'Ben', seller: 'Ana', toSeller: '$1.00', toBuyer: '$2.00' }), /arbiter|timer/i, o)
+      }
       const anaPage = readable(rendered.get(`/profiles/${ana.did}`)!)
       assert.match(anaPage, /Tutor in\s+Online tutors/, 'the profile’s one market and side, in the market’s words')
       assert.match(anaPage, /In Online tutors\s*, as tutor/, 'the badge line uses the label')

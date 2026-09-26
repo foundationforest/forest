@@ -7,8 +7,9 @@ software, configured, with no Forest code:
 2. **Jetstream** reads the relay and serves the stream as JSON. Each index takes Forest's records
    from it: `foundation.forest.*`, plus the account and identity events.
 
-**Nothing here is shipped.** It has run on this machine only: one local host, one local directory
-of DIDs, and no Railway.
+**Nothing here is shipped.** The relay runs on devnet, on Railway, reading the devnet host
+(`docs/services.md`); Jetstream is not deployed. Its tests run against one local host and one local
+directory of DIDs.
 
 ## Why these two
 
@@ -33,7 +34,7 @@ rewrite in `bluesky-social/jetstream`, because:
 - the rewrite is a full-network archive that backfills every host and serves nothing until it has.
 
 Carlos chose relay plus Jetstream over Tap, and over the relay alone, in this session's planning
-(`docs/changes/services.md`).
+(`docs/changes.md`).
 
 ## What it does, and what it does not
 
@@ -155,7 +156,7 @@ wss://<jetstream>/subscribe?wantedCollections=foundation.forest.*
 
 ## What running it on Railway will need
 
-None of this has been tried; nothing is deployed.
+`deploy/` does this for the relay on devnet (`deploy/README.md`); Jetstream is not deployed.
 
 **Two services, each built from its upstream Dockerfile at the pin:**
 - indigo's `cmd/relay/Dockerfile`: Go 1.26, runs `/relay serve`, port 2470.
@@ -188,7 +189,7 @@ the pinned commit, or at a fork holding exactly that commit.
 ## Chosen, not decided
 
 Where the handoff was silent the simplest option was taken. Each is reversible, since nothing is
-deployed, and each is in `docs/changes/services.md`.
+deployed, and each is in `docs/changes.md`.
 
 1. **The legacy Jetstream, not the rewrite.** It is a plain consumer. The rewrite archives the
    whole network, backfills every host, and serves nothing until it has.
@@ -210,4 +211,4 @@ deployed, and each is in `docs/changes/services.md`.
 - **A folder moving between hosts.** After an import, the host sends no sync event (see
   `host/README.md`), and how the relay treats the new host's first commit for a known DID was not
   tried.
-- **Railway.** Nothing deployed.
+- **Jetstream on Railway.** Not deployed; the relay runs on devnet (`docs/services.md`).
