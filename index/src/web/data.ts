@@ -10,7 +10,6 @@ import { badgeStatus } from '../scores/compute.ts'
 import { STATEMENT_HEADER } from '../scores/sign.ts'
 import { type Near, type Urls, SCORING_DOC, SOURCE, PAYLINK_DOC } from './html.ts'
 import { type PayLink, payLink } from './paylink.ts'
-import { type Options, options } from './words.ts'
 
 export type Ctx = { db: Db; directory: Directory; config: Config; urls: Urls }
 
@@ -33,8 +32,6 @@ export type Offer = ReturnType<typeof offerOut>
 function offerOut(ctx: Ctx, row: any) {
   const r = row.record
   const live = row.direction === 'offer' && row.market !== null && (row.expires === null || new Date(row.expires) > new Date())
-  const terms = (r.terms ?? null) as PayLink['terms']
-  const sides = { seller: ctx.directory.sideWord(row.market, 'seller'), buyer: ctx.directory.sideWord(row.market, 'buyer') }
   return {
     uri: row.uri,
     cid: row.cid,
@@ -49,11 +46,8 @@ function offerOut(ctx: Ctx, row: any) {
     description: row.description as string,
     /** Null in a market with no money. */
     price: (r.price ?? null) as PayLink['price'] | null,
-    terms,
-    /** The words for the two sides in this post's market: its labels, or seller and buyer. */
-    sides,
-    /** The escrow's options in one sentence, and a flag when they favour one side (words.ts). */
-    options: options(terms, sides, Boolean(terms?.arbiter) && terms?.arbiter === row.declared),
+    /** The escrow's two options as the post writes them, plain data; what to say about them is an app's. */
+    terms: (r.terms ?? null) as PayLink['terms'],
     availability: (r.availability ?? null) as string | null,
     remote: (row.remote ?? null) as boolean | null,
     /** As the post wrote it: degrees as decimal text, how far the real place may be, and the place. */
@@ -106,19 +100,18 @@ async function offers(ctx: Ctx, where: string, params: unknown[], limit: number,
 }
 
 /**
- * The market each profile lives in: the one market its counted badges name (a profile lives in one
- * scope, `market/role`), or null when they name none or more than one. Read from the last
- * recompute's uniqueness rows, which are exactly the counted badges.
+ * The market each profile lives in: the one its record names, when this index's directory has it;
+ * else null. A profile is one folder in one market.
  */
 async function profileMarkets(ctx: Ctx, dids: string[]): Promise<Map<string, string | null>> {
-  const { rows } = await ctx.db.query(
-    `select did, array_agg(distinct details->>'market') as markets from scores where kind = 'uniqueness' and did = any($1) group by did`,
-    [dids],
-  )
+  const { rows } = await ctx.db.query('select did, market from profiles where did = any($1)', [dids])
   const out = new Map<string, string | null>(dids.map((d) => [d, null]))
-  for (const r of rows) out.set(r.did, r.markets.length === 1 ? r.markets[0] : null)
+  for (const r of rows) if (ctx.directory.markets.has(r.market)) out.set(r.did, r.market)
   return out
 }
+
+/** A profile's own scope, `market/role`, as its record names it. */
+const scopeOf = (p: { market: string | null; role: string | null }): string | null => (p.market && p.role ? `${p.market}/${p.role}` : null)
 
 /** Each profile's two numbers, from the last recompute. */
 async function numbers(ctx: Ctx, dids: string[]): Promise<Map<string, Numbers>> {
@@ -265,14 +258,22 @@ export async function market(ctx: Ctx, name: string, offset: number, near: Near 
       [name],
     ),
     ctx.db.query(
-      `select b.did, b.wallet, b.scope, b.list_owner, p.wallet as declared from badges b join profiles p on p.did = b.did where b.market = $1`,
+      `select b.did, b.wallet, b.scope, b.list_owner, p.wallet as declared, p.market as profile_market, p.role as profile_role
+       from badges b join profiles p on p.did = b.did where b.market = $1`,
       [name],
     ),
     offers(ctx, 'p.market = $1', [name], PAGE_SIZE, offset, near),
   ])
   const counted = new Set(
     badges.rows
-      .filter((b) => badgeStatus({ did: b.did, wallet: b.wallet, scope: b.scope, listOwner: b.list_owner }, b.declared, ctx.directory).counted)
+      .filter(
+        (b) =>
+          badgeStatus(
+            { did: b.did, wallet: b.wallet, scope: b.scope, listOwner: b.list_owner },
+            { wallet: b.declared, scope: scopeOf({ market: b.profile_market, role: b.profile_role }) },
+            ctx.directory,
+          ).counted,
+      )
       .map((b) => b.did),
   )
   const by = new Map(posts.rows.map((r) => [r.direction, r.n]))
@@ -311,11 +312,18 @@ export async function profile(ctx: Ctx, did: string) {
   const rating = scores.rows.find((s) => s.kind === 'rating')
   const allPosts = posts.rows.map((row) => offerOut(ctx, row))
   const isLive = (o: Offer) => o.market !== null && (o.expires === null || new Date(o.expires) > new Date())
+  const home = ctx.directory.markets.get(p.market)
   return {
     ...self(ctx, 'profile', ctx.urls.profile(did)),
     did,
     profile: {
       name: p.name as string,
+      /** The one market this profile lives in, and its side there, as its record names them. */
+      market: p.market as string | null,
+      marketUrl: home ? ctx.urls.market(p.market) : null,
+      role: p.role as string | null,
+      /** The plain word for its side: the market's label, the role itself, or null in a one-sided market. */
+      side: home?.sides === 'two' && (p.role === 'seller' || p.role === 'buyer') ? ctx.directory.sideWord(p.market, p.role) : null,
       about: (r.about ?? null) as string | null,
       contact: (r.contact ?? null) as string | null,
       wallet: (p.wallet ?? null) as string | null,
@@ -324,7 +332,7 @@ export async function profile(ctx: Ctx, did: string) {
       cid: p.cid as string,
     },
     badges: badges.rows.map((b) => {
-      const status = badgeStatus({ did, wallet: b.wallet, scope: b.scope, listOwner: b.list_owner }, p.wallet, ctx.directory)
+      const status = badgeStatus({ did, wallet: b.wallet, scope: b.scope, listOwner: b.list_owner }, { wallet: p.wallet, scope: scopeOf(p) }, ctx.directory)
       const issuer = ctx.config.issuers[b.list_owner]
       const file = ctx.directory.markets.get(b.market)
       return {
@@ -374,9 +382,6 @@ export async function deal(ctx: Ctx, dealId: string) {
     // A deal names no market; the seller's profile lives in one, whose labels name the two sides.
     const sellerMarkets = [...new Set(sellerProfiles.map((p) => markets.get(p.did)).filter((m) => m))]
     const market = sellerMarkets.length === 1 ? sellerMarkets[0]! : null
-    const terms: PayLink['terms'] = e.arbiter || e.timer_days
-      ? { ...(e.arbiter ? { arbiter: e.arbiter } : {}), ...(e.timer_days ? { timer: { days: e.timer_days, to: e.timer_to } } : {}) }
-      : null
     const sides = { seller: ctx.directory.sideWord(market, 'seller'), buyer: ctx.directory.sideWord(market, 'buyer') }
     out = {
       escrow: e.escrow as string,
@@ -393,7 +398,6 @@ export async function deal(ctx: Ctx, dealId: string) {
       amount: e.amount as string,
       arbiter: (e.arbiter ?? null) as string | null,
       timer: e.timer_days ? { days: e.timer_days as number, to: e.timer_to as 'buyer' | 'seller' } : null,
-      options: options(terms, sides, e.arbiter !== null && (e.arbiter === e.buyer || e.arbiter === e.seller)) as Options,
       createdAt: iso(e.created_at),
       fundedAt: iso(e.funded_at),
       endedAt: iso(e.ended_at),

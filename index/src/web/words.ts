@@ -138,6 +138,8 @@ export function badgeWhyNot(why: string | null): string {
       return 'Not counted: registered under a name that isn’t a market in this index’s directory.'
     case 'noRole':
       return 'Not counted: registered for the market without a side, such as seller or buyer.'
+    case 'notProfileScope':
+      return 'Not counted: registered for another market or side than the one this profile is in.'
     default:
       return 'Not counted.'
   }
@@ -193,54 +195,4 @@ export function outcome(o: string, n: { buyer: string; seller: string; toSeller:
     default:
       return `It ended: ${n.seller} got ${n.toSeller}, ${n.buyer} got ${n.toBuyer}.`
   }
-}
-
-// -----------------------------------------------------------------------------------------------
-// The escrow's two options
-// -----------------------------------------------------------------------------------------------
-
-export type Options = {
-  /** The options in one plain sentence. */
-  text: string
-  /** Raised when an option favours one side: the arbiter is one of the two, or a timer pays the buyer. */
-  flag: boolean
-  why: ('arbiterIsParty' | 'timerToBuyer')[]
-}
-
-/**
- * An offer's or a payment's options in one sentence: "No arbiter, no timer." or "Money goes back
- * to the buyer after 30 days automatically." `sides` are the words for the two sides (a market's
- * labels, or seller and buyer). `arbiterIsParty`: the arbiter is one of the two sides.
- */
-export function options(
-  terms: { arbiter?: string; timer?: { days: number; to: 'seller' | 'buyer' } } | null,
-  sides: { seller: string; buyer: string },
-  arbiterIsParty: boolean,
-): Options {
-  const parts: string[] = []
-  if (terms?.arbiter) parts.push('an arbiter may decide how the money is split')
-  const t = terms?.timer
-  if (t) {
-    parts.push(
-      t.to === 'buyer'
-        ? `money goes back to the ${sides.buyer} after ${plural(t.days, 'day')} automatically`
-        : `money goes to the ${sides.seller} after ${plural(t.days, 'day')} automatically`,
-    )
-  }
-  const text = parts.length ? `${parts.join('; ').charAt(0).toUpperCase()}${parts.join('; ').slice(1)}.` : 'No arbiter, no timer.'
-  const why: Options['why'] = []
-  if (terms?.arbiter && arbiterIsParty) why.push('arbiterIsParty')
-  if (t?.to === 'buyer') why.push('timerToBuyer')
-  return { text, flag: why.length > 0, why }
-}
-
-/** What a flag means, for the person reading it. */
-export function optionsWarning(o: Options, sides: { seller: string; buyer: string }): string | null {
-  if (!o.flag) return null
-  const lines = o.why.map((w) =>
-    w === 'arbiterIsParty'
-      ? 'the arbiter is one of the two sides, so that side can decide a split alone'
-      : `unless it is released first, the money goes back to the ${sides.buyer} on its own`,
-  )
-  return `Worth knowing: ${lines.join('; and ')}.`
 }

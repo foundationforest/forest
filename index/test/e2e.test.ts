@@ -264,7 +264,15 @@ test('the index, end to end', { timeout: 600_000 }, async (t) => {
       ...(rkey ? { rkey } : {}),
       value,
     })
-    const profileRecord = (name: string, wallet: string) => ({ $type: 'foundation.forest.profile', name, wallet, createdAt: now() })
+    // Every profile lives in one market, as one side of it.
+    const profileRecord = (name: string, wallet: string, scope = SELLER) => ({
+      $type: 'foundation.forest.profile',
+      name,
+      market: scope.split('/')[0],
+      role: scope.split('/')[1],
+      wallet,
+      createdAt: now(),
+    })
     const offer = (market: string, description: string, terms?: unknown) => ({
       $type: 'foundation.forest.post',
       direction: 'offer',
@@ -291,7 +299,7 @@ test('the index, end to end', { timeout: 600_000 }, async (t) => {
         create('foundation.forest.post', offer(MARKET, 'Portuguese conversation for adults, A1 to B2.')),
         create('foundation.forest.post', offer(MARKET, 'Spanish grammar, one hour, homework optional.', { timer: { days: 7, to: 'seller' } })),
       ])
-      await ben.device!.write([create('foundation.forest.profile', profileRecord('Ben', ben.wallet.publicKey.toBase58()), 'self')])
+      await ben.device!.write([create('foundation.forest.profile', profileRecord('Ben', ben.wallet.publicKey.toBase58(), BUYER), 'self')])
       await cleo.device!.write([create('foundation.forest.profile', profileRecord('Cleo', cleoDeclared), 'self')])
       await waitFor(async () => (await count('select count(*) n from profiles')) === 3 && (await count('select count(*) n from posts')) === 2, 30_000, 'three profiles and two posts')
       const { rows } = await index.db.query('select market_written, market from posts order by market_written')
@@ -521,7 +529,7 @@ test('the index, end to end', { timeout: 600_000 }, async (t) => {
       assert.deepEqual([market.body.market.sides, market.body.market.labels, market.body.market.roles], ['two', { seller: 'tutor', buyer: 'student' }, ['seller', 'buyer']])
       assert.deepEqual(market.body.counts, { offers: 2, requests: 0, badgedProfiles: 2 }, 'Ana and Ben; not Cleo')
       assert.equal(market.body.total, 2)
-      const OFFER = ['uri', 'cid', 'did', 'name', 'profileUrl', 'direction', 'market', 'marketUrl', 'marketWritten', 'role', 'description', 'price', 'terms', 'sides', 'options', 'availability', 'remote', 'location', 'expires', 'createdAt', 'uniqueness', 'rating', 'standing', 'payLink']
+      const OFFER = ['uri', 'cid', 'did', 'name', 'profileUrl', 'direction', 'market', 'marketUrl', 'marketWritten', 'role', 'description', 'price', 'terms', 'availability', 'remote', 'location', 'expires', 'createdAt', 'uniqueness', 'rating', 'standing', 'payLink']
       for (const o of market.body.offers) {
         hasKeys(o, OFFER, 'an offer')
         assert.equal(o.did, ana.did)
@@ -531,18 +539,18 @@ test('the index, end to end', { timeout: 600_000 }, async (t) => {
         assert.ok(o.rating.value > 9.9 && o.rating.reviews === 2, `Ana rated ${o.rating.value} from ${o.rating.reviews}`)
         assert.ok(o.payLink.includes(encodeURIComponent(o.uri)), 'the pay link names the offer')
       }
-      assert.deepEqual(
-        market.body.offers.map((o: any) => o.options.text).sort(),
-        ['Money goes to the tutor after 7 days automatically.', 'No arbiter, no timer.'],
-        'each offer says its options in one sentence, in the market’s words',
-      )
+      // The options, as plain data; the pages say nothing of them.
+      const terms = market.body.offers.map((o: any) => o.terms)
+      assert.equal(terms.filter((x: unknown) => x === null).length, 1)
+      assert.deepEqual(terms.find((x: unknown) => x !== null), { timer: { days: 7, to: 'seller' } })
 
       assert.equal((await get('/markets/online-tutor.json')).status, 404, 'no aliases: another spelling is no market')
       assert.equal((await get('/markets/plumbers.json')).status, 404)
 
       const a = await get(`/profiles/${ana.did}.json`)
       hasKeys(a.body, ['kind', 'url', 'json', 'did', 'profile', 'badges', 'scores', 'offers', 'requests', 'credentials', 'reviews'], '/profiles/{did}.json')
-      hasKeys(a.body.profile, ['name', 'about', 'contact', 'wallet', 'photo', 'createdAt', 'cid'], 'profile')
+      hasKeys(a.body.profile, ['name', 'market', 'marketUrl', 'role', 'side', 'about', 'contact', 'wallet', 'photo', 'createdAt', 'cid'], 'profile')
+      assert.deepEqual([a.body.profile.market, a.body.profile.role, a.body.profile.side], [MARKET, 'seller', 'tutor'])
       hasKeys(a.body.badges[0], ['scope', 'market', 'marketUrl', 'role', 'side', 'listIndex', 'listOwner', 'issuer', 'wallet', 'counted', 'why', 'registeredAt', 'transaction'], 'a badge')
       hasKeys(a.body.scores, ['uniqueness', 'standing', 'rating'], 'scores')
       hasKeys(a.body.scores.standing, ['scope', 'value', 'valueMicro', 'details', 'computedAt', 'signed'], 'a score')
@@ -557,7 +565,7 @@ test('the index, end to end', { timeout: 600_000 }, async (t) => {
       hasKeys(d.body, ['kind', 'url', 'json', 'dealId', 'receipt', 'reviews'], '/deals/{dealId}.json')
       hasKeys(
         d.body.receipt,
-        ['escrow', 'program', 'buyer', 'seller', 'creator', 'buyerProfiles', 'sellerProfiles', 'market', 'sides', 'mint', 'amount', 'arbiter', 'timer', 'options', 'createdAt', 'fundedAt', 'endedAt', 'outcome', 'toSeller', 'toBuyer', 'closed', 'transaction'],
+        ['escrow', 'program', 'buyer', 'seller', 'creator', 'buyerProfiles', 'sellerProfiles', 'market', 'sides', 'mint', 'amount', 'arbiter', 'timer', 'createdAt', 'fundedAt', 'endedAt', 'outcome', 'toSeller', 'toBuyer', 'closed', 'transaction'],
         'a receipt',
       )
       assert.deepEqual(

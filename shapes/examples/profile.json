@@ -1,6 +1,8 @@
 {
   "$type": "foundation.forest.profile",
   "name": "Ana Ribeiro",
+  "market": "online-tutors",
+  "role": "seller",
   "photo": {
     "$type": "blob",
     "ref": { "$link": "bafkreicx54kjfbjopw56j2bwh7zphoa5ejyyx7e6wazjsfr3u2q33d65he" },

@@ -16,6 +16,8 @@ node bin/validate.js record examples/post.json --market examples/markets/online-
 node bin/validate.js market examples/markets/online-tutors.json
 ```
 
+A profile lives in one market, as one side of it: its record names `market` and `role`, both required, such as `online-tutors` and `seller`. A profile is one folder in one market by design; a person in two markets, or on both sides of one, holds two profiles. A badge counts for a profile only under that scope, `market/role`. Checked against a market file, a profile must name that market and a role its sides allow.
+
 A post may carry a `terms` block, fully optional, on an offer or a request. It holds only the options an escrow made from the post is created with, each off unless set: `arbiter`, a Solana key that may decide any split, and `timer`, `{ days, to }`: that many whole days after funding, everything goes to `to`, which is `seller` or `buyer`. With no terms, the only ways out of an escrow are the ones the two sides sign. The post's `price` names its token by `mint`, the token's address on Solana: any classic token works, and which tokens an index weighs is the index's call. `price` is optional in the shape; checked against a market file, it is required when the file says `money` is true.
 
 A post's `remote` and `location` are both optional: a post may say it happens online, name a place, or say neither. A `location` is `{ lat, lon, precisionKm, area }`, all four required inside it:
@@ -31,7 +33,7 @@ A review requires only `subject`, the DID it is about (and `createdAt`, as every
 - `media`: up to ten photos and short videos (`image/png`, `image/jpeg`, `video/mp4`, at most 50 MB each), as blob references.
 - `dealId` is the deal the review is about: the escrow's address (base58, 32 bytes) when an escrow exists, else 32 random bytes as lowercase hex, chosen when the deal began. The validator refuses a `dealId` that is neither, since it points at nothing.
 
-A review names no market. Its market is the market of the profile it is about, which lives in one scope (`market/role`); an app passes that market's file to check the review against it.
+A review names no market. Its market is the `market` of the profile it is about; an app passes that market's file to check the review against it.
 
 A market file has nine required keys and two optional ones. Nothing else belongs in one:
 
@@ -46,6 +48,6 @@ A market file has nine required keys and two optional ones. Nothing else belongs
 - `ratings`, the rating names a review in this market usually carries, `overall` always among them. It suggests; a review may use other names too.
 - `howDealsGo`, plain text on how deals in this market usually go, at most 3000 characters.
 
-A market file restricts no deal: the arbiter, the timer, the token and the amount are the seller's, per offer. With a market file the validator checks a post's market name, that its role is one the market's sides allow, its offer fields, and its price when the market has money; and a review's review fields. It checks a market file's structure, nothing more.
+A market file restricts no deal: the arbiter, the timer, the token and the amount are the seller's, per offer. With a market file the validator checks a profile's or a post's market name and that its role is one the market's sides allow; a post's offer fields, and its price when the market has money; and a review's review fields. It checks a market file's structure, nothing more.
 
 Design choices made here without a decision behind them are logged in `docs/changes.md` as "chosen, not decided".

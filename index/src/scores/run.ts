@@ -13,7 +13,7 @@ import { type IndexKeys, type Kind, sign } from './sign.ts'
 
 export async function loadInputs(db: Db): Promise<Inputs> {
   const [profiles, badges, receipts, reviews] = await Promise.all([
-    db.query('select did, wallet from profiles'),
+    db.query('select did, wallet, market, role from profiles'),
     db.query('select did, wallet, scope, list_owner from badges'),
     db.query(
       `select escrow, buyer, seller, creator, mint, funded_at is not null as funded, outcome, closed from escrow_receipts`,
@@ -21,7 +21,7 @@ export async function loadInputs(db: Db): Promise<Inputs> {
     db.query('select uri, reviewer, subject, overall, deal_id, created_at from reviews'),
   ])
   return {
-    profiles: profiles.rows.map((r) => ({ did: r.did, wallet: r.wallet })),
+    profiles: profiles.rows.map((r) => ({ did: r.did, wallet: r.wallet, scope: r.market && r.role ? `${r.market}/${r.role}` : null })),
     badges: badges.rows.map((r) => ({ did: r.did, wallet: r.wallet, scope: r.scope, listOwner: r.list_owner })),
     receipts: receipts.rows.map((r) => ({
       escrow: r.escrow,

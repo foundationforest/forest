@@ -8,7 +8,8 @@
 //   6. every URL in the read skill resolves;
 //   7. no crypto word anywhere a person reads;
 //   8. the Pay link reads back to the offer's own terms, and the pay page checks it;
-//   9. markets v1: two numbers, the options sentence and its flag, labels, near, no price, review fields.
+//   9. markets v1: two numbers, one scope per profile, labels, near, no price, review fields, and no
+//      word on an offer's or a receipt's options.
 //
 //   DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/postgres npm test
 
@@ -21,7 +22,7 @@ import type { Web } from '../src/web/routes.ts'
 import { serve } from '../src/web/server.ts'
 import { parsePayLink } from '../src/web/paylink.ts'
 import * as w from '../src/web/words.ts'
-import { DEAL, EXCHANGE, FOLDER, LISBON, MADE_UP_DEAL, MARKET, OFFERS, ana, ben, cleo, makeFixture } from './fixture.ts'
+import { DEAL, EXCHANGE, FOLDER, LISBON, MADE_UP_DEAL, MARKET, OFFERS, ana, ben, cleo, dara, makeFixture } from './fixture.ts'
 import { validateJsonLd } from './schemaorg/validate.ts'
 
 // -----------------------------------------------------------------------------------------------
@@ -75,7 +76,7 @@ test('pages for people and machines', { timeout: 120_000 }, async (t) => {
       { path: `/markets/${MARKET}`, canonical: `${base}/markets/${MARKET}` },
       { path: `/markets/${EXCHANGE}`, canonical: `${base}/markets/${EXCHANGE}` },
       { path: `/markets/${EXCHANGE}?km=10&near=38.720,-9.14`, canonical: `${base}/markets/${EXCHANGE}?near=38.72,-9.14&km=10` },
-      ...[ana, ben, cleo].map((p) => ({ path: `/profiles/${p.did}`, canonical: `${base}/profiles/${p.did}` })),
+      ...[ana, ben, cleo, dara].map((p) => ({ path: `/profiles/${p.did}`, canonical: `${base}/profiles/${p.did}` })),
       { path: `/deals/${DEAL}`, canonical: `${base}/deals/${DEAL}` },
       { path: `/deals/${MADE_UP_DEAL}`, canonical: `${base}/deals/${MADE_UP_DEAL}` },
       { path: '/search?q=portuguese', canonical: `${base}/search?q=portuguese` },
@@ -149,7 +150,7 @@ test('pages for people and machines', { timeout: 120_000 }, async (t) => {
       }
       const reviews = g.filter((n) => n['@type'] === 'Review')
       assert.deepEqual(reviews.map((r) => [r.author.name, r.reviewRating.ratingValue, r.reviewRating.bestRating]).sort(), [['Ben Okafor', 10, 10], ['Cleo', 1, 10]])
-      // Ben's offer names no price and a place: an Offer with no price, served in an area.
+      // Dara's offer names no price and a place: an Offer with no price, served in an area.
       const exchange: any = jsonLd(rendered.get(`/markets/${EXCHANGE}`)!)[0]['@graph'][0].mainEntity.itemListElement[0]
       assert.equal(exchange.price, undefined)
       assert.equal(exchange.itemOffered.areaServed, LISBON.area)
@@ -173,7 +174,7 @@ test('pages for people and machines', { timeout: 120_000 }, async (t) => {
         assert.equal(twin.json, linkRel(html, 'alternate'), `${p.path}: and itself`)
         const text = readable(html)
         const facts: string[] = []
-        const offer = (o: any) => facts.push(o.description, o.options.text, ...(o.price ? [w.price(o.price, fixture.config().currencies)!] : []))
+        const offer = (o: any) => facts.push(o.description, ...(o.price ? [w.price(o.price, fixture.config().currencies)!] : []))
         switch (twin.kind) {
           case 'home':
             for (const f of twin.folders) facts.push(w.title(f.folder), ...f.markets.map((m: any) => w.title(m.name)), ...f.markets.map((m: any) => w.plural(m.offers, 'offer')))
@@ -200,7 +201,7 @@ test('pages for people and machines', { timeout: 120_000 }, async (t) => {
           case 'deal':
             for (const r of twin.reviews) facts.push(r.text, r.reviewerName, r.subjectName)
             if (twin.receipt) {
-              facts.push(w.moneyFromBase(twin.receipt.amount, twin.receipt.mint, fixture.config().currencies).text, twin.receipt.options.text)
+              facts.push(w.moneyFromBase(twin.receipt.amount, twin.receipt.mint, fixture.config().currencies).text)
               for (const x of [...twin.receipt.buyerProfiles, ...twin.receipt.sellerProfiles]) facts.push(x.name, w.rating(x.rating), w.score(x.standing))
             }
             break
@@ -296,17 +297,19 @@ test('pages for people and machines', { timeout: 120_000 }, async (t) => {
       assert.match(readable(rendered.get(altered.pathname + altered.search)!), /Don’t pay from it/)
     })
 
-    await t.test('9. markets v1: two numbers, options and their flag, labels, near, no price, review fields', async () => {
-      // The options, in one sentence on every offer and on the receipt, and the flag.
-      assert.deepEqual(portuguese.options, { text: 'No arbiter, no timer.', flag: false, why: [] })
-      assert.deepEqual(spanish.options, { text: 'Money goes back to the student after 30 days automatically.', flag: true, why: ['timerToBuyer'] }, 'the market’s label for the buyer')
-      assert.deepEqual(spanish.sides, { seller: 'tutor', buyer: 'student' })
+    await t.test('9. markets v1: two numbers, one scope per profile, labels, near, no price, review fields', async () => {
+      // An offer's and a receipt's options are plain data in the twins; no page says a word about
+      // them, not even for Ana's offer whose timer sends the money back to the buyer.
+      assert.deepEqual([portuguese.terms, spanish.terms], [null, { timer: { days: 30, to: 'buyer' } }])
+      assert.equal('options' in spanish, false)
+      for (const [path, html] of rendered) assert.doesNotMatch(readable(html), /arbiter|timer/i, path)
       const anaPage = readable(rendered.get(`/profiles/${ana.did}`)!)
-      assert.ok(anaPage.includes('Money goes back to the student after 30 days automatically.'))
-      assert.ok(anaPage.includes('Worth knowing: unless it is released first, the money goes back to the student on its own.'))
+      assert.match(anaPage, /Tutor in\s+Online tutors/, 'the profile’s one market and side, in the market’s words')
       assert.match(anaPage, /In Online tutors\s*, as tutor/, 'the badge line uses the label')
+      assert.deepEqual([anaTwin.profile.market, anaTwin.profile.role, anaTwin.profile.side], [MARKET, 'seller', 'tutor'])
       const deal = await json(`/deals/${DEAL}.json`)
-      assert.deepEqual(deal.receipt.options, { text: 'No arbiter, no timer.', flag: false, why: [] })
+      assert.equal('options' in deal.receipt, false)
+      assert.deepEqual([deal.receipt.arbiter, deal.receipt.timer], [null, null])
       assert.equal(deal.receipt.market, MARKET, 'the seller’s market')
       assert.deepEqual(deal.receipt.sides, { seller: 'tutor', buyer: 'student' })
       assert.ok(readable(rendered.get(`/deals/${DEAL}`)!).includes('The tutor asked for this payment'))
@@ -326,18 +329,28 @@ test('pages for people and machines', { timeout: 120_000 }, async (t) => {
       assert.deepEqual(byBen.media, [{ cid: 'bafkreicx54kjfbjopw56j2bwh7zphoa5ejyyx7e6wazjsfr3u2q33d65he', mimeType: 'image/jpeg' }])
       assert.ok(anaPage.includes('Overall 10.0 of 10 · Patience 10.0 of 10'))
       assert.ok(anaPage.includes('Sessions: 8 · With 1 photo'))
-      // Ben holds badges in two markets, so he lives in no one market, and a review of him has none.
+      // One scope per profile: Ben lives in online-tutors as a buyer. His badge in the language
+      // exchange is under another scope, so it does not count for this profile; that market would
+      // be another profile, as Dara's is. A review of him takes online-tutors' review fields.
       const benTwin = await json(`/profiles/${ben.did}.json`)
-      assert.equal(benTwin.reviews.received[0].market, null)
-      assert.deepEqual(benTwin.badges.filter((b: any) => b.counted).map((b: any) => [b.scope, b.side]).sort(), [[`${EXCHANGE}/peer`, null], [`${MARKET}/buyer`, 'student']])
+      assert.equal(benTwin.reviews.received[0].market, MARKET)
+      assert.deepEqual(
+        benTwin.badges.map((b: any) => [b.scope, b.counted, b.why, b.side]).sort(),
+        [[`${EXCHANGE}/peer`, false, 'notProfileScope', null], [`${MARKET}/buyer`, true, null, 'student']],
+      )
+      assert.deepEqual(benTwin.scores.uniqueness.map((u: any) => u.scope), [`${MARKET}/buyer`])
+      assert.ok(readable(rendered.get(`/profiles/${ben.did}`)!).includes('Not counted: registered for another market or side than the one this profile is in.'))
+      const daraTwin = await json(`/profiles/${dara.did}.json`)
+      assert.deepEqual([daraTwin.profile.side, daraTwin.scores.uniqueness.map((u: any) => u.scope)], [null, [`${EXCHANGE}/peer`]])
+      assert.match(readable(rendered.get(`/profiles/${dara.did}`)!), /In\s+Language exchange/, 'a one-sided market names no side')
 
       // A market with no money: no price, no Pay link, and the page says how deals go.
       const exchange = await json(`/markets/${EXCHANGE}.json`)
       assert.equal(exchange.market.money, false)
       assert.deepEqual(exchange.market.roles, ['peer'])
       assert.deepEqual(exchange.counts, { offers: 1, requests: 0, badgedProfiles: 1 })
-      const [benOffer] = exchange.offers
-      assert.deepEqual([benOffer.uri, benOffer.price, benOffer.payLink, benOffer.location], [OFFERS.exchange.uri, null, null, LISBON])
+      const [daraOffer] = exchange.offers
+      assert.deepEqual([daraOffer.uri, daraOffer.price, daraOffer.payLink, daraOffer.location], [OFFERS.exchange.uri, null, null, LISBON])
       assert.ok(readable(rendered.get(`/markets/${EXCHANGE}`)!).includes('Arroios, Lisbon (within 2 km)'))
       assert.equal(
         (await json(`/pay.json?v=1&offer=${encodeURIComponent(OFFERS.exchange.uri)}&cid=${OFFERS.exchange.cid}&price.amount=1&price.mint=${portuguese.price.mint}&price.per=job`)).check,

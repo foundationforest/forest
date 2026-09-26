@@ -396,6 +396,22 @@ for (const shape of SHAPES) {
   })
 }
 
+test('a profile lives in one market, as one side of it', () => {
+  for (const key of ['market', 'role']) {
+    const p = example('profile')
+    delete p[key]
+    assertRejected(validateRecord(p), new RegExp(`must have the property "${key}"`))
+  }
+  assert.deepEqual(validateRecord({ ...example('profile'), role: 'buyer' }, { market: market() }), { ok: true, shape: 'profile', errors: [] })
+  const wrong = validateRecord({ ...example('profile'), market: 'plumbing', role: 'student' }, { market: market() })
+  assertRejected(wrong, /market must be "online-tutors", got "plumbing"/)
+  assertRejected(wrong, /role must be one of \(seller\|buyer\), got "student"/, 'a label is not a role')
+  const one = { ...market(), sides: 'one' }
+  delete one.labels
+  assert.deepEqual(validateRecord({ ...example('profile'), role: 'peer' }, { market: one }), { ok: true, shape: 'profile', errors: [] })
+  assertRejected(validateRecord(example('profile'), { market: one }), /role must be one of \(peer\), got "seller"/)
+})
+
 test('a post must use the market name and one of its roles', () => {
   const post = example('post')
   post.market = 'plumbers'

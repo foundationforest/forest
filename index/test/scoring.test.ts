@@ -39,10 +39,13 @@ const scoring = {
 }
 const settings = { directory, issuers: { [FOUNDATION]: { name: 'Forest Foundation', weight: 1 } }, scoring }
 
-const ana = { did: 'did:plc:ana', wallet: 'AnaWallet' }
-const ben = { did: 'did:plc:ben', wallet: 'BenWallet' }
-const cleo = { did: 'did:plc:cleo', wallet: 'CleoDeclared' }
+// Each profile lives in one scope, as its record names it.
+const ana = { did: 'did:plc:ana', wallet: 'AnaWallet', scope: 'online-tutors/seller' }
+const ben = { did: 'did:plc:ben', wallet: 'BenWallet', scope: 'online-tutors/buyer' }
+const cleo = { did: 'did:plc:cleo', wallet: 'CleoDeclared', scope: 'online-tutors/seller' }
 const badge = (did: string, wallet: string, scope = 'online-tutors/seller', listOwner = FOUNDATION): BadgeIn => ({ did, wallet, scope, listOwner })
+/** A badge's status for a profile declaring `wallet` and living in `scope` (the badge's own, unless another is named). */
+const own = (b: BadgeIn, wallet: string | null = ana.wallet, scope: string | null = b.scope) => badgeStatus(b, { wallet, scope }, directory)
 // Ana invoiced Ben (the seller created it), and Ben paid in one tap: no funding mark, released.
 const receipt = (over: Partial<ReceiptIn> = {}): ReceiptIn => ({
   escrow: 'Deal1111111111111111111111111111111111111111',
@@ -120,25 +123,35 @@ test('evidence: what counts little', () => {
 })
 
 test('a badge counts only as market/role under a directory name, and only for the wallet the profile declares', () => {
-  assert.deepEqual(badgeStatus(badge(ana.did, ana.wallet), ana.wallet, directory), { counted: true, market: 'online-tutors', role: 'seller' }, 'market/role; a file with no roles has seller and buyer')
-  assert.deepEqual(badgeStatus(badge(ana.did, ana.wallet, 'online-tutors/buyer'), ana.wallet, directory), { counted: true, market: 'online-tutors', role: 'buyer' })
-  assert.deepEqual(badgeStatus(badge(ana.did, ana.wallet, 'online-tutors'), ana.wallet, directory), { counted: false, why: 'noRole' }, 'a plain market counts for nothing')
-  assert.deepEqual(badgeStatus(badge(ana.did, ana.wallet, 'online-tutors:seller'), ana.wallet, directory), { counted: false, why: 'notInDirectory' }, 'only the slash separates a role')
-  assert.deepEqual(badgeStatus(badge(ana.did, 'NotDeclared'), ana.wallet, directory), { counted: false, why: 'walletNotDeclared' })
-  assert.deepEqual(badgeStatus(badge(ana.did, ana.wallet), null, directory), { counted: false, why: 'walletNotDeclared' })
-  assert.deepEqual(badgeStatus(badge(ana.did, ana.wallet, 'online-tutor/seller'), ana.wallet, directory), { counted: false, why: 'notInDirectory' }, 'another spelling is another name, not in the directory')
-  assert.deepEqual(badgeStatus(badge(ana.did, ana.wallet, 'plumbing/seller'), ana.wallet, directory), { counted: false, why: 'notInDirectory' }, 'a name the directory does not list')
-  assert.deepEqual(badgeStatus(badge(ana.did, ana.wallet, 'Online-Tutors/seller'), ana.wallet, directory), { counted: false, why: 'notInDirectory' }, 'byte for byte')
-  assert.deepEqual(badgeStatus(badge(ana.did, ana.wallet, 'online-tutors/plumber'), ana.wallet, directory), { counted: false, why: 'notInDirectory' }, 'a role the market does not have')
+  assert.deepEqual(own(badge(ana.did, ana.wallet)), { counted: true, market: 'online-tutors', role: 'seller' }, 'market/role; a file with no roles has seller and buyer')
+  assert.deepEqual(own(badge(ana.did, ana.wallet, 'online-tutors/buyer')), { counted: true, market: 'online-tutors', role: 'buyer' })
+  assert.deepEqual(own(badge(ana.did, ana.wallet, 'online-tutors')), { counted: false, why: 'noRole' }, 'a plain market counts for nothing')
+  assert.deepEqual(own(badge(ana.did, ana.wallet, 'online-tutors:seller')), { counted: false, why: 'notInDirectory' }, 'only the slash separates a role')
+  assert.deepEqual(own(badge(ana.did, 'NotDeclared')), { counted: false, why: 'walletNotDeclared' })
+  assert.deepEqual(own(badge(ana.did, ana.wallet), null), { counted: false, why: 'walletNotDeclared' })
+  assert.deepEqual(own(badge(ana.did, ana.wallet, 'online-tutor/seller')), { counted: false, why: 'notInDirectory' }, 'another spelling is another name, not in the directory')
+  assert.deepEqual(own(badge(ana.did, ana.wallet, 'plumbing/seller')), { counted: false, why: 'notInDirectory' }, 'a name the directory does not list')
+  assert.deepEqual(own(badge(ana.did, ana.wallet, 'Online-Tutors/seller')), { counted: false, why: 'notInDirectory' }, 'byte for byte')
+  assert.deepEqual(own(badge(ana.did, ana.wallet, 'online-tutors/plumber')), { counted: false, why: 'notInDirectory' }, 'a role the market does not have')
 })
 
 test('a badge counts only under a role its market’s sides allow: peer in a one-sided market', () => {
-  assert.deepEqual(badgeStatus(badge(ana.did, ana.wallet, 'language-exchange/peer'), ana.wallet, directory), { counted: true, market: 'language-exchange', role: 'peer' })
+  assert.deepEqual(own(badge(ana.did, ana.wallet, 'language-exchange/peer')), { counted: true, market: 'language-exchange', role: 'peer' })
   for (const role of ['seller', 'buyer']) {
-    assert.deepEqual(badgeStatus(badge(ana.did, ana.wallet, `language-exchange/${role}`), ana.wallet, directory), { counted: false, why: 'notInDirectory' }, `no ${role} in a one-sided market`)
+    assert.deepEqual(own(badge(ana.did, ana.wallet, `language-exchange/${role}`)), { counted: false, why: 'notInDirectory' }, `no ${role} in a one-sided market`)
   }
-  assert.deepEqual(badgeStatus(badge(ana.did, ana.wallet, 'online-tutors/peer'), ana.wallet, directory), { counted: false, why: 'notInDirectory' }, 'no peer in a two-sided one')
-  assert.deepEqual(badgeStatus(badge(ana.did, ana.wallet, 'online-tutors/tutor'), ana.wallet, directory), { counted: false, why: 'notInDirectory' }, 'a label is a word for pages, not a role')
+  assert.deepEqual(own(badge(ana.did, ana.wallet, 'online-tutors/peer')), { counted: false, why: 'notInDirectory' }, 'no peer in a two-sided one')
+  assert.deepEqual(own(badge(ana.did, ana.wallet, 'online-tutors/tutor')), { counted: false, why: 'notInDirectory' }, 'a label is a word for pages, not a role')
+})
+
+test('a badge counts only under its profile’s own scope: one folder, one market, one side', () => {
+  assert.deepEqual(own(badge(ana.did, ana.wallet), ana.wallet, ana.scope), { counted: true, market: 'online-tutors', role: 'seller' })
+  assert.deepEqual(own(badge(ana.did, ana.wallet, 'online-tutors/buyer'), ana.wallet, ana.scope), { counted: false, why: 'notProfileScope' }, 'the other side of the same market')
+  assert.deepEqual(own(badge(ana.did, ana.wallet, 'language-exchange/peer'), ana.wallet, ana.scope), { counted: false, why: 'notProfileScope' }, 'another market')
+  assert.deepEqual(own(badge(ana.did, ana.wallet), ana.wallet, null), { counted: false, why: 'notProfileScope' }, 'a profile that names no scope')
+  // Uniqueness counts only the badge under the profile's own scope.
+  const u = uniqueness({ profiles: [ana], badges: [badge(ana.did, ana.wallet), badge(ana.did, ana.wallet, 'language-exchange/peer')] }, settings)
+  assert.deepEqual(u.map((x) => x.scope), ['online-tutors/seller'])
 })
 
 test('uniqueness: issuers combine, an issuer at 0 adds nothing', () => {
@@ -164,7 +177,7 @@ test('standing: everyone starts at zero; the scenario the end-to-end test runs',
   const deal = receipt()
   const inputs: Inputs = {
     profiles: [ana, ben, cleo],
-    badges: [badge(ana.did, ana.wallet), badge(ben.did, ben.wallet), badge(cleo.did, 'CleoUndeclared')],
+    badges: [badge(ana.did, ana.wallet), badge(ben.did, ben.wallet, 'online-tutors/buyer'), badge(cleo.did, 'CleoUndeclared')],
     receipts: [deal],
     reviews: [
       review(ben.did, ana.did, { dealId: deal.escrow, overall: 10 }),
@@ -196,7 +209,7 @@ test('standing: everyone starts at zero; the scenario the end-to-end test runs',
 
 test('standing: repeating yourself or inventing deal ids adds nothing; self-reviews are ignored', () => {
   const spam = Array.from({ length: 20 }, (_, i) => review(ben.did, ana.did, { dealId: i.toString(16).padStart(64, '0'), overall: 10 }))
-  const s = compute({ profiles: [ana, ben], badges: [badge(ben.did, ben.wallet)], receipts: [], reviews: spam }, settings)
+  const s = compute({ profiles: [ana, ben], badges: [badge(ben.did, ben.wallet, 'online-tutors/buyer')], receipts: [], reviews: spam }, settings)
   assert.equal(s.reviews.filter((v) => v.counted).length, 1, 'only the latest no-receipt review counts')
   assert.ok(Math.abs(s.standing.find((x) => x.did === ana.did)!.value - 0.05) < 1e-9, '1 × 0.05 × 1')
 
@@ -209,12 +222,12 @@ test('standing: repeating yourself or inventing deal ids adds nothing; self-revi
 test('standing: a bad review with a receipt lowers standing below zero; no rating is neutral', () => {
   const deal = receipt()
   const bad = compute(
-    { profiles: [ana, ben], badges: [badge(ben.did, ben.wallet)], receipts: [deal], reviews: [review(ben.did, ana.did, { dealId: deal.escrow, overall: 1 })] },
+    { profiles: [ana, ben], badges: [badge(ben.did, ben.wallet, 'online-tutors/buyer')], receipts: [deal], reviews: [review(ben.did, ana.did, { dealId: deal.escrow, overall: 1 })] },
     settings,
   )
   assert.equal(bad.standing.find((x) => x.did === ana.did)!.value, -1)
   const thin = compute(
-    { profiles: [ana, ben], badges: [badge(ben.did, ben.wallet)], receipts: [deal], reviews: [review(ben.did, ana.did, { dealId: deal.escrow, overall: null })] },
+    { profiles: [ana, ben], badges: [badge(ben.did, ben.wallet, 'online-tutors/buyer')], receipts: [deal], reviews: [review(ben.did, ana.did, { dealId: deal.escrow, overall: null })] },
     settings,
   )
   assert.equal(thin.standing.find((x) => x.did === ana.did)!.value, 0)
@@ -230,7 +243,7 @@ test('rating: the counted overalls, averaged with the weights standing uses', ()
   const s = compute(
     {
       profiles: [ana, ben, cleo],
-      badges: [badge(ben.did, ben.wallet)],
+      badges: [badge(ben.did, ben.wallet, 'online-tutors/buyer')],
       receipts: [deal],
       reviews: [
         // Ben: badged, with a receipt both said yes to: weight 1 × 1.

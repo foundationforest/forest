@@ -7,7 +7,6 @@ import { type Near, type Raw, type Urls, SCORING_DOC, html, layout } from './htm
 import { dealLd, folderLd, homeLd, marketLd, payLd, profileLd, searchLd } from './jsonld.ts'
 import type { PayModel } from './pay.ts'
 import * as w from './words.ts'
-import type { Options } from './words.ts'
 
 export type View = { urls: Urls; currencies: CurrencyConfig }
 
@@ -31,12 +30,6 @@ function where(o: Offer): string {
   return o.location.precisionKm > 0 ? `${o.location.area} (within ${o.location.precisionKm} km)` : o.location.area
 }
 
-/** The escrow's options in one sentence, and a warning when they favour one side. */
-function optionsLines(o: Options, sides: { seller: string; buyer: string }): Raw {
-  const warning = w.optionsWarning(o, sides)
-  return html`<p class="small muted">${o.text}</p>${warning ? html`<p class="small warn">${warning}</p>` : ''}`
-}
-
 function offerCard(v: View, o: Offer, showSeller: boolean): Raw {
   const place = where(o)
   const price = w.price(o.price, v.currencies)
@@ -45,7 +38,6 @@ ${showSeller ? html`<h3><a href="${o.profileUrl}">${o.name ?? 'A profile with no
 ${!showSeller && o.marketUrl ? html`<p class="small"><a href="${o.marketUrl}">${w.title(o.market!)}</a></p>` : ''}
 <p>${o.description}</p>
 <p class="row">${price ? html`<strong>${price}</strong>` : ''}${place ? html`<span class="muted">${place}</span>` : ''}${o.availability ? html`<span class="muted">${o.availability}</span>` : ''}</p>
-${optionsLines(o.options, o.sides)}
 ${o.payLink ? html`<p><a class="pay" href="${o.payLink}" rel="nofollow">Pay</a></p>` : ''}
 </li>`
 }
@@ -124,7 +116,9 @@ export function profilePage(v: View, m: ProfileModel): string {
   const t = m.scores.standing
   const details = (t?.details ?? { reviews: { received: 0, counted: 0, withReceipt: 0 } }) as { reviews: { received: number; counted: number; withReceipt: number } }
   const rating = { value: m.scores.rating?.value ?? null, reviews: (m.scores.rating?.details as { reviews: number } | undefined)?.reviews ?? 0 }
+  const home = p.market && p.marketUrl ? html`<p class="small">${p.side ? `${w.title(p.side)} in ` : 'In '}<a href="${p.marketUrl}">${w.title(p.market)}</a></p>` : ''
   const body = html`<h1>${p.name}</h1>
+${home}
 ${p.about ? html`<p>${p.about}</p>` : ''}
 ${p.contact ? html`<p><strong>Contact:</strong> ${p.contact}</p>` : ''}
 
@@ -202,7 +196,6 @@ export function dealPage(v: View, m: DealModel): string {
 <dt>Started by</dt><dd>${r.creator === 'seller' ? html`${seller.html} (asked for payment)` : buyer.html}${r.createdAt ? ` · ${w.date(r.createdAt)}` : ''}</dd>
 ${r.fundedAt ? html`<dt>Payment marked</dt><dd>${w.date(r.fundedAt)}</dd>` : ''}
 <dt>${r.endedAt ? 'Ended' : 'Now'}</dt><dd>${status}${r.endedAt ? ` ${w.date(r.endedAt)}.` : ''}</dd>
-<dt>Terms</dt><dd>${optionsLines(r.options, r.sides)}</dd>
 </dl>
 <p class="small muted">${weight}</p>`
   }

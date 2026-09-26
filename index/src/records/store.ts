@@ -58,11 +58,12 @@ export async function applyRecordOp(db: Db, directory: Directory, op: RecordOp):
     case COLLECTIONS.profile: {
       if (op.rkey !== 'self') return { result: 'refused', why: 'a profile is keyed self' }
       await db.query(
-        `insert into profiles (did, cid, rev, record, name, wallet, created_at, indexed_at)
-         values ($1, $2, $3, $4, $5, $6, $7, now())
+        `insert into profiles (did, cid, rev, record, name, wallet, market, role, created_at, indexed_at)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
          on conflict (did) do update set cid = excluded.cid, rev = excluded.rev, record = excluded.record,
-           name = excluded.name, wallet = excluded.wallet, created_at = excluded.created_at, indexed_at = now()`,
-        [op.did, op.cid, op.rev, r, r.name, r.wallet ?? null, ts(r.createdAt)],
+           name = excluded.name, wallet = excluded.wallet, market = excluded.market, role = excluded.role,
+           created_at = excluded.created_at, indexed_at = now()`,
+        [op.did, op.cid, op.rev, r, r.name, r.wallet ?? null, r.market, r.role, ts(r.createdAt)],
       )
       break
     }

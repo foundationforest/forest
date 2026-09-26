@@ -95,10 +95,11 @@ export function loadLexiconDocs() {
  * A post's location, when it has one, is a point in degrees and a place name.
  * A post's terms are optional and checked by the lexicon alone.
  *
- * With a market file, the record is also checked against that market: a post
- * against the market it names (its name, a role its sides allow, its offer
- * fields, and a price when the market has money); a review against the market
- * of the profile it is about (its review fields). The caller finds that market.
+ * With a market file, the record is also checked against that market: a
+ * profile against the market it lives in (its name and a role its sides allow);
+ * a post against the market it names (the same, its offer fields, and a price
+ * when the market has money); a review against the market of the profile it is
+ * about (its review fields). The caller finds that market.
  * Nothing in a market file limits a post's terms or token, a review may use
  * any rating name, and evidence is not checked: it weighs, it never rejects.
  */
@@ -383,13 +384,13 @@ function base58Length(s) {
   return bytes
 }
 
-// Cross-checks a post against the market file it names: its name, a role the
-// market's sides allow, and a price when the market has money. Its extra
-// fields were merged into the lexicon above. A review's are too; nothing else
-// about a review is checked against its market.
+// Cross-checks a profile or a post against the market file it names: its name
+// and a role the market's sides allow, and for a post a price when the market
+// has money. A post's extra fields were merged into the lexicon above, and a
+// review's too; nothing else about a review is checked against its market.
 function marketRules(shape, record, market) {
   const errors = []
-  if (shape === 'post') {
+  if (shape === 'profile' || shape === 'post') {
     if (record.market !== market.name) {
       errors.push(`Record/market must be "${market.name}", got ${JSON.stringify(record.market)}`)
     }
@@ -397,6 +398,8 @@ function marketRules(shape, record, market) {
     if (!roles.includes(record.role)) {
       errors.push(`Record/role must be one of (${roles.join('|')}), got ${JSON.stringify(record.role)}`)
     }
+  }
+  if (shape === 'post') {
     if (market.money && record.price === undefined) {
       errors.push(`Record must have the property "price": deals in ${market.name} are paid`)
     }

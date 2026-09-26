@@ -50,8 +50,9 @@ store in `src/chain/poll.ts` change only if a receipt gains or loses a fact.
 In [SCORING.md](SCORING.md), in plain words. In short:
 
 - A badge counts only as `market/role`, the market a directory name byte for byte and the role one
-  its sides allow (`seller` or `buyer` when two, `peer` when one), and only for the wallet the
-  profile declares. A plain `market` counts for nothing.
+  its sides allow (`seller` or `buyer` when two, `peer` when one), only when that is the profile's
+  own scope (the market and role its record names), and only for the wallet the profile declares.
+  A plain `market` counts for nothing.
 - **Uniqueness** combines the weights this index gives the issuers vouching for a badge. The
   weights are in `config/issuers.json`: the foundation's list starts at 1, everyone else at 0.
 - **Standing** (the handoff's trust) sums the reviews received, from each one's `overall`
@@ -77,7 +78,7 @@ stale-while-revalidate=300`, `access-control-allow-origin: *`, no cookies, no se
 | `/folders/{folder}` | `.json` | The folder's markets |
 | `/markets/{market}?near=&km=&offset=` | `.json` | The market file (with how deals go), counts, and live offers: badged sellers first, then standing, then newest, 50 a page. `near=lat,lon&km=N` keeps the offers whose point is within N km |
 | `/profiles/{did}` | `.json` | The profile; every badge, counted or not and why, and who vouched; its scores, apart and signed; live offers and requests; reviews received and given, each with the payment behind it; credentials |
-| `/deals/{dealId}` | `.json` | The receipt in plain words (or none), its options, the profiles that declare its two keys with their two numbers, and the reviews that name it |
+| `/deals/{dealId}` | `.json` | The receipt in plain words (or none), the profiles that declare its two keys with their two numbers, and the reviews that name it |
 | `/search?q=&near=&km=` | `/search.json?q=` | Directory markets matching `q` by substring (name, folder, roles, labels), and live offers by full-text search (Postgres's `simple` configuration, which favours no language), near a point if asked |
 | `/pay?…` | `/pay.json?…` | An offer's Pay link, checked against the offer as indexed ([PAYLINK.md](PAYLINK.md)) |
 
@@ -100,12 +101,12 @@ are `Review`s with their authors, rated out of 10; and an `AggregateRating` is i
 `PropertyValue`. The JSON twins keep the records' own field names, such as `wallet` and `mint`,
 because they are for machines; the pages for people say none of them.
 
-Every offer card, the pay page and the receipt page say the escrow's options in one plain sentence
-("No arbiter, no timer.", "Money goes back to the buyer after 30 days automatically."), with a
-warning when the arbiter is one of the two sides or a timer returns the money to the buyer (the
-twin's `options.flag`). Where a market file has labels, the pages use them for seller and buyer; a
-receipt takes its seller's market's. A review's market is the market of the profile it is about:
-its extra fields are that market's `reviewFields`.
+An offer's escrow options (`terms`) and a receipt's (`arbiter`, `timer`) are plain data in the
+twins; the pages say nothing about them, and what to say is each app's. A profile lives in one
+market, as one side of it, as its record names them; a badge counts for it only under that scope.
+Where a market file has labels, the pages use them for seller and buyer; a receipt takes its
+seller's market's. A review's market is the market of the profile it is about: its extra fields
+are that market's `reviewFields`.
 
 ### Changed from part one
 
