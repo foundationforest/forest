@@ -3,13 +3,16 @@
 //   node railway.ts provision          the project `forest-devnet`: five services, their volumes and
 //                                      public domains, and each one's build and run settings (SERVICES below)
 //   node railway.ts variables          every service's variables; the secrets sealed
+//   node railway.ts set NAME VAR...    only the named variables of one service, made as `variables` makes
+//                                      them, and nothing else read or made
 //   node railway.ts deploy [name...]   builds and deploys: the branch's pushed commit when Railway can read
 //                                      the repo, otherwise an upload of this checkout (`railway up`)
 //   node railway.ts status             each service's latest deployment
 //   node railway.ts sealed             every variable's name and whether it is sealed; never a value
 //   node railway.ts rotate NAME        a new value for a secret this script makes, sealed, and a redeploy
 //   node railway.ts wire               the relay told to read the host (its admin requestCrawl), and its host list
-//   node railway.ts track BRANCH       every service built from BRANCH of the repo (main, once this is merged)
+//   node railway.ts track BRANCH       every service built from BRANCH of the repo, and redeployed on each
+//                                      push to it (main)
 //
 // Each step reads what exists first and changes only what is missing or different. Public facts
 // (ids, domains) go to deploy/services.json. Secrets are made or read by lib/secrets.ts, sent to
@@ -205,13 +208,20 @@ async function provision(): Promise<void> {
 // ---- variables ----------------------------------------------------------------------------------
 
 type Value = { value: string; sealed: boolean }
-const plain = (value: string): Value => ({ value, sealed: false })
-const sealed = (value: string): Value => {
+/**
+ * A variable as `variablesFor` names it. Its value is made only when it is sent, so `set` can send one
+ * variable without reading or making any other's secret.
+ */
+type Variable = () => Value
+const plain = (value: string): Variable => () => ({ value, sealed: false })
+const sealed = (make: () => string): Variable => () => {
+  const value = make()
   secrets.add(value)
   return { value, sealed: true }
 }
+const rpcVariable: Variable = rpc.sealed ? sealed(() => rpc.value) : plain(rpc.value)
 
-function variablesFor(name: Name, urls: Record<Name, string>): Record<string, Value> {
+function variablesFor(name: Name, urls: Record<Name, string>): Record<string, Variable> {
   const host = (url: string) => new URL(url).host
   switch (name) {
     case 'host':
@@ -228,9 +238,9 @@ function variablesFor(name: Name, urls: Record<Name, string>): Record<string, Va
         PDS_BSKY_APP_VIEW_DID: plain('did:web:appview.invalid'),
         LOG_ENABLED: plain('1'),
         LOG_LEVEL: plain('info'),
-        PDS_JWT_SECRET: sealed(secret('PDS_JWT_SECRET', hex32)),
-        PDS_ADMIN_PASSWORD: sealed(secret('PDS_ADMIN_PASSWORD', hex32)),
-        PDS_PLC_ROTATION_KEY_K256_PRIVATE_KEY_HEX: sealed(secret('PDS_PLC_ROTATION_KEY_K256_PRIVATE_KEY_HEX', hex32)),
+        PDS_JWT_SECRET: sealed(() => secret('PDS_JWT_SECRET', hex32)),
+        PDS_ADMIN_PASSWORD: sealed(() => secret('PDS_ADMIN_PASSWORD', hex32)),
+        PDS_PLC_ROTATION_KEY_K256_PRIVATE_KEY_HEX: sealed(() => secret('PDS_PLC_ROTATION_KEY_K256_PRIVATE_KEY_HEX', hex32)),
       }
     case 'carrier':
       // carrier/relay.env.example, on the volume.
@@ -243,16 +253,16 @@ function variablesFor(name: Name, urls: Record<Name, string>): Record<string, Va
         RELAY_API_BIND: plain(':2470'),
         PORT: plain('2470'), // Railway's health check calls PORT
         RELAY_METRICS_LISTEN: plain(':2471'),
-        RELAY_ADMIN_PASSWORD: sealed(secret('RELAY_ADMIN_PASSWORD', password)),
+        RELAY_ADMIN_PASSWORD: sealed(() => secret('RELAY_ADMIN_PASSWORD', password)),
       }
     case 'index':
-      // index/HOSTING.md; readers and pages in one process on the trial, so it holds the seed.
+      // index/HOSTING.md; readers and pages in one process, so it holds the seed.
       return {
-        DATABASE_URL: sealed(readSecret('DATABASE_URL')),
-        INDEX_SIGNING_SEED: sealed(secret('INDEX_SIGNING_SEED', hex32)),
+        DATABASE_URL: sealed(() => readSecret('DATABASE_URL')),
+        INDEX_SIGNING_SEED: sealed(() => secret('INDEX_SIGNING_SEED', hex32)),
         FIREHOSE_URL: plain(`wss://${host(urls.carrier)}`),
         PLC_URL: plain('https://plc.directory'),
-        SOLANA_RPC_URL: rpc.sealed ? sealed(rpc.value) : plain(rpc.value),
+        SOLANA_RPC_URL: rpcVariable,
         REGISTRY_PROGRAM_ID: plain(DEVNET.registry),
         ESCROW_PROGRAM_ID: plain(DEVNET.escrow),
         CHAIN_COMMITMENT: plain('finalized'),
@@ -262,9 +272,9 @@ function variablesFor(name: Name, urls: Record<Name, string>): Record<string, Va
       }
     case 'issuer': {
       // issuer/README.md. No Didit key: deploy/issuer/start.sh runs the stand-in.
-      const vars: Record<string, Value> = {
-        ISSUER_KEYPAIR: sealed(keyFile('issuer')),
-        SOLANA_RPC_URL: rpc.sealed ? sealed(rpc.value) : plain(rpc.value),
+      const vars: Record<string, Variable> = {
+        ISSUER_KEYPAIR: sealed(() => keyFile('issuer')),
+        SOLANA_RPC_URL: rpcVariable,
         REGISTRY_PROGRAM_ID: plain(DEVNET.registry),
         LIST_INDEX: plain('0'),
         DATABASE_PATH: plain('/data/issuer.sqlite'),
@@ -275,16 +285,16 @@ function variablesFor(name: Name, urls: Record<Name, string>): Record<string, Va
         PORT: plain('8080'),
       }
       if (process.env.DIDIT_API_KEY && process.env.DIDIT_WORKFLOW_ID) {
-        vars.DIDIT_API_KEY = sealed(process.env.DIDIT_API_KEY)
-        vars.DIDIT_WORKFLOW_ID = sealed(process.env.DIDIT_WORKFLOW_ID)
+        vars.DIDIT_API_KEY = sealed(() => need('DIDIT_API_KEY'))
+        vars.DIDIT_WORKFLOW_ID = sealed(() => need('DIDIT_WORKFLOW_ID'))
       }
       return vars
     }
     case 'feepayer':
       // feepayer/README.md: the key itself as the JSON array, since Railway has no secret files.
       return {
-        FOREST_FEEPAYER_KEY: sealed(keyFile('payer')),
-        RPC_URL: rpc.sealed ? sealed(rpc.value) : plain(rpc.value),
+        FOREST_FEEPAYER_KEY: sealed(() => keyFile('payer')),
+        RPC_URL: rpcVariable,
         PORT: plain('8080'),
       }
   }
@@ -344,11 +354,12 @@ async function patch(serviceId: string, variables: Record<string, { value: strin
  * occurred"). So a secret found unsealed is removed through the config (null) and sent again sealed,
  * and anything missing is sent again.
  */
-async function setVariables(name: Name, vars: Record<string, Value>): Promise<void> {
+async function setVariables(name: Name, variables: Record<string, Variable>): Promise<void> {
   const { railway } = readRecord()
   const serviceId = railway.services[name].id
   // Railway's documented way to build from a Dockerfile that is not at the root.
-  vars = { RAILWAY_DOCKERFILE_PATH: plain(`deploy/${name}/Dockerfile`), ...vars }
+  const all = { RAILWAY_DOCKERFILE_PATH: plain(`deploy/${name}/Dockerfile`), ...variables }
+  const vars: Record<string, Value> = Object.fromEntries(Object.entries(all).map(([k, make]) => [k, make()]))
   const shape = (v: Value) => (v.sealed ? { value: v.value, isSealed: true } : { value: v.value })
   await patch(serviceId, Object.fromEntries(Object.entries(vars).map(([k, v]) => [k, shape(v)])))
 
@@ -375,6 +386,23 @@ async function setVariables(name: Name, vars: Record<string, Value>): Promise<vo
 async function variables(): Promise<void> {
   const urls = urlsFromRecord()
   for (const name of live()) await setVariables(name, variablesFor(name, urls))
+  await sealedReport()
+}
+
+/**
+ * Only the named variables of one service, each made as `variables` makes it; no other variable's
+ * secret is read or made. On a machine without this deploy's secrets folder, `variables` would make
+ * every missing secret anew, which is a rotation (the index's signing identity included): `set`
+ * changes one thing, such as `set issuer DIDIT_API_KEY DIDIT_WORKFLOW_ID`.
+ */
+async function set(name: Name, keys: string[]): Promise<void> {
+  if (!NAMES.includes(name)) throw new Error(`usage: node railway.ts set ${NAMES.join('|')} VAR...`)
+  const all = variablesFor(name, urlsFromRecord())
+  const unknown = keys.filter((k) => !(k in all))
+  if (!keys.length || unknown.length) {
+    throw new Error(`usage: node railway.ts set ${name} VAR...; ${name} sets ${Object.keys(all).join(', ')}`)
+  }
+  await setVariables(name, Object.fromEntries(keys.map((k) => [k, all[k]])))
   await sealedReport()
 }
 
@@ -468,7 +496,7 @@ async function rotate(key: string): Promise<void> {
   if (!made) throw new Error(`rotate knows ${Object.keys(MADE).join(', ')}; others change where they come from (deploy/README.md)`)
   const { writeSecret } = await import('./lib/secrets.ts')
   writeSecret(key, made.make())
-  await setVariables(made.service, { [key]: sealed(readSecret(key)) })
+  await setVariables(made.service, { [key]: sealed(() => readSecret(key)) })
   await deploy([made.service])
 }
 
@@ -523,6 +551,9 @@ switch (step) {
   case 'variables':
     await variables()
     break
+  case 'set':
+    await set(args[0] as Name, args.slice(1))
+    break
   case 'deploy':
     await deploy(args as Name[])
     break
@@ -542,5 +573,5 @@ switch (step) {
     await track(args[0])
     break
   default:
-    throw new Error('usage: node railway.ts provision|variables|deploy [name...]|status|sealed|rotate NAME|wire|track BRANCH')
+    throw new Error('usage: node railway.ts provision|variables|set NAME VAR...|deploy [name...]|status|sealed|rotate NAME|wire|track BRANCH')
 }

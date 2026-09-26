@@ -51,14 +51,14 @@ lies about its price or terms is caught by the next step; a link cannot redirect
    through the DID document, or from any index: `/profiles/<did>.json` lists the offers with their
    `cid`). If the record's content id is not `cid`, the offer changed after the link was made:
    show the record's terms, not the link's. If the content id matches but a field differs, the link
-   was altered: stop.
+   was altered.
 3. **Find the seller's key** in the seller's profile record, as above.
 4. **Agree the amount.** `price.amount` is per hour, per day or for the job; the app asks how many
    hours or days and multiplies, then converts whole units to base units by the currency's decimals.
 5. **Make the escrow and pay,** with the escrow client: `termsFor(post.terms, { seller, amount })`,
    then `payInOneTap` to create, pay and release in one transaction, or `createIx` and a plain
    transfer to hold the money until the work is done. Before paying into an escrow someone else
-   created, check it with `whatDiffers` and `optionsNotAgreed` (see `escrow/client/src/terms.ts`).
+   created, check it with `optionsNotAgreed` (see `escrow/client/src/terms.ts`).
 
 The index's own page at the link (`/pay?…`) shows the offer in plain words and whether the link
 still matches it; its twin (`/pay.json?…`) says the same for machines, in `check`:
@@ -67,7 +67,7 @@ still matches it; its twin (`/pay.json?…`) says the same for machines, in `che
 |---|---|
 | `matches` | The link is the offer as indexed now |
 | `changed` | The offer was edited since (another `cid`); the page shows it as it is now |
-| `differs` | Same `cid`, another price or terms: the link was altered. Don't pay from it |
+| `differs` | Same `cid`, another price or terms: the link was altered |
 | `notLive` | The offer expired, or is no longer in a directory market |
 | `noPrice` | The offer names no price, so it has no Pay link |
 | `noKey` | The seller's profile names no key to be paid at |

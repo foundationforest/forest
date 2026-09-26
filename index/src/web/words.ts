@@ -191,7 +191,7 @@ export function outcome(o: string, n: { buyer: string; seller: string; toSeller:
     case 'arbitrated':
       return `The person they chose to decide split it: ${n.seller} got ${n.toSeller}, ${n.buyer} got ${n.toBuyer}.`
     case 'timerReleased':
-      return `The timer they set ran out: ${n.seller} got ${n.toSeller}, ${n.buyer} got ${n.toBuyer}.`
+      return `The time they set ran out: ${n.seller} got ${n.toSeller}, ${n.buyer} got ${n.toBuyer}.`
     default:
       return `It ended: ${n.seller} got ${n.toSeller}, ${n.buyer} got ${n.toBuyer}.`
   }

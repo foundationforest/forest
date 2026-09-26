@@ -6,6 +6,11 @@
 #   programs   both programs built as SBPF v3 (cargo build-sbf --arch v3), the format devnet runs
 #              them in, and their LiteSVM tests
 #
+# After every merge, a push to main:
+#   types      every package's type-check at once, on the merged commit (keys, both clients, the
+#              issuer, the index and deploy), so two pull requests that pass alone cannot leave main
+#              broken together. deploy/'s check needs the host built, for the host's test client
+#
 # Nightly, and by hand from the Actions tab, because they are slow or need a validator:
 #   validator  the registry client's, the escrow client's and the issuer's tests on a local validator
 #   fuzz       the registry's property test at 1,000 iterations; the escrow's fuzzer at 50,000,
@@ -100,6 +105,24 @@ jobs:
         run: |
           node --test --test-force-exit test/markets.test.ts test/scoring.test.ts test/sign.test.ts test/pages.test.ts | tee "$RUNNER_TEMP/tap"
           grep -qx '# skipped 0' "$RUNNER_TEMP/tap"
+
+  types:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Build the host, for deploy/'s check
+        run: |
+          corepack enable
+          host/build.sh
+      - name: Install
+        run: for dir in shapes keys registry/client escrow/client issuer index deploy; do (cd "$dir" && npm ci --no-audit --no-fund); done
+      - name: Type-check every package
+        run: for dir in keys registry/client escrow/client issuer index deploy; do echo "== $dir"; (cd "$dir" && npm run check); done
 
   programs:
     runs-on: ubuntu-latest

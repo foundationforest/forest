@@ -27,8 +27,9 @@ Each is on purpose, and none can be changed after deploy.
    public seeds so the tests can sign for them, so anyone with the repo can sign for them too.
    Deployed as they are, a stranger takes every fee and every dial, and owns list 0. Pinned by
    `finding_the_placeholder_treasury_is_anyones_key` and
-   `finding_the_placeholder_issuer_key_is_anyones_key`; `README.md`'s deploy checklist says what
-   replaces them. Devnet builds replace them with devnet keys (`devnet/build.sh`).
+   `finding_the_placeholder_issuer_key_is_anyones_key`; a client test fails if the program, its
+   tests and the client name different keys. Devnet builds replace them with devnet keys
+   (`devnet/build.sh`).
 3. **One treasury key turns every dial.** It accepts mints, each at a fee it sets once, and receives
    every fee and every sweep but a list's. It can accept a token it mints itself, a voucher by
    another name (`finding_the_treasury_can_accept_a_token_it_mints_itself`); only its discipline, a

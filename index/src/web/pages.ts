@@ -216,8 +216,8 @@ ${m.q ? html`<h2>Offers</h2>${nearLine(m.near)}${m.offers.length ? html`<ul clas
 
 const PAY_CHECK: Record<PayModel['check'], string> = {
   matches: 'This link matches the offer as it is now.',
-  changed: 'The offer has changed since this link was made. Check the terms below, which are the offer’s as it is now.',
-  differs: 'This link doesn’t match the offer it names: its price or terms were changed. Don’t pay from it.',
+  changed: 'The offer has changed since this link was made. Below is the offer as it is now.',
+  differs: 'This link doesn’t match the offer it names: its price or terms were changed.',
   notLive: 'This offer isn’t open any more.',
   noPrice: 'This offer names no price.',
   noKey: 'This seller hasn’t named how to be paid yet.',

@@ -24,4 +24,4 @@ Out of scope for v1: the cross-profile zero-knowledge proof (design storage so i
 
 For any change to a Solana program, use the safe-solana-builder skill and write its security checklist next to the program.
 
-When unsure whether something is settled, don't decide it: write the question in `docs/changes.md` and stop. At the end of every session append to `docs/changes.md`: built, learned, open. A session running in parallel writes both to its own `docs/changes/<topic>.md` instead (see "Building in parallel" in the handoff).
+When the plan is silent, choose the option that adds no rule and no text a person reads; log it as chosen. Ask only when the choice changes a sealed program or spends money. At the end of every session append to `docs/changes.md`: built, learned, open. A session running in parallel writes both to its own `docs/changes/<topic>.md` instead (see "Building in parallel" in the handoff).

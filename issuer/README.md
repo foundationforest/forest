@@ -4,8 +4,8 @@ The foundation's issuer: the step from "a face check passed" to "this person's s
 foundation's list". The foundation runs the first issuer, on list 0, which it owns. Issuers are
 open: anyone may open a list of their own in the registry and run this service, or another, on it.
 
-**Nothing here is shipped.** It has run against a stand-in Didit and a local validator, and nowhere
-else: no real face check, no devnet, no Railway.
+**Nothing here is shipped.** It runs on devnet, on Railway, with Didit's real face check
+(`docs/services.md`); its tests run against a stand-in Didit and a local validator.
 
 ## What it does
 
@@ -131,7 +131,7 @@ npm start                    # the service, with the variables below
 program built (`cargo build-sbf` in `registry/program`). It starts its own validator, loads the
 program, sends `init`, and starts the service from its environment variables with the real chain
 client and a stand-in Didit. The issuer key is the program's placeholder, which the tests can sign
-for; see `registry/README.md`, deploy checklist step 2.
+for (`registry/README.md`, "What is sealed").
 
 To run the service by hand against that validator, write a key file (`solana-keygen new -o
 issuer-keypair.json`, or the placeholder as the test does), point `ISSUER_KEYPAIR_PATH` at it, and
@@ -186,13 +186,13 @@ Not tried. What the service needs from any host, as it reads on Railway's docume
 - **Railway's HTTP logs.** Railway keeps every request's client address and path for 3 to 90 days,
   depending on plan, and its documents describe no way to turn that off. The service puts nothing
   in a path, but the addresses are Railway's log, not the service's. This conflicts with "no address
-  logs" and is open (`docs/changes/issuer.md`).
+  logs" and is open (`docs/changes.md`).
 - **A public domain** for the app to call. `PORT` is set by Railway.
 
 ## Chosen, not decided
 
 Where the handoff and the task were silent, the simplest option was taken. Each is reversible
-until something ships, and each is in `docs/changes/issuer.md`.
+until something ships, and each is in `docs/changes.md`.
 
 1. **Each Didit session gets a random `vendor_data`.** Didit's duplicate check compares a face
    against faces verified under a different `vendor_data`, and its documents don't say what happens

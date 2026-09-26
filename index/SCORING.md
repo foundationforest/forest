@@ -7,7 +7,7 @@ accountable, not good.
 - **Rating**, per profile, from 1.0 to 10.0: the `overall` ratings the people this profile dealt
   with gave it, averaged, each weighed by who gave it and by what backs it up.
 - **Standing**, per profile, starting at zero: what the people this profile dealt with said about
-  it, summed, weighed the same way. (The handoff calls it trust; it is the same score, renamed.)
+  it, summed, weighed the same way.
 
 These are this index's opinion, not the foundation's rule. The weights live in two files anyone
 can change on their own copy, `config/issuers.json` and `config/scoring.json`; the market names come
@@ -113,7 +113,7 @@ Rules that stop cheap inflation:
 What these rules do not stop: two real people who agree to run many small real deals and praise
 each other. The handoff bounds that by identity (one badge per human per market) and by reviewer
 standing. A minimum amount, or less weight for repeat deals between the same two, are open questions
-in `docs/changes/index.md`.
+in `docs/changes.md`.
 
 A worked example (the end-to-end test):
 

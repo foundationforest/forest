@@ -152,12 +152,8 @@ statement format are in `https://forest.foundation/index.json` under `index.keys
 
 An offer's `payLink` is one documented format:
 https://github.com/foundationforest/forest/blob/main/index/PAYLINK.md. It names the offer's record
-and repeats its price and terms. This index never pays and never holds money. The app the person
-pays with must:
-
-- look up the seller's key from the seller's own profile (the link does not carry it);
-- check the offer record against the link's `cid`;
-- then make the payment.
+and its content id (`cid`), and repeats its price and terms. It carries no seller key: the seller's
+key is in the seller's own profile. This index never pays and never holds money.
 
 An example, from this index's test data:
 
@@ -166,12 +162,6 @@ An example, from this index's test data:
 Its twin, `https://forest.foundation/pay.json?…` with the same query, says whether the link still
 matches the offer (`check`: `matches`, `changed`, `differs`, `notLive`, `noPrice`, `noKey`,
 `notFound`, `invalid`). An offer with no price has no Pay link.
-
-## Talking to people about it
-
-People reading your answer don't need the machinery. Say "payment", "dollars", "verified real
-person", "receipt". Don't say wallet, USDC, chain or gas. A score is evidence, not a verdict:
-say what backs it ("2 reviews, 1 backed by a payment"). Don't combine the scores into one.
 
 ## Examples
 

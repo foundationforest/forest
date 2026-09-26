@@ -4,10 +4,9 @@ The sealed Solana program that holds an amount of a classic SPL token between tw
 and seller, and lets it out only when the two sides agree; and the client an app uses to open,
 fund, check, end and read one.
 
-**Nothing here is shipped.** It has run under LiteSVM, under a fuzzer and on a local validator,
-and nowhere else. No devnet, no mainnet. The devnet run is built and scripted (`docs/devnet.md`),
-and stopped at the deploy for lack of test SOL in sessions 15 and 18; it has not been tried with
-this version.
+**Nothing here is shipped.** It runs on devnet, built as SBPF v3, with two real deals
+(`docs/devnet.md`), and has run under LiteSVM, under a fuzzer and on a local validator. Nothing is
+on mainnet.
 
 Money in, and out only when the two sides agree. Either party opens an escrow, naming both keys,
 the token and the amount; one the seller opens is an invoice. The escrow's address comes from the
@@ -273,7 +272,7 @@ every other devnet key (`devnet/keys.sh`, `docs/devnet.md`).
 ## Chosen, not decided
 
 Where the handoff and Carlos's answers were silent, the simplest option was taken. Each is
-reversible until something ships, and each is in `docs/changes/escrow.md`.
+reversible until something ships, and each is in `docs/changes.md`.
 
 1. **Funded means the live balance covers the amount**, checked by every way out, and below it the
    only exit is `close_unfunded`. So a receipt always means the amount was really held, and the
@@ -309,9 +308,8 @@ reversible until something ships, and each is in `docs/changes/escrow.md`.
 
 ## What this does not do
 
-No devnet deploy of this version, no mainnet; Kora only on a local validator, in `feepayer/`'s
-local test. No paid review has happened, and
-`docs/handoff.md`'s "Before mainnet" list still stands in full. Whether the wallets people use accept
+Nothing on mainnet; Kora only on a local validator, in `feepayer/`'s local test (the devnet deals
+used a plain payer key). No paid review has happened. Whether the wallets people use accept
 a program-derived address as a Solana Pay recipient has not been tried on a phone; if one does not,
 the app sends to the deposit address directly, which the client also gives. Tokens of another mint
 sent to an escrow's address are not recovered: its associated token account for that mint is a

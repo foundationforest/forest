@@ -74,6 +74,8 @@
         "RELAY_ADMIN_PASSWORD"
       ],
       "issuer": [
+        "DIDIT_API_KEY",
+        "DIDIT_WORKFLOW_ID",
         "ISSUER_KEYPAIR",
         "SOLANA_RPC_URL"
       ],
@@ -82,7 +84,7 @@
         "RPC_URL"
       ]
     },
-    "branch": "claude/zen-ritchie-9yl3w3"
+    "branch": "main"
   },
   "transactions": [
     {
