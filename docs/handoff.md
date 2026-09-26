@@ -202,7 +202,7 @@ How work splits: a chat with Carlos decides (stress tests, searches, anything th
 - `index/`: the readers, the scores and their signatures, the pages and their twins, the read skill, `llms.txt` and the Pay link, end to end on a local host, validator and Postgres, with the directory read from the `markets` repo.
 - `host/`: the fork, with end-to-end tests against a local directory and two local hosts.
 - `devnet/`: the devnet build (keys put into a copy of the source), the deploy script (each deploy's exact cost), the key script (every key derived from one phrase), and the public record; the run itself is in the two clients' `scripts/devnet.ts`, with read-only smoke tests (`npm run test:devnet`).
-- `deploy/`: the five services on Railway and the index's Postgres on Supabase: a Dockerfile per service, the devnet settings, a stand-in Didit that runs only when no Didit key is set, and the scripts that drive Railway, Supabase, the funding and the end-to-end proof.
+- `deploy/`: the five services on Railway and the index's Postgres on Supabase: a Dockerfile per service, the devnet settings, a stand-in Didit that runs only when no Didit key is set, and the scripts that drive Railway, Supabase, the funding and the loop (`deploy/e2e.ts`).
 - `testsite/`: a static site for trying the keys page on real phones; not online.
 - The `markets` repo: the directory, 57 markets in 17 folders.
 - Reports: `registry/FEASIBILITY.md` and `docs/decisions/` (used-code storage, the host, adversarial review 1 of both programs).
@@ -210,9 +210,10 @@ How work splits: a chat with Carlos decides (stress tests, searches, anything th
 **On devnet** (read September 26, 2026; every address and signature is in `docs/devnet.md` and `docs/services.md`):
 
 - **The programs:** the registry at `8sUyd9JXRGEUqf2hYVnLCybi74549VG27dAK6YvbbU3i` and the escrow at `3vAVLwiwFkCUG4AHV3gK3t15HoyRSuKNEuBFvvy9CbeR`, both SBPF v3, upgradeable by the devnet deploy key.
-- **The registry:** `init`; a test dollar accepted at 0.25; list 0, owned by the devnet issuer key, with two members; two badges. `freelance/seller`, for the keys recipe's test seed: `freelance` is not a directory market, so the foundation's index counts it for no profile. `tutoring/seller`, for the second test seed: its profile record names no market or role, so the index does not count the badge for that profile (`notProfileScope`).
-- **The escrow:** two deals, an invoice paid and released in one tap (2.00 to the seller) and a buyer's escrow split 60/40 by both sides.
-- **The keys:** the deploy key holds 1.80 SOL, the fee payer's key 1.13, the issuer's 0.00995 (about 2,000 inserts), the treasury 0.01.
+- **The registry:** `init`; a test dollar accepted at 0.25; list 0, owned by the devnet issuer key, with three members, the third put there by a person's real face check through the public issuer; four badges. `freelance/seller`, for the keys recipe's test seed: `freelance` is not a directory market, so the foundation's index counts it for no profile. `tutoring/seller` for the second test seed's profile 0, `tutoring/seller` for the third test seed's, and `tutoring/buyer` for the second seed's profile 1: the index counts all three.
+- **The escrow:** three deals: two invoices paid and released in one tap (2.00 and 10.00 to the seller, the second through the public fee payer) and a buyer's escrow split 60/40 by both sides.
+- **The keys:** the deploy key holds 1.80 SOL, the fee payer's key 1.12, the issuer's 0.00999 (about 2,000 inserts), the treasury 0.01.
+- **The loop,** on 2026-09-26, by `deploy/e2e.ts` over the public services: a new person's real face check, two badges and an invoice paid and released in one tap, all through the fee payer, and reviews both ways, each profile then rated and in standing on the index with the deal counted as agreed by both sides. A second run sends nothing (`docs/services.md`, "The loop").
 - **The services,** in the Railway project `forest-devnet` on the Hobby plan, each built from `main` and redeployed on every push to it; every devnet RPC they use is Helius's:
 
 | Service | URL |
@@ -225,9 +226,8 @@ How work splits: a chat with Carlos decides (stress tests, searches, anything th
 
 **Next, in order.**
 
-1. **The full loop over the public services, by script:** verify, register, post, get found, get paid, get reviewed.
-2. **The attack pass on both programs,** with overflow checks turned on.
-3. **Then Roots.** Names come after Roots.
+1. **The attack pass on both programs,** with overflow checks turned on.
+2. **Then Roots.** Names come after Roots.
 
 ## Building in parallel
 
@@ -256,7 +256,7 @@ One list. Each item says what it waits on: **needs Carlos** (a decision, an acco
 - Which wallet holds a pool's compliance attestation: on the central wallet it adds to what the ramp already knows; on a profile wallet it would put a person next to a profile. *Needs Carlos.*
 - Whether an app offering a pool needs its own lawyer pass. *Needs Carlos.*
 - Who runs the fee payer, and its operations loop: someone keeps SOL on its key and turns the dollars it collects back into SOL. With no margin it sells SOL at its price source's rate, with nothing for that source's error. This file has Roots run an instance. *Needs Carlos.*
-- Refunds arrive as SOL in a wallet that otherwise holds none: left there, paid out at ramp-out, or taken by the fee payer as payment (Kora can accept SOL as a paid token); the copy never says "SOL". *Needs Carlos.*
+- Refunds arrive as SOL in a wallet that otherwise holds none: left there, paid out at ramp-out, or taken by the fee payer as payment (Kora can accept SOL as a paid token); the copy never says "SOL". The loop shows it: the invoice's deposit address's rent came back to the seller as 0.00148844 SOL. *Needs Carlos.*
 - Priority fees: the fee payer allows no compute budget program, so no transaction carries one, and under congestion one may land late. Keep the five programs, or add the sixth and let the person pay for it. *Needs Carlos.*
 - A payment address apart from the fee payer's key, so what it collects sits under a colder key. *Needs Carlos.*
 - Kora 2.2, once stable: it hardens the fee payer against being drained, and it takes the key itself, not a path. *Mechanical.*
@@ -293,12 +293,13 @@ One list. Each item says what it waits on: **needs Carlos** (a decision, an acco
 
 **Issuer and face check**
 
-- The scripted loop's verify step meets Didit's real face check on devnet, which needs a person: someone does the check once per run, or the script puts its person on list 0 another way, as the devnet run did through the issuer key. *Needs Carlos.*
+- A face counts once per Didit application, devnet or not: Carlos's face is now in the duplicate search of the application the issuer uses, tied to the third test seed on devnet's list 0, so a later check of his there is refused as a duplicate unless that session is deleted in Didit's console. Delete it before anything real, or give devnet its own Didit application. Each new person in a scripted run needs a new face. *Needs Carlos.*
 - A passed face check that never reached the issuer, the device lost between the check and the submit, locks the person out: the face is Didit's, and the session is gone with the device. *Needs Carlos.*
 - A manual approval in Didit's console keeps the duplicate warning, so the issuer still refuses a false duplicate a person has cleared: a path for a false positive. *Needs Carlos.*
 - `/submit` has no limit: each one asks Didit for a decision, which spends Didit's rate limit. *Needs Carlos.*
 - Whether two face checks by one person at the same moment see each other in Didit's duplicate search; ask Didit. *Mechanical.*
-- The Didit client is tested against a stand-in built from Didit's documents. The first real decision, once a person does the check on the page in `docs/services.md`, is compared with `parseDecision`, and shows whether the foundation's workflow runs the liveness steps and the face search the issuer's rule reads. *Needs Carlos.*
+- Whether the foundation's workflow runs the face search the issuer's rule reads. The first real decision passed `parseDecision` and the rule: `Approved`, one `PASSIVE` liveness step `Approved`, no warnings, and a face-search `matches` list, empty. The list being there suggests the search ran; only a second check with the same face, refused as a duplicate, shows it. *Needs Carlos.*
+- The foundation's Didit workflow runs IP analysis (`IP_ANALYSIS` among its features), so Didit keeps the address of the phone that did the check, next to the face. The issuer never sees it. Keep it, or turn it off in the workflow. *Needs Carlos.*
 - The request limit: people behind one shared address share five face checks an hour, and its memory grows with the number of addresses in an hour; both for real traffic to size. *Mechanical.*
 
 **Hosting and privacy**
@@ -346,7 +347,6 @@ One list. Each item says what it waits on: **needs Carlos** (a decision, an acco
 
 **Devnet and checks**
 
-- `deploy/e2e.ts`, the scripted proof, writes a profile with no market or role and reads `freelance-work/tutoring.json`, which the `markets` repo does not have; and nothing has run the invoice paid in one tap through the fee payer. The full loop starts from both. *Mechanical.*
 - `host/`, `carrier/` and `feepayer/` have TypeScript tests and no type-check of their own, so the check after each merge leaves them out. *Mechanical.*
 
 ## Don't resurrect

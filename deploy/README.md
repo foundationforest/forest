@@ -8,7 +8,7 @@ end on their public URLs. What is running now, with every URL and signature, is 
 Every service is built from its own folder's scripts, unchanged (`host/build.sh` and `run.sh`,
 `carrier/build.sh`, the index's install line, the issuer's `npm start`, Kora's own image with
 `feepayer/run.sh`). This folder adds only what deploying needs: Dockerfiles, devnet settings, a
-stand-in face check, and the scripts that drive Railway, Supabase and the proof.
+stand-in face check, and the scripts that drive Railway, Supabase and the loop.
 
 ## What runs where
 
@@ -32,9 +32,9 @@ Railway has deprecated `railway.json`, so `railway.ts` sets these through the AP
 | `railway.ts` | Railway through its GraphQL API: `provision`, `variables`, `set`, `deploy`, `status`, `sealed`, `rotate`, `wire`, `track` |
 | `supabase.ts` | Supabase through its Management API: `create`, `lockdown`, `url` |
 | `fund.ts` | devnet: 1 SOL to the fee payer's key, its test-dollar account, test dollars for the proof's person |
-| `e2e.ts` | the seven-step proof on the public URLs |
+| `e2e.ts` | the loop on the public URLs: three profiles, one real face check, two badges, a deal paid through the fee payer, reviews both ways |
 | `services.json` | the public record the scripts read and write: ids, URLs, addresses, signatures. Never a secret |
-| `lib/` | secrets kept outside the repo, the record, devnet helpers, the proof's person |
+| `lib/` | secrets kept outside the repo, the record, devnet helpers, the test seeds' people |
 | `*/Dockerfile`, `index/*.devnet.json`, `feepayer/devnet-config.sh`, `issuer/fake-didit.ts`, `issuer/start.sh` | one folder per service |
 
 ## Secrets
@@ -79,12 +79,14 @@ git push                                 # Railway builds what GitHub holds
 node railway.ts deploy                   # builds and starts all five
 node railway.ts wire                     # the relay reads the host
 node fund.ts                             # devnet SOL and test dollars
-node e2e.ts                              # the proof
+FACE_CHECK_SESSION=<id> node e2e.ts      # the loop; a person does one face check
 ```
 
-`e2e.ts` also needs `npm ci` in `keys/`, `shapes/`, `registry/client` and `registry/artifacts` (then
-`npm run fetch`), and `host/build.sh` run, for `host/test/device.ts`. Every script checks first and
-skips what is done.
+`e2e.ts` also needs `npm ci` in `keys/`, `shapes/`, `registry/client`, `registry/artifacts` (then
+`npm run fetch`) and `escrow/client`, and `host/build.sh` run, for `host/test/device.ts`. Its seller
+is a new person, so its first run waits for someone to do a face check on a phone: `FACE_CHECK_SESSION`
+names a session the issuer opened, or the script opens one and prints its page. The session id is
+never printed or written down. Every script checks first and skips what is done.
 
 ## Redeploying
 

@@ -2585,3 +2585,37 @@ month of Railway usage (`deploy/README.md`).
   4. `variables` could refuse to make a secret Railway already holds. *Mechanical.*
   5. `host/`, `carrier/` and `feepayer/` have no type-check of their own. *Mechanical.*
 - **Still standing:** nothing is shipped and nothing is on mainnet; on devnet both programs stay upgradeable by whoever holds the phrase.
+
+## 2026-09-26: the loop, on the public services, with a person's face check
+
+- **Build order:** asked for by Carlos, one pull request, nothing running in parallel: `deploy/e2e.ts` on markets v1, the 25 September proof's profile fixed, then the whole loop over the public devnet services (a new seller with a real face check, a buyer, a deal through the fee payer, reviews both ways), every URL and signature recorded, and a second run that sends nothing.
+- **Built:**
+  1. **`deploy/e2e.ts`, the loop,** in nine steps, each checking the host, the issuer or the chain first and sending only what is missing. It reads the market's file where the `markets` repo's `directory.md` says it is (`education/tutoring.json`), writes profiles that name their market and role and posts that name neither, validates every record against the market file before writing it, and registers, invoices and pays through the public fee payer as `feepayer/test` does (the fee payer as payer, Kora's quote paid by one transfer of exactly that). It keeps each step's time only when that step sent something, and a run that sends nothing leaves `deploy/services.json` byte for byte as it was.
+  2. **`keys/test/third-seed.json`:** a third fixed test seed, SHA-256 of `forest.foundation/test/third-seed/v1`, documented like the second. `deploy/lib/person.ts` takes any test seed and profile number.
+  3. **The 25 September proof's profile** rewritten to name `tutoring/seller` (commit `bafyreidxgzzmbdjusivi6t6flf5auugg3ljg44yalfhwxg377mntnrg3ja`): the index counts its badge again and lists its old offer in `tutoring`.
+  4. **The loop, run on 2026-09-26 from 19:51 to 19:57:49 UTC:** the seller (seed 3) made its folder and an offer; Carlos did Didit's face check on his phone, which the issuer took 229 s after the script asked and put on list 0 as member 2 in its next batch, 102 s later; the seller's `tutoring/seller` badge and the buyer's (seed 2, profile 1) `tutoring/buyer` badge were registered through the fee payer; the seller invoiced the buyer 10.00 through the fee payer, and the buyer paid and released it in one transaction through it; each reviewed the other on the deal. The index shows both badges counted, the seller at rating 9.0 and standing 1.25, the buyer at 10.0 and 1.56, both reviews backed by a payment both sides agreed to, and the deal page naming both. Every URL and signature is in `docs/services.md`, "The loop".
+  5. **The second run sent nothing,** checked outside the script: the newest signature on every address the loop touches, every folder's head commit and every DID's log in plc.directory were the same before and after (run twice).
+  6. **Docs:** `docs/services.md` ("The loop"; the face check done and used; the proof's badge counted again; what this is not), `deploy/README.md` (the loop and what it needs), and `docs/handoff.md` (the devnet state, Next, and the Open items below).
+- **Chosen, not decided** (each reversible, since nothing ships):
+  1. **The face check's session id comes from `FACE_CHECK_SESSION` and is never printed or written down,** as the last session chose for the check page: next to the seller's commitment it would put a person's face check next to a profile. Without it the script opens a session through the issuer and prints its page.
+  2. **The seller is `Devnet test seller` and the buyer `Devnet test buyer`,** names that do not say the buyer is seed 2's person; the handles keep the `forest-seedN-pK` form, and the seeds are public, so anyone can link them anyway.
+  3. **The deal's escrow id is fixed** (the first 8 bytes of SHA-256 of `forest.foundation/test/loop/v1`), so a second run finds the same escrow at the same address.
+  4. **Test dollars are minted inside the loop, only when what a wallet still has to pay is more than it holds,** rounded up to a whole dollar: 5.00 to the seller (a registration and an invoice's storage deposits), 12.00 to the buyer (a registration and the 10.00 lesson). `fund.ts` is unchanged.
+  5. **The old post keeps its `market` and `role` keys:** the record shapes allow extra keys and the index ignores them, and the task asked only for the profile. A fresh run writes a post with neither.
+  6. **The invoice makes the deposit address first,** as `feepayer/test` opens an escrow through Kora, though no transfer in that transaction goes there.
+  7. **The reviews rate `overall` and `clarity`,** the tutoring market's two ratings.
+  8. **The decision was read once, for its shape only,** through Didit's API with the issuer's key: field names, statuses, risk codes and counts, nothing personal printed, the file deleted.
+- **Learned:**
+  - **The whole loop works on the public services.** A new person, their face checked once, is registered, invoiced, paid through the fee payer and reviewed, and the index weighs it all, in 6 minutes 25 seconds, of which 5 minutes 33 seconds are the face check and the issuer's batch.
+  - **At 20-second polls, the issuer's answer went from `no_liveness` straight to accepted:** the decision showed no liveness result until it was approved, so an app polling `/submit` sees one refusal code, then success. The script asked about a dozen times, each asking Didit for a decision.
+  - **The first real decision fits `parseDecision`:** `Approved`, one `PASSIVE` liveness step `Approved` with no warnings, and a face-search `matches` list, empty. The workflow's features are `LIVENESS` and `IP_ANALYSIS`.
+  - **Kora charges exactly what it spends, plus 50 lamports' worth per transaction,** on the public fee payer too: 706,010 for a registration, 3,489,850 for an invoice (its escrow's 1,991,360 and deposit address's 1,488,440 at devnet's rent, and the fee), 10,050 for a one-tap payment; its key spent 4,911,720 lamports and took 4,911,920.
+  - **An invoice through the fee payer works with the deposit address made first,** and a one-tap payment of it passes Kora's check on the transfer's destination.
+  - **The rent refund lands:** the deposit address's 1,488,440 lamports went back to the seller at the release, so its wallet holds SOL it never asked for.
+  - **The index reads fast:** every step that waited on it (a badge counted, the deal shown, the reviews weighed) finished within 6 to 13 seconds, sending included.
+  - **The loop's badge can be matched to its face check by timing on devnet:** the insert was alone in its batch, and the script registers seconds later. Roots' random wait is the answer for real people; the script does not wait.
+- **Open** (new here; the whole list is the handoff's Open):
+  1. Carlos's face is in the duplicate search of the Didit application the issuer uses, tied to a devnet test seed: delete that session before anything real, or give devnet its own application. *Needs Carlos.*
+  2. Whether the workflow's face search runs: shown only when a second check with the same face is refused. *Needs Carlos.*
+  3. The workflow runs IP analysis, so Didit keeps the checking phone's address next to the face: keep it or turn it off. *Needs Carlos.*
+- **Still standing:** nothing is shipped and nothing is on mainnet; on devnet both programs stay upgradeable by whoever holds the phrase.
