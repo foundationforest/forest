@@ -1,0 +1,26 @@
+{
+  "name": "@forest/deploy",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Puts the foundation's services online on devnet (Railway and Supabase) and proves them end to end. Scripts only; no service logic.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "supabase": "node supabase.ts",
+    "railway": "node railway.ts",
+    "fund": "node fund.ts",
+    "e2e": "node e2e.ts",
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@solana/spl-token": "0.4.9",
+    "@solana/web3.js": "1.99.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.2",
+    "typescript": "5.9.3"
+  }
+}

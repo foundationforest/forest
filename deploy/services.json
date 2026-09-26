@@ -1,0 +1,189 @@
+{
+  "supabase": {
+    "organization": "Forest",
+    "project": "forest-devnet",
+    "ref": "grhoheihzqwgzyiajzkp",
+    "region": "us-west-1",
+    "plan": "free",
+    "pooler": {
+      "host": "aws-0-us-west-1.pooler.supabase.com",
+      "port": 5432,
+      "mode": "session"
+    }
+  },
+  "railway": {
+    "workspace": "Carlos Islas's Projects",
+    "project": "forest-devnet",
+    "projectId": "d222014f-0f90-4695-961e-c6ba803102d7",
+    "environmentId": "59c63b74-7845-4638-bc65-5fa46ec22aed",
+    "environment": "production",
+    "services": {
+      "host": {
+        "id": "1f59a363-75d8-4d30-afc8-4c836e9c0cb1",
+        "source": "github",
+        "url": "https://host-production-22a4.up.railway.app",
+        "port": 2583,
+        "volume": "/data",
+        "blocked": null
+      },
+      "carrier": {
+        "id": "a3d89a6e-ca40-4348-a61f-a3b76c2b7d34",
+        "source": "github",
+        "url": "https://carrier-production-f88f.up.railway.app",
+        "port": 2470,
+        "volume": "/data",
+        "blocked": null
+      },
+      "index": {
+        "id": "37f23042-b2a0-4ff0-90c6-e0521fc811d2",
+        "source": "github",
+        "url": "https://index-production-1b6e.up.railway.app",
+        "port": 8080,
+        "volume": null,
+        "blocked": null
+      },
+      "issuer": {
+        "id": "a1ce9fdf-ad09-4bf5-a016-bab97ce8be81",
+        "source": "github",
+        "url": "https://issuer-production-fd68.up.railway.app",
+        "port": 8080,
+        "volume": "/data",
+        "blocked": null
+      },
+      "feepayer": {
+        "blocked": null,
+        "id": "8eda2bc9-4966-4e9c-8fcb-664efe976c37",
+        "source": "github",
+        "url": "https://feepayer-production.up.railway.app",
+        "port": 8080,
+        "volume": null
+      }
+    },
+    "sealed": {
+      "host": [
+        "PDS_ADMIN_PASSWORD",
+        "PDS_JWT_SECRET",
+        "PDS_PLC_ROTATION_KEY_K256_PRIVATE_KEY_HEX"
+      ],
+      "index": [
+        "DATABASE_URL",
+        "INDEX_SIGNING_SEED",
+        "SOLANA_RPC_URL"
+      ],
+      "carrier": [
+        "RELAY_ADMIN_PASSWORD"
+      ],
+      "issuer": [
+        "ISSUER_KEYPAIR",
+        "SOLANA_RPC_URL"
+      ],
+      "feepayer": [
+        "FOREST_FEEPAYER_KEY",
+        "RPC_URL"
+      ]
+    },
+    "branch": "claude/zen-ritchie-9yl3w3"
+  },
+  "transactions": [
+    {
+      "what": "1 SOL from the deploy key to the payer (the fee payer's key)",
+      "signature": "3HE365iaTREMg6XqBiG9rJ8NRFjE5MtBcqgapVzyrH8Uvfiw9Yei5ixKQMuX6j9XPL5xPRTyduuf67AVXNC27rgu"
+    },
+    {
+      "what": "test-dollar accounts: the payer's (where Kora is paid) and seed 2 profile 0's wallet's",
+      "signature": "41PCZaJXPbFF19aAdsWqcqdqqpfYdzKJDCBFfErwV6n9RSmKVWnvoYSrubtdkC9dPTbsMwm5R3MaVh7aC9sVDCcf"
+    },
+    {
+      "what": "2.00 test dollars minted to seed 2 profile 0's wallet",
+      "signature": "2JgMD27RCDYP6Dn5YE5YvC4bzYUVG3yrPf5XY9ABoaGBR1j2z7yd8sfcqXbrqtpishRcx2JPQd9KWzJ4uac6kcDv"
+    }
+  ],
+  "funding": {
+    "payerTopUp": "3HE365iaTREMg6XqBiG9rJ8NRFjE5MtBcqgapVzyrH8Uvfiw9Yei5ixKQMuX6j9XPL5xPRTyduuf67AVXNC27rgu",
+    "dollars": "2JgMD27RCDYP6Dn5YE5YvC4bzYUVG3yrPf5XY9ABoaGBR1j2z7yd8sfcqXbrqtpishRcx2JPQd9KWzJ4uac6kcDv",
+    "payer": "9CKUm2s7nwT7HrCpjtaffNH3PnUUVyQr2gELjHrWYBUd",
+    "payerTokens": "HxTvJQiheuas12R1hWecMHhD4eGVbXdw6JhKpQDbxSyj",
+    "person": {
+      "wallet": "Ux7wKu7VMpDnkMFn1LxYDzv5SykSyyRNUXcDPLVG2WU",
+      "tokens": "4hXBUvdvuTyJyvzB3LPPmFs36ppAvJkfVdtrEtGJB81L"
+    }
+  },
+  "wiring": {
+    "relayReadsHost": "host-production-22a4.up.railway.app",
+    "relayHostEntry": {
+      "ID": 1,
+      "CreatedAt": "2026-09-25T22:40:38.261420302Z",
+      "Host": "host-production-22a4.up.railway.app",
+      "SSL": true,
+      "Cursor": -1,
+      "Registered": true,
+      "Blocked": false,
+      "CrawlRateLimit": 0,
+      "RepoCount": 0,
+      "RepoLimit": 100,
+      "HasActiveConnection": true,
+      "EventsSeenSinceStartup": 0,
+      "PerSecondEventRate": {
+        "Max": 50,
+        "Window": 1
+      },
+      "PerHourEventRate": {
+        "Max": 2600,
+        "Window": 3600
+      },
+      "PerDayEventRate": {
+        "Max": 21000,
+        "Window": 86400
+      },
+      "UserCount": 0,
+      "AccountLimitAlertsSilenced": false,
+      "AccountLimitAlertState": "ok"
+    }
+  },
+  "e2e": {
+    "person": "keys/test/second-seed.json, profile 0",
+    "did": "did:plc:zefdl6huirvjcnefpybzrzhp",
+    "handle": "forest-seed2-p0.host-production-22a4.up.railway.app",
+    "wallet": "Ux7wKu7VMpDnkMFn1LxYDzv5SykSyyRNUXcDPLVG2WU",
+    "commitment": "12320236330478641936781802142443378236731250063022611120734225829319609112781",
+    "plc": "https://plc.directory/did:plc:zefdl6huirvjcnefpybzrzhp",
+    "host": {
+      "url": "https://host-production-22a4.up.railway.app",
+      "did": "did:web:host-production-22a4.up.railway.app",
+      "profile": "at://did:plc:zefdl6huirvjcnefpybzrzhp/foundation.forest.profile/self",
+      "post": "at://did:plc:zefdl6huirvjcnefpybzrzhp/foundation.forest.post/3mwetspeunk2v",
+      "folder": "https://host-production-22a4.up.railway.app/xrpc/com.atproto.sync.getRepo?did=did:plc:zefdl6huirvjcnefpybzrzhp"
+    },
+    "index": {
+      "profilePage": "https://index-production-1b6e.up.railway.app/profiles/did:plc:zefdl6huirvjcnefpybzrzhp",
+      "profileJson": "https://index-production-1b6e.up.railway.app/profiles/did:plc:zefdl6huirvjcnefpybzrzhp.json",
+      "marketPage": "https://index-production-1b6e.up.railway.app/markets/tutoring",
+      "badgeShown": true,
+      "badgeEntry": "\"scope\":\"tutoring/seller\",\"market\":\"tutoring\",\"marketUrl\":\"https://index-production-1b6e.up.railway.app/markets/tutoring\",\"role\":\"seller\",\"listIndex\":0,\"listOwner\":\"7zPD6AZc7RJv4Z15AoHvzJ2ZMCTW57XZTJanMZYsU7U7\",\"issuer\":"
+    },
+    "issuer": {
+      "url": "https://issuer-production-fd68.up.railway.app",
+      "list": "7PMx9JpaP7ZwewZ78833FomUbHQgDFFERM9WuvyRurjD",
+      "member": 1,
+      "insert": "4ov2ogEHW9sqfb3XCxxDuTzBkr3FDXBquP1JSYzAp8LzANMsx2iX95u1vZgMFzcENdeXcu6ALrnwWqTzJkvPd4ra"
+    },
+    "badge": {
+      "bytes": 841,
+      "computeUnits": 135503,
+      "networkFee": 10000,
+      "scope": "tutoring/seller",
+      "feePayer": "https://feepayer-production.up.railway.app",
+      "feePayerKey": "9CKUm2s7nwT7HrCpjtaffNH3PnUUVyQr2gELjHrWYBUd",
+      "code": "13bc335a5385dbcddf2c6cc7417e4fb67e1a6566827bcd77341fb3679ca936f0",
+      "codeAccount": "A5rrNKPiiz6CmWFZcPhK75fvHUnoc7hbKdSYkeseWU8M",
+      "root": "21c9fbd96ff6c2a0f990fa19de90522058a714c6be9f6d7d89abf393cf55955d",
+      "registration": "5QetLo4KtqypuGZTTkV36phj7y4nVWBj681QgFq4inYHQo1hhA3VNpvKqDZKn7zPtzBNo2x7pc5hP5gCZfQpGN5A",
+      "charge": "706010 test-dollar base units (706010 lamports at the mock price)"
+    },
+    "identity": {
+      "didDocumentEndpoint": "https://host-production-22a4.up.railway.app",
+      "hostDid": "did:web:host-production-22a4.up.railway.app"
+    },
+    "finishedAt": "2026-09-25T22:46:14.921Z"
+  }
+}
