@@ -69,12 +69,14 @@ export async function applyRecordOp(db: Db, directory: Directory, op: RecordOp):
     case COLLECTIONS.post: {
       await db.query(
         `insert into posts (uri, did, rkey, cid, record, direction, market_written, market, role, description,
-                            price_amount, price_mint, price_per, remote, location, expires, created_at, indexed_at)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, now())
+                            price_amount, price_mint, price_per, remote, lat, lon, precision_km, area, expires, created_at,
+                            indexed_at)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, now())
          on conflict (uri) do update set cid = excluded.cid, record = excluded.record, direction = excluded.direction,
            market_written = excluded.market_written, market = excluded.market, role = excluded.role,
            description = excluded.description, price_amount = excluded.price_amount, price_mint = excluded.price_mint,
-           price_per = excluded.price_per, remote = excluded.remote, location = excluded.location,
+           price_per = excluded.price_per, remote = excluded.remote, lat = excluded.lat, lon = excluded.lon,
+           precision_km = excluded.precision_km, area = excluded.area,
            expires = excluded.expires, created_at = excluded.created_at, indexed_at = now()`,
         [
           uri,
@@ -87,11 +89,14 @@ export async function applyRecordOp(db: Db, directory: Directory, op: RecordOp):
           directory.postMarket(r.market),
           r.role,
           r.description,
-          r.price.amount,
-          r.price.mint,
-          r.price.per,
+          r.price?.amount ?? null,
+          r.price?.mint ?? null,
+          r.price?.per ?? null,
           r.remote ?? null,
-          r.location ?? null,
+          r.location ? Number(r.location.lat) : null,
+          r.location ? Number(r.location.lon) : null,
+          r.location?.precisionKm ?? null,
+          r.location?.area ?? null,
           ts(r.expires),
           ts(r.createdAt),
         ],
@@ -100,12 +105,12 @@ export async function applyRecordOp(db: Db, directory: Directory, op: RecordOp):
     }
     case COLLECTIONS.review: {
       await db.query(
-        `insert into reviews (uri, reviewer, rkey, cid, record, subject, rating, text, deal_id, created_at, indexed_at)
+        `insert into reviews (uri, reviewer, rkey, cid, record, subject, overall, text, deal_id, created_at, indexed_at)
          values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
          on conflict (uri) do update set cid = excluded.cid, record = excluded.record, subject = excluded.subject,
-           rating = excluded.rating, text = excluded.text, deal_id = excluded.deal_id,
+           overall = excluded.overall, text = excluded.text, deal_id = excluded.deal_id,
            created_at = excluded.created_at, indexed_at = now()`,
-        [uri, op.did, op.rkey, op.cid, r, r.subject, r.rating ?? null, r.text ?? null, r.dealId ?? null, ts(r.createdAt)],
+        [uri, op.did, op.rkey, op.cid, r, r.subject, r.ratings?.overall ?? null, r.text ?? null, r.dealId ?? null, ts(r.createdAt)],
       )
       break
     }

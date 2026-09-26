@@ -4,7 +4,7 @@
   "defs": {
     "main": {
       "type": "record",
-      "description": "A review of another profile, kept in the reviewer's own folder. Only who it is about is required: a review can be as thin as pointing at a person. What is missing weighs less; nothing is refused.",
+      "description": "A review of another profile, kept in the reviewer's own folder. Only who it is about is required: a review can be as thin as pointing at a person. What is missing weighs less; nothing is refused. Its market is the market of the profile it is about.",
       "key": "tid",
       "record": {
         "type": "object",
@@ -15,15 +15,24 @@
             "description": "The reviewed profile's DID.",
             "format": "did"
           },
-          "rating": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 5
+          "ratings": {
+            "type": "ref",
+            "ref": "#ratings"
           },
           "text": {
             "type": "string",
             "maxGraphemes": 3000,
             "maxLength": 30000
+          },
+          "media": {
+            "type": "array",
+            "description": "Optional. Photos and short videos of the work.",
+            "items": {
+              "type": "blob",
+              "accept": ["image/png", "image/jpeg", "video/mp4"],
+              "maxSize": 50000000
+            },
+            "maxLength": 10
           },
           "dealId": {
             "type": "string",
@@ -35,6 +44,17 @@
             "type": "string",
             "format": "datetime"
           }
+        }
+      }
+    },
+    "ratings": {
+      "type": "object",
+      "description": "Optional. Ratings by name, each from 1.0 to 10.0 with at most one decimal, as decimal text (\"8.5\"), since a record holds no fractional numbers. Any name may be used; overall by convention, and a market file suggests others.",
+      "properties": {
+        "overall": {
+          "type": "string",
+          "description": "The whole deal, from \"1\" to \"10\".",
+          "maxLength": 4
         }
       }
     }

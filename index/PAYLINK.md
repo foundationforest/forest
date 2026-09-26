@@ -31,7 +31,8 @@ the same string. Another index writes its own address in place of `https://fores
 
 Every parameter after `cid` is the post record's own field, named by its path in the record
 (`shapes/lexicons/foundation/forest/post.json`). An app ignores parameters it does not know, so
-version 1 can grow.
+version 1 can grow. Only an offer with a price has a Pay link: a post's price is optional, and an
+offer in a market whose deals are not paid names none.
 
 An example, from the index's test data:
 
@@ -69,6 +70,7 @@ still matches it; its twin (`/pay.json?…`) says the same for machines, in `che
 | `changed` | The offer was edited since (another `cid`); the page shows it as it is now |
 | `differs` | Same `cid`, another price or terms: the link was altered. Don't pay from it |
 | `notLive` | The offer expired, or is no longer in a directory market |
+| `noPrice` | The offer names no price: it is in a market whose deals are not paid, and has no Pay link |
 | `noKey` | The seller's profile names no key to be paid at |
 | `notFound` | This index has no offer at that address |
 | `invalid` | Not a complete link |

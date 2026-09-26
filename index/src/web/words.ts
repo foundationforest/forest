@@ -8,9 +8,15 @@ import type { CurrencyConfig } from '../config.ts'
 // Names
 // -----------------------------------------------------------------------------------------------
 
-/** A market or category slug as a heading: `online-tutors` → `Online tutors`. */
+/** A market or folder slug as a heading: `online-tutors` → `Online tutors`. */
 export function title(slug: string): string {
   const s = slug.replace(/-/g, ' ')
+  return s.charAt(0).toUpperCase() + s.slice(1)
+}
+
+/** A rating's or a field's name as words: `overall` → `Overall`, `onTime` → `On time`. */
+export function nameWords(name: string): string {
+  const s = name.replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase()
   return s.charAt(0).toUpperCase() + s.slice(1)
 }
 
@@ -51,7 +57,9 @@ export function moneyFromBase(base: string, mint: string, currencies: CurrencyCo
 
 export const PER: Record<string, string> = { hour: 'per hour', day: 'per day', job: 'for the job' }
 
-export function price(p: { amount: string; mint: string; per: string }, currencies: CurrencyConfig): string {
+/** An offer's price in words, or null when it names none (a market with no money). */
+export function price(p: { amount: string; mint: string; per: string } | null, currencies: CurrencyConfig): string | null {
+  if (!p) return null
   const m = money(p.amount, p.mint, currencies)
   return m.known ? `${m.text} ${PER[p.per] ?? ''}`.trim() : m.text.charAt(0).toUpperCase() + m.text.slice(1)
 }
@@ -86,8 +94,34 @@ export function plural(n: number, one: string, many = `${one}s`): string {
   return `${n} ${n === 1 ? one : many}`
 }
 
-export function stars(rating: number | null): string {
-  return rating === null ? 'No rating' : `${'★'.repeat(rating)}${'☆'.repeat(5 - rating)} ${rating} of 5`
+/** A rating out of 10, always with one decimal: `8.5`, `10.0`. */
+export function outOf10(v: number): string {
+  return v.toFixed(1)
+}
+
+/** A profile's rating: the weighted overall of the reviews that count, or none yet. */
+export function rating(r: { value: number | null; reviews: number }): string {
+  return r.value === null ? 'No rating yet' : `Rated ${outOf10(r.value)} of 10 from ${plural(r.reviews, 'review')}`
+}
+
+/** A review's own ratings, overall first: `Overall 9.5 of 10 · Patience 10.0 of 10`. */
+export function ratings(rs: Record<string, number>): string {
+  const names = Object.keys(rs).sort((a, b) => (a === 'overall' ? -1 : b === 'overall' ? 1 : a < b ? -1 : 1))
+  return names.length ? names.map((n) => `${nameWords(n)} ${outOf10(rs[n])} of 10`).join(' · ') : 'No rating'
+}
+
+/** How many photos and videos a review carries: `With 2 photos and 1 video`. */
+export function media(items: { mimeType: string | null }[]): string | null {
+  const videos = items.filter((m) => m.mimeType?.startsWith('video/')).length
+  const photos = items.length - videos
+  const parts = [photos ? plural(photos, 'photo') : '', videos ? plural(videos, 'video') : ''].filter(Boolean)
+  return parts.length ? `With ${parts.join(' and ')}` : null
+}
+
+/** A market's extra field and its value: `Sessions: 8`, `Subjects: portuguese, spanish`. */
+export function field(name: string, value: unknown): string {
+  const v = Array.isArray(value) ? value.join(', ') : typeof value === 'boolean' ? (value ? 'yes' : 'no') : String(value)
+  return `${nameWords(name)}: ${v}`
 }
 
 // -----------------------------------------------------------------------------------------------
@@ -161,9 +195,52 @@ export function outcome(o: string, n: { buyer: string; seller: string; toSeller:
   }
 }
 
-export function timer(t: { days: number; to: string }, n: { buyer: string; seller: string }): string {
-  return `A timer: ${plural(t.days, 'day')} after the payment is marked, everything goes to ${t.to === 'seller' ? n.seller : n.buyer}.`
+// -----------------------------------------------------------------------------------------------
+// The escrow's two options
+// -----------------------------------------------------------------------------------------------
+
+export type Options = {
+  /** The options in one plain sentence. */
+  text: string
+  /** Raised when an option favours one side: the arbiter is one of the two, or a timer pays the buyer. */
+  flag: boolean
+  why: ('arbiterIsParty' | 'timerToBuyer')[]
 }
 
-export const ARBITER = 'Someone they both named may decide how to split it.'
-export const NO_OPTIONS = 'Money moves only when both sides agree.'
+/**
+ * An offer's or a payment's options in one sentence: "No arbiter, no timer." or "Money goes back
+ * to the buyer after 30 days automatically." `sides` are the words for the two sides (a market's
+ * labels, or seller and buyer). `arbiterIsParty`: the arbiter is one of the two sides.
+ */
+export function options(
+  terms: { arbiter?: string; timer?: { days: number; to: 'seller' | 'buyer' } } | null,
+  sides: { seller: string; buyer: string },
+  arbiterIsParty: boolean,
+): Options {
+  const parts: string[] = []
+  if (terms?.arbiter) parts.push('an arbiter may decide how the money is split')
+  const t = terms?.timer
+  if (t) {
+    parts.push(
+      t.to === 'buyer'
+        ? `money goes back to the ${sides.buyer} after ${plural(t.days, 'day')} automatically`
+        : `money goes to the ${sides.seller} after ${plural(t.days, 'day')} automatically`,
+    )
+  }
+  const text = parts.length ? `${parts.join('; ').charAt(0).toUpperCase()}${parts.join('; ').slice(1)}.` : 'No arbiter, no timer.'
+  const why: Options['why'] = []
+  if (terms?.arbiter && arbiterIsParty) why.push('arbiterIsParty')
+  if (t?.to === 'buyer') why.push('timerToBuyer')
+  return { text, flag: why.length > 0, why }
+}
+
+/** What a flag means, for the person reading it. */
+export function optionsWarning(o: Options, sides: { seller: string; buyer: string }): string | null {
+  if (!o.flag) return null
+  const lines = o.why.map((w) =>
+    w === 'arbiterIsParty'
+      ? 'the arbiter is one of the two sides, so that side can decide a split alone'
+      : `unless it is released first, the money goes back to the ${sides.buyer} on its own`,
+  )
+  return `Worth knowing: ${lines.join('; and ')}.`
+}

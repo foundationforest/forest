@@ -10,12 +10,33 @@ import type { Config } from '../config.ts'
 import type { Db } from '../db.ts'
 import type { Directory } from '../markets.ts'
 import * as data from './data.ts'
-import { urlsFor } from './html.ts'
+import { type Near, urlsFor } from './html.ts'
 import { robots, sitemap, textFile } from './machine.ts'
 import * as pages from './pages.ts'
 import { pay } from './pay.ts'
 
 export type Web = { handle: (req: Request) => Promise<Response> }
+
+const DECIMAL = /^-?\d{1,3}(\.\d{1,6})?$/
+
+/**
+ * `near=lat,lon&km=N`: a point in degrees and a distance in kilometres, both or neither. Null when
+ * neither is asked; a string saying what is wrong when either is malformed.
+ */
+export function parseNear(search: URLSearchParams): Near | null | string {
+  const near = search.get('near')
+  const km = search.get('km')
+  if (near === null && km === null) return null
+  const [lat, lon, ...rest] = (near ?? '').split(',')
+  const n = { lat: Number(lat), lon: Number(lon), km: Number(km) }
+  if (rest.length || !DECIMAL.test(lat ?? '') || !DECIMAL.test(lon ?? '') || Math.abs(n.lat) > 90 || Math.abs(n.lon) > 180) {
+    return 'near must be a point in degrees, latitude then longitude, such as near=38.72,-9.14'
+  }
+  if (km === null || !/^\d{1,5}(\.\d{1,3})?$/.test(km) || n.km <= 0 || n.km > 20_000) {
+    return 'km must be a distance in kilometres above 0 and at most 20000, such as km=10'
+  }
+  return n
+}
 
 const CACHE = 'public, max-age=30, stale-while-revalidate=300'
 const SECURITY = {
@@ -54,8 +75,9 @@ export function createWeb(ctx: { db: Db; directory: Directory; config: Config })
     return respond(404, HTML, pages.notFoundPage(view, `${urls.base}${url.pathname}`, message))
   }
 
-  function moved(to: string): Response {
-    return respond(301, 'text/plain; charset=utf-8', `Moved to ${to}\n`, { location: to })
+  function badRequest(asJson: boolean, url: URL, message: string): Response {
+    if (asJson) return respond(400, JSON_TYPE, jsonText({ error: 'BadRequest', message }))
+    return respond(400, HTML, pages.notFoundPage(view, `${urls.base}${url.pathname}`, message))
   }
 
   async function route(url: URL): Promise<Response> {
@@ -74,27 +96,19 @@ export function createWeb(ctx: { db: Db; directory: Directory; config: Config })
       return notFound(asJson, url, 'That address is not written correctly.')
     }
     const [a, b] = parts
-    const ext = asJson ? '.json' : ''
 
     if (parts.length === 0) return page(await data.home(c), asJson, pages.homePage)
-    if (a === 'categories' && parts.length === 2) {
-      const m = await data.category(c, b)
-      return m ? page(m, asJson, pages.categoryPage) : notFound(asJson, url, `No category named ${b} in this index’s directory.`)
+    if (a === 'folders' && parts.length === 2) {
+      const m = await data.folder(c, b)
+      return m ? page(m, asJson, pages.folderPage) : notFound(asJson, url, `No folder named ${b} in this index’s directory.`)
     }
     if (a === 'markets' && parts.length === 2) {
-      if (!ctx.directory.markets.has(b)) {
-        const to = ctx.directory.aliasOf.get(b)
-        if (to) {
-          const target = new URL(urls.market(to))
-          target.pathname += ext
-          target.search = url.search
-          return moved(target.toString())
-        }
-        return notFound(asJson, url, `No market named ${b} in this index’s directory.`)
-      }
+      if (!ctx.directory.markets.has(b)) return notFound(asJson, url, `No market named ${b} in this index’s directory.`)
+      const near = parseNear(url.searchParams)
+      if (typeof near === 'string') return badRequest(asJson, url, near)
       const raw = Number(url.searchParams.get('offset') ?? 0)
       const offset = Number.isInteger(raw) && raw >= 0 ? Math.min(raw, 100_000) : 0
-      return page((await data.market(c, b, offset))!, asJson, pages.marketPage)
+      return page((await data.market(c, b, offset, near))!, asJson, pages.marketPage)
     }
     if (a === 'profiles' && parts.length === 2) {
       const m = await data.profile(c, b)
@@ -107,7 +121,9 @@ export function createWeb(ctx: { db: Db; directory: Directory; config: Config })
     if (a === 'search' && parts.length === 1) {
       const q = (url.searchParams.get('q') ?? '').trim()
       if (q.length > 200) return asJson ? respond(400, JSON_TYPE, jsonText({ error: 'BadRequest', message: 'q is at most 200 characters' })) : notFound(false, url, 'Search for 200 characters or fewer.')
-      return page(await data.search(c, q), asJson, pages.searchPage)
+      const near = parseNear(url.searchParams)
+      if (typeof near === 'string') return badRequest(asJson, url, near)
+      return page(await data.search(c, q, near), asJson, pages.searchPage)
     }
     if (a === 'pay' && parts.length === 1) return page(await pay(c, url.searchParams), asJson, pages.payPage)
     return notFound(asJson, url, `There is no page at ${url.pathname}.`)

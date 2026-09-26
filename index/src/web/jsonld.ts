@@ -2,14 +2,15 @@
 // shopping AIs read the page natively. Built from the same model as the HTML and the twin.
 //
 // Two things schema.org decides for us:
-//   - `review` and `aggregateRating` do not take a Person. So reviews and the rating are nodes of
-//     their own whose `itemReviewed` (any Thing) is the profile, Person or LocalBusiness alike.
-//   - A rating needs a bounded scale; trust has none (a sum that can go below zero). The rating is
-//     trust squashed onto 1 to 5 by the same curve the reviewer weight uses, t / (|t| + 1), and
-//     says so in `ratingExplanation`. It is trust alone: uniqueness is never blended in.
+//   - `review` and `aggregateRating` do not take a Person. So a profile's reviews and its rating are
+//     nodes of their own whose `itemReviewed` (any Thing) is the profile, Person or LocalBusiness
+//     alike. An Offer takes both, so each offer also carries its seller's rating.
+//   - A rating needs a bounded scale; standing has none (a sum that can go below zero). So the
+//     rating, the weighted overall from 1 to 10, is the AggregateRating, and standing rides on each
+//     offer as a PropertyValue. Neither is blended with the other, or with uniqueness.
 
 import type { CurrencyConfig as Currencies } from '../config.ts'
-import type { DealModel, MarketModel, Offer, ProfileModel, Review, SearchModel, CategoryModel, HomeModel } from './data.ts'
+import type { DealModel, FolderModel, HomeModel, MarketModel, Offer, ProfileModel, Review, SearchModel } from './data.ts'
 import { money, moneyFromBase, title } from './words.ts'
 
 type Node = Record<string, unknown>
@@ -17,16 +18,23 @@ const CONTEXT = 'https://schema.org'
 const graph = (nodes: Node[]) => ({ '@context': CONTEXT, '@graph': nodes })
 const ref = (id: string) => ({ '@id': id })
 
-/** Trust on a 1 to 5 scale: 3 at zero, towards 5 as it grows, towards 1 as it falls. */
-export function trustAsRating(t: number): number {
-  return Math.round((3 + (2 * t) / (Math.abs(t) + 1)) * 100) / 100
+export const RATING_EXPLANATION =
+  'The weighted average of the overall ratings, from 1 to 10, in the reviews this index counts, each weighed by who wrote it and by the payment behind it. See index/SCORING.md in the Forest repository.'
+
+export const STANDING_EXPLANATION =
+  'The seller’s standing in this index: the reviews they received, each weighed by who wrote it and by the payment behind it, summed. Everyone starts at 0; it can go below. See index/SCORING.md in the Forest repository.'
+
+/** A rating out of 10, one decimal, as the pages show it. */
+const tenth = (v: number) => Math.round(v * 10) / 10
+
+function aggregateRating(r: { value: number | null; reviews: number }): Node | null {
+  if (r.value === null || r.reviews === 0) return null
+  return { '@type': 'AggregateRating', ratingValue: tenth(r.value), bestRating: 10, worstRating: 1, reviewCount: r.reviews, ratingExplanation: RATING_EXPLANATION }
 }
 
-export const RATING_EXPLANATION =
-  'This index’s trust score, from reviews weighed by who wrote them and the payment behind them, put on a 1 to 5 scale as 3 + 2·t/(|t|+1). It is not an average of stars. See index/SCORING.md in the Forest repository.'
-
 function offerNode(o: Offer, currencies: Currencies, seller: Node): Node {
-  const m = money(o.price.amount, o.price.mint, currencies)
+  const m = o.price ? money(o.price.amount, o.price.mint, currencies) : null
+  const rating = aggregateRating(o.rating)
   const node: Node = {
     '@type': 'Offer',
     identifier: o.uri,
@@ -38,10 +46,12 @@ function offerNode(o: Offer, currencies: Currencies, seller: Node): Node {
       serviceType: o.market ?? o.marketWritten,
       description: o.description,
       provider: seller,
-      ...(o.remote ? {} : o.location ? { areaServed: o.location } : {}),
+      ...(o.remote ? {} : o.location ? { areaServed: o.location.area } : {}),
     },
+    ...(rating ? { aggregateRating: rating } : {}),
+    additionalProperty: { '@type': 'PropertyValue', name: 'standing', value: o.standing, description: STANDING_EXPLANATION },
   }
-  if (m.known) {
+  if (m?.known && o.price) {
     node.price = m.decimal
     node.priceCurrency = m.code
     node.priceSpecification = { '@type': 'UnitPriceSpecification', price: m.decimal, priceCurrency: m.code, unitText: o.price.per }
@@ -61,7 +71,7 @@ function reviewNode(v: Review, itemReviewed: Node, id: string): Node {
     identifier: v.uri,
     itemReviewed,
     author: personRef(v.reviewerName, v.reviewerUrl),
-    ...(v.rating !== null ? { reviewRating: { '@type': 'Rating', ratingValue: v.rating, bestRating: 5, worstRating: 1 } } : {}),
+    ...(v.overall !== null ? { reviewRating: { '@type': 'Rating', ratingValue: v.overall, bestRating: 10, worstRating: 1 } } : {}),
     ...(v.text ? { reviewBody: v.text } : {}),
     ...(v.createdAt ? { datePublished: v.createdAt } : {}),
   }
@@ -72,19 +82,19 @@ export function homeLd(m: HomeModel): unknown {
     { '@type': 'WebSite', '@id': m.url, url: m.url, name: 'Forest', description: m.index.about },
     {
       '@type': 'ItemList',
-      name: 'Categories',
-      itemListElement: m.categories.map((c, i) => ({ '@type': 'ListItem', position: i + 1, name: title(c.category), url: c.url })),
+      name: 'Markets, by folder',
+      itemListElement: m.folders.map((f, i) => ({ '@type': 'ListItem', position: i + 1, name: title(f.folder), url: f.url })),
     },
   ])
 }
 
-export function categoryLd(m: CategoryModel): unknown {
+export function folderLd(m: FolderModel): unknown {
   return graph([
     {
       '@type': 'CollectionPage',
       '@id': m.url,
       url: m.url,
-      name: title(m.category),
+      name: title(m.folder),
       mainEntity: {
         '@type': 'ItemList',
         itemListElement: m.markets.map((x, i) => ({ '@type': 'ListItem', position: i + 1, name: title(x.name), url: x.url })),
@@ -100,7 +110,7 @@ export function marketLd(m: MarketModel, currencies: Currencies): unknown {
       '@id': m.url,
       url: m.url,
       name: title(m.market.name),
-      ...(m.market.description ? { description: m.market.description } : {}),
+      description: m.market.description,
       mainEntity: {
         '@type': 'OfferCatalog',
         name: `${title(m.market.name)}: offers`,
@@ -113,7 +123,7 @@ export function marketLd(m: MarketModel, currencies: Currencies): unknown {
 
 export function profileLd(m: ProfileModel, currencies: Currencies): unknown {
   const id = `${m.url}#profile`
-  const place = m.offers.find((o) => !o.remote && o.location)?.location ?? null
+  const place = m.offers.find((o) => !o.remote && o.location)?.location?.area ?? null
   const subject: Node = {
     '@type': place ? 'LocalBusiness' : 'Person',
     '@id': id,
@@ -125,19 +135,8 @@ export function profileLd(m: ProfileModel, currencies: Currencies): unknown {
     makesOffer: m.offers.map((o) => offerNode(o, currencies, ref(id))),
   }
   const nodes: Node[] = [{ '@type': 'ProfilePage', '@id': m.url, url: m.url, name: m.profile.name, mainEntity: ref(id) }, subject]
-  const rated = m.reviews.received.filter((v) => v.counted && v.rating !== null)
-  if (m.scores.trust && rated.length) {
-    nodes.push({
-      '@type': 'AggregateRating',
-      '@id': `${m.url}#trust`,
-      itemReviewed: ref(id),
-      ratingValue: trustAsRating(m.scores.trust.value),
-      bestRating: 5,
-      worstRating: 1,
-      reviewCount: rated.length,
-      ratingExplanation: RATING_EXPLANATION,
-    })
-  }
+  const rating = m.scores.rating ? aggregateRating({ value: m.scores.rating.value, reviews: (m.scores.rating.details as { reviews: number }).reviews }) : null
+  if (rating) nodes.push({ ...rating, '@id': `${m.url}#rating`, itemReviewed: ref(id) })
   m.reviews.received.forEach((v, i) => nodes.push(reviewNode(v, ref(id), `${m.url}#review-${i + 1}`)))
   return graph(nodes)
 }

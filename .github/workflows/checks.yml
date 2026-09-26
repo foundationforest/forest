@@ -3,11 +3,15 @@
 # On every pull request and every push to main, nothing running but the tests:
 #   node       each Node package's type-check and its tests that need no chain and no host
 #   index      the index's type-check, its unit tests and its page tests, on a Postgres service
-#   programs   both programs built with cargo build-sbf, and their LiteSVM tests
+#   programs   both programs built as SBPF v3 (cargo build-sbf --arch v3), the format devnet runs
+#              them in, and their LiteSVM tests
 #
 # Nightly, and by hand from the Actions tab, because they are slow or need a validator:
 #   validator  the registry client's, the escrow client's and the issuer's tests on a local validator
-#   fuzz       the registry's property test at 1,000 iterations; the escrow's fuzzer at 50,000
+#   fuzz       the registry's property test at 1,000 iterations; the escrow's fuzzer at 50,000,
+#              on an SBPF v0 build of the escrow: Trident 0.12's runtime starts with every feature
+#              off, so it runs only v0 programs and refuses a v3 build on its first create. That is
+#              the one old-format build here, and nothing else uses it
 #   end-to-end the host's tests, the carrier and the fee payer run locally, and the index end to end
 #
 # A test that finds a piece missing skips instead of failing. Here a skip fails the step: the TAP
@@ -121,11 +125,17 @@ jobs:
             registry/program/tests-litesvm
             escrow/program
             escrow/program/tests-litesvm
-      - name: Build both programs
+      - name: Build both programs, SBPF v3
         run: |
-          (cd registry/program && cargo build-sbf)
-          (cd escrow/program && cargo build-sbf)
+          (cd registry/program && cargo build-sbf --arch v3)
+          (cd escrow/program && cargo build-sbf --arch v3)
           sha256sum registry/program/target/deploy/*.so escrow/program/target/deploy/*.so
+          # The ELF header's e_flags is the SBPF version: refuse anything but v3.
+          for so in registry/program/target/deploy/*.so escrow/program/target/deploy/*.so; do
+            v=$(od -An -t u4 -j 48 -N 4 "$so" | tr -d ' ')
+            echo "$so: SBPF v$v"
+            [ "$v" = 3 ]
+          done
       - name: Registry, LiteSVM
         working-directory: registry/program/tests-litesvm
         run: cargo test
@@ -194,14 +204,32 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           name: programs
+      - name: Solana CLI, cached
+        id: solana
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.local/share/solana
+            ~/.cache/solana
+          key: solana-${{ env.SOLANA_VERSION }}
+      - name: Solana CLI, installed
+        if: steps.solana.outputs.cache-hit != 'true'
+        run: sh -c "$(curl -sSfL "https://release.anza.xyz/v$SOLANA_VERSION/install")"
+      - run: echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: |
+            escrow/program
             registry/program/tests-litesvm
             escrow/program/trident-tests
-      - name: Registry, property test, 1,000 iterations
+      - name: Registry, property test, 1,000 iterations (on the v3 build)
         working-directory: registry/program/tests-litesvm
         run: FOREST_FUZZ_ITERATIONS=1000 cargo test --release --test invariants -- --nocapture
+      - name: Escrow, rebuilt as SBPF v0 for Trident, whose runtime runs no v3 program
+        working-directory: escrow/program
+        run: |
+          cargo build-sbf --arch v0
+          [ "$(od -An -t u4 -j 48 -N 4 target/deploy/forest_escrow.so | tr -d ' ')" = 0 ]
       - name: Escrow, fuzzer, 50,000 iterations (exit 99 if an invariant broke)
         working-directory: escrow/program/trident-tests
         run: TRIDENT_WITH_EXIT_CODE=1 FOREST_FUZZ_ITERATIONS=50000 cargo run --release --bin fuzz_escrow

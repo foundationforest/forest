@@ -8,21 +8,21 @@
 // The statement:
 //
 //   forest.foundation/index/v1/score
-//   kind <uniqueness|trust>
+//   kind <uniqueness|standing|rating>
 //   did <the profile's DID>
-//   scope <the badge's scope, or empty for trust>
+//   scope <the badge's scope, or empty for standing and rating>
 //   value <millionths, a signed whole number>
 //   at <unix seconds>
 //
 // The field element: Poseidon(domain, kind, did, scope, value + 2^63, at), where
 //   domain = fieldHash('forest.foundation/index/v1/score')
-//   kind   = 1 for uniqueness, 2 for trust
+//   kind   = 1 for uniqueness, 2 for standing, 3 for rating
 //   did    = fieldHash('forest.foundation/index/v1/did/', did)
 //   scope  = the registry's own scopeOf(scope), the number a registration proof carries as its
-//            scope, so a later circuit ties a uniqueness score to a badge's code; 0 for trust
+//            scope, so a later circuit ties a uniqueness score to a badge's code; 0 otherwise
 // fieldHash is the registry client's: keccak256 of the namespace and the bytes, shifted right a
-// byte. The value is offset by 2^63 so a negative trust is still a small positive number a circuit
-// can range-check.
+// byte. The value is offset by 2^63 so a negative standing is still a small positive number a
+// circuit can range-check. A rating's value is its 1.0 to 10.0 in millionths.
 
 import { ed25519 } from '@noble/curves/ed25519.js'
 import { hkdf } from '@noble/hashes/hkdf.js'
@@ -35,7 +35,7 @@ import { fieldHash, scopeOf } from '../../../registry/client/src/field.ts'
 export const STATEMENT_HEADER = 'forest.foundation/index/v1/score'
 export const DOMAIN = fieldHash('forest.foundation/index/v1/score')
 export const DID_NS = 'forest.foundation/index/v1/did/'
-export const KIND = { uniqueness: 1n, trust: 2n } as const
+export const KIND = { uniqueness: 1n, standing: 2n, rating: 3n } as const
 export const VALUE_OFFSET = 1n << 63n
 
 export type Kind = keyof typeof KIND
@@ -87,8 +87,8 @@ export function parseStatement(text: string): Statement {
     return lines[i].slice(prefix.length)
   }
   const kind = field(1, 'kind')
-  if (kind !== 'uniqueness' && kind !== 'trust') throw new Error('unknown kind')
-  return { kind, did: field(2, 'did'), scope: field(3, 'scope'), value: BigInt(field(4, 'value')), at: BigInt(field(5, 'at')) }
+  if (!Object.hasOwn(KIND, kind)) throw new Error('unknown kind')
+  return { kind: kind as Kind, did: field(2, 'did'), scope: field(3, 'scope'), value: BigInt(field(4, 'value')), at: BigInt(field(5, 'at')) }
 }
 
 export function messageOf(s: Statement): bigint {

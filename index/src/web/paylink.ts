@@ -87,11 +87,11 @@ export function parsePayLink(search: URLSearchParams): { ok: true; link: PayLink
 }
 
 /** Where a link and the offer as indexed now differ, field by field. Empty when they agree. */
-export function linkDiffers(link: PayLink, offer: { price: PayLink['price']; terms: PayLink['terms'] }): string[] {
+export function linkDiffers(link: PayLink, offer: { price: PayLink['price'] | null; terms: PayLink['terms'] }): string[] {
   const out: string[] = []
-  if (link.price.amount !== offer.price.amount) out.push('price.amount')
-  if (link.price.mint !== offer.price.mint) out.push('price.mint')
-  if (link.price.per !== offer.price.per) out.push('price.per')
+  if (link.price.amount !== offer.price?.amount) out.push('price.amount')
+  if (link.price.mint !== offer.price?.mint) out.push('price.mint')
+  if (link.price.per !== offer.price?.per) out.push('price.per')
   if ((link.terms?.arbiter ?? null) !== (offer.terms?.arbiter ?? null)) out.push('terms.arbiter')
   const a = link.terms?.timer ?? null
   const b = offer.terms?.timer ?? null

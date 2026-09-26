@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { DEFAULT_ROLES, SHAPES, loadLexiconDocs, rolesOf, shapeId, validateMarket, validateRecord } from '../src/validate.js'
+import { MARKET_KEYS, SHAPES, SIDE_ROLES, loadLexiconDocs, rolesOf, shapeId, validateMarket, validateRecord } from '../src/validate.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const root = join(here, '..')
@@ -49,18 +49,50 @@ test('a record of an unknown shape is rejected', () => {
   assertRejected(validateRecord('not an object'), /must be a JSON object/)
 })
 
-test('a post without its price is rejected', () => {
+test('a post may leave out its price; a market with money asks for one', () => {
   const post = example('post')
   delete post.price
-  assertRejected(validateRecord(post), /must have the property "price"/)
+  assert.deepEqual(validateRecord(post), { ok: true, shape: 'post', errors: [] })
+  assertRejected(validateRecord(post, { market: market() }), /must have the property "price": deals in online-tutors are paid/)
+  const unpaid = { ...market(), money: false }
+  assert.deepEqual(validateRecord(post, { market: unpaid }), { ok: true, shape: 'post', errors: [] }, 'no money: no price needed')
+  assert.deepEqual(validateRecord(example('post'), { market: unpaid }), { ok: true, shape: 'post', errors: [] }, 'and a price is not refused')
 })
+
+const LISBON = { lat: '38.72', lon: '-9.14', precisionKm: 2, area: 'Alfama, Lisbon' }
 
 test('a post may leave out remote, with or without a location', () => {
   const post = example('post')
   delete post.remote
   assert.equal(validateRecord(post).ok, true)
-  post.location = 'Lisbon'
-  assert.equal(validateRecord(post).ok, true)
+  post.location = LISBON
+  assert.deepEqual(validateRecord(post), { ok: true, shape: 'post', errors: [] })
+})
+
+test('a location is a point in degrees as decimal text, a precision in whole km from 0, and a place', () => {
+  for (const location of [
+    LISBON,
+    { ...LISBON, precisionKm: 0, lat: '38.7139', lon: '-9.1394' },
+    { ...LISBON, precisionKm: 20000, lat: '0', lon: '180' },
+    { ...LISBON, lat: '-90', lon: '-180.0' },
+  ]) {
+    assert.deepEqual(validateRecord({ ...example('post'), location }), { ok: true, shape: 'post', errors: [] }, JSON.stringify(location))
+  }
+  const cases = [
+    [{ ...LISBON, lat: 38.72 }, /location\/lat must be a string/],
+    [{ ...LISBON, lat: '38.71391' }, /location\/lat must be degrees from -90 to 90 as decimal text with at most 4 decimals/],
+    [{ ...LISBON, lat: '90.5' }, /location\/lat must be degrees from -90 to 90/],
+    [{ ...LISBON, lon: '-180.01' }, /location\/lon must be degrees from -180 to 180/],
+    [{ ...LISBON, lon: '9,14' }, /location\/lon must be degrees/],
+    [{ ...LISBON, precisionKm: -1 }, /precisionKm can not be less than 0/],
+    [{ ...LISBON, precisionKm: 20001 }, /precisionKm can not be greater than 20000/],
+    [{ ...LISBON, precisionKm: 1.5 }, /precisionKm must be an integer/],
+    [{ lat: '38.72', lon: '-9.14', precisionKm: 2 }, /location must have the property "area"/],
+    ['Lisbon', /location must be an object/],
+  ]
+  for (const [location, pattern] of cases) {
+    assertRejected(validateRecord({ ...example('post'), location }), pattern)
+  }
 })
 
 test('a post priced per week is rejected', () => {
@@ -110,10 +142,35 @@ test('terms hold an arbiter key and a timer of whole days to one named side', ()
   }
 })
 
-test('a review rated 6 is rejected', () => {
-  const review = example('review')
-  review.rating = 6
-  assertRejected(validateRecord(review), /rating can not be greater than 5/)
+test('ratings are decimal text from 1.0 to 10.0 with one decimal at most, under any name', () => {
+  for (const ratings of [{}, { overall: '1' }, { overall: '10' }, { overall: '10.0' }, { overall: '7.5', punctuality: '9', 'on time': '8.0' }]) {
+    assert.deepEqual(validateRecord({ ...example('review'), ratings }), { ok: true, shape: 'review', errors: [] }, JSON.stringify(ratings))
+  }
+  for (const [ratings, pattern] of [
+    [{ overall: 8.5 }, /overall must be a string/],
+    [{ overall: '0.5' }, /ratings\/overall must be decimal text from 1.0 to 10.0/],
+    [{ overall: '10.5' }, /ratings\/overall must be decimal text from 1.0 to 10.0/],
+    [{ overall: '7.25' }, /ratings\/overall must be decimal text/],
+    [{ overall: '07' }, /ratings\/overall must be decimal text/],
+    [{ patience: 9 }, /ratings\/patience must be decimal text/],
+    [{ patience: '' }, /ratings\/patience must be decimal text/],
+    [{ $type: '5' }, /ratings: "\$type" must be a name of 1 to 64 characters, not starting with "\$"/],
+    [{ ['x'.repeat(65)]: '5' }, /must be a name of 1 to 64 characters/],
+    [[['overall', '5']], /ratings must be an object of names/],
+  ]) {
+    assertRejected(validateRecord({ ...example('review'), ratings }), pattern)
+  }
+})
+
+test('a review may carry photos and short videos, ten at most', () => {
+  // A blob as a record holds it; the examples carry none, since a host refuses a record whose blob it does not hold.
+  const photo = example('profile').photo
+  const video = { ...photo, mimeType: 'video/mp4', size: 40_000_000 }
+  assert.deepEqual(validateRecord({ ...example('review'), media: [photo, video] }), { ok: true, shape: 'review', errors: [] })
+  assertRejected(validateRecord({ ...example('review'), media: Array(11).fill(photo) }), /media must not have more than 10 elements/)
+  assertRejected(validateRecord({ ...example('review'), media: [photo, { ...photo, mimeType: 'application/pdf' }] }), /media\/1 must be one of image\/png, image\/jpeg, video\/mp4, got "application\/pdf"/)
+  assertRejected(validateRecord({ ...example('review'), media: [{ ...video, size: 50_000_001 }] }), /media\/0 must be at most 50000000 bytes, got 50000001/)
+  assertRejected(validateRecord({ ...example('profile'), photo: { ...example('profile').photo, mimeType: 'video/mp4' } }), /photo must be one of image\/png, image\/jpeg/)
 })
 
 test('a review of something that is not a DID is rejected', () => {
@@ -123,11 +180,11 @@ test('a review of something that is not a DID is rejected', () => {
 })
 
 test('the thinnest review points at a person and says nothing else, and is valid', () => {
-  // Everything but who it is about is optional: no rating, no text, no deal. What is missing
+  // Everything but who it is about is optional: no ratings, no text, no photos, no deal. What is missing
   // weighs less; nothing is refused.
   const thin = { $type: 'foundation.forest.review', subject: 'did:plc:abcdefghijklmnopqrstuvwx', createdAt: '2026-11-02T18:30:00Z' }
   assert.deepEqual(validateRecord(thin), { ok: true, shape: 'review', errors: [] })
-  for (const keep of ['rating', 'text', 'dealId']) {
+  for (const keep of ['ratings', 'text', 'dealId']) {
     const review = { ...thin, [keep]: example('review')[keep] }
     assert.deepEqual(validateRecord(review), { ok: true, shape: 'review', errors: [] }, `with only ${keep}`)
   }
@@ -176,69 +233,23 @@ test('the online-tutors market file is valid', () => {
   assert.deepEqual(validateMarket(market()), { ok: true, errors: [] })
 })
 
-test('a market file cannot add a new shape', () => {
-  const m = market()
-  m.fields.lesson = { properties: { topic: { type: 'string' } } }
-  assertRejected(validateMarket(m), /fields\/lesson: not a shape/)
-})
-
-test('a market file cannot add fields to a credential', () => {
-  const m = market()
-  m.fields.credential = { properties: { grade: { type: 'string' } } }
-  assertRejected(validateMarket(m), /cannot add fields to a credential/)
-})
-
-test('a market field cannot be structured (ref, object, union, blob)', () => {
-  for (const def of [
-    { type: 'ref', ref: '#syllabus' },
-    { type: 'object', properties: {} },
-    { type: 'union', refs: [] },
-    { type: 'blob' },
-    { type: 'unknown' },
-  ]) {
-    const m = market()
-    m.fields.post.properties.syllabus = def
-    assertRejected(validateMarket(m), /Anything structured is a new shape/)
-  }
-})
-
-test('a market field cannot redefine a base field or start with "$"', () => {
-  const m = market()
-  m.fields.post.properties.price = { type: 'string' }
-  assertRejected(validateMarket(m), /"price" is already a post field/)
-  const n = market()
-  n.fields.post.properties.$type = { type: 'string' }
-  assertRejected(validateMarket(n), /no "\$"/)
-})
-
-test('a market field with a bad constraint is rejected by the lexicon library', () => {
-  const m = market()
-  m.fields.post.properties.subjects.maxLength = 'ten'
-  assertRejected(validateMarket(m), /subjects\/maxLength: Expected number/)
-})
-
-test('a market file cannot require a field it did not add', () => {
-  const m = market()
-  m.fields.post.required = ['nope']
-  assertRejected(validateMarket(m), /"nope" is not one of this market's post fields/)
-})
-
-test('a market file has five required keys, two optional ones, and nothing else', () => {
-  const extra = market()
-  extra.pricing = 'hourly'
-  assertRejected(validateMarket(extra), /unknown key "pricing"/)
-  for (const key of ['name', 'category', 'fields', 'evidenceTypes', 'credentialIssuers']) {
+test('a market file has nine required keys, two optional ones, and nothing else', () => {
+  assert.deepEqual(MARKET_KEYS, ['name', 'folder', 'description', 'sides', 'money', 'evidenceTypes', 'offerFields', 'ratings', 'howDealsGo', 'labels', 'reviewFields'])
+  for (const key of ['name', 'folder', 'description', 'sides', 'money', 'evidenceTypes', 'offerFields', 'ratings', 'howDealsGo']) {
     const missing = market()
     delete missing[key]
     assertRejected(validateMarket(missing), new RegExp(`missing "${key}"`))
   }
   const bare = market()
-  delete bare.description
-  delete bare.roles
-  assert.deepEqual(validateMarket(bare), { ok: true, errors: [] }, 'no description and no roles')
+  delete bare.labels
+  delete bare.reviewFields
+  assert.deepEqual(validateMarket(bare), { ok: true, errors: [] }, 'no labels and no review fields')
+  for (const key of ['category', 'fields', 'roles', 'credentialIssuers', 'aliases', 'pricing']) {
+    assertRejected(validateMarket({ ...market(), [key]: [] }), new RegExp(`unknown key "${key}"`))
+  }
 })
 
-test('a market file says nothing about money or time, and restricts no deal', () => {
+test('a market file restricts no deal', () => {
   for (const [key, value] of [
     ['suggested', { autoReleaseDays: 7, cancellationSteps: [] }],
     ['autoReleaseDays', 7],
@@ -247,65 +258,134 @@ test('a market file says nothing about money or time, and restricts no deal', ()
     ['tokens', [{ symbol: 'USDC', mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', chain: 'solana' }]],
     ['reviewEvidence', 'escrow'],
   ]) {
-    const m = market()
-    m[key] = value
-    assertRejected(validateMarket(m), new RegExp(`unknown key "${key}"`))
+    assertRejected(validateMarket({ ...market(), [key]: value }), new RegExp(`unknown key "${key}"`))
   }
 })
 
-test('roles default to seller and buyer; a market file may name its own', () => {
-  const m = market()
-  assert.equal(m.roles, undefined)
-  assert.deepEqual(rolesOf(m), ['seller', 'buyer'])
-  assert.deepEqual([...DEFAULT_ROLES], ['seller', 'buyer'])
+test('roles come from sides: seller and buyer when two, peer when one', () => {
+  assert.deepEqual(SIDE_ROLES, { two: ['seller', 'buyer'], one: ['peer'] })
+  const two = market()
+  assert.deepEqual(rolesOf(two), ['seller', 'buyer'])
   for (const role of ['seller', 'buyer']) {
-    assert.deepEqual(validateRecord({ ...example('post'), role }, { market: m }), { ok: true, shape: 'post', errors: [] }, role)
+    assert.deepEqual(validateRecord({ ...example('post'), role }, { market: two }), { ok: true, shape: 'post', errors: [] }, role)
   }
-  assertRejected(validateRecord({ ...example('post'), role: 'tutor' }, { market: m }), /role must be one of \(seller\|buyer\), got "tutor"/)
+  assertRejected(validateRecord({ ...example('post'), role: 'tutor' }, { market: two }), /role must be one of \(seller\|buyer\), got "tutor"/, 'a label is a word for pages, not a role')
 
-  const own = { ...market(), roles: ['tutor', 'student'] }
-  assert.deepEqual(validateMarket(own), { ok: true, errors: [] })
-  assert.deepEqual(validateRecord({ ...example('post'), role: 'tutor' }, { market: own }), { ok: true, shape: 'post', errors: [] })
-  assertRejected(validateRecord(example('post'), { market: own }), /role must be one of \(tutor\|student\), got "seller"/)
+  const one = { ...market(), sides: 'one' }
+  delete one.labels
+  assert.deepEqual(validateMarket(one), { ok: true, errors: [] })
+  assert.deepEqual(rolesOf(one), ['peer'])
+  assert.deepEqual(validateRecord({ ...example('post'), role: 'peer' }, { market: one }), { ok: true, shape: 'post', errors: [] })
+  assertRejected(validateRecord(example('post'), { market: one }), /role must be one of \(peer\), got "seller"/)
 
-  for (const [roles, pattern] of [
-    [[], /roles must be a non-empty array of slugs; leave it out for seller and buyer/],
-    [['Seller'], /roles: "Seller" must be a lowercase slug/],
-    [['seller', 'seller'], /roles must be distinct/],
-  ]) {
-    assertRejected(validateMarket({ ...market(), roles }), pattern)
+  for (const sides of ['three', 2, 'Two', null]) {
+    assertRejected(validateMarket({ ...market(), sides }), /sides must be "two" \(a seller and a buyer\) or "one" \(peers\)/)
   }
 })
 
-test('a description is optional, and one line', () => {
+test('labels are the plain words for seller and buyer, in a two-sided market only', () => {
+  assert.deepEqual(validateMarket({ ...market(), labels: { seller: 'driver', buyer: 'rider' } }), { ok: true, errors: [] })
+  assertRejected(validateMarket({ ...market(), sides: 'one' }), /labels are only for a two-sided market/)
+  for (const labels of [{ seller: 'tutor' }, { seller: 'tutor', buyer: 'student', peer: 'x' }, ['tutor', 'student'], 'tutor']) {
+    assertRejected(validateMarket({ ...market(), labels }), /labels must be \{ "seller": …, "buyer": … \} and nothing else/)
+  }
+  for (const buyer of ['', 'two\nlines', 'x'.repeat(65), 7]) {
+    assertRejected(validateMarket({ ...market(), labels: { seller: 'tutor', buyer } }), /labels\/buyer must be one line of text, at most 64 characters/)
+  }
+})
+
+test('money is true or false', () => {
+  assert.deepEqual(validateMarket({ ...market(), money: false }), { ok: true, errors: [] })
+  for (const money of ['yes', 1, null]) assertRejected(validateMarket({ ...market(), money }), /money must be true or false/)
+})
+
+test('ratings name what reviews usually rate, overall always among them', () => {
+  assert.deepEqual(validateMarket({ ...market(), ratings: ['overall'] }), { ok: true, errors: [] })
+  for (const [ratings, pattern] of [
+    [['patience'], /ratings must include "overall"/],
+    [[], /ratings must include "overall"/],
+    [['overall', 'overall'], /ratings must be distinct/],
+    [['overall', 'on-time'], /ratings: "on-time" must be a camelCase name/],
+    [['overall', 7], /ratings: 7 must be a camelCase name/],
+    ['overall', /ratings must be an array of rating names/],
+  ]) {
+    assertRejected(validateMarket({ ...market(), ratings }), pattern)
+  }
+})
+
+test('howDealsGo is plain text, lines allowed', () => {
+  assert.deepEqual(validateMarket({ ...market(), howDealsGo: 'Pay up front.\nRelease after the lesson.' }), { ok: true, errors: [] })
+  assert.deepEqual(validateMarket({ ...market(), howDealsGo: 'x'.repeat(3000) }), { ok: true, errors: [] })
+  for (const howDealsGo of ['', '  \n ', 'x'.repeat(3001), 42, ['a']]) {
+    assertRejected(validateMarket({ ...market(), howDealsGo }), /howDealsGo must be plain text, at most 3000 characters/)
+  }
+})
+
+test('offerFields and reviewFields add flat fields, never a new shape', () => {
+  for (const key of ['offerFields', 'reviewFields']) {
+    for (const def of [
+      { type: 'ref', ref: '#syllabus' },
+      { type: 'object', properties: {} },
+      { type: 'union', refs: [] },
+      { type: 'blob' },
+      { type: 'unknown' },
+    ]) {
+      assertRejected(validateMarket({ ...market(), [key]: { properties: { syllabus: def } } }), /Anything structured is a new shape/)
+    }
+    assertRejected(validateMarket({ ...market(), [key]: { properties: {}, lesson: {} } }), new RegExp(`${key}/lesson: only "properties" and "required" belong here`))
+    assertRejected(validateMarket({ ...market(), [key]: [] }), new RegExp(`${key} must be an object`))
+  }
+  assert.deepEqual(validateMarket({ ...market(), offerFields: {} }), { ok: true, errors: [] }, 'no extra fields is a valid block')
+})
+
+test('a market field cannot redefine a base field or start with "$"', () => {
+  const m = market()
+  m.offerFields.properties.price = { type: 'string' }
+  assertRejected(validateMarket(m), /offerFields\/properties\/price: "price" is already a post field/)
+  const r = market()
+  r.reviewFields.properties.ratings = { type: 'string' }
+  assertRejected(validateMarket(r), /reviewFields\/properties\/ratings: "ratings" is already a review field/)
+  const n = market()
+  n.offerFields.properties.$type = { type: 'string' }
+  assertRejected(validateMarket(n), /no "\$"/)
+})
+
+test('a market field with a bad constraint is rejected by the lexicon library', () => {
+  const m = market()
+  m.offerFields.properties.subjects.maxLength = 'ten'
+  assertRejected(validateMarket(m), /offerFields: .*subjects\/maxLength: Expected number/)
+})
+
+test('a market file cannot require a field it did not add', () => {
+  const m = market()
+  m.offerFields.required = ['nope']
+  assertRejected(validateMarket(m), /"nope" is not one of this market's post fields/)
+  const r = market()
+  r.reviewFields.required = ['nope']
+  assertRejected(validateMarket(r), /"nope" is not one of this market's review fields/)
+})
+
+test('a description is one line', () => {
   assert.deepEqual(validateMarket({ ...market(), description: 'x'.repeat(300) }), { ok: true, errors: [] })
   for (const description of ['', '   ', 'two\nlines', 'a\rb', 'x'.repeat(301), 42, null]) {
     assertRejected(validateMarket({ ...market(), description }), /description must be one line of text, at most 300 characters/)
   }
 })
 
-test('a category is any slug: a folder and a page, never code', () => {
-  for (const category of ['home-services', 'freelance-work', 'buy-and-sell', 'rides']) {
-    const m = market()
-    m.category = category
-    assert.deepEqual(validateMarket(m), { ok: true, errors: [] }, category)
+test('a name and a folder are any slug: a folder is a place in the directory, never code', () => {
+  for (const folder of ['home-services', 'freelance-work', 'buy-and-sell', 'rides']) {
+    assert.deepEqual(validateMarket({ ...market(), folder }), { ok: true, errors: [] }, folder)
   }
-  const m = market()
-  m.category = 'Home Services'
-  assertRejected(validateMarket(m), /category must be a lowercase slug/)
+  assertRejected(validateMarket({ ...market(), folder: 'Home Services' }), /folder must be a lowercase slug/)
+  assertRejected(validateMarket({ ...market(), name: 'online tutors' }), /name must be a lowercase slug/)
+  assertRejected(validateMarket({ ...market(), name: 'x'.repeat(65) }), /name must be a lowercase slug/)
 })
 
-test('market scalars are checked', () => {
-  const m = market()
-  m.evidenceTypes = ['escrow', 'Shipment Tracking', 'escrow']
-  m.credentialIssuers = ['bob']
-  const result = validateMarket(m)
+test('evidence types are distinct slugs', () => {
+  const result = validateMarket({ ...market(), evidenceTypes: ['escrow', 'Shipment Tracking', 'escrow'] })
   assertRejected(result, /evidenceTypes: "Shipment Tracking" must be a lowercase slug/)
   assertRejected(result, /evidenceTypes must be distinct/)
-  assertRejected(result, /"bob" is not a DID/)
-  const none = market()
-  none.evidenceTypes = []
-  assert.deepEqual(validateMarket(none), { ok: true, errors: [] }, 'no evidence types is a valid list')
+  assert.deepEqual(validateMarket({ ...market(), evidenceTypes: [] }), { ok: true, errors: [] }, 'no evidence types is a valid list')
 })
 
 // Records against their lexicon plus a market file
@@ -332,7 +412,7 @@ test("a market file limits no offer's token or terms", () => {
   assert.deepEqual(validateRecord(post, { market: market() }), { ok: true, shape: 'post', errors: [] })
 })
 
-test("a post must carry the market's required extra field, typed as the market says", () => {
+test("a post must carry the market's required offer field, typed as the market says", () => {
   const post = example('post')
   delete post.subjects
   assertRejected(validateRecord(post, { market: market() }), /must have the property "subjects"/)
@@ -341,21 +421,33 @@ test("a post must carry the market's required extra field, typed as the market s
   assertRejected(validateRecord(again, { market: market() }), /languages\/0 must be a well-formed BCP 47/)
 })
 
+test("a review is checked against its subject's market: its review fields, and any rating name", () => {
+  const review = example('review')
+  assert.equal(review.sessions, 8)
+  assert.deepEqual(validateRecord(review, { market: market() }), { ok: true, shape: 'review', errors: [] })
+  assertRejected(validateRecord({ ...review, sessions: 0 }, { market: market() }), /sessions can not be less than 1/)
+  assertRejected(validateRecord({ ...review, sessions: 'eight' }, { market: market() }), /sessions must be an integer/)
+  const requires = market()
+  requires.reviewFields.required = ['sessions']
+  const { sessions: _, ...without } = review
+  assertRejected(validateRecord(without, { market: requires }), /must have the property "sessions"/)
+  // The market file suggests names; a review may rate anything else too.
+  const other = { ...review, ratings: { overall: '9', humour: '10' } }
+  assert.deepEqual(market().ratings.includes('humour'), false)
+  assert.deepEqual(validateRecord(other, { market: market() }), { ok: true, shape: 'review', errors: [] })
+})
+
 test('evidence weighs, never rejects: a review without an escrow is valid in an escrow market', () => {
   const review = example('review')
   delete review.dealId
   const withEscrow = market()
   assert.deepEqual(withEscrow.evidenceTypes, ['escrow'])
   assert.deepEqual(validateRecord(review, { market: withEscrow }), { ok: true, shape: 'review', errors: [] })
-  const none = market()
-  none.evidenceTypes = []
-  assert.deepEqual(validateRecord(review, { market: none }), { ok: true, shape: 'review', errors: [] })
+  assert.deepEqual(validateRecord(review, { market: { ...market(), evidenceTypes: [] } }), { ok: true, shape: 'review', errors: [] })
 })
 
 test('a broken market file fails the record, and says so', () => {
-  const m = market()
-  m.roles = []
-  assertRejected(validateRecord(example('post'), { market: m }), /^market file: roles must be/)
+  assertRejected(validateRecord(example('post'), { market: { ...market(), sides: 'many' } }), /^market file: sides must be/)
 })
 
 // The command line

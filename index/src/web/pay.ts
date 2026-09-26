@@ -16,11 +16,12 @@ export type PayModel = {
    *   changed   the offer was edited since (another cid); `offer` shows it as it is now
    *   differs   same cid, other price or terms: the link was altered
    *   notLive   the offer expired or is no longer an offer in a directory market
+   *   noPrice   the offer names no price: it is in a market where deals are not paid
    *   noKey     the seller's profile names no key to be paid at
    *   notFound  no offer at that address in this index
    *   invalid   not a complete link
    */
-  check: 'matches' | 'changed' | 'differs' | 'notLive' | 'noKey' | 'notFound' | 'invalid'
+  check: 'matches' | 'changed' | 'differs' | 'notLive' | 'noPrice' | 'noKey' | 'notFound' | 'invalid'
   differences: string[]
   offer: Offer | null
 }
@@ -41,6 +42,7 @@ export async function pay(ctx: Ctx, search: URLSearchParams): Promise<PayModel> 
   }
   const live = offer.direction === 'offer' && offer.market !== null && !(offer.expires && new Date(offer.expires) <= new Date())
   if (!live) return { ...out, check: 'notLive' }
+  if (!offer.price) return { ...out, check: 'noPrice' }
   // A live offer with no pay link is one whose profile names no key.
   if (!offer.payLink) return { ...out, check: 'noKey' }
   if (offer.cid !== link.cid) return { ...out, check: 'changed', differences: linkDiffers(link, offer) }

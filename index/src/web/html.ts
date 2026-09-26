@@ -44,15 +44,23 @@ export function seg(s: string): string {
 
 export type Urls = ReturnType<typeof urlsFor>
 
+/** Offers within `km` kilometres of a point, as `near=lat,lon&km=N` asks. */
+export type Near = { lat: number; lon: number; km: number }
+
+/** `near=lat,lon&km=N`, the comma kept readable, or nothing. */
+const nearQuery = (near: Near | null | undefined): string[] => (near ? [`near=${near.lat},${near.lon}`, `km=${near.km}`] : [])
+const query = (parts: string[]) => (parts.length ? `?${parts.join('&')}` : '')
+
 export function urlsFor(base: string) {
   return {
     base,
     home: () => `${base}/`,
-    category: (c: string) => `${base}/categories/${seg(c)}`,
-    market: (m: string, offset = 0) => `${base}/markets/${seg(m)}${offset ? `?offset=${offset}` : ''}`,
+    folder: (f: string) => `${base}/folders/${seg(f)}`,
+    market: (m: string, offset = 0, near: Near | null = null) =>
+      `${base}/markets/${seg(m)}${query([...nearQuery(near), ...(offset ? [`offset=${offset}`] : [])])}`,
     profile: (did: string) => `${base}/profiles/${seg(did)}`,
     deal: (id: string) => `${base}/deals/${seg(id)}`,
-    search: (q: string) => `${base}/search?q=${encodeURIComponent(q)}`,
+    search: (q: string, near: Near | null = null) => `${base}/search${query([`q=${encodeURIComponent(q)}`, ...nearQuery(near)])}`,
     file: (name: string) => `${base}/${name}`,
     /** The twin of a page: the same URL with `.json` on its path, the query kept. The home page's is /index.json. */
     json: (pageUrl: string) => {
@@ -108,7 +116,7 @@ export type Head = {
   /** The twin's URL; null for a page with no twin (a 404). */
   json: string | null
   jsonLd: unknown | null
-  /** Search results, pay links and deals with no receipt: open to all, not for search engines to list. */
+  /** Search results, near views of a market, pay links and deals with no receipt: open to all, not for search engines to list. */
   noindex?: boolean
 }
 

@@ -13,7 +13,6 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Lexicons, jsonToLex, parseLexiconDoc } from '@atproto/lexicon'
-import { isValidDid } from '@atproto/syntax'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const LEXICON_DIR = join(here, '..', 'lexicons', 'foundation', 'forest')
@@ -24,24 +23,32 @@ export const NAMESPACE = 'foundation.forest'
 /** The four shapes. Nothing else is a Forest record. */
 export const SHAPES = ['profile', 'post', 'review', 'credential']
 
-/** Shapes a market file may add fields to. A credential is the issuer's, not the market's. */
-export const MARKET_FIELD_PLACES = ['profile', 'post', 'review']
-
 /**
- * The keys a market file must have. A market file describes a market; it says
- * nothing about money or time, which are the seller's, per offer, and it
- * restricts no deal.
+ * The keys a market file must have. A market file describes a market and restricts no deal: the
+ * arbiter, the timer, the token and the amount are the seller's, per offer.
  */
-export const MARKET_REQUIRED_KEYS = ['name', 'category', 'fields', 'evidenceTypes', 'credentialIssuers']
+export const MARKET_REQUIRED_KEYS = ['name', 'folder', 'description', 'sides', 'money', 'evidenceTypes', 'offerFields', 'ratings', 'howDealsGo']
 
 /** The keys a market file may have. Nothing else belongs in one. */
-export const MARKET_KEYS = [...MARKET_REQUIRED_KEYS, 'description', 'roles']
+export const MARKET_KEYS = [...MARKET_REQUIRED_KEYS, 'labels', 'reviewFields']
 
-/** A market's roles when its file names none. */
-export const DEFAULT_ROLES = Object.freeze(['seller', 'buyer'])
+/** A market's roles come from its sides: seller and buyer when two, peer when one. */
+export const SIDE_ROLES = Object.freeze({ two: Object.freeze(['seller', 'buyer']), one: Object.freeze(['peer']) })
+
+/** The two blocks of extra fields a market file may carry, and the shape each adds to. */
+export const FIELD_BLOCKS = Object.freeze({ offerFields: 'post', reviewFields: 'review' })
 
 /** A market file's description is one line, at most this long. */
 export const MAX_DESCRIPTION = 300
+
+/** How deals go in the market, in plain text, at most this long. */
+export const MAX_HOW_DEALS_GO = 3000
+
+/** A label, the plain word for a side, at most this long. */
+export const MAX_LABEL = 64
+
+/** Every review may rate `overall`; a market file lists it with any others it suggests. */
+export const OVERALL = 'overall'
 
 // A market field is flat data. Anything structured would be a new shape.
 const EXTRA_FIELD_TYPES = ['string', 'integer', 'boolean', 'array']
@@ -49,6 +56,10 @@ const EXTRA_ITEM_TYPES = ['string', 'integer', 'boolean']
 
 const SLUG = /^[a-z0-9]+(-[a-z0-9]+)*$/
 const FIELD_NAME = /^[a-z][A-Za-z0-9]*$/
+// A rating: decimal text from 1.0 to 10.0, at most one decimal. A record holds no fractional numbers.
+const RATING = /^(10(\.0)?|[1-9](\.[0-9])?)$/
+// Degrees as decimal text, at most four decimals.
+const DEGREES = /^-?[0-9]{1,3}(\.[0-9]{1,4})?$/
 
 export function shapeId(shape) {
   return `${NAMESPACE}.${shape}`
@@ -80,11 +91,16 @@ export function loadLexiconDocs() {
 /**
  * Check one record. Returns { ok, shape, errors }.
  * A review's deal id, when it has one, must be an escrow address or 32 bytes
- * of hex. A post's terms are optional and checked by the lexicon alone.
- * With a market file, the record is checked against the shape plus that
- * market's extra fields, and against the market's name and roles. Nothing in
- * a market file limits a post's terms or token, and evidence is not checked:
- * it weighs, it never rejects.
+ * of hex, and each of its ratings decimal text from 1.0 to 10.0 under any name.
+ * A post's location, when it has one, is a point in degrees and a place name.
+ * A post's terms are optional and checked by the lexicon alone.
+ *
+ * With a market file, the record is also checked against that market: a post
+ * against the market it names (its name, a role its sides allow, its offer
+ * fields, and a price when the market has money); a review against the market
+ * of the profile it is about (its review fields). The caller finds that market.
+ * Nothing in a market file limits a post's terms or token, a review may use
+ * any rating name, and evidence is not checked: it weighs, it never rejects.
  */
 export function validateRecord(record, { market } = {}) {
   if (!isPlainObject(record)) return fail(undefined, ['record must be a JSON object'])
@@ -108,15 +124,18 @@ export function validateRecord(record, { market } = {}) {
     return fail(shape, [e.message])
   }
 
-  const errors = shape === 'review' ? reviewRules(record) : []
+  const errors = blobRules(record, doc)
+  if (shape === 'review') errors.push(...reviewRules(record))
+  if (shape === 'post') errors.push(...postRules(record))
   if (market !== undefined) errors.push(...marketRules(shape, record, market))
   return errors.length ? fail(shape, errors) : { ok: true, shape, errors: [] }
 }
 
 /**
- * Check a market file's structure. Returns { ok, errors }.
- * Required: name, category, fields, evidenceTypes, credentialIssuers.
- * Optional: a one-line description, and roles (seller and buyer when absent).
+ * Check a market file's structure, and nothing more. Returns { ok, errors }.
+ * Required: name, folder, description, sides, money, evidenceTypes,
+ * offerFields, ratings, howDealsGo. Optional: labels (two sides only) and
+ * reviewFields. Nothing else.
  */
 export function validateMarket(market) {
   if (!isPlainObject(market)) return { ok: false, errors: ['market file must be a JSON object'] }
@@ -132,32 +151,35 @@ export function validateMarket(market) {
   }
   if (errors.length) return { ok: false, errors }
 
-  if (typeof market.name !== 'string' || !SLUG.test(market.name) || market.name.length > 64) {
-    errors.push('name must be a lowercase slug (letters, digits, hyphens), at most 64 characters')
-  }
-
-  if ('description' in market) {
-    const d = market.description
-    if (typeof d !== 'string' || d.trim() === '' || /[\r\n]/.test(d) || d.length > MAX_DESCRIPTION) {
-      errors.push(`description must be one line of text, at most ${MAX_DESCRIPTION} characters`)
+  for (const key of ['name', 'folder']) {
+    if (typeof market[key] !== 'string' || !SLUG.test(market[key]) || market[key].length > 64) {
+      errors.push(`${key} must be a lowercase slug (letters, digits, hyphens), at most 64 characters`)
     }
   }
 
-  if ('roles' in market) {
-    if (!Array.isArray(market.roles) || market.roles.length === 0) {
-      errors.push(`roles must be a non-empty array of slugs; leave it out for ${DEFAULT_ROLES.join(' and ')}`)
+  if (!isOneLine(market.description, MAX_DESCRIPTION)) {
+    errors.push(`description must be one line of text, at most ${MAX_DESCRIPTION} characters`)
+  }
+
+  if (!Object.hasOwn(SIDE_ROLES, market.sides)) {
+    errors.push('sides must be "two" (a seller and a buyer) or "one" (peers)')
+  }
+
+  if ('labels' in market) {
+    const labels = market.labels
+    if (market.sides !== 'two') {
+      errors.push('labels are only for a two-sided market: the plain words for seller and buyer')
+    } else if (!isPlainObject(labels) || Object.keys(labels).sort().join() !== 'buyer,seller') {
+      errors.push('labels must be { "seller": …, "buyer": … } and nothing else')
     } else {
-      for (const role of market.roles) {
-        if (typeof role !== 'string' || !SLUG.test(role) || role.length > 64) {
-          errors.push(`roles: ${JSON.stringify(role)} must be a lowercase slug, at most 64 characters`)
-        }
+      for (const side of ['seller', 'buyer']) {
+        if (!isOneLine(labels[side], MAX_LABEL)) errors.push(`labels/${side} must be one line of text, at most ${MAX_LABEL} characters`)
       }
-      if (new Set(market.roles).size !== market.roles.length) errors.push('roles must be distinct')
     }
   }
 
-  if (typeof market.category !== 'string' || !SLUG.test(market.category) || market.category.length > 64) {
-    errors.push('category must be a lowercase slug, at most 64 characters')
+  if (typeof market.money !== 'boolean') {
+    errors.push('money must be true or false: whether deals in this market are paid')
   }
 
   if (!Array.isArray(market.evidenceTypes)) {
@@ -171,31 +193,43 @@ export function validateMarket(market) {
     if (new Set(market.evidenceTypes).size !== market.evidenceTypes.length) errors.push('evidenceTypes must be distinct')
   }
 
-  if (!Array.isArray(market.credentialIssuers)) {
-    errors.push('credentialIssuers must be an array of DIDs (empty until issuers exist)')
-  } else {
-    for (const did of market.credentialIssuers) {
-      if (!isValidDid(did)) errors.push(`credentialIssuers: ${JSON.stringify(did)} is not a DID`)
-    }
+  for (const key of Object.keys(FIELD_BLOCKS)) {
+    if (key in market) errors.push(...checkFieldBlock(key, market[key]))
   }
 
-  errors.push(...checkFields(market.fields))
+  if (!Array.isArray(market.ratings)) {
+    errors.push(`ratings must be an array of rating names, "${OVERALL}" among them`)
+  } else {
+    for (const name of market.ratings) {
+      if (typeof name !== 'string' || !FIELD_NAME.test(name) || name.length > 64) {
+        errors.push(`ratings: ${JSON.stringify(name)} must be a camelCase name, at most 64 characters`)
+      }
+    }
+    if (!market.ratings.includes(OVERALL)) errors.push(`ratings must include "${OVERALL}"`)
+    if (new Set(market.ratings).size !== market.ratings.length) errors.push('ratings must be distinct')
+  }
+
+  if (typeof market.howDealsGo !== 'string' || market.howDealsGo.trim() === '' || market.howDealsGo.length > MAX_HOW_DEALS_GO) {
+    errors.push(`howDealsGo must be plain text, at most ${MAX_HOW_DEALS_GO} characters`)
+  }
 
   return errors.length ? { ok: false, errors } : { ok: true, errors: [] }
 }
 
-/** A market's roles: the ones its file names, or seller and buyer. */
+/** A market's roles, from its sides: seller and buyer, or peer. */
 export function rolesOf(market) {
-  return market.roles ?? DEFAULT_ROLES
+  return SIDE_ROLES[market.sides] ?? []
 }
 
 /**
  * A copy of a shape's lexicon doc with one market's extra fields for that
- * shape merged in. Base fields come first; a market never redefines them.
+ * shape merged in: offer fields into a post, review fields into a review.
+ * Base fields come first; a market never redefines them.
  */
 export function mergeMarket(doc, shape, market) {
   const merged = structuredClone(doc)
-  const block = market.fields?.[shape]
+  const key = Object.keys(FIELD_BLOCKS).find((k) => FIELD_BLOCKS[k] === shape)
+  const block = key ? market[key] : undefined
   if (!isPlainObject(block)) return merged
   const record = merged.defs.main.record
   record.properties = { ...record.properties, ...(block.properties ?? {}) }
@@ -203,81 +237,57 @@ export function mergeMarket(doc, shape, market) {
   return merged
 }
 
-// The rule: fields only in allowed places, never a new shape.
-function checkFields(fields) {
-  if (!isPlainObject(fields)) {
-    return [`fields must be an object keyed by shape (${MARKET_FIELD_PLACES.join(', ')})`]
+// The rule for one block of extra fields: flat fields added to one shape, never a new shape.
+function checkFieldBlock(key, block) {
+  const place = FIELD_BLOCKS[key]
+  if (!isPlainObject(block)) {
+    return [`${key} must be an object with "properties" and optional "required": the extra fields a ${place} in this market carries`]
   }
   const errors = []
-  const docs = loadLexiconDocs()
+  for (const k of Object.keys(block)) {
+    if (k !== 'properties' && k !== 'required') errors.push(`${key}/${k}: only "properties" and "required" belong here`)
+  }
 
-  for (const [place, block] of Object.entries(fields)) {
-    if (!MARKET_FIELD_PLACES.includes(place)) {
+  const props = block.properties ?? {}
+  if (!isPlainObject(props)) return [...errors, `${key}/properties must be an object of field definitions`]
+  const base = loadLexiconDocs()[place].defs.main.record.properties
+  for (const [name, def] of Object.entries(props)) {
+    const path = `${key}/properties/${name}`
+    if (!FIELD_NAME.test(name)) {
+      errors.push(`${path}: field names are camelCase letters and digits, no "$"`)
+    }
+    if (name in base) {
+      errors.push(`${path}: "${name}" is already a ${place} field; market files add fields, they never redefine them`)
+    }
+    if (!isPlainObject(def)) {
+      errors.push(`${path}: must be a field definition with a "type"`)
+      continue
+    }
+    if (!EXTRA_FIELD_TYPES.includes(def.type)) {
       errors.push(
-        SHAPES.includes(place)
-          ? `fields/${place}: a market file cannot add fields to a ${place}; allowed places are ${MARKET_FIELD_PLACES.join(', ')}`
-          : `fields/${place}: not a shape. Market files add fields to ${MARKET_FIELD_PLACES.join(', ')}; they never add a new shape`,
+        `${path}: type ${JSON.stringify(def.type)} is not allowed; a market field is string, integer, boolean, or an array of those. Anything structured is a new shape`,
       )
-      continue
+    } else if (def.type === 'array' && !(isPlainObject(def.items) && EXTRA_ITEM_TYPES.includes(def.items.type))) {
+      errors.push(`${path}: array items must be string, integer, or boolean`)
     }
-    if (!isPlainObject(block)) {
-      errors.push(`fields/${place} must be an object with "properties" and optional "required"`)
-      continue
-    }
-    for (const key of Object.keys(block)) {
-      if (key !== 'properties' && key !== 'required') {
-        errors.push(`fields/${place}/${key}: only "properties" and "required" belong here`)
-      }
-    }
+  }
 
-    const props = block.properties ?? {}
-    if (!isPlainObject(props)) {
-      errors.push(`fields/${place}/properties must be an object of field definitions`)
-      continue
-    }
-    const base = docs[place].defs.main.record.properties
-    for (const [name, def] of Object.entries(props)) {
-      const path = `fields/${place}/properties/${name}`
-      if (!FIELD_NAME.test(name)) {
-        errors.push(`${path}: field names are camelCase letters and digits, no "$"`)
-      }
-      if (name in base) {
-        errors.push(`${path}: "${name}" is already a ${place} field; market files add fields, they never redefine them`)
-      }
-      if (!isPlainObject(def)) {
-        errors.push(`${path}: must be a field definition with a "type"`)
-        continue
-      }
-      if (!EXTRA_FIELD_TYPES.includes(def.type)) {
-        errors.push(
-          `${path}: type ${JSON.stringify(def.type)} is not allowed; a market field is string, integer, boolean, or an array of those. Anything structured is a new shape`,
-        )
-      } else if (def.type === 'array' && !(isPlainObject(def.items) && EXTRA_ITEM_TYPES.includes(def.items.type))) {
-        errors.push(`${path}: array items must be string, integer, or boolean`)
-      }
-    }
-
-    const required = block.required ?? []
-    if (!Array.isArray(required)) {
-      errors.push(`fields/${place}/required must be an array of this market's ${place} field names`)
-    } else {
-      for (const name of required) {
-        if (!(name in props)) {
-          errors.push(`fields/${place}/required: ${JSON.stringify(name)} is not one of this market's ${place} fields`)
-        }
-      }
+  const required = block.required ?? []
+  if (!Array.isArray(required)) {
+    errors.push(`${key}/required must be an array of this market's ${place} field names`)
+  } else {
+    for (const name of required) {
+      if (!(name in props)) errors.push(`${key}/required: ${JSON.stringify(name)} is not one of this market's ${place} fields`)
     }
   }
   if (errors.length) return errors
 
   // Last: the merged lexicon must still be a valid lexicon. This catches bad
   // constraints inside an otherwise allowed field (maxLength: "ten").
-  for (const place of Object.keys(fields)) {
-    try {
-      parseLexiconDoc(mergeMarket(docs[place], place, { fields }))
-    } catch (e) {
-      errors.push(`fields/${place}: ${describeLexiconError(e)}`)
-    }
+  try {
+    parseLexiconDoc(mergeMarket(loadLexiconDocs()[place], place, { [key]: block }))
+  } catch (e) {
+    errors.push(`${key}: ${describeLexiconError(e)}`)
   }
   return errors
 }
@@ -285,11 +295,70 @@ function checkFields(fields) {
 // A review's deal id, when it has one: the escrow's address when an escrow
 // exists (base58, 32 bytes), else 32 random bytes as lowercase hex. Anything
 // else points at nothing, so it is refused; a review with no deal id is fine.
+// Its ratings, when it has any: any name, each decimal text from 1.0 to 10.0.
 function reviewRules(record) {
-  if (record.dealId === undefined) return []
-  const id = record.dealId
-  if (/^[0-9a-f]{64}$/.test(id) || base58Length(id) === 32) return []
-  return [`dealId must be the escrow's address (base58, 32 bytes) or 32 random bytes as lowercase hex, got ${JSON.stringify(id)}`]
+  const errors = []
+  if (record.dealId !== undefined) {
+    const id = record.dealId
+    if (!(/^[0-9a-f]{64}$/.test(id) || base58Length(id) === 32)) {
+      errors.push(`dealId must be the escrow's address (base58, 32 bytes) or 32 random bytes as lowercase hex, got ${JSON.stringify(id)}`)
+    }
+  }
+  if (record.ratings !== undefined) {
+    // The lexicon library takes an array for an object; a map of names is an object.
+    if (!isPlainObject(record.ratings)) return [...errors, 'ratings must be an object of names, such as { "overall": "8.5" }']
+    for (const [name, value] of Object.entries(record.ratings)) {
+      if (name.length === 0 || name.length > 64 || name.startsWith('$')) {
+        errors.push(`ratings: ${JSON.stringify(name)} must be a name of 1 to 64 characters, not starting with "$"`)
+      }
+      if (typeof value !== 'string' || !RATING.test(value)) {
+        errors.push(`ratings/${name} must be decimal text from 1.0 to 10.0 with at most one decimal, such as "8.5", got ${JSON.stringify(value)}`)
+      }
+    }
+  }
+  return errors
+}
+
+// A post's location, when it has one: a point in degrees as decimal text, at
+// most four decimals. That it is rounded to precisionKm is the app's to do;
+// nothing here can tell.
+function postRules(record) {
+  const errors = []
+  const where = record.location
+  if (where !== undefined) {
+    for (const [key, bound] of [['lat', 90], ['lon', 180]]) {
+      const v = where[key]
+      if (!DEGREES.test(v) || Math.abs(Number(v)) > bound) {
+        errors.push(`location/${key} must be degrees from -${bound} to ${bound} as decimal text with at most 4 decimals, such as "38.72", got ${JSON.stringify(v)}`)
+      }
+    }
+  }
+  return errors
+}
+
+// A blob's type and size against its lexicon's accept and maxSize, for each
+// blob field of the record (a profile's photo, a review's media). The lexicon
+// library checks only that a blob is a blob, and a host checks nothing for a
+// collection it has no lexicon for.
+function blobRules(record, doc) {
+  const errors = []
+  for (const [name, def] of Object.entries(doc.defs.main.record.properties)) {
+    const value = record[name]
+    if (value === undefined) continue
+    const blob = def.type === 'blob' ? def : def.type === 'array' && def.items?.type === 'blob' ? def.items : null
+    if (!blob) continue
+    const refs = def.type === 'array' ? value : [value]
+    refs.forEach((ref, i) => {
+      const path = def.type === 'array' ? `${name}/${i}` : name
+      if (blob.accept && !blob.accept.includes(ref.mimeType)) {
+        errors.push(`${path} must be one of ${blob.accept.join(', ')}, got ${JSON.stringify(ref.mimeType)}`)
+      }
+      if (blob.maxSize !== undefined && !(ref.size <= blob.maxSize)) {
+        errors.push(`${path} must be at most ${blob.maxSize} bytes, got ${ref.size}`)
+      }
+    })
+  }
+  return errors
 }
 
 const BASE58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
@@ -314,9 +383,10 @@ function base58Length(s) {
   return bytes
 }
 
-// Cross-checks a post against the market file it is meant for: its name and
-// its roles. Nothing in a market file limits a post's terms or its token, and
-// evidence is never checked: it weighs, it never rejects.
+// Cross-checks a post against the market file it names: its name, a role the
+// market's sides allow, and a price when the market has money. Its extra
+// fields were merged into the lexicon above. A review's are too; nothing else
+// about a review is checked against its market.
 function marketRules(shape, record, market) {
   const errors = []
   if (shape === 'post') {
@@ -326,6 +396,9 @@ function marketRules(shape, record, market) {
     const roles = rolesOf(market)
     if (!roles.includes(record.role)) {
       errors.push(`Record/role must be one of (${roles.join('|')}), got ${JSON.stringify(record.role)}`)
+    }
+    if (market.money && record.price === undefined) {
+      errors.push(`Record must have the property "price": deals in ${market.name} are paid`)
     }
   }
   return errors
@@ -344,6 +417,10 @@ function fail(shape, errors) {
 
 function isPlainObject(v) {
   return v !== null && typeof v === 'object' && !Array.isArray(v)
+}
+
+function isOneLine(v, max) {
+  return typeof v === 'string' && v.trim() !== '' && !/[\r\n]/.test(v) && v.length <= max
 }
 
 function deepFreeze(v) {

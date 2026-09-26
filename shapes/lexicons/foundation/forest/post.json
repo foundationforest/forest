@@ -8,7 +8,7 @@
       "key": "tid",
       "record": {
         "type": "object",
-        "required": ["direction", "market", "role", "description", "price", "createdAt"],
+        "required": ["direction", "market", "role", "description", "createdAt"],
         "properties": {
           "direction": {
             "type": "string",
@@ -22,7 +22,7 @@
           },
           "role": {
             "type": "string",
-            "description": "The poster's role, one of the market file's roles.",
+            "description": "The poster's role: seller or buyer in a two-sided market, peer in a one-sided one.",
             "maxLength": 64
           },
           "description": {
@@ -49,10 +49,8 @@
             "description": "Optional. True when the work happens online."
           },
           "location": {
-            "type": "string",
-            "description": "Where, when not remote.",
-            "maxGraphemes": 128,
-            "maxLength": 1280
+            "type": "ref",
+            "ref": "#location"
           },
           "expires": {
             "type": "string",
@@ -68,7 +66,7 @@
     },
     "price": {
       "type": "object",
-      "description": "The price block. Per hour, per day, per job: the app multiplies before funding, one escrow per payment.",
+      "description": "The price block, optional: required only in a market whose file says money is true. Per hour, per day, per job: the app multiplies before funding, one escrow per payment.",
       "required": ["amount", "mint", "per"],
       "properties": {
         "amount": {
@@ -120,6 +118,35 @@
           "type": "string",
           "description": "The side that gets everything when the timer ends.",
           "enum": ["seller", "buyer"]
+        }
+      }
+    },
+    "location": {
+      "type": "object",
+      "description": "Optional. Where: a point the app rounds to precisionKm before writing, and the place in words. Degrees are decimal text, since a record holds no fractional numbers.",
+      "required": ["lat", "lon", "precisionKm", "area"],
+      "properties": {
+        "lat": {
+          "type": "string",
+          "description": "Latitude in degrees, -90 to 90, as decimal text with at most 4 decimals: \"38.72\".",
+          "maxLength": 8
+        },
+        "lon": {
+          "type": "string",
+          "description": "Longitude in degrees, -180 to 180, as decimal text with at most 4 decimals: \"-9.14\".",
+          "maxLength": 9
+        },
+        "precisionKm": {
+          "type": "integer",
+          "description": "How far, in whole kilometres, the point may be from the real place: the app rounds the point to this before writing. 0 is an exact point, for a shop or a venue.",
+          "minimum": 0,
+          "maximum": 20000
+        },
+        "area": {
+          "type": "string",
+          "description": "The place in words: a neighbourhood, a town.",
+          "maxGraphemes": 128,
+          "maxLength": 1280
         }
       }
     }
