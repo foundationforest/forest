@@ -770,3 +770,124 @@ fn sweep_pays_only_the_recorded_rent_recipient_and_only_from_an_escrow() {
     assert_eq!(h.lamports(&escrow), (128 + ESCROW_LEN as u64) * RENT_FINAL);
     println!("rejected as expected: the sweep pays only the recorded rent recipient (the creator), and only from an escrow");
 }
+
+// ---------------------------------------------------------------------------------------------
+// 8. The edges (session 16, the attack pass): the deposit address adopting a stranger's money, a
+//    frozen deposit or seller account, and a sweep then a close.
+// ---------------------------------------------------------------------------------------------
+
+#[test]
+fn finding_a_reused_deposit_address_adopts_a_stranger_buyers_money() {
+    // The deposit address is the escrow's associated token account for the mint, and the escrow's
+    // address is ["escrow", creator, id] — neither depends on the buyer. So money one buyer sends to
+    // that address, before any escrow exists there or after a close, is adopted by whatever deal next
+    // occupies the id, even one naming a different buyer. The first buyer is then not a party and
+    // cannot recover it. This is why ids must be unique per deal and a buyer must pay only an escrow
+    // it has read and that names it (the escrow client's pre-payment checks); the program cannot
+    // tell whose money arrived, and never needs to.
+    let mut h = Harness::new();
+    let seller = h.seller.insecure_clone();
+    let buyer_a = h.buyer.insecure_clone();
+    let escrow = escrow_address(&seller.pubkey(), 1);
+
+    // Buyer A pays the seller's id-1 deposit address before any escrow exists there, making the
+    // account first as a wallet paying a Solana Pay link to a missing account would.
+    let (make, vault) = create_ata_idempotent_ix(buyer_a.pubkey(), escrow, h.mint);
+    h.send(&[make, spl_transfer_ix(h.buyer_tokens, vault, buyer_a.pubkey(), AMOUNT)], &[&buyer_a])
+        .expect("buyer A pays the address");
+    assert_eq!(h.balance(&vault), AMOUNT);
+
+    // The seller invoices the SAME id naming a different buyer B; `create` adopts A's money.
+    let buyer_b = h.someone();
+    let t = Terms { id: 1, seller: seller.pubkey(), amount: AMOUNT, arbiter: None, timer: None };
+    let a = CreateAccounts { buyer: buyer_b.pubkey(), payer: h.payer.pubkey(), mint: h.mint };
+    h.send(&[invoice_ix(&t, &a)], &[&seller]).expect("the seller invoices buyer B at the same id");
+    assert_eq!(h.escrow(&escrow).buyer, buyer_b.pubkey(), "the deal names buyer B");
+    assert_eq!(h.vault_balance(&escrow), AMOUNT, "funded with buyer A's money");
+
+    // Buyer B releases to the seller: the seller takes buyer A's money, and A is out of it with no
+    // way to recover, since the escrow's recorded buyer is B.
+    let s = Accounts {
+        escrow,
+        vault,
+        buyer_tokens: refund_address(&buyer_b.pubkey(), &h.mint),
+        seller_tokens: h.seller_tokens,
+        rent_recipient: seller.pubkey(),
+    };
+    h.send(&[release_to_seller_ix(&s, buyer_b.pubkey())], &[&buyer_b]).expect("buyer B releases to the seller");
+    assert_eq!(h.balance(&h.seller_tokens), AMOUNT, "the seller has buyer A's money");
+    assert_eq!(h.balance(&h.buyer_tokens), BUYER_START - AMOUNT, "and buyer A is out of it");
+    println!("FINDING (app): a reused deposit address adopts a stranger buyer's money; ids must be unique and a buyer must pay only an escrow that names it");
+}
+
+#[test]
+fn finding_a_frozen_deposit_account_blocks_every_way_out() {
+    // The checklist reasons that freezing the deposit account stops every way out, since each moves
+    // tokens out of it; only the buyer's account had been frozen in a test. Here the deposit account
+    // itself is frozen: no way out runs until it is thawed. USDC's issuer holds this freeze authority.
+    let mut h = Harness::new();
+    let t = Terms { arbiter: Some(h.arbiter.pubkey()), timer: Some(Timer { days: 1, to: Side::Seller }), ..h.terms(1) };
+    let escrow = h.marked(&t);
+    let vault = vault_address(&escrow, &h.mint);
+    let mut frozen = h.account(&vault);
+    frozen.data[108] = 2; // AccountState::Frozen
+    h.svm.set_account(vault, frozen).unwrap();
+
+    let froze = |e: String, what: &str| assert!(e.contains("0x11") || e.to_lowercase().contains("frozen"), "{what}: {e}");
+    froze(h.release_to_seller(&escrow).expect_err("release_to_seller"), "release_to_seller");
+    froze(h.release_to_buyer(&escrow).expect_err("release_to_buyer"), "release_to_buyer");
+    froze(h.split(&escrow, 5_000).expect_err("split"), "split");
+    froze(h.arbitrate(&escrow, 5_000).expect_err("arbitrate"), "arbitrate");
+    // Even one that pays the whole balance to one side moves it out of the frozen deposit account.
+    froze(h.arbitrate(&escrow, 10_000).expect_err("all to the seller"), "arbitrate all to seller");
+    h.advance(DAY + 1);
+    froze(h.timer_release(&escrow, Side::Seller).expect_err("timer_release"), "timer_release");
+    assert_eq!(h.vault_balance(&escrow), AMOUNT, "nothing moved");
+    println!("FINDING (token): a frozen deposit account blocks every way out until it is thawed");
+}
+
+#[test]
+fn finding_a_frozen_seller_account_blocks_only_the_ways_out_that_pay_the_seller() {
+    // The mirror of the buyer-freeze finding, for the seller. Freezing the seller's standard account
+    // stops every way out that pays the seller anything; the ones that pay the seller nothing run,
+    // since they never touch it.
+    let mut h = Harness::new();
+    let t = Terms { arbiter: Some(h.arbiter.pubkey()), ..h.terms(1) };
+    let escrow = h.funded(&t);
+    let mut frozen = h.account(&h.seller_tokens);
+    frozen.data[108] = 2; // AccountState::Frozen
+    h.svm.set_account(h.seller_tokens, frozen).unwrap();
+
+    let e = h.release_to_seller(&escrow).expect_err("frozen");
+    assert!(e.contains("0x11") || e.to_lowercase().contains("frozen"), "{e}");
+    let e = h.arbitrate(&escrow, 5_000).expect_err("frozen");
+    assert!(e.contains("0x11") || e.to_lowercase().contains("frozen"), "{e}");
+    // Everything to the buyer pays the seller nothing and never touches its frozen account.
+    h.arbitrate(&escrow, 0).expect("all to the buyer runs");
+    assert_eq!(h.balance(&h.refund()), AMOUNT);
+    println!("FINDING (token): a frozen seller account blocks every way out that pays the seller, and nothing else");
+}
+
+#[test]
+fn close_unfunded_after_a_sweep_returns_what_is_left_to_the_creator() {
+    // A never-funded escrow can be swept as its rent minimum falls, and then closed. The two must
+    // compose: the sweep leaves the escrow account at exactly the current minimum, and the close
+    // returns that (and the deposit account's rent) to the creator, with no underflow and nothing
+    // stranded.
+    let mut h = Harness::new();
+    h.svm.set_sysvar(&rent_at(6_960)); // the older, higher rate, so the cut leaves an excess
+    let buyer = h.buyer.insecure_clone();
+    let (escrow, _) = h.create(&h.terms(1)).expect("create at the old rate");
+    let vault = vault_address(&escrow, &h.mint);
+    h.svm.set_sysvar(&rent_at(RENT_FINAL)); // the cut lands
+    let creator_before = h.lamports(&buyer.pubkey());
+
+    h.sweep(&escrow).expect("sweep the escrow's excess to the creator");
+    assert_eq!(h.lamports(&escrow), (128 + ESCROW_LEN as u64) * RENT_FINAL, "left at exactly the new minimum");
+
+    h.close_unfunded(&escrow, &buyer).expect("close after the sweep");
+    h.assert_closed(&escrow, "escrow");
+    h.assert_closed(&vault, "vault");
+    assert!(h.lamports(&buyer.pubkey()) > creator_before, "the creator got the excess and then the remaining rent");
+    println!("a sweep then a close compose: the creator gets the excess and the remaining rent, nothing stranded");
+}

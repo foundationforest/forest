@@ -11,7 +11,7 @@ how this program applies it or why it does not apply, and every limit known toda
 |---|---|
 | Program | `forest_escrow`, v1, `FoRE4JYRAxFpqRoPBzuPZZ9Yfn6ovtkBfUggynex3MKT` for local work |
 | Framework | Anchor 1.2, `cargo build-sbf` (Solana CLI 4.2.2, platform-tools v1.54), no IDL |
-| Testing | LiteSVM (52 tests), a local validator (the client's `test:validator`, and `feepayer/`'s local test through Kora), a Trident fuzzer (fourteen invariants) |
+| Testing | LiteSVM (56 tests), a local validator (the client's `test:validator`, and `feepayer/`'s local test through Kora), a Trident fuzzer (fourteen invariants). Session 16 (the attack pass, `docs/attack-pass.md`) added four tests; all suites and the fuzzer at 50,000 iterations re-run green |
 | Risk level | 🟡 Medium by the skill's table (a simple escrow: token transfers, basic CPI, PDAs, no admin). Treated as 🔴 **Critical**, because it is sealed at deploy and holds other people's money, so this checklist carries a High-Risk Decisions section. |
 | Upgrade authority | Removed at mainnet deploy with `solana program set-upgrade-authority --final` (`README.md`). No admin key, no config, no pause, no fee. A v2 is a new program at a new address. |
 
@@ -365,14 +365,15 @@ signatures.
 Each is reported, not fixed, because fixing it would change a rule Carlos decided or add one. The
 ones marked open are questions in `docs/changes.md`.
 
-1. **A frozen token account.** A classic mint's freeze authority (USDC has one) can freeze:
+1. **A frozen token account.** A classic mint's freeze authority (USDC has one) can freeze, and each
+   is now pinned by a test (session 16, the attack pass):
    - the deposit account, which stops every way out until it is thawed, since each moves tokens out
-     of it (a `close_unfunded` that returns something too; one with nothing to return was not tried);
+     of it (`finding_a_frozen_deposit_account_blocks_every_way_out`);
    - the buyer's standard account, which stops every way out that pays the buyer anything; the ones
      that pay the buyer nothing still run (`finding_a_frozen_buyer_account_blocks_only_the_ways_out_that_pay_the_buyer`);
    - the seller's standard account, which, by the same rule, stops every way out that pays the
-     seller anything (tested for the buyer; the seller's slot is checked the same way). The last
-     version let the seller name another account; this one does not.
+     seller anything (`finding_a_frozen_seller_account_blocks_only_the_ways_out_that_pay_the_seller`).
+     The last version let the seller name another account; this one does not.
 2. **Options nobody checked.** The program runs any option its creator set. A seller who works
    without reading the escrow can lose to a buyer's one-day timer to itself, and a buyer who pays
    without reading an invoice can lose to a one-day timer to the seller. `optionsNotAgreed` exists
@@ -384,7 +385,12 @@ ones marked open are questions in `docs/changes.md`.
    one locks what it would be paid, as in any transfer. The app names parties by keys people hold.
 4. **A part payment can be closed under the buyer** by the seller, at any time. The part comes
    back; a second part sent to the closed address waits for the creator to reopen the id
-   (`finding_a_part_payment_can_be_closed_under_the_buyer_by_the_seller`).
+   (`finding_a_part_payment_can_be_closed_under_the_buyer_by_the_seller`). More broadly, the deposit
+   address is the creator's-key-and-id's, not the buyer's, so money sent to it before an escrow
+   exists there, or after a close, is adopted by whatever deal next holds the id — even one naming a
+   different buyer, who then cannot recover it (`finding_a_reused_deposit_address_adopts_a_stranger_buyers_money`,
+   session 16). Ids must be unique per deal, and a buyer must pay only an escrow it has read and that
+   names it (the client's checks); the program cannot tell whose money arrived.
 5. **An overpayment follows the balance** (High-risk decision 4).
 6. **A party's standard account must exist to be paid.** A seller who has never held the token has
    none: whoever sends the way out makes it first, at their own cost

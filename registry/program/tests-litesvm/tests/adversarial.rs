@@ -11,12 +11,15 @@ use forest_registry_tests::*;
 use num_bigint::BigUint;
 use solana_account::Account;
 use solana_address::Address;
+use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_instruction::Instruction;
 use solana_keypair::Keypair;
 use solana_signer::Signer;
 
 const QUARTER_USDC: u64 = USDC_FEE;
 const TOKEN_2022_PROGRAM: Address = solana_address::address!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
+/// Wrapped SOL. A classic SPL Token mint. The escrow refuses it by name; the registry does not.
+const NATIVE_MINT: Address = solana_address::address!("So11111111111111111111111111111111111111112");
 
 /// BN254's scalar field order, the bound every public input must sit under.
 const BN254_R: &str = "21888242871839275222246405745257275088548364400416422360885981858940010000001";
@@ -502,4 +505,118 @@ fn finding_a_sweep_into_a_treasury_holding_no_sol_fails_until_someone_funds_it()
     h.send(&[sweep_rent_ix(&SweepTarget::Config, fresh.pubkey())], &[Harness::PAYER]).expect("a big sweep lands");
     h.send(&[sweep_rent_ix(&target, fresh.pubkey())], &[Harness::PAYER]).expect("and then the small one");
     println!("FINDING (nuisance, operations): an empty treasury refuses small sweeps until it holds ~0.00065 SOL");
+}
+
+// ---------------------------------------------------------------------------------------------
+// 6. The edges (session 16, the attack pass): the sealed tree depth, the fee at 1 and at the
+//    maximum, and wrapped SOL as a fee token.
+// ---------------------------------------------------------------------------------------------
+
+#[test]
+fn tree_full_at_depth_32_is_the_sealed_bound() {
+    // A list cannot grow past depth 32: the verification key is sealed at that depth, and the tree
+    // module refuses a 33rd level (`TreeFull`). Reaching it by real inserts is impossible (2^32
+    // leaves), so the boundary is forced with `set_account`. The last leaf a depth-32 tree holds
+    // lands at leaf_count = 2^32 - 1; the very next insert is a 33rd level and is refused.
+    let mut h = Harness::new();
+    let issuer_kp = Keypair::new();
+
+    // Plant a list at index 1 in a chosen state. `insert_identity` consults no other account, so a
+    // planted list with a consistent discriminator, length and issuer is all it reads.
+    let plant = |h: &mut Harness, leaf_count: u64| {
+        let mut data = vec![0u8; LIST_LEN];
+        data[..8].copy_from_slice(&discriminator("account", "IdentityList"));
+        let b = &mut data[8..];
+        b[0..8].copy_from_slice(&leaf_count.to_le_bytes());
+        b[8..12].copy_from_slice(&1u32.to_le_bytes()); // index
+        b[12] = 1; // issuer_count
+        b[5200..5232].copy_from_slice(issuer_kp.pubkey().as_ref()); // issuers[0]
+        b[5456..5488].copy_from_slice(issuer_kp.pubkey().as_ref()); // owner
+        h.svm
+            .set_account(
+                list_address(1),
+                Account { lamports: 100_000_000, data, owner: PROGRAM_ID, executable: false, rent_epoch: 0 },
+            )
+            .unwrap();
+    };
+
+    // The 2^32-th leaf lands at depth 32. The append walks 32 levels up the frontier, so a raised
+    // compute limit.
+    plant(&mut h, (1u64 << 32) - 1);
+    let budget = ComputeBudgetInstruction::set_compute_unit_limit(1_400_000);
+    h.send_signed(&[budget.clone(), insert_identity_ix(issuer_kp.pubkey(), 1, dec_to_be32("7"))], &[&issuer_kp])
+        .expect("the last leaf of a full depth-32 tree registers");
+    assert_eq!(h.list(1).leaf_count, 1u64 << 32);
+
+    // One more would be a 33rd level: refused before any hashing.
+    let err = h
+        .send_signed(&[budget, insert_identity_ix(issuer_kp.pubkey(), 1, dec_to_be32("8"))], &[&issuer_kp])
+        .expect_err("depth 33");
+    assert!(err.contains("TreeFull") || err.contains("full at depth 32"), "{err}");
+    println!("rejected as expected: a list is full at depth 32, the depth the verification key is sealed at");
+}
+
+#[test]
+fn register_pays_the_fee_at_one_base_unit_and_at_the_maximum() {
+    // Only a zero fee is refused (`add_token_records_the_fee...`). The two live extremes, one base
+    // unit and u64::MAX, are legal, and `register` must move exactly them and no more. This pins the
+    // fee arithmetic at the edges, on the one path that charges, beside `too_little_paid_writes_nothing`.
+    let (mut h, f) = ready();
+    let lo = Address::new_unique();
+    h.svm.set_account(lo, spl_mint_account(0)).unwrap();
+    h.send(&[add_token_ix(h.treasury, lo, 1)], &[Harness::PAYER, Harness::TREASURY]).expect("fee 1");
+    let hi = Address::new_unique();
+    h.svm.set_account(hi, spl_mint_account(0)).unwrap();
+    h.send(&[add_token_ix(h.treasury, hi, u64::MAX)], &[Harness::PAYER, Harness::TREASURY]).expect("fee u64::MAX");
+    let treasury_lo = h.token_account_for(lo, h.treasury);
+    let treasury_hi = h.token_account_for(hi, h.treasury);
+
+    // fee = 1: the wallet holds exactly one base unit, pays it, and the treasury has one.
+    let alice = Reg::of(f.proof("alice-tutors"));
+    let (wa, ta) = h.wallet_with(lo, 1);
+    let mut a = accounts(&h, &alice, &wa, ta);
+    a.treasury_tokens = treasury_lo;
+    h.send_signed(&[alice.ix(&a)], &[&alice.profile, &wa]).expect("one base unit paid");
+    assert_eq!(token_amount(&h.account(&ta).data), 0);
+    assert_eq!(token_amount(&h.account(&treasury_lo).data), 1);
+
+    // fee = u64::MAX: the wallet holds the maximum a u64 can, and all of it moves.
+    let bob = Reg::of(f.proof("bob-tutors"));
+    let (wb, tb) = h.wallet_with(hi, u64::MAX);
+    let mut b = accounts(&h, &bob, &wb, tb);
+    b.treasury_tokens = treasury_hi;
+    h.send_signed(&[bob.ix(&b)], &[&bob.profile, &wb]).expect("u64::MAX paid");
+    assert_eq!(token_amount(&h.account(&tb).data), 0);
+    assert_eq!(token_amount(&h.account(&treasury_hi).data), u64::MAX);
+
+    // One base unit short of the maximum: the token program refuses it, and nothing is written.
+    let carol = Reg::of(f.proof("alice-cleaning"));
+    let (wc, tc) = h.wallet_with(hi, u64::MAX - 1);
+    let mut c = accounts(&h, &carol, &wc, tc);
+    c.treasury_tokens = treasury_hi;
+    let err = h.send_signed(&[carol.ix(&c)], &[&carol.profile, &wc]).expect_err("one short of the maximum");
+    assert!(err.contains("insufficient funds"), "{err}");
+    assert_eq!(token_amount(&h.account(&tc).data), u64::MAX - 1, "nothing taken");
+    assert!(h.svm.get_account(&used_code_address(&carol.code)).is_none(), "and no code written");
+    println!("register moves exactly the fee at 1 and at u64::MAX; one unit short moves nothing");
+}
+
+#[test]
+fn wrapped_sol_is_a_classic_mint_the_registry_treats_like_any_other() {
+    // The escrow refuses wrapped SOL by name, because a plain SOL transfer to a deposit account
+    // would not count as funding. The registry has no such rule: WSOL is a classic SPL Token mint,
+    // so the treasury can accept it as a fee token and a registration can pay the fee in it. Nothing
+    // is broken by that (WSOL is real money), but it is pinned so the difference between the two
+    // programs is on the record rather than a surprise.
+    let (mut h, f) = ready();
+    h.svm.set_account(NATIVE_MINT, spl_mint_account(9)).unwrap();
+    h.send(&[add_token_ix(h.treasury, NATIVE_MINT, 250_000)], &[Harness::PAYER, Harness::TREASURY]).expect("WSOL accepted");
+    let treasury_wsol = h.token_account_for(NATIVE_MINT, h.treasury);
+    let alice = Reg::of(f.proof("alice-tutors"));
+    let (w, t) = h.wallet_with(NATIVE_MINT, 1_000_000);
+    let mut a = accounts(&h, &alice, &w, t);
+    a.treasury_tokens = treasury_wsol;
+    h.send_signed(&[alice.ix(&a)], &[&alice.profile, &w]).expect("registration paid in wrapped SOL");
+    assert_eq!(token_amount(&h.account(&treasury_wsol).data), 250_000);
+    println!("FINDING (behaviour, on the record): the registry accepts wrapped SOL as a fee token; the escrow refuses it");
 }

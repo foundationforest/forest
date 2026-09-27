@@ -12,7 +12,7 @@ reads it as it stands. The program is `program/src/`; the tests named here are i
 |---|---|
 | Program | `forest_registry`, v1, `FoRPzGfMyWjK8uLjMoZfae2yevnviyCsGsHM7AwBwK8B` for local work |
 | Framework | Anchor 1.2, `cargo build-sbf` (Solana CLI 4.2.2, platform-tools v1.54), no IDL. Builds and passes as SBPF v0 and as SBPF v3 (`--arch v3`) |
-| Testing | LiteSVM (48 tests: `registry.rs` 31, `adversarial.rs` 16, `invariants.rs` the property test), a local validator (the client's `test:validator`), the devnet run and its read-only smoke tests (`docs/devnet.md`). The Trident fuzzer in `program/trident-tests/` cannot run (Trident 0.12 lacks the Poseidon and alt_bn128 syscalls) and keeps a stale model |
+| Testing | LiteSVM (51 tests: `registry.rs` 31, `adversarial.rs` 19, `invariants.rs` the property test), a local validator (the client's `test:validator`), the devnet run and its read-only smoke tests (`docs/devnet.md`). The Trident fuzzer in `program/trident-tests/` cannot run (Trident 0.12 lacks the Poseidon and alt_bn128 syscalls) and keeps a stale model. Session 16 (the attack pass, `docs/attack-pass.md`) added three tests and turned overflow checks on; all suites and the property test re-run green on the new binary |
 | Risk level | 🟢 Low by the skill's table ("registry"), but it moves tokens (the fee, by CPI), has a key that turns dials (the treasury), and is sealed at deploy. Treated as 🔴 **Critical**, so this checklist carries a High-Risk Decisions section. |
 | Upgrade authority | Removed at mainnet deploy (`README.md`, "The upgrade authority, and how it is removed"). No pause, no admin override of a registration. A v2 is a new program with new lists. On devnet the authority stays on the devnet deploy key. |
 
@@ -102,9 +102,11 @@ Each is on purpose, and none can be changed after deploy.
   trees' counts are bounded by `tree::append`, which uses `checked_add` and refuses depth 33
   (`TreeFull`), so the `+ 1` after it cannot overflow. `sweep_rent` subtracts with
   `saturating_sub`, moves only the excess, and checks the target ends exactly at its minimum.
-  `open_list`'s `list_count + 1` is unchecked: it wraps only after 2^32 lists, each paying a list's
-  rent, and a wrap makes the next `open_list` fail (list 0's address is taken), so it can stop new
-  lists, never corrupt one. The release profile does not set `overflow-checks` (Known limits).
+  `open_list`'s `list_count + 1`, `register`'s `code_tree.count = count + 1` and `push_root`'s
+  `leaf_count += 1` are written with plain `+`: each is unreachable in practice (2^32 lists, 2^64
+  leaves). The release profile sets `overflow-checks = true` (session 16, the attack pass), so any of
+  them aborts on overflow rather than wrapping; the tree's own `checked_add`/`TreeFull` already
+  bounded depth. Pinned by `tree_full_at_depth_32_is_the_sealed_bound`.
 - **3.2 Multiply before divide. Does not apply:** no division.
 - **3.3 Slippage. Does not apply:** no price. Each mint's fee is fixed when it is accepted and never
   changes.
@@ -320,7 +322,7 @@ program reads, and leaves the account at exactly that minimum
   checked at `init`.
 - **§5 CPI. Applied:** `Program<Token>`, and a `CpiContext` holding only the transfer's accounts.
 - **§6 Errors. Applied:** `RegistryError`, each with a message; `require!` and its typed forms.
-- **§8 Build. Two notes.** The release profile sets no `overflow-checks` (Known limits), and Anchor
+- **§8 Build. Two notes.** The release profile sets `overflow-checks = true` (session 16), and Anchor
   1.2's derive macros print `unexpected cfg` warnings for `anchor-debug`, which are cosmetic.
 
 ## LiteSVM checklist (litesvm.md §9)
@@ -352,8 +354,8 @@ program reads, and leaves the account at exactly that minimum
 4. USDC's freeze authority can stop registrations paid from, or into, a frozen account (§17).
 5. A code account's rent is never returned, and its excess sweeps to the treasury, not to whoever
    paid it (decision 6; open in the handoff).
-6. `list_count + 1` is unchecked, and the release profile sets no `overflow-checks` (§3.1). Both are
-   program changes, possible only before deploy.
+6. The three plain-`+` increments are unreachable (2^32 lists, 2^64 leaves); the release profile
+   now sets `overflow-checks = true` (§3.1, session 16), so any overflow aborts rather than wraps.
 7. Anyone can open lists without limit, and a race for one index makes the loser send again (§29.1).
 8. A human who holds another profile's wallet can badge that profile; the later circuit under the
    handoff's Open closes it.
