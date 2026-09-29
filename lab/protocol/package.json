@@ -11,14 +11,14 @@
   "scripts": {
     "check": "tsc --noEmit",
     "test": "node --test --test-concurrency=1 test/*.test.ts",
-    "test:fast": "node --test test/core.test.ts test/host.test.ts test/grants.test.ts test/sealed.test.ts test/attacks.test.ts",
+    "test:fast": "node --test test/core.test.ts test/view.test.ts test/host.test.ts test/grants.test.ts test/sealed.test.ts test/attacks.test.ts",
+    "test:net": "node --test test/net/*.test.ts",
     "build:page": "node web/build.ts",
     "bench": "node bench/throughput.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "2.2.0",
     "@modelcontextprotocol/server": "2.2.0",
-    "@noble/ciphers": "2.4.0",
     "@noble/curves": "2.4.0",
     "@noble/hashes": "2.4.0",
     "@scure/base": "2.4.0",

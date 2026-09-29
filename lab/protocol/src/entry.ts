@@ -66,6 +66,11 @@ export function checkPath(path: unknown): asserts path is string {
   if (segments[0] === 'grant' && segments.length !== 2) fail('path', 'a grant lives at grant/<id>')
 }
 
+/** A sealed body: `{ sealed: <age file, base64url> }` and nothing else (sealed.ts opens it). */
+export function isSealed(body: Body | null): body is { sealed: string } {
+  return body !== null && typeof body.sealed === 'string' && Object.keys(body).length === 1
+}
+
 /** Does a grant's path prefix cover a path? Segment by segment: `offer` covers `offer/x`, not `offerx`. */
 export function pathCovers(prefix: string, path: string): boolean {
   return path === prefix || path.startsWith(prefix + '/')

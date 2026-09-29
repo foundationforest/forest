@@ -2,7 +2,7 @@
 // here, whatever host it came from: a reader trusts no host.
 
 import { type Entry, EntryError, decodeEntry, encodeEntry } from './entry.ts'
-import type { Result } from './host.ts'
+import type { ReadOptions, Result } from './host.ts'
 import type { Version } from './view.ts'
 
 export type PublishOutcome = { host: string; status: number; results: Result[]; error?: string }
@@ -29,10 +29,13 @@ export async function publish(hosts: string[], entries: Entry[]): Promise<Publis
 
 export type Page = { versions: Version[]; cursor: number; refused: Array<{ line: string; reason: string }> }
 
-/** One page of a host's entries after a cursor, each one checked. */
-export async function readPage(host: string, options: { profile?: string; path?: string; after?: number; limit?: number } = {}): Promise<Page> {
+/** One page of a host's feed after a cursor, in the host's order, each entry checked. */
+export async function readPage(host: string, options: ReadOptions = {}): Promise<Page> {
   const query = new URLSearchParams()
-  for (const [key, value] of Object.entries(options)) if (value !== undefined) query.set(key, String(value))
+  if (options.after !== undefined) query.set('after', String(options.after))
+  if (options.profile !== undefined) query.set('profile', options.profile)
+  if (options.badged) query.set('badged', '1')
+  if (options.limit !== undefined) query.set('limit', String(options.limit))
   const res = await fetch(`${host}/v1/entries?${query}`)
   if (!res.ok) throw new Error(`${host} answered ${res.status}`)
   const cursor = Number.parseInt(res.headers.get('forest-cursor') ?? '0', 10)
@@ -49,8 +52,8 @@ export async function readPage(host: string, options: { profile?: string; path?:
   return { versions, cursor, refused }
 }
 
-/** Everything a host serves for one profile (or the whole host), page by page. */
-export async function readAll(host: string, options: { profile?: string; path?: string } = {}): Promise<Page> {
+/** A host's whole feed (for one profile, or badged profiles only), page by page, in its order. */
+export async function readAll(host: string, options: Omit<ReadOptions, 'after' | 'limit'> = {}): Promise<Page> {
   const out: Page = { versions: [], cursor: 0, refused: [] }
   for (;;) {
     const page = await readPage(host, { ...options, after: out.cursor })

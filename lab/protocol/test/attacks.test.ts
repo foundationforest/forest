@@ -1,7 +1,7 @@
 // Trying hard to break each need. Every test names the need and says what was tried; a test that
 // shows an attack succeeding says so in its name: those are findings, written into the report.
-// Other attack tests live next to the code they attack: grants.test.ts, door.test.ts,
-// browser.test.ts, sealed.test.ts, spam.test.ts, host.test.ts, discovery.test.ts.
+// Other attack tests live next to the code they attack: grants.test.ts, connections.test.ts,
+// browser.test.ts, sealed.test.ts, policy.test.ts, host.test.ts, discovery.test.ts.
 
 import assert from 'node:assert/strict'
 import { createPublicKey, verify as nodeVerify } from 'node:crypto'
@@ -11,14 +11,17 @@ import { sha512 } from '@noble/hashes/sha2.js'
 import { getCompiledTransactionMessageDecoder } from '@solana/transaction-messages'
 import { publish, readAll } from '../src/client.ts'
 import { b64u, concat, hex, utf8 } from '../src/bytes.ts'
+import { canonical } from '../src/canonical.ts'
 import { type Entry, checkEntry, encodeEntry, signingInput, unsignedOf, verifySignature } from '../src/entry.ts'
 import { checkPayload, hostsPayload } from '../src/discovery.ts'
 import type { Host } from '../src/host.ts'
 import { Index } from '../src/indexer.ts'
-import { boxKey, didFromPublicKey, keyFromSecret } from '../src/keys.ts'
-import { viewProfile } from '../src/view.ts'
+import { didFromPublicKey, keyFromSecret } from '../src/keys.ts'
+import { approve, requestFromLink, requestLink } from '../src/request.ts'
+import { boxKey } from '../src/sealed.ts'
+import { liveContent, viewProfile } from '../src/view.ts'
 import { delegateEntry, folderEntry, grantEntry, ownerEntry } from '../src/write.ts'
-import { MINUTE, SEED, T0, alice, aliceBuyer, assistant, bob, offerBody, profileBody, reviewBody } from './fixtures.ts'
+import { MINUTE, SEED, T0, alice, aliceBuyer, bob, offerBody, profileBody, reviewBody, signer } from './fixtures.ts'
 import { startHost } from './helpers.ts'
 
 const L = 2n ** 252n + 27742317777372353535851937790883648493n
@@ -132,9 +135,9 @@ describe('need 2: nobody forges; signatures mean one thing everywhere', () => {
   })
 
   test('a delegate cannot use one profile’s grant in another profile', () => {
-    const { entry: grant, grantId } = grantEntry(alice, 'g', { to: assistant.did, paths: ['offer'], until: T0 + 7 * 86_400_000 }, T0)
-    const intoBob = delegateEntry(assistant, bob.did, grantId, 'offer/x', offerBody('1'), T0 + 1)
-    const v = viewProfile(bob.did, [checkEntry(grant), checkEntry(intoBob)], T0 + MINUTE)
+    const { entry: grant, grantId } = grantEntry(alice, 'g', { to: signer.did, paths: ['offer'], until: T0 + 7 * 86_400_000 }, T0)
+    const intoBob = delegateEntry(signer, bob.did, grantId, 'offer/x', offerBody('1'), T0 + 1)
+    const v = viewProfile(bob.did, [[checkEntry(grant), checkEntry(intoBob)]], T0 + MINUTE)
     assert.equal(v.ignored.get(checkEntry(intoBob).id), 'grant-not-current')
   })
 })
@@ -190,7 +193,7 @@ describe('needs 4, 5, 6, 10 over real hosts', () => {
 describe('need 7: linking two profiles of one person', () => {
   test('keys, box keys, grant keys and ids: nothing public repeats across the two profiles', async () => {
     const [box0, box1] = await Promise.all([boxKey(SEED, 0), boxKey(SEED, 1)])
-    const agentFor = (n: number) => keyFromSecret(sha512(utf8(`door agent ${n}`)).subarray(0, 32)) // a door derives one key per connection
+    const agentFor = (n: number) => keyFromSecret(sha512(utf8(`signer ${n}`)).subarray(0, 32)) // one signer key per profile
     const one = [
       folderEntry(alice, { hosts: ['https://big-host.example'], box: box0.recipient }, T0),
       ownerEntry(alice, 'profile', profileBody('Alice teaches'), T0),
@@ -226,6 +229,27 @@ describe('need 7: linking two profiles of one person', () => {
       const feed = (await readAll(host.url)).versions.map((v) => v.entry.profile)
       const last = feed.slice(-2)
       assert.deepEqual(last, [alice.did, aliceBuyer.did], 'adjacent in arrival order, same millisecond: an observer can guess they are one person')
+    } finally {
+      await host.close()
+    }
+  })
+
+  test('FINDING: an assistant that wrote a post recognizes it later on public hosts, in either mode', async () => {
+    const host = await startHost({ now: () => T0 })
+    try {
+      await publish([host.url], [folderEntry(alice, { hosts: [host.url] }, T0)])
+      // Draft and approve: the assistant holds nothing and the person signs, but the words are the assistant's.
+      const drafted = offerBody('35')
+      const link = requestLink('https://forest.example/approve', { v: 1, profile: alice.did, path: 'offer/drafted', body: drafted, hosts: [host.url] })
+      await approve(SEED, requestFromLink(link), T0 + 1)
+      // Under a grant: the post carries the signer's own key.
+      const { entry: grant, grantId } = grantEntry(alice, 'mine', { to: signer.did, paths: ['offer'], until: T0 + 86_400_000 }, T0 + 2)
+      await publish([host.url], [grant, delegateEntry(signer, alice.did, grantId, 'offer/signed', offerBody('36'), T0 + 3)])
+
+      // Later, reading a public host with only its own words and its own key in hand:
+      const found = (await readAll(host.url)).versions.filter((v) => canonical(v.entry.body) === canonical(drafted) || v.entry.by === signer.did)
+      assert.deepEqual(found.map((v) => [v.entry.profile, v.entry.path]), [[alice.did, 'offer/drafted'], [alice.did, 'offer/signed']])
+      assert.ok(liveContent(viewProfile(alice.did, [(await readAll(host.url)).versions], T0 + MINUTE)).has('offer/drafted'))
     } finally {
       await host.close()
     }

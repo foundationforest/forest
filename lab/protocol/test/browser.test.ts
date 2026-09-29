@@ -1,7 +1,7 @@
 // The approval page in a real browser with a real WebAuthn passkey (PRF): headless Chromium with
-// a virtual authenticator standing in for the phone. Keys from the passkey; a connection approved
-// with one tap; an assistant's draft approved with one tap through MCP; a draft that tries to
-// inject HTML; another person's passkey refused. Real phones are not tested here.
+// a virtual authenticator standing in for the phone. A note approved with one tap; an assistant's
+// draft approved through MCP; a permission for the person's own signer; HTML in a draft; another
+// person's passkey; a broken link. Real phones are not tested here.
 
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
@@ -11,11 +11,16 @@ import type { AddressInfo } from 'node:net'
 import { after, before, describe, test } from 'node:test'
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client'
 import { type Browser, type BrowserContext, type Page, chromium } from 'playwright-core'
-import { readAll } from '../src/client.ts'
-import { Door } from '../src/door.ts'
+import { hex } from '../src/bytes.ts'
+import { publish, readAll } from '../src/client.ts'
+import { Connections } from '../src/connections.ts'
+import { checkEntry } from '../src/entry.ts'
 import type { Host } from '../src/host.ts'
+import { profileKey, seedFromPrf } from '../src/keys.ts'
+import { type ApprovalRequest, requestLink } from '../src/request.ts'
 import { viewProfile } from '../src/view.ts'
-import { offerBody, reviewBody } from './fixtures.ts'
+import { delegateEntry, folderEntry, ownerEntry } from '../src/write.ts'
+import { DAY, offerBody, profileBody, reviewBody, signer } from './fixtures.ts'
 import { startHost } from './helpers.ts'
 
 const CHROME = process.env.CHROME_PATH ?? '/opt/pw-browsers/chromium-1194/chrome-linux/chrome'
@@ -54,23 +59,51 @@ async function phone(browser: Browser): Promise<{ context: BrowserContext; page:
   return { context, page }
 }
 
+/**
+ * The person's first run, which is the app's job and not the page's: make a passkey on the page's
+ * origin and get its PRF output. The test then makes the seed from it in Node, as the app would.
+ */
+async function firstRun(page: Page, origin: string): Promise<Uint8Array> {
+  await page.goto(`${origin}/approve.html`)
+  const prf = await page.evaluate(async () => {
+    const input = new TextEncoder().encode('forest.foundation/prf/v1')
+    await navigator.credentials.create({
+      publicKey: {
+        rp: { name: 'Forest' },
+        user: { id: crypto.getRandomValues(new Uint8Array(16)), name: 'forest', displayName: 'Forest' },
+        challenge: crypto.getRandomValues(new Uint8Array(32)),
+        pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
+        authenticatorSelection: { residentKey: 'required', userVerification: 'required' },
+        extensions: { prf: {} },
+      },
+    })
+    const got = (await navigator.credentials.get({
+      publicKey: { challenge: crypto.getRandomValues(new Uint8Array(32)), userVerification: 'required', extensions: { prf: { eval: { first: input } } } },
+    })) as PublicKeyCredential
+    const first = (got.getClientExtensionResults() as { prf: { results: { first: ArrayBuffer } } }).prf.results.first
+    return [...new Uint8Array(first)].map((b) => b.toString(16).padStart(2, '0')).join('')
+  })
+  return seedFromPrf(hex.decode(prf))
+}
+
 async function open(page: Page, url: string) {
   await page.goto('about:blank')
   await page.goto(url)
 }
 const statusText = (page: Page) => page.locator('#status').textContent()
+const done = (page: Page) => page.waitForFunction(() => document.getElementById('status')?.textContent?.startsWith('Done.'))
 
-describe('approval page with a real passkey', { skip: existsSync(CHROME) ? false : `no Chromium at ${CHROME}` }, () => {
+describe('the approval page with a real passkey', { skip: existsSync(CHROME) ? false : `no Chromium at ${CHROME}` }, () => {
   let browser: Browser
   let alicePhone: { context: BrowserContext; page: Page }
   let h1: Host
   let h2: Host
   let hosts: string[]
-  let door: Door
   let pageServer: Server
   let origin: string
   let profile: string
-  let token: string
+  const request = (path: string, body: ApprovalRequest['body']): ApprovalRequest => ({ v: 1, profile, path, body, hosts })
+  const view = async () => viewProfile(profile, [(await readAll(h1.url, { profile })).versions, (await readAll(h2.url, { profile })).versions], Date.now())
 
   before(async () => {
     execFileSync(process.execPath, [new URL('../web/build.ts', import.meta.url).pathname])
@@ -78,99 +111,90 @@ describe('approval page with a real passkey', { skip: existsSync(CHROME) ? false
     h2 = await startHost()
     hosts = [h1.url, h2.url]
     ;({ server: pageServer, origin } = await servePage())
-    door = new Door({ approvalPage: `${origin}/approve.html`, waitMs: 500 })
-    await door.listen()
     browser = await chromium.launch({ executablePath: CHROME, headless: true })
     alicePhone = await phone(browser)
+    const key = profileKey(await firstRun(alicePhone.page, origin), 0)
+    profile = key.did
+    await publish(hosts, [folderEntry(key, { hosts }, Date.now()), ownerEntry(key, 'profile', profileBody('Alice'), Date.now())])
   })
   after(async () => {
     await browser?.close()
-    await door?.close()
     await new Promise<void>((resolve) => pageServer?.close(() => resolve()))
     await h1?.close()
     await h2?.close()
   })
 
-  test('a passkey with PRF makes the seed in the page; the profile it publishes is the same every time', async () => {
-    const { page } = alicePhone
-    await open(page, `${origin}/approve.html#setup=${hosts.join(',')}`)
-    await page.click('#create')
-    await page.waitForFunction(() => document.getElementById('status')?.textContent === 'Passkey ready.')
-    await page.click('#setup')
-    await page.waitForFunction(() => document.body.dataset.profile)
-    profile = (await page.evaluate(() => document.body.dataset.profile))!
-    assert.match((await statusText(page))!, /Profile ready on 2 of 2 hosts/)
-    // Again, after a reload: the same passkey gives the same profile.
-    await open(page, `${origin}/approve.html#setup=${hosts.join(',')}`)
-    await page.click('#setup')
-    await page.waitForFunction(() => document.body.dataset.profile)
-    assert.equal(await page.evaluate(() => document.body.dataset.profile), profile)
-    const view = viewProfile(profile, (await readAll(h1.url, { profile })).versions, Date.now())
-    assert.equal(view.folder?.hosts.length, 2)
-    assert.match(view.folder!.box!, /^age1pq1/)
+  test('the page’s code is this lab’s and four libraries’, and nothing else', () => {
+    const libraries = readFileSync(`${DIST}approve.deps.txt`, 'utf8').trim().split('\n').map((line) => line.split(' ')[0])
+    assert.deepEqual(libraries, ['@noble/curves', '@noble/hashes', '@scure/base', 'canonicalize'])
   })
 
-  test('connect: the page says who asks and for what; one tap signs the grant', async () => {
+  test('a note: the page shows exactly what it will sign, as text; one tap and the passkey post it to every host; the device keeps a copy', async () => {
     const { page } = alicePhone
-    const started = door.startConnect({ profile, hosts, client: 'claude.ai', paths: ['offer'], days: 7 })
-    await open(page, started.url)
+    await open(page, requestLink(`${origin}/approve.html`, request('offer/maths', offerBody('30'))))
     await page.waitForSelector('#approve:not([hidden])')
-    const shown = (await page.locator('#what').textContent())!
-    assert.match(shown, /claude\.ai asks to write for you, on its own, until/)
-    assert.match(shown, /Only: offer/)
+    const shown = (await page.locator('#note').textContent())!
+    assert.match(shown, /^Publish offer\/maths:/)
+    assert.match(shown, /description: One hour of maths tutoring, online\./)
     await page.click('#approve')
-    await page.waitForFunction(() => document.getElementById('status')?.textContent?.startsWith('Done.'))
-    token = door.exchange(started.id, started.verifier)
+    await done(page)
+    assert.equal(await statusText(page), 'Done. Published on 2 hosts.')
+    const offer = (await view()).current.get('offer/maths')!
+    assert.equal(offer.entry.by, undefined, 'signed by the profile itself')
+    const copies = JSON.parse((await page.evaluate(() => localStorage.getItem('forest.entries')))!) as string[]
+    assert.equal(checkEntry(JSON.parse(copies.at(-1)!)).id, offer.id)
   })
 
-  test('an assistant over MCP: an offer under the rule at once; a review approved on the phone with one tap', async () => {
+  test('an assistant over MCP: the draft’s link opened on the phone, one tap, reported published', async () => {
     const { page } = alicePhone
+    const service = new Connections({ approvalPage: `${origin}/approve.html`, hosts: [h1.url], waitMs: 3000 })
+    await service.listen()
     const client = new Client(
       { name: 'assistant', version: '0.0.0' },
       { capabilities: { elicitation: { url: {} } }, versionNegotiation: { mode: { pin: '2026-07-28' } }, inputRequired: { maxRounds: 3 } },
     )
-    const opened: string[] = []
-    client.setRequestHandler('elicitation/create', async (request) => {
-      const { url } = request.params as { url: string }
-      opened.push(url)
-      await open(page, url)
+    client.setRequestHandler('elicitation/create', async (req) => {
+      await open(page, (req.params as { url: string }).url)
       await page.waitForSelector('#approve:not([hidden])')
       await page.click('#approve')
-      await page.waitForFunction(() => document.getElementById('status')?.textContent?.startsWith('Done.'))
+      await done(page)
       return { action: 'accept' as const }
     })
-    await client.connect(new StreamableHTTPClientTransport(new URL(`${door.url}/mcp`), { requestInit: { headers: { authorization: `Bearer ${token}` } } }))
-
-    const offer = await client.callTool({ name: 'forest_write', arguments: { path: 'offer/maths', body: offerBody('30') } })
-    assert.match(JSON.stringify(offer), /signed by the assistant/)
-    assert.equal(opened.length, 0, 'no approval needed within the rule')
-
-    const review = await client.callTool({ name: 'forest_write', arguments: { path: 'review/1', body: reviewBody(profile) } })
-    assert.match(JSON.stringify(review), /Approved and published review\/1/)
-    assert.equal(opened.length, 1)
-    const view = viewProfile(profile, (await readAll(h2.url, { profile })).versions, Date.now())
-    assert.equal(view.current.get('review/1')!.entry.by, undefined, 'the person’s own signature')
-    assert.ok(view.current.get('offer/maths')!.entry.by, 'the assistant’s signature')
-    await client.close()
+    try {
+      await client.connect(new StreamableHTTPClientTransport(new URL(`${service.url}/mcp`)))
+      const result = await client.callTool({ name: 'forest_draft', arguments: { profile, path: 'review/1', body: reviewBody(profile) } })
+      assert.match(JSON.stringify(result), /Published: review\/1/)
+      assert.equal((await view()).current.get('review/1')!.entry.by, undefined)
+    } finally {
+      await client.close()
+      await service.close()
+    }
   })
 
-  test('a draft that carries HTML is shown as text and runs nothing', async () => {
+  test('a permission for a signer of the person’s own: one tap; then the signer publishes with the phone off', async () => {
     const { page } = alicePhone
-    const client = new Client({ name: 'assistant', version: '0.0.0' }, { capabilities: { elicitation: { url: {} } }, versionNegotiation: { mode: { pin: '2026-07-28' } }, inputRequired: { autoFulfill: false } })
-    await client.connect(new StreamableHTTPClientTransport(new URL(`${door.url}/mcp`), { requestInit: { headers: { authorization: `Bearer ${token}` } } }))
-    const payload = '<img src=x onerror="window.pwned=1"><script>window.pwned=2</script>'
-    const result = (await client.callTool({ name: 'forest_write', arguments: { path: 'review/2', body: { subject: profile, text: payload } } }, { allowInputRequired: true } as never)) as unknown as {
-      inputRequests: Record<string, { params: { url: string } }>
-    }
-    await open(page, result.inputRequests.approve!.params.url)
+    const until = Date.now() + 7 * DAY
+    await open(page, requestLink(`${origin}/approve.html`, request('grant/mine', { to: signer.did, paths: ['offer'], until, label: 'My signer, offers only' })))
     await page.waitForSelector('#approve:not([hidden])')
-    assert.equal(await page.locator('#what img, #what script').count(), 0)
-    assert.match((await page.locator('#what').textContent())!, /<img src=x onerror=/)
+    assert.match((await page.locator('#note').textContent())!, /^“My signer, offers only” asks to publish for you on its own, until \d{4}-\d{2}-\d{2}\.Only: offer\./)
+    await page.click('#approve')
+    await done(page)
+    const grant = (await view()).current.get('grant/mine')!
+    const [outcome] = await publish(hosts, [delegateEntry(signer, profile, grant.id, 'offer/weekend', offerBody('50'), Date.now())])
+    assert.equal(outcome!.results[0]!.ok, true)
+  })
+
+  test('a draft that carries HTML is shown as text and runs nothing; the page refuses HTML from strings altogether', async () => {
+    const { page } = alicePhone
+    const payload = '<img src=x onerror="window.pwned=1"><script>window.pwned=2</script>'
+    await open(page, requestLink(`${origin}/approve.html`, request('review/2', { subject: profile, text: payload })))
+    await page.waitForSelector('#approve:not([hidden])')
+    assert.equal(await page.locator('#note img, #note script').count(), 0)
+    assert.match((await page.locator('#note').textContent())!, /<img src=x onerror=/)
     assert.equal(await page.evaluate(() => (window as unknown as { pwned?: number }).pwned), undefined)
-    // Defence in depth: the page's policy refuses HTML from strings altogether (Trusted Types).
     const sink = await page.evaluate(() => {
       try {
-        document.getElementById('what')!.innerHTML = '<b>x</b>'
+        document.getElementById('note')!.innerHTML = '<b>x</b>'
         return 'allowed'
       } catch {
         return 'blocked'
@@ -178,27 +202,28 @@ describe('approval page with a real passkey', { skip: existsSync(CHROME) ? false
     })
     assert.equal(sink, 'blocked')
     await page.click('#decline')
-    await client.close()
+    assert.equal(await statusText(page), 'Declined. Nothing was signed.')
+    assert.equal((await view()).current.get('review/2'), undefined)
   })
 
-  test('another person’s passkey cannot approve a draft for this profile', async () => {
+  test('another person’s passkey cannot approve a note for this profile', async () => {
     const bobPhone = await phone(browser)
     try {
-      await open(bobPhone.page, `${origin}/approve.html#setup=${hosts.join(',')}`)
-      await bobPhone.page.click('#create')
-      await bobPhone.page.waitForFunction(() => document.getElementById('status')?.textContent === 'Passkey ready.')
-      const client = new Client({ name: 'assistant', version: '0.0.0' }, { capabilities: { elicitation: { url: {} } }, versionNegotiation: { mode: { pin: '2026-07-28' } }, inputRequired: { autoFulfill: false } })
-      await client.connect(new StreamableHTTPClientTransport(new URL(`${door.url}/mcp`), { requestInit: { headers: { authorization: `Bearer ${token}` } } }))
-      const result = (await client.callTool({ name: 'forest_write', arguments: { path: 'review/3', body: reviewBody(profile) } }, { allowInputRequired: true } as never)) as unknown as {
-        inputRequests: Record<string, { params: { url: string } }>
-      }
-      await open(bobPhone.page, result.inputRequests.approve!.params.url)
+      await firstRun(bobPhone.page, origin)
+      await open(bobPhone.page, requestLink(`${origin}/approve.html`, request('review/3', reviewBody(profile))))
       await bobPhone.page.waitForSelector('#approve:not([hidden])')
       await bobPhone.page.click('#approve')
       await bobPhone.page.waitForFunction(() => /profile you do not hold/.test(document.getElementById('status')?.textContent ?? ''))
-      await client.close()
+      assert.equal((await view()).current.get('review/3'), undefined)
     } finally {
       await bobPhone.context.close()
     }
+  })
+
+  test('a broken link: the page says so and offers nothing to approve', async () => {
+    const { page } = alicePhone
+    await open(page, `${origin}/approve.html#bm90IGEgcmVxdWVzdA`)
+    await page.waitForFunction(() => /cannot be approved/.test(document.getElementById('status')?.textContent ?? ''))
+    assert.equal(await page.locator('#approve').isHidden(), true)
   })
 })

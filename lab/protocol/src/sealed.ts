@@ -8,20 +8,33 @@
 // rest; a reader keeps whatever it already opened. No forward secrecy: a box key that leaks
 // later opens every past entry sealed to it.
 
-import { Decrypter, Encrypter } from 'age-encryption'
+import { bech32 } from '@scure/base'
+import { Decrypter, Encrypter, identityToRecipient } from 'age-encryption'
 import { b64u } from './bytes.ts'
 import { canonical, parseCanonical } from './canonical.ts'
-import type { Body } from './entry.ts'
+import { type Body, isSealed } from './entry.ts'
+import { LABELS, derive } from './keys.ts'
+
+export { isSealed }
+
+export type BoxKey = {
+  /** age's post-quantum hybrid identity (ML-KEM-768 + X25519), from a 32-byte seed. */
+  identity: string
+  /** What goes in the folder, for others to seal entries to: `age1pq1…`. */
+  recipient: string
+}
+
+/** The profile's box key: one label from the seed, used as age's hybrid identity. */
+export async function boxKey(seed: Uint8Array, n: number): Promise<BoxKey> {
+  const identity = bech32.encodeFromBytes('AGE-SECRET-KEY-PQ-', derive(seed, LABELS.box(n))).toUpperCase()
+  return { identity, recipient: await identityToRecipient(identity) }
+}
 
 export async function seal(body: Body, recipients: string[]): Promise<Body> {
   if (!recipients.length) throw new Error('seal to at least one reader')
   const encrypter = new Encrypter()
   for (const recipient of recipients) encrypter.addRecipient(recipient)
   return { sealed: b64u.encode(await encrypter.encrypt(canonical(body))) }
-}
-
-export function isSealed(body: Body | null): body is { sealed: string } {
-  return body !== null && typeof body.sealed === 'string' && Object.keys(body).length === 1
 }
 
 /** Open a sealed body with a box identity. Throws if this identity is not among its readers. */

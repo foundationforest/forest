@@ -2,13 +2,12 @@
 //
 // The passkey-to-seed recipe is keys/SPEC.md's, unchanged. A profile's key is the ed25519 key
 // keys/ already derives as the profile's wallet: one key is the profile's name, signs its
-// entries, and holds its money. The box key (for sealed entries) is one new label.
+// entries, and holds its money. The box key (for sealed entries) is one new label; it is made
+// in sealed.ts, so code that never opens a sealed entry carries no encryption library.
 
 import { ed25519 } from '@noble/curves/ed25519.js'
 import { hkdf } from '@noble/hashes/hkdf.js'
 import { sha256 } from '@noble/hashes/sha2.js'
-import { bech32 } from '@scure/base'
-import { identityToRecipient } from 'age-encryption'
 import { base58, concat, equalBytes, utf8 } from './bytes.ts'
 
 export const LABELS = {
@@ -92,17 +91,4 @@ export function addressFromDid(did: string): string {
   const key = publicKeyFromDid(did)
   if (!key) throw new Error('not a Forest profile name')
   return base58.encode(key)
-}
-
-export type BoxKey = {
-  /** age's post-quantum hybrid identity (ML-KEM-768 + X25519), from a 32-byte seed. */
-  identity: string
-  /** What goes in the folder, for others to seal entries to: `age1pq1…`. */
-  recipient: string
-}
-
-/** The profile's box key, for sealed entries: one new label, age's hybrid identity from it. */
-export async function boxKey(seed: Uint8Array, n: number): Promise<BoxKey> {
-  const identity = bech32.encodeFromBytes('AGE-SECRET-KEY-PQ-', derive(seed, LABELS.box(n))).toUpperCase()
-  return { identity, recipient: await identityToRecipient(identity) }
 }

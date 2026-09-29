@@ -2,7 +2,7 @@
 
 import { type Body, type Entry, type FolderBody, type GrantBody, entryId, signEntry, unsignedOf } from './entry.ts'
 import type { ProfileKey } from './keys.ts'
-import type { ProfileView, Version } from './view.ts'
+import type { ProfileView } from './view.ts'
 
 /**
  * The time for a new version: the clock, but always after the newest version the writer knows
@@ -31,15 +31,7 @@ export function grantEntry(owner: ProfileKey, id: string, grant: GrantBody, time
   return { entry, grantId: entryId(unsignedOf(entry)) }
 }
 
-/** Revoke: the owner deletes the grant. Everything signed under it stops counting. */
+/** Revoke: the owner deletes the grant. It ends from now on; what the delegate posted before stays. */
 export function revokeEntry(owner: ProfileKey, id: string, time: number): Entry {
   return ownerEntry(owner, `grant/${id}`, null, time)
-}
-
-/**
- * "Keep these": after a revocation or an expiry, the owner re-signs, in one approval, the
- * delegate's versions it wants to keep. Owner versions win at their paths from then on.
- */
-export function keepAll(owner: ProfileKey, kept: Version[], now: number): Entry[] {
-  return kept.map((v) => ownerEntry(owner, v.entry.path, v.entry.body, Math.max(now, v.entry.time + 1)))
 }

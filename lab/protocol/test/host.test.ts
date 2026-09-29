@@ -3,13 +3,13 @@
 
 import assert from 'node:assert/strict'
 import { after, before, describe, test } from 'node:test'
-import { publish, readAll } from '../src/client.ts'
+import { publish, readAll, readPage } from '../src/client.ts'
 import { type Entry, checkEntry, encodeEntry } from '../src/entry.ts'
 import { DAY, type Host } from '../src/host.ts'
 import { Index } from '../src/indexer.ts'
 import { liveContent } from '../src/view.ts'
 import { folderEntry, nextTime, ownerEntry } from '../src/write.ts'
-import { MINUTE, T0, alice, bob, offerBody, profileBody, reviewBody } from './fixtures.ts'
+import { MINUTE, T0, alice, aliceBuyer, bob, offerBody, profileBody, reviewBody } from './fixtures.ts'
 import { Clock, startHost } from './helpers.ts'
 
 describe('two hosts, one index', () => {
@@ -83,6 +83,81 @@ describe('two hosts, one index', () => {
     await publish([h1.url], [keep0, v2])
     const pruned = h1.prune(clock.t)
     assert.ok(pruned >= 1, 'superseded versions go at once')
+  })
+})
+
+describe('feeds', () => {
+  test('three filters: after a cursor, one profile, badged profiles only (the host asks the registry)', async () => {
+    const badges = new Set([bob.did])
+    const h = await startHost({ now: () => T0, isBadged: (did) => badges.has(did) })
+    try {
+      const url = h.url
+      await publish([url], [folderEntry(alice, { hosts: [url] }, T0), ownerEntry(alice, 'profile', profileBody('Alice'), T0)])
+      await publish([url], [folderEntry(bob, { hosts: [url] }, T0), ownerEntry(bob, 'profile', profileBody('Bob'), T0)])
+      const whole = await readAll(url)
+      assert.deepEqual(whole.versions.map((v) => v.entry.profile), [alice.did, alice.did, bob.did, bob.did], 'arrival order')
+
+      assert.deepEqual((await readAll(url, { profile: alice.did })).versions.map((v) => v.entry.path), ['folder', 'profile'])
+      assert.deepEqual([...new Set((await readAll(url, { badged: true })).versions.map((v) => v.entry.profile))], [bob.did])
+      const since = await readPage(url, { after: 2 })
+      assert.deepEqual(since.versions.map((v) => v.entry.profile), [bob.did, bob.did])
+      assert.equal((await readPage(url, { after: since.cursor })).versions.length, 0, 'nothing new since the cursor')
+
+      // Alice gets a badge: from the host's next look at the registry, her profile is in the badged feed.
+      badges.add(alice.did)
+      await h.refreshBadges()
+      assert.deepEqual([...new Set((await readAll(url, { badged: true })).versions.map((v) => v.entry.profile))], [alice.did, bob.did])
+    } finally {
+      await h.close()
+    }
+  })
+})
+
+describe('a host that closes, or blocks a reader', () => {
+  test('costs nothing lasting: readers use the other host; the app posts its own copies to a new one; the profile is the same, entry for entry', async () => {
+    const clock = new Clock(T0)
+    const one = await startHost({ now: clock.now })
+    const two = await startHost({ now: clock.now })
+    const three = await startHost({ now: clock.now })
+    try {
+      // The app posts every entry to every host in the folder, and keeps its own copies.
+      const copies: Entry[] = [
+        folderEntry(aliceBuyer, { hosts: [one.url, two.url] }, T0),
+        ownerEntry(aliceBuyer, 'profile', profileBody('A.'), T0),
+        ownerEntry(aliceBuyer, 'offer/wanted', offerBody('25'), T0),
+      ]
+      await publish([one.url, two.url], copies)
+      const before = new Index({ hosts: [one.url], now: clock.now })
+      await before.crawl()
+      const was = [...before.view(aliceBuyer.did)!.current.values()].map((v) => v.id).sort()
+
+      // Host one blocks this reader (every read refused), then closes altogether.
+      one.read = () => {
+        throw new Error('blocked')
+      }
+      const blocked = new Index({ hosts: [one.url, two.url], now: clock.now })
+      const crawl = await blocked.crawl()
+      assert.deepEqual(crawl.unreachable, [one.url])
+      assert.deepEqual([...blocked.view(aliceBuyer.did)!.current.values()].map((v) => v.id).sort(), was)
+      await one.close()
+
+      // The app replaces it: a folder naming the new host, then its copies there.
+      clock.advance(MINUTE)
+      const moved = folderEntry(aliceBuyer, { hosts: [two.url, three.url] }, clock.t)
+      copies.push(moved)
+      await publish([two.url, three.url], [moved])
+      const [outcome] = await publish([three.url], copies)
+      assert.ok(outcome!.results.every((r) => r.ok || r.error === 'stale'), JSON.stringify(outcome!.results))
+
+      const after = new Index({ hosts: [three.url], now: clock.now })
+      await after.crawl()
+      const now = [...after.view(aliceBuyer.did)!.current.values()]
+      assert.deepEqual(now.filter((v) => v.entry.path !== 'folder').map((v) => v.id).sort(), was.filter((id) => id !== checkEntry(copies[0]!).id).sort())
+      assert.deepEqual(after.view(aliceBuyer.did)!.folder!.hosts, [two.url, three.url])
+    } finally {
+      await two.close()
+      await three.close()
+    }
   })
 })
 

@@ -47,7 +47,7 @@ rate('the extra subgroup check on R alone (pure JavaScript)', 1_000, () => R.isT
 rate('read one entry off the wire (parse, canonical, strict verify)', 1_000, () => decodeEntry(wire))
 
 // A host taking entries: 500 profiles, a folder and 4 offers each, in batches of 100.
-const host = new Host({ url: 'https://bench.example', now: () => 1_790_000_000_000, limits: { newProfilesPerHour: 1e9, newProfilesPerAddressPerHour: 1e9 } })
+const host = new Host({ url: 'https://bench.example', now: () => 1_790_000_000_000 })
 const lines: string[] = []
 for (let p = 0; p < 500; p++) {
   const k = keyFromSecret(new Uint8Array(32).map((_, j) => (p * 13 + j * 7 + 1) & 255))
@@ -72,5 +72,5 @@ console.log(`${'host: serve the feed, pages of 1,000'.padEnd(58)} ${Math.round(r
 
 // The merge for a busy profile: 1,000 entries.
 const busy = Array.from({ length: 1000 }, (_, i) => checkEntry(ownerEntry(key, `offer/${i % 200}`, offer, 1_790_000_000_000 + i)))
-rate('merge a profile of 1,000 entries (the view)', 200, () => viewProfile(key.did, busy, 1_790_000_000_000 + 10_000))
+rate('merge a profile of 1,000 entries (the view)', 200, () => viewProfile(key.did, [busy], 1_790_000_000_000 + 10_000))
 await host.close()

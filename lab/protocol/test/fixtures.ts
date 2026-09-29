@@ -19,8 +19,8 @@ export const OTHER_SEED = seedFromPrf(new Uint8Array(32).fill(7))
 export const alice = profileKey(SEED, 0) // a seller profile
 export const aliceBuyer = profileKey(SEED, 1) // the same person's buyer profile
 export const bob = profileKey(OTHER_SEED, 0) // someone else
-/** An assistant's own key: never the person's. */
-export const assistant = keyFromSecret(new Uint8Array(32).fill(42))
+/** A delegate's own key, e.g. an always-on signer the person runs: never the profile's key. */
+export const signer = keyFromSecret(new Uint8Array(32).fill(42))
 export const stranger = keyFromSecret(new Uint8Array(32).fill(99))
 
 export const T0 = Date.UTC(2026, 8, 29, 12, 0, 0)

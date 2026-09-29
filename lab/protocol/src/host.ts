@@ -1,16 +1,16 @@
 // A host: plain HTTP and one SQLite file. It holds no keys, has no accounts and asks for no
 // login: an entry's signature is its only credential. It checks every entry, stores the ones
-// that count, serves them to anyone, and forgets old versions after the owner's `keep` days.
+// that count, serves them to anyone in the order it took them in, and forgets old versions after
+// the owner's `keep` days.
 //
-//   POST /v1/entries                         NDJSON of canonical entries; one NDJSON result each
-//   GET  /v1/entries?profile=&path=&after=   NDJSON of stored entries in arrival order;
-//                                            header forest-cursor: the last sequence number
-//   GET  /.well-known/forest                 this host's name, version and limits
+//   POST /v1/entries                               NDJSON of canonical entries; one NDJSON result each
+//   GET  /v1/entries?after=&profile=&badged=1      NDJSON of stored entries in arrival order;
+//                                                  header forest-cursor: the last sequence number
 //
-// It logs nothing about who asks. Per-address budgets for new profiles live in memory only,
-// under a keyed hash with a key made at start, and are dropped every hour.
+// Anything it refuses beyond the protocol's checks is its own policy, from two things: the
+// signature on every entry (which key wrote what) and the public registry (which keys hold a
+// badge). It logs nothing about who asks.
 
-import { createHmac, randomBytes } from 'node:crypto'
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { DatabaseSync } from 'node:sqlite'
@@ -19,39 +19,30 @@ import {
   type Entry,
   EntryError,
   type FolderBody,
+  MAX_ENTRY_BYTES,
   MAX_FUTURE_MS,
   decodeEntry,
   encodeEntry,
   normalizeOrigin,
 } from './entry.ts'
-import { type ProfileView, type Version, delegateReason, viewProfile } from './view.ts'
+import { type ProfileView, type Version, admission, viewProfile } from './view.ts'
 
 export const DAY = 86_400_000
-const HOUR = 3_600_000
+/** Entries per request. */
+export const MAX_BATCH = 100
+const MAX_REQUEST_BYTES = MAX_BATCH * (MAX_ENTRY_BYTES + 1)
 
-export type Quota = { entries: number; bytes: number; writesPerMinute: number }
-export type Limits = {
-  /** A key with no badge: enough for a profile card, a folder, a few offers and reviews. */
-  unbadged: Quota
-  badged: Quota
-  /** New profiles without a badge this host admits per hour, from everyone together. */
-  newProfilesPerHour: number
-  /** ...and from any one network address. */
-  newProfilesPerAddressPerHour: number
-  /** Entries per request. */
-  batch: number
-  /** Bytes per request. */
-  requestBytes: number
+/** What a host's own policy can go on, besides the entry itself. */
+export type Facts = {
+  /** The registry's answer for this profile's key. */
+  badged: boolean
+  /** The first folder of a profile this host never held. */
+  newProfile: boolean
+  /** What this host already stores for the profile. */
+  stored: { entries: number; bytes: number }
 }
-
-export const DEFAULT_LIMITS: Limits = {
-  unbadged: { entries: 100, bytes: 256 * 1024, writesPerMinute: 30 },
-  badged: { entries: 20_000, bytes: 64 * 1024 * 1024, writesPerMinute: 600 },
-  newProfilesPerHour: 1_000,
-  newProfilesPerAddressPerHour: 5,
-  batch: 100,
-  requestBytes: 8 * 1024 * 1024,
-}
+/** A host's own policy: null takes the entry; a reason refuses it. Folders of held profiles always pass. */
+export type Policy = (entry: Entry, facts: Facts) => string | null | Promise<string | null>
 
 export type HostOptions = {
   /** This host's origin, exactly as folders name it. */
@@ -59,41 +50,31 @@ export type HostOptions = {
   /** SQLite file; in memory when omitted. */
   file?: string
   now?: () => number
-  /** Does this key hold a badge? The key is the wallet, so a host can ask the registry. */
+  /** The public registry: does this key hold a badge? The key is the wallet the badge names. */
   isBadged?: (did: string) => boolean | Promise<boolean>
-  limits?: Partial<Limits>
-  /** Read the first address of X-Forwarded-For (behind a proxy you run). */
-  trustProxy?: boolean
+  policy?: Policy
 }
 
 export type Result = { i: number; id?: string; ok: boolean; error?: string; message?: string }
+export type ReadOptions = { after?: number; profile?: string; badged?: boolean; limit?: number }
 
-type Row = { id: string; text: string }
 type ProfileRow = { profile: string; state: 'held' | 'left' | 'closed'; badged: number }
 
 export class Host {
   readonly url: string
-  readonly limits: Limits
   private readonly db: DatabaseSync
   private readonly now: () => number
   private readonly isBadged: (did: string) => boolean | Promise<boolean>
-  private readonly trustProxy: boolean
+  private readonly policy?: Policy
   private server?: Server
-  // In memory only: hourly budgets for new profiles, and per-key write rates.
-  private hour = 0
-  private newThisHour = 0
-  private readonly newByAddress = new Map<string, number>()
-  private addressKey = randomBytes(32)
-  private readonly writes = new Map<string, number[]>()
 
   constructor(options: HostOptions) {
     const url = normalizeOrigin(options.url)
     if (!url) throw new Error('a host is named by an https origin (http only on loopback)')
     this.url = url
-    this.limits = { ...DEFAULT_LIMITS, ...options.limits }
     this.now = options.now ?? Date.now
     this.isBadged = options.isBadged ?? (() => false)
-    this.trustProxy = options.trustProxy ?? false
+    this.policy = options.policy
     this.db = new DatabaseSync(options.file ?? ':memory:')
     this.db.exec(`
       PRAGMA journal_mode = WAL;
@@ -101,8 +82,6 @@ export class Host {
         seq INTEGER PRIMARY KEY AUTOINCREMENT,
         id TEXT NOT NULL UNIQUE,
         profile TEXT NOT NULL,
-        path TEXT NOT NULL,
-        time INTEGER NOT NULL,
         text TEXT NOT NULL,
         bytes INTEGER NOT NULL,
         keep INTEGER NOT NULL DEFAULT 1,   -- 1: current and counting, or held for good
@@ -121,8 +100,8 @@ export class Host {
   // Writing
 
   /** Take a batch of entries (wire text), check each, store what counts. */
-  async accept(lines: string[], address = ''): Promise<Result[]> {
-    if (lines.length > this.limits.batch) return [{ i: 0, ok: false, error: 'batch', message: `at most ${this.limits.batch} entries a request` }]
+  async accept(lines: string[]): Promise<Result[]> {
+    if (lines.length > MAX_BATCH) return [{ i: 0, ok: false, error: 'batch', message: `at most ${MAX_BATCH} entries a request` }]
     const now = this.now()
     const results: Result[] = []
     const decoded: Array<{ i: number; checked: Checked }> = []
@@ -136,29 +115,28 @@ export class Host {
         results.push({ i, ok: false, error: code, message: (err as Error).message })
       }
     })
-    // Folders first, then grants, then content: a new profile can arrive in one request.
-    const rank = (c: Checked) => (c.entry.path === 'folder' ? 0 : c.entry.path.startsWith('grant/') ? 1 : 2)
-    decoded.sort((a, b) => rank(a.checked) - rank(b.checked) || a.i - b.i)
-    for (const { i, checked } of decoded) {
-      results.push({ i, id: checked.id, ...(await this.acceptOne(checked, now, address)) })
-    }
+    // Folders first, so a new profile can arrive in one request; the rest in the order sent,
+    // which is the order the feed will show.
+    decoded.sort((a, b) => Number(b.checked.entry.path === 'folder') - Number(a.checked.entry.path === 'folder') || a.i - b.i)
+    for (const { i, checked } of decoded) results.push({ i, id: checked.id, ...(await this.acceptOne(checked, now)) })
     return results.sort((a, b) => a.i - b.i)
   }
 
-  private async acceptOne({ entry, id }: Checked, now: number, address: string): Promise<{ ok: boolean; error?: string; message?: string }> {
+  private async acceptOne({ entry, id }: Checked, now: number): Promise<{ ok: boolean; error?: string; message?: string }> {
     if (this.db.prepare('SELECT 1 FROM entries WHERE id = ?').get(id)) return { ok: true, message: 'already here' }
     const profile = this.profileRow(entry.profile)
 
     if (entry.path === 'folder') {
       const folder = entry.body as FolderBody | null
       if (!profile) {
-        // A profile this host never held: its first folder must name this host, and new
-        // profiles without a badge are admitted within an hourly budget.
+        // A profile this host never held: its first folder must name this host.
         if (!folder || !folder.hosts.includes(this.url)) return { ok: false, error: 'not-named', message: 'the folder does not name this host' }
         const badged = await this.isBadged(entry.profile)
-        if (!badged && !this.admitNewProfile(now, address)) return { ok: false, error: 'busy', message: 'too many new profiles; try later or another host' }
+        const refused = await this.policy?.(entry, { badged, newProfile: true, stored: { entries: 0, bytes: 0 } })
+        if (refused) return { ok: false, error: 'policy', message: refused }
         this.db.prepare('INSERT INTO profiles (profile, state, badged) VALUES (?, ?, ?)').run(entry.profile, 'held', badged ? 1 : 0)
       } else {
+        // A profile it holds or held: a newer folder always passes, so a person can always leave.
         const top = this.view(entry.profile, now).current.get('folder')
         if (top && !isNewerVersion(entry.time, id, top)) return { ok: false, error: 'stale', message: 'a newer folder is already here' }
       }
@@ -168,18 +146,21 @@ export class Host {
     }
 
     if (!profile || profile.state !== 'held') return { ok: false, error: 'not-held', message: 'this host does not hold that profile: send its folder naming this host first' }
-    const quota = profile.badged ? this.limits.badged : this.limits.unbadged
-    if (!this.withinRate(entry.profile, quota.writesPerMinute, now)) return { ok: false, error: 'rate', message: 'too many writes this minute' }
-    const used = this.db.prepare('SELECT COUNT(*) AS n, COALESCE(SUM(bytes), 0) AS b FROM entries WHERE profile = ?').get(entry.profile) as { n: number; b: number }
-    const bytes = Buffer.byteLength(encodeEntry(entry))
-    if (used.n + 1 > quota.entries || used.b + bytes > quota.bytes) return { ok: false, error: 'quota', message: 'this profile is full on this host' }
-
     if (entry.by !== undefined) {
+      // A delegate entry is taken in only while its grant version is current here, and not past
+      // `until` by this host's clock. What arrived before a revocation stays.
       const view = this.view(entry.profile, now)
-      const reason = delegateReason({ entry, id }, view.grants, now)
-      if (reason) return { ok: false, error: 'grant', message: reason }
       const top = view.current.get(entry.path)
       if (top && top.entry.by === undefined) return { ok: false, error: 'grant', message: 'owner-first' }
+      const reason = admission({ entry, id }, view.grants) ?? (now > view.grants.get(entry.grant!)!.body.until ? 'grant-expired' : null)
+      if (reason) return { ok: false, error: 'grant', message: reason }
+    }
+    const badged = await this.isBadged(entry.profile)
+    if (badged !== Boolean(profile.badged)) this.db.prepare('UPDATE profiles SET badged = ? WHERE profile = ?').run(badged ? 1 : 0, entry.profile)
+    if (this.policy) {
+      const stored = this.db.prepare('SELECT COUNT(*) AS entries, COALESCE(SUM(bytes), 0) AS bytes FROM entries WHERE profile = ?').get(entry.profile) as Facts['stored']
+      const refused = await this.policy(entry, { badged, newProfile: false, stored })
+      if (refused) return { ok: false, error: 'policy', message: refused }
     }
     this.insert(entry, id)
     this.settle(entry.profile, now)
@@ -188,16 +169,15 @@ export class Host {
 
   private insert(entry: Entry, id: string) {
     const text = encodeEntry(entry)
-    this.db
-      .prepare('INSERT INTO entries (id, profile, path, time, text, bytes) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(id, entry.profile, entry.path, entry.time, text, Buffer.byteLength(text))
+    this.db.prepare('INSERT INTO entries (id, profile, text, bytes) VALUES (?, ?, ?, ?)').run(id, entry.profile, text, Buffer.byteLength(text))
   }
 
   /**
-   * Recompute which of a profile's entries count, after any change. Current versions are kept;
-   * the rest get a stale date and are pruned `keep` days later. A profile this host no longer
-   * holds keeps only its newest folder and its deletes, so an old folder or old entries replayed
-   * here after a move are refused or pruned.
+   * Recompute which of a profile's entries count, after any change. Current versions are kept,
+   * and so is every grant version a delegate version here arrived under, so a reader that comes
+   * later can still place it. The rest get a stale date and are pruned `keep` days later. A
+   * profile this host no longer holds keeps only its newest folder and its deletes, so an old
+   * folder or old entries replayed here after a move are refused or pruned.
    */
   private settle(profile: string, now: number) {
     const view = this.view(profile, now)
@@ -207,6 +187,9 @@ export class Host {
     const keepForGood = new Set<string>()
     for (const [path, v] of view.current) {
       if (state === 'held' || path === 'folder' || v.entry.body === null) keepForGood.add(v.id)
+    }
+    if (state === 'held') {
+      for (const v of [...view.current.values(), ...[...view.history.values()].flat()]) if (v.entry.grant) keepForGood.add(v.entry.grant)
     }
     const rows = this.db.prepare('SELECT id, keep FROM entries WHERE profile = ?').all(profile) as Array<{ id: string; keep: number }>
     const mark = this.db.prepare('UPDATE entries SET keep = ?, stale_since = ? WHERE id = ?')
@@ -231,11 +214,22 @@ export class Host {
     return removed
   }
 
+  /** Ask the registry again about every profile here, for the badged feed. */
+  async refreshBadges(): Promise<void> {
+    for (const { profile } of this.db.prepare('SELECT profile FROM profiles').all() as Array<{ profile: string }>) {
+      this.db.prepare('UPDATE profiles SET badged = ? WHERE profile = ?').run((await this.isBadged(profile)) ? 1 : 0, profile)
+    }
+  }
+
   // ------------------------------------------------------------------------------------------
   // Reading
 
-  /** Stored entries in arrival order, as canonical text, after a cursor. */
-  read(options: { profile?: string; path?: string; after?: number; limit?: number } = {}): { lines: string[]; cursor: number } {
+  /**
+   * Stored entries in arrival order, as canonical text, after a cursor; for one profile, or only
+   * profiles the registry says hold a badge. A profile badged later shows from then on; a reader
+   * that wants its earlier entries reads it by profile.
+   */
+  read(options: ReadOptions = {}): { lines: string[]; cursor: number } {
     const limit = Math.min(Math.max(options.limit ?? 1000, 1), 1000)
     const where: string[] = ['seq > ?']
     const args: Array<string | number> = [options.after ?? 0]
@@ -243,19 +237,16 @@ export class Host {
       where.push('profile = ?')
       args.push(options.profile)
     }
-    if (options.path) {
-      where.push('(path = ? OR substr(path, 1, ?) = ?)')
-      args.push(options.path, options.path.length + 1, options.path + '/')
-    }
+    if (options.badged) where.push('profile IN (SELECT profile FROM profiles WHERE badged = 1)')
     const rows = this.db.prepare(`SELECT seq, text FROM entries WHERE ${where.join(' AND ')} ORDER BY seq LIMIT ?`).all(...args, limit) as Array<{ seq: number; text: string }>
     return { lines: rows.map((r) => r.text), cursor: rows.length ? rows[rows.length - 1]!.seq : (options.after ?? 0) }
   }
 
-  /** This host's own view of a profile: what it uses to decide what to keep. */
+  /** This host's own view of a profile, from its feed in arrival order: what it uses to decide what to keep. */
   view(profile: string, now = this.now()): ProfileView {
-    const rows = this.db.prepare('SELECT id, text FROM entries WHERE profile = ?').all(profile) as Row[]
-    const versions: Version[] = rows.map((r) => ({ id: r.id, entry: JSON.parse(r.text) as Entry }))
-    return viewProfile(profile, versions, now)
+    const rows = this.db.prepare('SELECT id, text FROM entries WHERE profile = ? ORDER BY seq').all(profile) as Array<{ id: string; text: string }>
+    const feed: Version[] = rows.map((r) => ({ id: r.id, entry: JSON.parse(r.text) as Entry }))
+    return viewProfile(profile, [feed], now)
   }
 
   count(profile?: string): number {
@@ -272,37 +263,6 @@ export class Host {
 
   private profileRow(profile: string): ProfileRow | undefined {
     return this.db.prepare('SELECT profile, state, badged FROM profiles WHERE profile = ?').get(profile) as ProfileRow | undefined
-  }
-
-  // ------------------------------------------------------------------------------------------
-  // Budgets (memory only)
-
-  private admitNewProfile(now: number, address: string): boolean {
-    const hour = Math.floor(now / HOUR)
-    if (hour !== this.hour) {
-      this.hour = hour
-      this.newThisHour = 0
-      this.newByAddress.clear()
-      this.addressKey = randomBytes(32)
-    }
-    if (this.newThisHour >= this.limits.newProfilesPerHour) return false
-    const tag = createHmac('sha256', this.addressKey).update(address).digest('base64url')
-    const fromAddress = this.newByAddress.get(tag) ?? 0
-    if (fromAddress >= this.limits.newProfilesPerAddressPerHour) return false
-    this.newThisHour++
-    this.newByAddress.set(tag, fromAddress + 1)
-    return true
-  }
-
-  private withinRate(profile: string, perMinute: number, now: number): boolean {
-    const recent = (this.writes.get(profile) ?? []).filter((t) => t > now - 60_000)
-    if (recent.length >= perMinute) {
-      this.writes.set(profile, recent)
-      return false
-    }
-    recent.push(now)
-    this.writes.set(profile, recent)
-    return true
   }
 
   // ------------------------------------------------------------------------------------------
@@ -330,10 +290,6 @@ export class Host {
       res.writeHead(204, { 'access-control-allow-methods': 'GET, POST', 'access-control-allow-headers': 'content-type' }).end()
       return
     }
-    if (req.method === 'GET' && url.pathname === '/.well-known/forest') {
-      json(res, 200, { host: this.url, protocol: 'forest.foundation/entry/v1', limits: this.limits })
-      return
-    }
     if (url.pathname !== '/v1/entries') {
       res.writeHead(404).end()
       return
@@ -344,9 +300,9 @@ export class Host {
         return v === null ? undefined : Number.parseInt(v, 10)
       }
       const out = this.read({
-        profile: url.searchParams.get('profile') ?? undefined,
-        path: url.searchParams.get('path') ?? undefined,
         after: num('after'),
+        profile: url.searchParams.get('profile') ?? undefined,
+        badged: url.searchParams.get('badged') === '1',
         limit: num('limit'),
       })
       res.writeHead(200, { 'content-type': 'application/x-ndjson', 'forest-cursor': String(out.cursor), 'access-control-expose-headers': 'forest-cursor' })
@@ -354,16 +310,13 @@ export class Host {
       return
     }
     if (req.method === 'POST') {
-      const body = await readBody(req, this.limits.requestBytes)
+      const body = await readBody(req, MAX_REQUEST_BYTES)
       if (body === null) {
         res.writeHead(413).end()
         return
       }
-      const lines = body.split('\n').filter((l) => l.length > 0)
-      const address = this.trustProxy ? String(req.headers['x-forwarded-for'] ?? '').split(',')[0]!.trim() : (req.socket.remoteAddress ?? '')
-      const results = await this.accept(lines, address)
-      const status = results.some((r) => r.error === 'busy' || r.error === 'rate') ? 429 : 200
-      res.writeHead(status, { 'content-type': 'application/x-ndjson' })
+      const results = await this.accept(body.split('\n').filter((l) => l.length > 0))
+      res.writeHead(200, { 'content-type': 'application/x-ndjson' })
       res.end(results.map((r) => JSON.stringify(r) + '\n').join(''))
       return
     }
@@ -373,10 +326,6 @@ export class Host {
 
 function isNewerVersion(time: number, id: string, than: Version): boolean {
   return time !== than.entry.time ? time > than.entry.time : id > than.id
-}
-
-function json(res: ServerResponse, status: number, value: unknown) {
-  res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(value))
 }
 
 async function readBody(req: IncomingMessage, max: number): Promise<string | null> {
@@ -389,4 +338,3 @@ async function readBody(req: IncomingMessage, max: number): Promise<string | nul
   }
   return Buffer.concat(chunks).toString('utf8')
 }
-
