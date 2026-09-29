@@ -1,0 +1,37 @@
+{
+  "name": "@forest/lab-protocol",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Lab prototype of Forest's data protocol: signed entries on plain hosts. Exploration only; nothing here is shipped.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "node --test --test-concurrency=1 test/*.test.ts",
+    "test:fast": "node --test test/core.test.ts test/host.test.ts test/grants.test.ts test/sealed.test.ts test/attacks.test.ts",
+    "build:page": "node web/build.ts",
+    "bench": "node bench/throughput.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/client": "2.2.0",
+    "@modelcontextprotocol/server": "2.2.0",
+    "@noble/ciphers": "2.4.0",
+    "@noble/curves": "2.4.0",
+    "@noble/hashes": "2.4.0",
+    "@scure/base": "2.4.0",
+    "@synonymdev/pkarr": "8.0.2",
+    "age-encryption": "0.3.1",
+    "canonicalize": "5.1.0",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@solana/transaction-messages": "8.4.0",
+    "@types/node": "22.20.2",
+    "esbuild": "0.28.2",
+    "playwright-core": "1.56.1",
+    "typescript": "5.9.3"
+  }
+}
