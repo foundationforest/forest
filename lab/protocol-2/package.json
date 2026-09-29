@@ -1,0 +1,29 @@
+{
+  "name": "@forest/protocol-2",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Lab: a smaller protocol for the records people own. Report, spec and prototype with tests.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.ts",
+    "test:net": "node --test test/net/*.test.ts",
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@hpke/core": "1.9.0",
+    "@hpke/dhkem-x25519": "1.8.0",
+    "@ipld/dag-cbor": "10.0.2",
+    "@noble/curves": "2.4.0",
+    "@noble/hashes": "2.4.0",
+    "@scure/base": "2.4.0",
+    "dns-packet": "5.6.1",
+    "multiformats": "14.0.5"
+  },
+  "devDependencies": {
+    "@atproto/lexicon": "0.7.15",
+    "@types/dns-packet": "5.6.5",
+    "@types/node": "22.20.2",
+    "typescript": "5.9.3"
+  }
+}

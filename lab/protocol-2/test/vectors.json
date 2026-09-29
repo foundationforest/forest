@@ -1,0 +1,154 @@
+{
+  "about": "Fixed test vectors for protocol-2. The seed is the one keys/test/vectors.json pins. Bytes are base64url unless named hex. Generated once by this implementation; changing any value here is a protocol change.",
+  "seed": "3d9afcf6df255ce134686fc4f26d6cca0a57f82480f7b34d37e682546aaa72b0",
+  "profiles": [
+    {
+      "index": 0,
+      "did": "did:key:z6MkmnCAEPLw1gAunNJDayBjhM5knekuPmxxk5jVSjKKcTzT",
+      "reader": "did:key:z6LSpPr5VkPkGaP27nAzcR5geDyd7g7v6B8VzhTBwmRH4Nom",
+      "wallet": "Azh4zBXfQsXLKrrD6YanN7VZhpNyQot7vVdtB2r41UWx"
+    },
+    {
+      "index": 1,
+      "did": "did:key:z6Mkew7E5BZLwFvVBU2z4bfupWN68zV37rDGCbZyeh2AUwkw",
+      "reader": "did:key:z6LSqvrh2GnsHHN9Xx6e1HPGVi49aYPE57gEnLrBS7W5eaCc",
+      "wallet": "79Lhh1j5NiJqZNz6qrynxCVvJJnKApCrLLjBCov8a1oj"
+    }
+  ],
+  "agent": {
+    "privateKeyHex": "0101010101010101010101010101010101010101010101010101010101010101",
+    "did": "did:key:z6Mkon3Necd6NkkyfoGoHxid2znGc59LU3K7mubaRcFbLfLX"
+  },
+  "entries": [
+    {
+      "cid": "bafyreibpuic3gjzskcxrp2nmdfuwpyigae2v4mn7nw5c2il2lqqt7iiiyy",
+      "bytes": "qGF2AWJhdBprSdIAYm9wZGtleXNjZGlkeDhkaWQ6a2V5Ono2TWttbkNBRVBMdzFnQXVuTkpEYXlCamhNNWtuZWt1UG14eGs1alZTaktLY1R6VGNyZWOhZnJlYWRlcng4ZGlkOmtleTp6NkxTcFByNVZrUGtHYVAyN25BemNSNWdlRHlkN2c3djZCOFZ6aFRCd21SSDROb21jc2VxAGNzaWdYQJ0pmsNfiii-SJfuQ5QRaJPjWY6CbBLCdeThYsy5gOknl-d9WlkyFpbwpLPAC1EYb1D7TiADLwC3J9aml946xgpkcHJldvY",
+      "entry": {
+        "v": 1,
+        "did": "did:key:z6MkmnCAEPLw1gAunNJDayBjhM5knekuPmxxk5jVSjKKcTzT",
+        "seq": 0,
+        "prev": null,
+        "at": 1800000000,
+        "op": "keys",
+        "rec": {
+          "reader": "did:key:z6LSpPr5VkPkGaP27nAzcR5geDyd7g7v6B8VzhTBwmRH4Nom"
+        },
+        "sig": "nSmaw1-KKL5Il-5DlBFok-NZjoJsEsJ15OFizLmA6SeX531aWTIWlvCks8ALURhvUPtOIAMvALcn1qaX3jrGCg"
+      }
+    },
+    {
+      "cid": "bafyreicwgbpmbylzfgn4d46cjqwnaudmskdvxrld3ywgqsswaxhhs7ik6y",
+      "bytes": "qmF2AWJhdBprSdIBYm9wY3B1dGNjb2x4GWZvdW5kYXRpb24uZm9yZXN0LnByb2ZpbGVjZGlkeDhkaWQ6a2V5Ono2TWttbkNBRVBMdzFnQXVuTkpEYXlCamhNNWtuZWt1UG14eGs1alZTaktLY1R6VGNrZXlkc2VsZmNyZWOmZG5hbWVjQW5hZHJvbGVmc2VsbGVyZSR0eXBleBlmb3VuZGF0aW9uLmZvcmVzdC5wcm9maWxlZm1hcmtldG1vbmxpbmUtdHV0b3JzZndhbGxldHgsQXpoNHpCWGZRc1hMS3JyRDZZYW5ON1ZaaHBOeVFvdDd2VmR0QjJyNDFVV3hpY3JlYXRlZEF0dDIwMjYtMDktMjlUMDA6MDA6MDBaY3NlcQFjc2lnWECvUSjA0LjNWBPRtil8Ehn9eRUWQ-70yO1GAZ0Fdhkl_Jici69wB6mnKyFdfwkc8QWD3gNDjIqZrrUzFCiNWK8LZHByZXbYKlglAAFxEiAvogWzJzJQrxfprBlpZ-EGATVeMb9tui0helwhP6EIxg",
+      "entry": {
+        "v": 1,
+        "did": "did:key:z6MkmnCAEPLw1gAunNJDayBjhM5knekuPmxxk5jVSjKKcTzT",
+        "seq": 1,
+        "prev": "bafyreibpuic3gjzskcxrp2nmdfuwpyigae2v4mn7nw5c2il2lqqt7iiiyy",
+        "at": 1800000001,
+        "op": "put",
+        "col": "foundation.forest.profile",
+        "key": "self",
+        "rec": {
+          "$type": "foundation.forest.profile",
+          "name": "Ana",
+          "market": "online-tutors",
+          "role": "seller",
+          "wallet": "Azh4zBXfQsXLKrrD6YanN7VZhpNyQot7vVdtB2r41UWx",
+          "createdAt": "2026-09-29T00:00:00Z"
+        },
+        "sig": "r1EowNC4zVgT0bYpfBIZ_XkVFkPu9MjtRgGdBXYZJfyYnIuvcAeppyshXX8JHPEFg94DQ4yKma61MxQojVivCw"
+      }
+    },
+    {
+      "cid": "bafyreiffhzuaeamwcybzqbxtmzn5ufr64sy4avkhfdjkge5sgan4un2rxm",
+      "bytes": "qGF2AWJhdBprSdICYm9wZWdyYW50Y2RpZHg4ZGlkOmtleTp6Nk1rbW5DQUVQTHcxZ0F1bk5KRGF5QmpoTTVrbmVrdVBteHhrNWpWU2pLS2NUelRjcmVjpWJ0b3g4ZGlkOmtleTp6Nk1rb24zTmVjZDZOa2t5Zm9Hb0h4aWQyem5HYzU5TFUzSzdtdWJhUmNGYkxmTFhjZXhwGmtLI4BjbWF4CmNvcHOBY3B1dGRjb2xzgXZmb3VuZGF0aW9uLmZvcmVzdC5wb3N0Y3NlcQJjc2lnWEAM4Er52lkdY96_qNLyr5hOT4wtQjTUUNr6CCLrs2Et9uoBQ7jNXrOYGfLUDtBguRJcD4rJIu2jkgz5EY9BI1IDZHByZXbYKlglAAFxEiBWMF7A4Xkpm8Hzwkws0FBskodbxWPeLGhKVgXOeX0K9g",
+      "entry": {
+        "v": 1,
+        "did": "did:key:z6MkmnCAEPLw1gAunNJDayBjhM5knekuPmxxk5jVSjKKcTzT",
+        "seq": 2,
+        "prev": "bafyreicwgbpmbylzfgn4d46cjqwnaudmskdvxrld3ywgqsswaxhhs7ik6y",
+        "at": 1800000002,
+        "op": "grant",
+        "rec": {
+          "to": "did:key:z6Mkon3Necd6NkkyfoGoHxid2znGc59LU3K7mubaRcFbLfLX",
+          "cols": [
+            "foundation.forest.post"
+          ],
+          "ops": [
+            "put"
+          ],
+          "exp": 1800086400,
+          "max": 10
+        },
+        "sig": "DOBK-dpZHWPev6jS8q-YTk-MLUI01FDa-ggi67NhLfbqAUO4zV6zmBny1A7QYLkSXA-KySLto5IM-RGPQSNSAw"
+      }
+    },
+    {
+      "cid": "bafyreiez4dsyjn6mljf4os24gjtt43j2l3vi75ha5cvmp7q3z3xw7aougy",
+      "bytes": "rGF2AWJhdBprSdIDYmJ5eDhkaWQ6a2V5Ono2TWtvbjNOZWNkNk5ra3lmb0dvSHhpZDJ6bkdjNTlMVTNLN211YmFSY0ZiTGZMWGJvcGNwdXRjY29sdmZvdW5kYXRpb24uZm9yZXN0LnBvc3RjZGlkeDhkaWQ6a2V5Ono2TWttbkNBRVBMdzFnQXVuTkpEYXlCamhNNWtuZWt1UG14eGs1alZTaktLY1R6VGNrZXloM2w1eGtxMm1jcmVjpGUkdHlwZXZmb3VuZGF0aW9uLmZvcmVzdC5wb3N0aWNyZWF0ZWRBdHQyMDI2LTA5LTI5VDAwOjAwOjAzWmlkaXJlY3Rpb25lb2ZmZXJrZGVzY3JpcHRpb25yUG9ydHVndWVzZSBsZXNzb25zY3NlcQNjc2lnWEAPD6wZcf8miv6fHKdOEbXf2dUcHOAgtK_SahY8KEn3c1c6iLllLrHx_ZtGxA0tgNVOfhFOlDCRa8L2GUs8DU8KY3ZpYdgqWCUAAXESIKU-aAIBlhYDmAbzZlvaFj7kscBVRyjSoxOyMBvKN1G7ZHByZXbYKlglAAFxEiClPmgCAZYWA5gG82Zb2hY-5LHAVUco0qMTsjAbyjdRuw",
+      "entry": {
+        "v": 1,
+        "did": "did:key:z6MkmnCAEPLw1gAunNJDayBjhM5knekuPmxxk5jVSjKKcTzT",
+        "seq": 3,
+        "prev": "bafyreiffhzuaeamwcybzqbxtmzn5ufr64sy4avkhfdjkge5sgan4un2rxm",
+        "at": 1800000003,
+        "op": "put",
+        "by": "did:key:z6Mkon3Necd6NkkyfoGoHxid2znGc59LU3K7mubaRcFbLfLX",
+        "via": "bafyreiffhzuaeamwcybzqbxtmzn5ufr64sy4avkhfdjkge5sgan4un2rxm",
+        "col": "foundation.forest.post",
+        "key": "3l5xkq2m",
+        "rec": {
+          "$type": "foundation.forest.post",
+          "direction": "offer",
+          "description": "Portuguese lessons",
+          "createdAt": "2026-09-29T00:00:03Z"
+        },
+        "sig": "Dw-sGXH_Jor-nxynThG139nVHBzgILSv0moWPChJ93NXOoi5ZS6x8f2bRsQNLYDVTn4RTpQwkWvC9hlLPA1PCg"
+      }
+    },
+    {
+      "cid": "bafyreie2o4axmwf2kodt7w55btlmhrdnhkoo6hzrp27s6cyrk3ij5kctym",
+      "bytes": "qGF2AWJhdBprSdIEYm9wZnJldm9rZWNkaWR4OGRpZDprZXk6ejZNa21uQ0FFUEx3MWdBdW5OSkRheUJqaE01a25la3VQbXh4azVqVlNqS0tjVHpUY3JlY6FlZ3JhbnTYKlglAAFxEiClPmgCAZYWA5gG82Zb2hY-5LHAVUco0qMTsjAbyjdRu2NzZXEEY3NpZ1hA6XnG1s2hJlMThvoCtM5p9Z0DV72m56fR1c2CymaUIKOfclL85anK9M62PdOU4gWgFadsO8y6PMoSADlVVNdID2RwcmV22CpYJQABcRIgmeDlhLfMWkvHS1wyZz5tOl7qj_Tg6KrH_hvO72-B1DY",
+      "entry": {
+        "v": 1,
+        "did": "did:key:z6MkmnCAEPLw1gAunNJDayBjhM5knekuPmxxk5jVSjKKcTzT",
+        "seq": 4,
+        "prev": "bafyreiez4dsyjn6mljf4os24gjtt43j2l3vi75ha5cvmp7q3z3xw7aougy",
+        "at": 1800000004,
+        "op": "revoke",
+        "rec": {
+          "grant": "bafyreiffhzuaeamwcybzqbxtmzn5ufr64sy4avkhfdjkge5sgan4un2rxm"
+        },
+        "sig": "6XnG1s2hJlMThvoCtM5p9Z0DV72m56fR1c2CymaUIKOfclL85anK9M62PdOU4gWgFadsO8y6PMoSADlVVNdIDw"
+      }
+    },
+    {
+      "cid": "bafyreifo7t574w2pkt5a5g4gmy5igjxqy32lrejg36laeqingpmqtjnxgm",
+      "bytes": "qWF2AWJhdBprSdIFYm9wY2RlbGNjb2x2Zm91bmRhdGlvbi5mb3Jlc3QucG9zdGNkaWR4OGRpZDprZXk6ejZNa21uQ0FFUEx3MWdBdW5OSkRheUJqaE01a25la3VQbXh4azVqVlNqS0tjVHpUY2tleWgzbDV4a3EybWNzZXEFY3NpZ1hAyFH1R6B8cpkeIspgrtBs6T2r1U2iBa6FLFPDPYhcbVCIcjkLxxEN6oW453RX99k3vFPf5YcS3Di-zDjQbhHMD2RwcmV22CpYJQABcRIgmncBdli6U4c_270M1sPEbTqc7x8xfr8vCxFW0J6oU8M",
+      "entry": {
+        "v": 1,
+        "did": "did:key:z6MkmnCAEPLw1gAunNJDayBjhM5knekuPmxxk5jVSjKKcTzT",
+        "seq": 5,
+        "prev": "bafyreie2o4axmwf2kodt7w55btlmhrdnhkoo6hzrp27s6cyrk3ij5kctym",
+        "at": 1800000005,
+        "op": "del",
+        "col": "foundation.forest.post",
+        "key": "3l5xkq2m",
+        "sig": "yFH1R6B8cpkeIspgrtBs6T2r1U2iBa6FLFPDPYhcbVCIcjkLxxEN6oW453RX99k3vFPf5YcS3Di-zDjQbhHMDw"
+      }
+    }
+  ],
+  "pointer": {
+    "hosts": [
+      "https://host.example"
+    ],
+    "seq": 1800000000000000,
+    "payload": "4cpxpx04lWpl11ysNcRpCbWuBtY0u5Bk2fJKZMSe-KJXoHXg4iRX38wEJpX2xLnwESjc4onKwu9mF9s0tzL8CwAGZRcomIAAAACAAAAAAAEAAAAAB19mb3Jlc3Q0cHVwemd3N2ZocW50d3o5emZ0NHdzZ2diZmd3b2o0YXB0MWVxODk1ejU1ZDgxYnJhZnFueQAAEAABAAABLAAfA3Y9MRpob3N0cz1odHRwczovL2hvc3QuZXhhbXBsZQ"
+  },
+  "permit": {
+    "photo": "_9j_4AECAwQ",
+    "cid": "bafkreidt7ujhq5wlcvjem3jmtadfet7dhatl6fqlbsbaskvvwcbprehbgi",
+    "exp": 1800000600,
+    "bytes": "pGNjaWR4O2JhZmtyZWlkdDd1amhxNXdsY3ZqZW0zam10YWRmZXQ3ZGhhdGw2ZnFsYnNiYXNrdnZ3Y2JwcmVoYmdpY2RpZHg4ZGlkOmtleTp6Nk1rbW5DQUVQTHcxZ0F1bk5KRGF5QmpoTTVrbmVrdVBteHhrNWpWU2pLS2NUelRjZXhwGmtJ1Fhjc2lnWEDtag-ZbuD5tPN13XGKPDWFWmjpu1BZehMpbsS0VOKJFcPyrLZ5ZYGC8ynU1EOqGPVEFfKvwqNuf0qcxYgKDGAL"
+  }
+}
