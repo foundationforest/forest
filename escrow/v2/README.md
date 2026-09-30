@@ -145,8 +145,9 @@ As v1's README says, with these differences:
   `escrowAddress(seller, id)`. Before paying an invoice in one tap, the app reads the deposit
   address's balance: every way out pays the whole balance.
 - **Who fronts the rent.** Whoever signs `create` as payer is recorded and gets the sweep. A fee
-  payer that fronts the rent and charges the person for it gets back what the rent cuts free
-  later; the deposit account's rent still comes back to the creator.
+  payer that fronts the rent and charges the person for it keeps what the rent cuts free later, by
+  decision, and says so plainly to the people it serves; the deposit account's rent still comes
+  back to the creator.
 
 ## The upgrade authority
 
@@ -154,35 +155,42 @@ As for v1: on the day it deploys to mainnet, `solana program set-upgrade-authori
 --final`, and `solana program show` says "Authority: none". The program id for local work is
 `FoRE2EscrowV2objectsTimerFundedAtPayer222222`; no keypair for it exists. Mainnet gets a fresh one.
 
-## Chosen, not decided
+## Decided
 
-Where the request was silent, the option that adds no rule and no text a person reads was taken.
-Each is reversible until v2 is sealed on mainnet.
+Carlos's answers, 2026-09-30, to what the request left open.
 
 1. **One objection per escrow**, not one per side. After the first, the timer is off, so a second
    would change nothing but the record; it is refused (`AlreadyObjected`).
 2. **"Before the timer fires" is before it is due,** not before someone sends `timer_release`. The
    same deadline then gates both, so they never race; the side a timer favours is sure of it from
    the due second on.
-3. **An objection needs no timer and no money.** Refusing it without a timer, or before the money
-   arrives, would add rules; it is recorded either way. A buyer can object to an invoice's timer
-   before paying it.
+3. **An objection needs no timer and no money.** It is recorded either way. A buyer can object to
+   an invoice's timer before paying it.
 4. **`close_unfunded` still runs after an objection.** It is not the timer, and a part payment
    would otherwise have no way out.
-5. **The receipt does not say whether the funding was marked.** "Whether or not anyone marked it"
+5. **The sweep goes to the payer, a fee payer included.** A fee payer that fronted the rent keeps
+   what Solana's rent cuts free, and says so plainly to people; its own description changes to
+   match, in the services' repo.
+
+## Chosen, not decided
+
+Where the request was silent, the option that adds no rule and no text a person reads was taken.
+Each is reversible until v2 is sealed on mainnet.
+
+1. **The receipt does not say whether the funding was marked.** "Whether or not anyone marked it"
    is read as: the funding time is recorded either way. The `Funded` event exists only if it was
    marked.
-6. **`Ended` carries `funded_at`, and `RentSwept` the payer,** so an index reads both from the log
+2. **`Ended` carries `funded_at`, and `RentSwept` the payer,** so an index reads both from the log
    without reading the account.
-7. **Only the sweep goes to the payer.** The deposit account's rent and a close's rents stay with
+3. **Only the sweep goes to the payer.** The deposit account's rent and a close's rents stay with
    the creator, as "everything else unchanged" says.
-8. **The layout appends,** so v1's offsets hold in v2's first 256 bytes.
-9. **The v2 devnet program id** is derived from the devnet phrase under a new label,
+4. **The layout appends,** so v1's offsets hold in v2's first 256 bytes.
+5. **The v2 devnet program id** is derived from the devnet phrase under a new label,
    `escrow-v2-program`, with the recipe in `devnet/keys.sh`; the deploy key is v1's.
 
 ## What this does not do
 
 Nothing on mainnet. The Trident fuzzer and the local-validator test were not carried over; the
-devnet run is the client's only test against a real runtime. `.github/workflows/checks.yml` does
-not build or test v2 yet. The fee payer's configuration (`feepayer/`) allows v1's program id, not
-v2's, and the index reads v1's escrow only. `security-checklist.md` lists every known limit.
+devnet run is the client's only test against a real runtime. Left to later sessions, as decided:
+`.github/workflows/checks.yml` does not build or test v2 yet, the fee payer's configuration
+(`feepayer/`) allows v1's program id, not v2's, and the index reads v1's escrow only. `security-checklist.md` lists every known limit.

@@ -26,23 +26,27 @@ handoff says for `docs/changes/<topic>.md`.
 ## Learned
 
 - The deploy key held 5.80 SOL before this deploy, where the handoff (read September 26) says
-  1.80; who added the difference is not recorded. After this deploy it holds 4.317.
+  1.80; the founder added the difference. After this deploy it holds 4.317.
 - Devnet's rent rate is 5,080 lamports a byte, today's mainnet rate, so no sweep has anything to
   move there yet; the sweep to the payer is tested under LiteSVM only.
 
+## Decided (Carlos, 2026-09-30)
+
+- The sweep goes to the recorded payer, a fee payer included: it keeps refunds from Solana's rent
+  cuts and says so plainly to people. Its "charges exactly what it spends" line is updated in the
+  services' repo, not here.
+- One objection per escrow; its deadline is the timer's due time; it needs no timer and no money;
+  `close_unfunded` still runs after one.
+- CI for `escrow/v2`, the fee payer's allowlist and the index reading v2 are later sessions' work.
+
 ## Open
 
-- **The sweep and the fee payer** (program, needs Carlos). With Kora as payer, what the rent cuts
-  free goes to Kora's key, which already charged the person for the whole deposit. Keep, or record
-  the creator after all, before v2 is sealed. `security-checklist.md`, Known limit 3.
-- **The choices in `README.md`, "Chosen, not decided"** (program, needs Carlos): one objection per
-  escrow; the deadline is the timer's due time, not its sending; an objection needs no timer and no
-  money; `close_unfunded` still runs after one; the receipt does not say whether the funding was
-  marked.
-- **CI** (mechanical): `.github/workflows/checks.yml` builds and tests v1 only. v2 needs the same
-  three lines in the `programs` job and a matrix entry for `escrow/v2/client`.
-- **The fee payer and the index** (mechanical): `feepayer/kora.toml` allows v1's program id only, so
-  the public fee payer refuses v2 transactions; the index follows one escrow program id (already
-  open in the handoff: "a list of ids, each with its adapter").
+- **CI** (mechanical, a later session): `.github/workflows/checks.yml` builds and tests v1 only. v2
+  needs the same three lines in the `programs` job and a matrix entry for `escrow/v2/client`.
+- **The fee payer and the index** (mechanical, later sessions): `feepayer/kora.toml` allows v1's
+  program id only, so the public fee payer refuses v2 transactions; the index follows one escrow
+  program id (already open in the handoff: "a list of ids, each with its adapter").
+- **Whether the receipt should say the funding was marked** (program, `README.md`, "Chosen, not
+  decided" 1): not asked; as built, it does not.
 - **The fuzzer and the validator test** (mechanical): not carried over to v2.
 - **The handoff and `docs/devnet.md`** (mechanical): describe v1 only; the consolidation adds v2.

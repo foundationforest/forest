@@ -30,8 +30,8 @@ be anyone, a party included; every way out pays the whole balance; anyone may se
    other), so the program never strands it, but neither side can take it.
 8. **The sweep pays whoever fronted the rent, not the person who opened the escrow.** When a fee
    payer fronts the rent and charges the person for it (Kora, as `feepayer/` runs it), what the
-   rent cuts free later goes to the fee payer's key, which was already paid for it. See Known
-   limit 3.
+   rent cuts free later goes to the fee payer's key, which was already paid for it. Intended
+   (Carlos, 2026-09-30): the fee payer keeps it and says so plainly to people. See Known limit 3.
 
 ## Shared base, sections 1 to 31
 
@@ -252,16 +252,16 @@ fuzzer's SBPF v0 build) does not apply: v2 has no fuzzer yet (6 below). New in v
 2. **A deadlock holds the money.** After an objection, with no arbiter, if neither side gives and
    they do not agree, the money stays in the deposit account for good. v1 had the same with no
    timer; v2 has it whenever someone objects. Nothing in the program can break it.
-3. **The fee payer gets the sweep.** With Kora as the payer, the rent excess goes to Kora's key,
-   which already charged the person, in dollars, for the whole deposit at the old rate. The person
-   pays for what is later returned to the fee payer; the handoff's "charges exactly what it spends,
-   no margin" holds at the moment of charging and not after the cuts. A product that wants the
-   person to get it back makes the person's own key the payer, which then needs SOL.
+3. **The fee payer gets the sweep, by decision.** With Kora as the payer, the rent excess goes to
+   Kora's key, which already charged the person, in dollars, for the whole deposit at the old rate.
+   Intended: the fee payer keeps refunds from Solana's rent cuts and says so to people; the line
+   "charges exactly what it spends" is updated to match in the services' repo. A product that wants
+   the person to get it back makes the person's own key the payer, which then needs SOL.
 4. **A sweep into a closed payer account can fail.** If the payer's account holds nothing (a
    one-time sponsor key emptied), a sweep that would leave it below an empty account's rent-exempt
    minimum fails, and can be sent again once more has built up (v1's limit 8, now the payer's).
 5. **An objection sent late may land after the deadline.** The chain's clock decides; the client's
    `canObject` reads the local clock.
-6. **Not carried over:** the Trident fuzzer and the local-validator test. The CI workflow does not
-   build or test v2 (`.github/workflows/checks.yml` is outside `escrow/`). The fee payer's
-   configuration and the index do not know v2's program id yet.
+6. **Not carried over:** the Trident fuzzer and the local-validator test. Left to later sessions,
+   as decided: the CI workflow does not build or test v2 (`.github/workflows/checks.yml`), and the
+   fee payer's configuration and the index do not know v2's program id yet.
