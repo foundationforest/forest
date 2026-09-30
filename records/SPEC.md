@@ -189,7 +189,8 @@ Three filters, in any combination:
   profile key itself, since that key is the wallet the badge names. A profile badged later shows
   from then on; a reader that wants its earlier entries reads it by `profile`.
 
-`limit` is at most 1000 lines a page.
+`limit` is at most 1000 lines a page. A page is at most 4 MB (4,194,304 bytes): a host ends it
+before a line that would pass that. Readers MAY refuse a larger page.
 
 **Taking an entry in.** In this order; the error code is in brackets.
 1. Checks:

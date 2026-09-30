@@ -4,11 +4,11 @@ import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 import { base58, hex } from '../src/bytes.ts'
 import { canonical, parseCanonical } from '../src/canonical.ts'
-import { EntryError, checkEntry, decodeEntry, encodeEntry, entryId, signEntry, unsignedOf } from '../src/entry.ts'
+import { EntryError, MAX_ENTRY_BYTES, checkEntry, decodeEntry, encodeEntry, entryId, signEntry, unsignedOf } from '../src/entry.ts'
 import { addressFromDid, didFromPublicKey, publicKeyFromDid } from '../src/keys.ts'
 import { boxKey } from '../src/sealed.ts'
 import { ownerEntry } from '../src/write.ts'
-import { SEED, T0, VECTORS, alice, aliceBuyer, offerBody, profileBody } from './fixtures.ts'
+import { SEED, T0, VECTORS, alice, aliceBuyer, offerBody, profileBody, sizedEntry } from './fixtures.ts'
 
 describe('keys', () => {
   test('the seed and every profile key are exactly what keys/ pins: the profile id is its wallet', async () => {
@@ -121,5 +121,17 @@ describe('entries', () => {
   test('size cap', () => {
     const big = { about: 'x'.repeat(70_000) }
     assert.throws(() => ownerEntry(alice, 'profile', big, T0), /at most/)
+  })
+
+  test('the size cap counts UTF-8 bytes, not characters', () => {
+    const atCap = encodeEntry(sizedEntry(alice, 'note/a', MAX_ENTRY_BYTES))
+    assert.ok(decodeEntry(atCap).id)
+    // One more byte, from one two-byte character: still 65,536 characters, now 65,537 bytes.
+    const over = sizedEntry(alice, 'note/a', MAX_ENTRY_BYTES + 1, 1)
+    const text = encodeEntry(over)
+    assert.deepEqual([text.length, Buffer.byteLength(text)], [MAX_ENTRY_BYTES, MAX_ENTRY_BYTES + 1])
+    assert.throws(() => decodeEntry(text), (err: EntryError) => err.code === 'size')
+    assert.throws(() => checkEntry(over), (err: EntryError) => err.code === 'size')
+    assert.throws(() => ownerEntry(alice, 'note/a', over.body, T0), /at most/)
   })
 })

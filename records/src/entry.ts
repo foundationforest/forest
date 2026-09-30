@@ -118,6 +118,11 @@ export function signingInput(unsigned: Unsigned): Uint8Array {
   return concat(SIGN_PREFIX, utf8(canonical(unsigned)))
 }
 
+/** The cap counts UTF-8 bytes. A string's length (UTF-16 units) is never more, so huge text is refused unencoded. */
+function checkSize(text: string) {
+  if (text.length > MAX_ENTRY_BYTES || utf8(text).length > MAX_ENTRY_BYTES) fail('size', `an entry is at most ${MAX_ENTRY_BYTES} bytes`)
+}
+
 /** The entry's id: SHA-256 of what was signed, so a re-encoded signature is not a new entry. */
 export function entryId(unsigned: Unsigned): string {
   return hex.encode(sha256(signingInput(unsigned)))
@@ -130,7 +135,7 @@ export function signEntry(unsigned: Unsigned, secretKey: Uint8Array): Entry {
   const derived = ed25519.getPublicKey(secretKey)
   if (hex.encode(derived) !== hex.encode(publicKey)) fail('key', 'the secret key is not the signer named in the entry')
   const entry: Entry = { ...unsigned, sig: b64u.encode(ed25519.sign(signingInput(unsigned), secretKey)) }
-  if (canonical(entry).length > MAX_ENTRY_BYTES) fail('size', `an entry is at most ${MAX_ENTRY_BYTES} bytes`)
+  checkSize(canonical(entry))
   return entry
 }
 
@@ -156,7 +161,7 @@ export function checkEntry(value: unknown): Checked {
   checkShape(value)
   const entry = value
   const text = canonical(entry)
-  if (text.length > MAX_ENTRY_BYTES) fail('size', `an entry is at most ${MAX_ENTRY_BYTES} bytes`)
+  checkSize(text)
   const unsigned = unsignedOf(entry)
   const signer = publicKeyFromDid(entry.by ?? entry.profile)!
   if (!verifySignature(b64u.decode(entry.sig), signingInput(unsigned), signer)) fail('signature', 'signature does not verify')
@@ -170,7 +175,7 @@ export function encodeEntry(entry: Entry): string {
 
 /** Read one entry off the wire: the text must be canonical, then every check. */
 export function decodeEntry(text: string): Checked {
-  if (text.length > MAX_ENTRY_BYTES) fail('size', `an entry is at most ${MAX_ENTRY_BYTES} bytes`)
+  checkSize(text)
   let value: Json
   try {
     value = parseCanonical(text)
