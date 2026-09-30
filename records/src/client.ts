@@ -29,19 +29,29 @@ export async function publish(hosts: string[], entries: Entry[]): Promise<Publis
 
 export type Page = { versions: Version[]; cursor: number; refused: Array<{ line: string; reason: string }> }
 
-/** One page of a host's feed after a cursor, in the host's order, each entry checked. */
-export async function readPage(host: string, options: ReadOptions = {}): Promise<Page> {
+/** The largest page a reader takes, and a host serves. */
+export const MAX_PAGE_BYTES = 4 * 1024 * 1024
+/** A read that has not finished by then is given up. */
+export const READ_TIMEOUT_MS = 60_000
+
+/**
+ * One page of a host's feed after a cursor, in the host's order, each entry checked. It throws
+ * on a page over MAX_PAGE_BYTES, or one not read within `timeout` ms (READ_TIMEOUT_MS when omitted).
+ */
+export async function readPage(host: string, options: ReadOptions & { timeout?: number } = {}): Promise<Page> {
   const query = new URLSearchParams()
   if (options.after !== undefined) query.set('after', String(options.after))
   if (options.profile !== undefined) query.set('profile', options.profile)
   if (options.badged) query.set('badged', '1')
   if (options.limit !== undefined) query.set('limit', String(options.limit))
-  const res = await fetch(`${host}/v1/entries?${query}`)
+  const res = await fetch(`${host}/v1/entries?${query}`, { signal: AbortSignal.timeout(options.timeout ?? READ_TIMEOUT_MS) })
   if (!res.ok) throw new Error(`${host} answered ${res.status}`)
   const cursor = Number.parseInt(res.headers.get('forest-cursor') ?? '0', 10)
+  const text = await readText(res, MAX_PAGE_BYTES)
+  if (text === null) throw new Error(`${host} served a page over ${MAX_PAGE_BYTES} bytes`)
   const versions: Version[] = []
   const refused: Page['refused'] = []
-  for (const line of (await res.text()).split('\n')) {
+  for (const line of text.split('\n')) {
     if (!line) continue
     try {
       versions.push(decodeEntry(line))
@@ -50,6 +60,25 @@ export async function readPage(host: string, options: ReadOptions = {}): Promise
     }
   }
   return { versions, cursor, refused }
+}
+
+/** A response's text, or null as soon as it passes `max` bytes. */
+async function readText(res: Response, max: number): Promise<string | null> {
+  if (!res.body) return ''
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let text = ''
+  let size = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) return text + decoder.decode()
+    size += value.length
+    if (size > max) {
+      await reader.cancel()
+      return null
+    }
+    text += decoder.decode(value, { stream: true })
+  }
 }
 
 /** A host's whole feed (for one profile, or badged profiles only), page by page, in its order. */

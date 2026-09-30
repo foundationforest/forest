@@ -2,14 +2,16 @@
 // deletes, pruning, moving hosts, and hosts that misbehave.
 
 import assert from 'node:assert/strict'
+import { createServer } from 'node:http'
+import { connect } from 'node:net'
 import { after, before, describe, test } from 'node:test'
-import { publish, readAll, readPage } from '../src/client.ts'
-import { type Entry, checkEntry, encodeEntry } from '../src/entry.ts'
+import { MAX_PAGE_BYTES, publish, readAll, readPage } from '../src/client.ts'
+import { type Entry, MAX_ENTRY_BYTES, checkEntry, encodeEntry } from '../src/entry.ts'
 import { DAY, type Host } from '../src/host.ts'
 import { Index } from '../src/indexer.ts'
 import { liveContent } from '../src/view.ts'
 import { folderEntry, nextTime, ownerEntry } from '../src/write.ts'
-import { MINUTE, T0, alice, aliceBuyer, bob, offerBody, profileBody, reviewBody } from './fixtures.ts'
+import { MINUTE, T0, alice, aliceBuyer, bob, offerBody, profileBody, reviewBody, sizedEntry } from './fixtures.ts'
 import { Clock, startHost } from './helpers.ts'
 
 describe('two hosts, one index', () => {
@@ -270,6 +272,95 @@ describe('hosts that misbehave', () => {
       assert.deepEqual(results.map((r) => r.error), ['not-held', 'signature', 'future', 'canonical'])
       const notNamed = await h.accept([encodeEntry(folderEntry(alice, { hosts: ['https://elsewhere.example'] }, T0))])
       assert.equal(notNamed[0]!.error, 'not-named')
+    } finally {
+      await h.close()
+    }
+  })
+})
+
+describe('limits: 4 MB a page, the spec’s size an entry, 60 seconds a read', () => {
+  const bytes = (lines: string[]) => lines.reduce((n, l) => n + Buffer.byteLength(l) + 1, 0)
+
+  test('a host ends a page before 4 MB; a reader still gets every entry, page by page', async () => {
+    const h = await startHost({ now: () => T0 })
+    try {
+      const full = Array.from({ length: 66 }, (_, i) => sizedEntry(alice, `note/${i}`, MAX_ENTRY_BYTES))
+      const [outcome] = await publish([h.url], [folderEntry(alice, { hosts: [h.url] }, T0), ...full])
+      assert.ok(outcome!.results.every((r) => r.ok), JSON.stringify(outcome!.results.filter((r) => !r.ok)))
+      const first = h.read()
+      assert.ok(bytes(first.lines) <= MAX_PAGE_BYTES)
+      assert.ok(bytes(first.lines) + MAX_ENTRY_BYTES + 1 > MAX_PAGE_BYTES, 'the next entry would not have fit')
+      assert.ok(first.lines.length < 67)
+      assert.equal((await readAll(h.url)).versions.length, 67)
+    } finally {
+      await h.close()
+    }
+  })
+
+  test('a reader refuses a page over 4 MB, and takes one of exactly 4 MB', async () => {
+    const h = await startHost({ now: () => T0 })
+    try {
+      h.read = () => ({ lines: ['x'.repeat(MAX_PAGE_BYTES)], cursor: 1 })
+      await assert.rejects(readPage(h.url), /over 4194304 bytes/)
+      h.read = () => ({ lines: ['x'.repeat(MAX_PAGE_BYTES - 1)], cursor: 1 })
+      assert.equal((await readPage(h.url)).cursor, 1)
+    } finally {
+      await h.close()
+    }
+  })
+
+  test('a reader refuses an entry over the size cap in bytes, and takes one at it', async () => {
+    const h = await startHost({ now: () => T0 })
+    try {
+      const atCap = sizedEntry(alice, 'note/a', MAX_ENTRY_BYTES)
+      const over = sizedEntry(alice, 'note/b', MAX_ENTRY_BYTES + 1, 1)
+      h.read = () => ({ lines: [encodeEntry(atCap), encodeEntry(over)], cursor: 2 })
+      const page = await readPage(h.url)
+      assert.deepEqual(page.versions.map((v) => v.id), [checkEntry(atCap).id])
+      assert.deepEqual(page.refused.map((r) => r.reason), ['size'])
+    } finally {
+      await h.close()
+    }
+  })
+
+  test('a host refuses an entry over the size cap in bytes', async () => {
+    const h = await startHost({ now: () => T0 })
+    try {
+      const over = sizedEntry(alice, 'note/b', MAX_ENTRY_BYTES + 1, 1)
+      const [outcome] = await publish([h.url], [folderEntry(alice, { hosts: [h.url] }, T0), over])
+      assert.deepEqual(outcome!.results.map((r) => r.error), [undefined, 'size'])
+    } finally {
+      await h.close()
+    }
+  })
+
+  test('a reader gives up on a host that stalls, before its answer or during it', async () => {
+    const stall = createServer((req, res) => {
+      if (req.url!.includes('after=1')) res.writeHead(200, { 'forest-cursor': '1' }).write('{')
+    })
+    await new Promise<void>((resolve) => stall.listen(0, '127.0.0.1', resolve))
+    const url = `http://127.0.0.1:${(stall.address() as { port: number }).port}`
+    try {
+      await assert.rejects(readPage(url, { timeout: 200 }), { name: 'TimeoutError' })
+      await assert.rejects(readPage(url, { after: 1, timeout: 200 }), { name: 'TimeoutError' })
+    } finally {
+      stall.closeAllConnections()
+      await new Promise((resolve) => stall.close(resolve))
+    }
+  })
+
+  test('a host drops a request still arriving after its timeout, with 408', async () => {
+    const h = await startHost({ now: () => T0, timeout: 200 })
+    try {
+      const { port } = new URL(h.url)
+      const socket = connect(Number(port), '127.0.0.1')
+      socket.write('POST /v1/entries HTTP/1.1\r\nhost: x\r\ncontent-length: 100\r\n\r\n{"v"')
+      const answer = await new Promise<string>((resolve) => {
+        let got = ''
+        socket.on('data', (d) => (got += d))
+        socket.on('close', () => resolve(got))
+      })
+      assert.match(answer, /^HTTP\/1\.1 408/)
     } finally {
       await h.close()
     }

@@ -1,9 +1,11 @@
 // Shared test fixtures: the keys/ recipe's pinned test seed, and a few ready-made records.
 
 import { readFileSync } from 'node:fs'
-import { hex } from '../src/bytes.ts'
-import type { Body } from '../src/entry.ts'
-import { keyFromSecret, profileKey, seedFromPrf } from '../src/keys.ts'
+import { ed25519 } from '@noble/curves/ed25519.js'
+import { b64u, hex } from '../src/bytes.ts'
+import { canonical } from '../src/canonical.ts'
+import { type Body, type Entry, type Unsigned, signingInput } from '../src/entry.ts'
+import { type ProfileKey, keyFromSecret, profileKey, seedFromPrf } from '../src/keys.ts'
 
 export const VECTORS = JSON.parse(readFileSync(new URL('../../keys/test/vectors.json', import.meta.url), 'utf8')) as {
   prf: string
@@ -50,3 +52,14 @@ export const reviewBody = (subject: string): Body => ({
   dealId: 'a'.repeat(64),
   createdAt: '2026-09-29T12:00:00Z',
 })
+
+/**
+ * A signed owner entry whose canonical text is exactly `bytes` long, `wide` of its characters
+ * two-byte (é). Signed directly, since signEntry refuses anything over the cap.
+ */
+export function sizedEntry(key: ProfileKey, path: string, bytes: number, wide = 0): Entry {
+  const unsigned = (about: string): Unsigned => ({ v: 1, profile: key.did, path, time: T0, body: { about } })
+  const rest = bytes - canonical({ ...unsigned(''), sig: 'x'.repeat(86) }).length - 2 * wide
+  const u = unsigned('é'.repeat(wide) + 'x'.repeat(rest))
+  return { ...u, sig: b64u.encode(ed25519.sign(signingInput(u), key.secretKey)) }
+}

@@ -14,6 +14,7 @@
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { DatabaseSync } from 'node:sqlite'
+import { MAX_PAGE_BYTES, READ_TIMEOUT_MS } from './client.ts'
 import {
   type Checked,
   type Entry,
@@ -53,6 +54,8 @@ export type HostOptions = {
   /** The public registry: does this key hold a badge? The key is the wallet the badge names. */
   isBadged?: (did: string) => boolean | Promise<boolean>
   policy?: Policy
+  /** Milliseconds a request may take to arrive in full; past that it gets 408. READ_TIMEOUT_MS when omitted. */
+  timeout?: number
 }
 
 export type Result = { i: number; id?: string; ok: boolean; error?: string; message?: string }
@@ -66,6 +69,7 @@ export class Host {
   private readonly now: () => number
   private readonly isBadged: (did: string) => boolean | Promise<boolean>
   private readonly policy?: Policy
+  private readonly timeout: number
   private server?: Server
 
   constructor(options: HostOptions) {
@@ -75,6 +79,7 @@ export class Host {
     this.now = options.now ?? Date.now
     this.isBadged = options.isBadged ?? (() => false)
     this.policy = options.policy
+    this.timeout = options.timeout ?? READ_TIMEOUT_MS
     this.db = new DatabaseSync(options.file ?? ':memory:')
     this.db.exec(`
       PRAGMA journal_mode = WAL;
@@ -227,7 +232,8 @@ export class Host {
   /**
    * Stored entries in arrival order, as canonical text, after a cursor; for one profile, or only
    * profiles the registry says hold a badge. A profile badged later shows from then on; a reader
-   * that wants its earlier entries reads it by profile.
+   * that wants its earlier entries reads it by profile. A page ends before a line that would take
+   * it past MAX_PAGE_BYTES; one entry always fits.
    */
   read(options: ReadOptions = {}): { lines: string[]; cursor: number } {
     const limit = Math.min(Math.max(options.limit ?? 1000, 1), 1000)
@@ -238,8 +244,17 @@ export class Host {
       args.push(options.profile)
     }
     if (options.badged) where.push('profile IN (SELECT profile FROM profiles WHERE badged = 1)')
-    const rows = this.db.prepare(`SELECT seq, text FROM entries WHERE ${where.join(' AND ')} ORDER BY seq LIMIT ?`).all(...args, limit) as Array<{ seq: number; text: string }>
-    return { lines: rows.map((r) => r.text), cursor: rows.length ? rows[rows.length - 1]!.seq : (options.after ?? 0) }
+    const rows = this.db.prepare(`SELECT seq, text, bytes FROM entries WHERE ${where.join(' AND ')} ORDER BY seq LIMIT ?`).all(...args, limit) as Array<{ seq: number; text: string; bytes: number }>
+    const lines: string[] = []
+    let cursor = options.after ?? 0
+    let size = 0
+    for (const row of rows) {
+      size += row.bytes + 1
+      if (size > MAX_PAGE_BYTES) break
+      lines.push(row.text)
+      cursor = row.seq
+    }
+    return { lines, cursor }
   }
 
   /** This host's own view of a profile, from its feed in arrival order: what it uses to decide what to keep. */
@@ -269,7 +284,8 @@ export class Host {
   // HTTP
 
   async listen(port = 0, hostname = '127.0.0.1'): Promise<number> {
-    this.server = createServer((req, res) => {
+    // Node looks for requests past the timeout every 30 seconds by default; every second keeps it near.
+    this.server = createServer({ requestTimeout: this.timeout, connectionsCheckingInterval: 1000 }, (req, res) => {
       this.handle(req, res).catch(() => {
         if (!res.headersSent) res.writeHead(500).end()
       })
