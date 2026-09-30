@@ -6,9 +6,9 @@
     "programId": "FA6ZodkyhMDj9yjzY27dk8JDCtcHnJx8mr45Mx9TfKg8",
     "programData": "5eR7zdTkR1RVRzjJjy8ZLnheBShwfUhgwz24JwYz1scH",
     "upgradeAuthority": "2mz33wBK7FKRXoAi7LptGGTwVQJDbrSyrVwbYRCqwP3A",
-    "lastDeploySlot": 506019385,
-    "soSha256": "85330ec32dd6e5b93e1e31cceda054bffc521026dbeabf55c0d3938687ae259d",
-    "soBytes": 314336,
+    "lastDeploySlot": 506035356,
+    "soSha256": "9826203cb46ea8a327d5e1a726c2b14bd59f16e44f0f3edb3efe23b5f19164ba",
+    "soBytes": 315104,
     "sbpfVersion": "v3",
     "deploySignature": "5eNZjWGMBZagsLRtaqiY2RuJPin7p57pq8ACLqVWjU5RaU5r6otgss8u6W8tMexK1ZxUaHA957EQzSfr4hSGeGzj",
     "deployCost": {
@@ -21,7 +21,32 @@
       "balanceBefore": 2513640720,
       "balanceAfter": 913526880,
       "spent": 1600113840
-    }
+    },
+    "upgrades": [
+      {
+        "slot": 506035356,
+        "signature": "5oestkAS8zQuzzFRubpqgun5vkNrdJx2s2msSTv9nkLxFQGbActgnuE2Bb3gTsQ9Av6vWE6t5sTY3V7N1vJj9a3v",
+        "soSha256": "9826203cb46ea8a327d5e1a726c2b14bd59f16e44f0f3edb3efe23b5f19164ba",
+        "soBytes": 315104,
+        "cost": {
+          "bytes": 315104,
+          "previousBytes": 314336,
+          "bufferRent": 1601566520,
+          "extendRent": 52019200,
+          "writes": 312,
+          "fees": 1575000,
+          "total": 1655160720,
+          "spend": 53594200,
+          "balanceBefore": 4904842480,
+          "balanceAfter": 4851248280,
+          "spent": 53594200,
+          "extendBytes": 10240
+        },
+        "note": "Solana CLI 4.2.2 extended the program data by 10,240 bytes for the 768 the build needed, in the upgrade's own transaction; that rent stays in the program data (now 324,576 bytes). The cost was first computed with the 768 alone, and the script's formula corrected after.",
+        "what": "the same address, upgraded in place: a Token-2022 mint that cannot be transferred is also refused at create (NonTransferable, 6030)",
+        "programDataBytes": 324576
+      }
+    ]
   },
   "transactions": [
     {
@@ -88,6 +113,26 @@
       "program": "escrow-v2",
       "what": "split: buyer and seller both sign 60/40; 1.20 Open USD-shaped dollar to the seller, 0.80 back to the buyer",
       "signature": "4tRka1hL8Dg9wPhq456X8qUGfweMPptSsMZHQrX23KEP8vFjyycUgySiLmHGGGzfFVgYiPgNFumWwXUjHVKr3BE8"
+    },
+    {
+      "program": "escrow-v2",
+      "what": "upgrade in place: the escrow, v2, now 315104 bytes (sha256 9826203cb46ea8a3…), same address",
+      "signature": "5oestkAS8zQuzzFRubpqgun5vkNrdJx2s2msSTv9nkLxFQGbActgnuE2Bb3gTsQ9Av6vWE6t5sTY3V7N1vJj9a3v"
+    },
+    {
+      "program": "escrow-v2",
+      "what": "close: the first v2 deploy, B3p13G…, its deposit to the deploy key",
+      "signature": "ixgDZxawthhWkjFgJ148wn9egD5L8wKX4ZWci7zzZWQxndWurhXD7eM5nLHPxWMms1ki7i1HnyE4k37YfXo4U1i"
+    },
+    {
+      "program": "escrow-v2",
+      "what": "invoice: the seller opens an escrow naming the buyer, 1.00 Open USD-shaped dollar, no options, the payer fronting the rent",
+      "signature": "3GSF5jb7mwG7tjxcPK9pcjGt3nWJr3sLVZhCza6caRmxSTop2hyrWbExWufdZPJAJP7n9NnxzXCJFwzu21kDt9X5"
+    },
+    {
+      "program": "escrow-v2",
+      "what": "one tap: the deposit address made first, then the buyer pays 1.00 Open USD-shaped dollar into it and releases it to the seller, in one transaction",
+      "signature": "n4VhujBDwBZfBT7RGUah1m6AaE9iXabYAF2WZtz1ekBWa858UFgikPyRE6ATVoetidRTNtusku7cJbASXSEsAC3"
     }
   ],
   "deals": {
@@ -194,6 +239,31 @@
         "rentRecipient": "4kFff36dwTKhK8tEm4m9QiyRCRcj67aXsYgkKMxwLuqE",
         "payer": "9CKUm2s7nwT7HrCpjtaffNH3PnUUVyQr2gELjHrWYBUd"
       }
+    },
+    "invoice, Token-2022, after the upgrade": {
+      "what": "the seller invoices 1.00 Open USD-shaped dollar; the buyer checks it, then, in one transaction, the deposit address made first, pays and releases; nobody marks it",
+      "id": "104415348337825950",
+      "signatures": {
+        "invoice": "3GSF5jb7mwG7tjxcPK9pcjGt3nWJr3sLVZhCza6caRmxSTop2hyrWbExWufdZPJAJP7n9NnxzXCJFwzu21kDt9X5",
+        "one tap": "n4VhujBDwBZfBT7RGUah1m6AaE9iXabYAF2WZtz1ekBWa858UFgikPyRE6ATVoetidRTNtusku7cJbASXSEsAC3"
+      },
+      "escrow": "2GPnA88UjFHA8WA6nA3WzQm7eaNGzStFYpEfiEd7yjPz",
+      "mint": "g55mjY4swDAFt16TZds3tsmoK55qkdhDLn4kb32RGZz",
+      "receipt": {
+        "status": "ended",
+        "outcome": "releasedToSeller",
+        "amount": "1000000",
+        "toSeller": "1000000",
+        "toBuyer": "0",
+        "creator": "seller",
+        "createdAt": "1790802321",
+        "fundedAt": "1790802323",
+        "endedAt": "1790802323",
+        "objection": null,
+        "objectedAt": null,
+        "rentRecipient": "3Ttfgh6ATW9j5cYMttLiZuVub77hQjkDiZDDhzqyooTf",
+        "payer": "9CKUm2s7nwT7HrCpjtaffNH3PnUUVyQr2gELjHrWYBUd"
+      }
     }
   },
   "openUsdShaped": {
@@ -218,7 +288,7 @@
   },
   "earlier": [
     {
-      "note": "The first v2 deploy, of the program before it took Token-2022 mints: classic tokens only, its ways out without the mint account, so the client here no longer builds its instructions. Left as it is at its address, upgrade authority on the deploy key, never upgraded; its label was escrow-v2-program.",
+      "note": "The first v2 deploy, of the program before it took Token-2022 mints: classic tokens only, its ways out without the mint account, so the client here no longer builds its instructions. Never upgraded; closed on 2026-09-30 (`closed`), so its id can never hold a program again; its label was escrow-v2-program.",
       "escrow": {
         "programId": "B3p13G8xvNvUrAnaXg9AUtwffBAUHcp6XoMwGV2jKPi7",
         "programData": "HBT5QfC4yymLW9tjHhNsQk1XgL7o3gXEjyRPHCWLgjEM",
@@ -328,7 +398,38 @@
             "payer": "9CKUm2s7nwT7HrCpjtaffNH3PnUUVyQr2gELjHrWYBUd"
           }
         }
+      },
+      "closed": {
+        "what": "closed: superseded by FA6Z…, its program data's deposit returned to the deploy key. Its two receipts stay as accounts no program owns any more, readable, their rent locked for good.",
+        "date": "2026-09-30",
+        "signature": "ixgDZxawthhWkjFgJ148wn9egD5L8wKX4ZWci7zzZWQxndWurhXD7eM5nLHPxWMms1ki7i1HnyE4k37YfXo4U1i",
+        "slot": 506034556,
+        "programDataLamports": 1482044280,
+        "returnedToDeployKey": 1482039280,
+        "fee": 5000,
+        "strandedAccounts": 2,
+        "strandedLamports": 4399280
       }
     }
-  ]
+  ],
+  "upgradeChecks": {
+    "what": "after the upgrade in slot 506035356: deal 1 again in the Open USD-shaped dollar, and a non-transferable mint's create simulated",
+    "signatures": {
+      "one more to the buyer": "2SKJcH7x4evX8zi2nZHM6NKxyMLpL14RkrQBpwYo2c1uQrkCpHKNvi36uh3YsPoDegi1yU4X1B9Jn5AezEQK5Aq7",
+      "a non-transferable mint": "2J15JfNVK8Sy52EPDcEnTirfmzcCS9az1qbb6jGF7pSLqVW7sa4Viomo18yFxq9xjdX9orVHU5xyvWawkaZQ9h9j"
+    },
+    "nonTransferableMint": "FVw9HyNs8rZZP7Q5V1V9L5xVCqgZAwavPSDc1Jzrm6yk",
+    "nonTransferableCreate": {
+      "simulated": true,
+      "err": {
+        "InstructionError": [
+          0,
+          {
+            "Custom": 6030
+          }
+        ]
+      },
+      "log": "AnchorError thrown in src/lib.rs:487. Error Code: NonTransferable. Error Number: 6030. Error Message: a token that cannot be transferred is not accepted: nothing could be paid into the escrow, and nothing minted into it could leave."
+    }
+  }
 }

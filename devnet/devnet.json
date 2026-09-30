@@ -35,7 +35,18 @@
     "config": "4nxop5nYuJHyRKgLn6yj6vvDB1LZTM7wDykH3N8Qsn2y",
     "list0": "7PMx9JpaP7ZwewZ78833FomUbHQgDFFERM9WuvyRurjD",
     "codeTree": "82eKSXYhRAQGL3Y2FtFYc9fFQQnxhPbFHwGAxjvNxGJX",
-    "usdcMint": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
+    "usdcMint": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+    "closed": {
+      "what": "closed: superseded by the registry in registry/devnet/devnet.json (Hyh5\u2026), its program data's deposit returned to the deploy key. Its config, list, code tree and codes stay as accounts no program owns any more, readable, their rent locked for good; nothing can register here again.",
+      "date": "2026-09-30",
+      "signature": "3Nzwf1R8dhDQfMavjrRhYhNu941o4KAfoicYeerytR7rp5uRoTekVmZmxWPrPg7L3foUWVPcCnShyVe2C8podepG",
+      "slot": 506034586,
+      "programDataLamports": 1549913080,
+      "returnedToDeployKey": 1549908080,
+      "fee": 5000,
+      "strandedAccounts": 7,
+      "strandedLamports": 42113200
+    }
   },
   "escrow": {
     "programId": "3vAVLwiwFkCUG4AHV3gK3t15HoyRSuKNEuBFvvy9CbeR",
@@ -210,6 +221,11 @@
       "program": "escrow",
       "what": "split: buyer and seller both sign 60/40; 1.80 to the seller, 1.20 back to the buyer",
       "signature": "2jkrKGRZFTZdi3PFv8YVJgdPTUX9Ypm9tuyEx2U7xJcThXbRaekvyseGa8a5ERbBGQZA6MXq7FyC2f9FUL1YaHsZ"
+    },
+    {
+      "program": "registry",
+      "what": "close: the first registry, 8sUy\u2026, its deposit to the deploy key",
+      "signature": "3Nzwf1R8dhDQfMavjrRhYhNu941o4KAfoicYeerytR7rp5uRoTekVmZmxWPrPg7L3foUWVPcCnShyVe2C8podepG"
     }
   ],
   "tokenAccounts": {

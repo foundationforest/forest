@@ -870,7 +870,7 @@ function readerOf(accounts: Map<string, { owner: PublicKey; data: Uint8Array }>)
   }
 }
 
-test('a mint is read with its token program and decimals; wrapped SOL and a transfer fee are refused', () => {
+test('a mint is read with its token program and decimals; wrapped SOL, a transfer fee and a non-transferable mint are refused', () => {
   assert.deepEqual(tokenOf(mint, { owner: TOKEN_PROGRAM_ID, data: mintBytes(null) }), { mint, program: TOKEN_PROGRAM_ID, decimals: 6 })
   const openUsdShaped = mintBytes([
     [3, Buffer.alloc(32)], // mint close authority
@@ -882,6 +882,11 @@ test('a mint is read with its token program and decimals; wrapped SOL and a tran
   assert.deepEqual(tokenOf(mint, { owner: TOKEN_2022_PROGRAM_ID, data: openUsdShaped }), { mint, program: TOKEN_2022_PROGRAM_ID, decimals: 6 })
   assert.throws(() => tokenOf(mint, { owner: TOKEN_2022_PROGRAM_ID, data: mintBytes([[1, Buffer.alloc(108)]]) }), /TransferFee/)
   assert.throws(() => tokenOf(mint, { owner: TOKEN_2022_PROGRAM_ID, data: mintBytes([[16, Buffer.alloc(64)]]) }), /TransferFee/, 'the confidential fee too')
+  assert.throws(() => tokenOf(mint, { owner: TOKEN_2022_PROGRAM_ID, data: mintBytes([[9, Buffer.alloc(0)]]) }), /NonTransferable/)
+  // Interest-bearing (10) and scaled (25) mints are accepted: the escrow deals in raw amounts.
+  for (const [type, len] of [[10, 52], [25, 56]]) {
+    assert.deepEqual(tokenOf(mint, { owner: TOKEN_2022_PROGRAM_ID, data: mintBytes([[type, Buffer.alloc(len)]]) }).program, TOKEN_2022_PROGRAM_ID)
+  }
   assert.throws(() => tokenOf(NATIVE_MINT, { owner: TOKEN_PROGRAM_ID, data: mintBytes(null) }), /NativeMint/)
   assert.throws(() => tokenOf(NATIVE_MINT_2022, { owner: TOKEN_2022_PROGRAM_ID, data: mintBytes([]) }), /NativeMint/)
   assert.throws(() => tokenOf(mint, { owner: PROGRAM_ID, data: mintBytes(null) }), /not a mint of either token program/)

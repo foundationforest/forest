@@ -18,8 +18,9 @@
 # 2. Build. escrow/v2/program's Cargo.toml, Cargo.lock and src are copied into
 #    escrow/v2/devnet/target/ (ignored), `declare_id!` alone is replaced with the v2 id, checked to
 #    appear exactly once, and the copy is built for SBPF v3.
-# 3. Deploy, unless the id already holds a program: the exact cost computed first as
-#    devnet/deploy.sh computes it, refused (exit 3) if the deploy key holds less. Writes go over RPC.
+# 3. Deploy a fresh id, or upgrade it in place when it holds other bytes (the same bytes are left
+#    as they are): the exact cost computed first as devnet/deploy.sh computes it, refused (exit 3)
+#    if the deploy key holds less. Writes go over RPC.
 # 4. Check the deployed bytes are the built ones, and record everything public in
 #    escrow/v2/devnet/devnet.json.
 #
@@ -107,14 +108,26 @@ rm -f "$out/program/target/deploy/"*-keypair.json
 built=$(sha256sum <"$so" | cut -d' ' -f1)
 echo "built $(wc -c <"$so") bytes, SBPF v$(node -e "process.stdout.write(String(require('fs').readFileSync(process.argv[1]).readUInt32LE(0x30)))" "$so"), sha256 $built"
 
-# 3. Deploy.
-deployed_now=false
-if solana program show "$id" "${cli[@]}" >/dev/null 2>&1; then
-  echo "already deployed at $id"
-else
-  cost=$(node - "$rpc" "$so" <<'JS'
+# 3. Deploy, or upgrade in place. A fresh id is deployed; an id already holding these bytes is left
+#    as it is; an id holding other bytes is upgraded at the same address, its program data extended
+#    first if the build is longer (the CLI's auto-extend). Either way the cost is computed first
+#    and refused (exit 3) if the deploy key holds less. An upgrade holds a buffer's rent while it
+#    writes, which comes back at the upgrade; it spends the fees and any extension's rent.
+mode=deploy
+if solana program show "$id" "${cli[@]}" --output json >"$out/before.json" 2>/dev/null; then
+  solana program dump "$id" "$out/before.so" "${cli[@]}" >/dev/null
+  if [ "$(head -c "$(wc -c <"$so")" "$out/before.so" | sha256sum | cut -d' ' -f1)" = "$built" ]; then
+    mode=none
+    echo "already deployed at $id, these bytes"
+  else
+    mode=upgrade
+    echo "deployed at $id with other bytes: upgrading in place"
+  fi
+fi
+if [ "$mode" != none ]; then
+  cost=$(node - "$rpc" "$so" "$mode" "$out/before.json" <<'JS'
 const fs = require('fs')
-const [rpc, so] = process.argv.slice(2)
+const [rpc, so, mode, beforePath] = process.argv.slice(2)
 const bytes = fs.readFileSync(so)
 const CHUNK = 1012 // Solana CLI 4.2.2: 1,232 minus an empty write transaction's 219 bytes, minus 1
 let writes = 0
@@ -127,22 +140,40 @@ async function rent(size) {
 }
 ;(async () => {
   const programDataRent = await rent(45 + bytes.length)
-  const programRent = await rent(36)
-  const fees = 10_000 + 5_000 * writes + 10_000
-  console.log(JSON.stringify({ bytes: bytes.length, programDataRent, programRent, writes, fees, total: programDataRent + programRent + fees }))
+  if (mode === 'deploy') {
+    const programRent = await rent(36)
+    const fees = 10_000 + 5_000 * writes + 10_000
+    console.log(JSON.stringify({ bytes: bytes.length, programDataRent, programRent, writes, fees, total: programDataRent + programRent + fees, spend: programDataRent + programRent + fees }))
+    return
+  }
+  // The buffer (37 bytes of header), made with the payer and the buffer key signing; the writes;
+  // the upgrade. If the build is longer than the program data holds, Solana CLI 4.2.2 extends it
+  // in the upgrade's own transaction by at least 10,240 bytes (on 2026-09-30 it added 10,240 for
+  // 768 needed), and that rent stays in the program data, back only if the program is closed.
+  const before = JSON.parse(fs.readFileSync(beforePath, 'utf8'))
+  const bufferRent = await rent(37 + bytes.length)
+  const extendBytes = bytes.length > before.dataLen ? Math.max(bytes.length - before.dataLen, 10_240) : 0
+  const extend = extendBytes > 0 ? Math.max(0, (await rent(45 + before.dataLen + extendBytes)) - before.lamports) : 0
+  const fees = 10_000 + 5_000 * writes + 5_000
+  console.log(JSON.stringify({ bytes: bytes.length, previousBytes: before.dataLen, extendBytes, bufferRent, extendRent: extend, writes, fees, total: bufferRent + extend + fees, spend: extend + fees }))
 })()
 JS
 )
   need=$(node -e "process.stdout.write(String(JSON.parse(process.argv[1]).total))" "$cost")
+  spend=$(node -e "process.stdout.write(String(JSON.parse(process.argv[1]).spend))" "$cost")
   have=$(solana balance "$deployer" "${cli[@]}" --lamports | cut -d' ' -f1)
   echo "cost $cost; the deploy key holds $have lamports"
-  [ "$have" -ge "$need" ] || { echo "the deploy key holds less than the deploy costs; nothing deployed" >&2; exit 3; }
-  solana program deploy "${cli[@]}" --upgrade-authority "$keys/deploy.json" --program-id "$keys/$label.json" \
-    --use-rpc --output json "$so" >"$out/deploy.json"
+  [ "$have" -ge "$need" ] || { echo "the deploy key holds less than the $mode needs; nothing sent" >&2; exit 3; }
+  if [ "$mode" = deploy ]; then
+    solana program deploy "${cli[@]}" --upgrade-authority "$keys/deploy.json" --program-id "$keys/$label.json" \
+      --use-rpc --output json "$so" >"$out/deploy.json"
+  else
+    solana program deploy "${cli[@]}" --upgrade-authority "$keys/deploy.json" --program-id "$id" \
+      --use-rpc --output json "$so" >"$out/deploy.json"
+  fi
   after=$(solana balance "$deployer" "${cli[@]}" --lamports | cut -d' ' -f1)
   printf '{"cost":%s,"balanceBefore":%s,"balanceAfter":%s}\n' "$cost" "$have" "$after" >"$out/spend.json"
-  echo "spent $((have - after)) lamports; computed $need"
-  deployed_now=true
+  echo "spent $((have - after)) lamports; computed $spend"
 fi
 
 # 4. Check and record.
@@ -152,9 +183,9 @@ deployed=$(head -c "$(wc -c <"$so")" "$out/dumped.so" | sha256sum | cut -d' ' -f
 [ "$built" = "$deployed" ] || { echo "the deployed bytes are not the built ones" >&2; exit 1; }
 echo "deployed bytes match the build ($built)"
 
-node - "$record" "$out" "$id" "$built" "$so" "$deployed_now" <<'JS'
+node - "$record" "$out" "$id" "$built" "$so" "$mode" <<'JS'
 const fs = require('fs')
-const [recordPath, out, id, sha, so, now] = process.argv.slice(2)
+const [recordPath, out, id, sha, so, mode] = process.argv.slice(2)
 const record = fs.existsSync(recordPath) ? JSON.parse(fs.readFileSync(recordPath, 'utf8')) : {
   note: 'The devnet deploy of the escrow, v2, beside v1 (devnet/devnet.json), which it does not touch. Public keys, addresses and signatures only. The program id is derived from the devnet phrase under the label escrow-v2-program-2; the other keys are the ones devnet/devnet.json names. Written by escrow/v2/devnet/deploy.sh and escrow/v2/client/scripts/devnet.ts.',
   cluster: 'devnet',
@@ -169,13 +200,20 @@ p.lastDeploySlot = show.lastDeploySlot
 p.soSha256 = sha
 p.soBytes = fs.statSync(so).size
 p.sbpfVersion = `v${fs.readFileSync(so).readUInt32LE(0x30)}`
-if (now === 'true') {
+if (mode !== 'none') {
   const d = JSON.parse(fs.readFileSync(`${out}/deploy.json`, 'utf8'))
   const s = JSON.parse(fs.readFileSync(`${out}/spend.json`, 'utf8'))
-  p.deploySignature = d.signature
-  p.deployCost = { ...s.cost, balanceBefore: s.balanceBefore, balanceAfter: s.balanceAfter, spent: s.balanceBefore - s.balanceAfter }
+  const cost = { ...s.cost, balanceBefore: s.balanceBefore, balanceAfter: s.balanceAfter, spent: s.balanceBefore - s.balanceAfter }
   record.transactions ??= []
-  record.transactions.push({ program: 'escrow-v2', what: `deploy: the escrow, v2 (SBPF ${p.sbpfVersion}), upgrade authority kept on the deploy key`, signature: d.signature })
+  if (mode === 'deploy') {
+    p.deploySignature = d.signature
+    p.deployCost = cost
+    record.transactions.push({ program: 'escrow-v2', what: `deploy: the escrow, v2 (SBPF ${p.sbpfVersion}), upgrade authority kept on the deploy key`, signature: d.signature })
+  } else {
+    p.upgrades ??= []
+    p.upgrades.push({ slot: show.lastDeploySlot, signature: d.signature, soSha256: sha, soBytes: p.soBytes, cost })
+    record.transactions.push({ program: 'escrow-v2', what: `upgrade in place: the escrow, v2, now ${p.soBytes} bytes (sha256 ${sha.slice(0, 16)}…), same address`, signature: d.signature })
+  }
 }
 fs.writeFileSync(recordPath, JSON.stringify(record, null, 2) + '\n')
 JS

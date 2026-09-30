@@ -12,7 +12,8 @@
 //!
 //! Money in, and out only when the two sides agree. One shape. An amount of a token held between
 //! two keys, buyer and seller. The token is any mint of the classic SPL Token program or of
-//! Token-2022, but for wrapped SOL and a Token-2022 mint with a transfer fee. Each escrow has its own deposit account, funded by a
+//! Token-2022, but for wrapped SOL and a Token-2022 mint with a transfer fee or that cannot be
+//! transferred. Each escrow has its own deposit account, funded by a
 //! plain transfer from anywhere; the escrow counts as funded when that account holds at least the
 //! agreed amount. Once funded it has three ways out: the buyer releases everything to the
 //! seller, the seller releases everything to the buyer, or both sign a split. Receiving in full
@@ -143,7 +144,7 @@ pub mod forest_escrow {
         };
         require_keys_neq!(ctx.accounts.mint.key(), NATIVE_MINT, EscrowError::NativeMint);
         require_keys_neq!(ctx.accounts.mint.key(), NATIVE_MINT_2022, EscrowError::NativeMint);
-        refuse_transfer_fee(&ctx.accounts.mint)?;
+        refuse_extensions(&ctx.accounts.mint)?;
         require!(args.amount > 0, EscrowError::AmountZero);
         let (timer_days, timer_to) = match args.timer {
             Some(t) => {
@@ -465,12 +466,14 @@ fn divide(balance: u64, seller_bps: u16) -> Result<(u64, u64)> {
     Ok((to_seller, to_buyer))
 }
 
-/// Refuse a Token-2022 mint with a transfer fee, or a confidential one. Every way out pays the
-/// whole balance and each side must receive what was agreed; a fee withheld on the way in and
-/// again on the way out breaks both, and its rate can be raised after creation. A mint's
-/// extensions are fixed when it is made, so checking once, here, is enough. A classic mint has no
-/// extensions.
-fn refuse_transfer_fee(mint: &InterfaceAccount<Mint>) -> Result<()> {
+/// Refuse the two Token-2022 mints an escrow cannot hold. One with a transfer fee, or a
+/// confidential one: every way out pays the whole balance and each side must receive what was
+/// agreed; a fee withheld on the way in and again on the way out breaks both, and its rate can be
+/// raised after creation. One that cannot be transferred: nothing could be paid in, and what its
+/// issuer minted into a deposit account could never leave, so the escrow and both rents would be
+/// stuck. Every other extension is the issuer's to have. A mint's extensions are fixed when it is
+/// made, so checking once, here, is enough. A classic mint has no extensions.
+fn refuse_extensions(mint: &InterfaceAccount<Mint>) -> Result<()> {
     let info = mint.to_account_info();
     if *info.owner != spl_token_2022::ID {
         return Ok(());
@@ -481,6 +484,7 @@ fn refuse_transfer_fee(mint: &InterfaceAccount<Mint>) -> Result<()> {
     for fee in [ExtensionType::TransferFeeConfig, ExtensionType::ConfidentialTransferFeeConfig] {
         require!(!types.contains(&fee), EscrowError::TransferFee);
     }
+    require!(!types.contains(&ExtensionType::NonTransferable), EscrowError::NonTransferable);
     Ok(())
 }
 
@@ -631,8 +635,8 @@ pub struct Create<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
     /// A mint of the classic SPL Token program or of Token-2022, owned by `token_program`. Wrapped
-    /// SOL of either program is refused by name, and a Token-2022 mint with a transfer fee by its
-    /// extensions (`refuse_transfer_fee`).
+    /// SOL of either program is refused by name, and a Token-2022 mint with a transfer fee or that
+    /// cannot be transferred by its extensions (`refuse_extensions`).
     #[account(mint::token_program = token_program)]
     pub mint: InterfaceAccount<'info, Mint>,
     /// The classic SPL Token program or Token-2022: whichever owns the mint.

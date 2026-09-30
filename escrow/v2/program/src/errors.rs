@@ -64,4 +64,6 @@ pub enum EscrowError {
     // Both token programs from here on.
     #[msg("a token with a transfer fee is not accepted: the fee would take part of every payment in and out")]
     TransferFee,
+    #[msg("a token that cannot be transferred is not accepted: nothing could be paid into the escrow, and nothing minted into it could leave")]
+    NonTransferable,
 }

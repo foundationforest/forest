@@ -15,6 +15,9 @@
 //    program, a metadata pointer, pause, metadata; and a freeze authority), the payer key holding
 //    every issuer role, and three of it minted to the buyer. Then deals 1 and 2 again in it, so
 //    a one tap and both payouts of a split cross Token-2022.
+// 4. After the upgrade in place that refuses a non-transferable mint: deal 1 once more in the
+//    Token-2022 dollar (the buyer topped up to one if it holds less), and a non-transferable
+//    Token-2022 mint made there, its `create` simulated, which must fail with `NonTransferable`.
 //
 // A payer key pays every network fee and fronts every rent, the way a fee payer would, and is
 // recorded as the escrow's payer. <dir> holds payer.json, buyer.json and seller.json, read and never
@@ -30,6 +33,7 @@ import { fileURLToPath } from 'node:url'
 import {
   AccountState,
   createAssociatedTokenAccountIdempotentInstruction,
+  createInitializeNonTransferableMintInstruction,
   createInitializeDefaultAccountStateInstruction,
   createInitializeMetadataPointerInstruction,
   createInitializeMint2Instruction,
@@ -395,5 +399,50 @@ await objectionDeal('objection', classic, 'test dollar')
 const ousd = await openUsdShaped()
 await invoiceDeal('invoice, Token-2022', ousd, 'Open USD-shaped dollar')
 await objectionDeal('objection, Token-2022', ousd, 'Open USD-shaped dollar')
+
+// 4. After the upgrade in place.
+const upgraded = record.escrow.upgrades?.at(-1)
+if (upgraded) {
+  const buyerTokens = refundAddress(buyer.publicKey, ousd.mint, ousd.program)
+  const d = (record.upgradeChecks ??= { what: `after the upgrade in slot ${upgraded.slot}: deal 1 again in the Open USD-shaped dollar, and a non-transferable mint's create simulated`, signatures: {} })
+  if (!record.deals['invoice, Token-2022, after the upgrade'] && (await tokens(buyerTokens, ousd)) < 1_000_000n) {
+    const sig = await send([createMintToCheckedInstruction(ousd.mint, buyerTokens, payer.publicKey, 1_000_000n, 6, [], TOKEN_2022_PROGRAM_ID)], [payer])
+    d.signatures['one more to the buyer'] = sig
+    save()
+    console.log(`  ${sig}  one more Open USD-shaped dollar to the buyer`)
+  }
+  await invoiceDeal('invoice, Token-2022, after the upgrade', ousd, 'Open USD-shaped dollar')
+
+  const file = join(keysDir!, 'non-transferable-mint.json')
+  if (!existsSync(file)) writeFileSync(file, JSON.stringify([...Keypair.generate().secretKey]), { mode: 0o600 })
+  const nt = key('non-transferable-mint')
+  d.nonTransferableMint = nt.publicKey.toBase58()
+  if (!(await connection.getAccountInfo(nt.publicKey))) {
+    const space = getMintLen([ExtensionType.NonTransferable])
+    const sig = await send(
+      [
+        SystemProgram.createAccount({ fromPubkey: payer.publicKey, newAccountPubkey: nt.publicKey, lamports: await connection.getMinimumBalanceForRentExemption(space), space, programId: TOKEN_2022_PROGRAM_ID }),
+        createInitializeNonTransferableMintInstruction(nt.publicKey, TOKEN_2022_PROGRAM_ID),
+        createInitializeMint2Instruction(nt.publicKey, 6, payer.publicKey, null, TOKEN_2022_PROGRAM_ID),
+      ],
+      [payer, nt],
+    )
+    d.signatures['a non-transferable mint'] = sig
+    save()
+    console.log(`  ${sig}  a non-transferable Token-2022 mint`)
+  }
+  const terms = termsFor(undefined, { seller: seller.publicKey, amount: 1_000_000n, id: randomId() })
+  const create = invoiceIx({ seller: seller.publicKey, buyer: buyer.publicKey, payer: payer.publicKey, mint: nt.publicKey, tokenProgram: TOKEN_2022_PROGRAM_ID, terms, programId })
+  const tx = new Transaction().add(create)
+  tx.feePayer = payer.publicKey
+  tx.recentBlockhash = (await connection.getLatestBlockhash('confirmed')).blockhash
+  tx.sign(payer, seller)
+  const sim = await connection.simulateTransaction(tx)
+  const refused = (sim.value.logs ?? []).find((l) => l.includes('Error Code: NonTransferable'))
+  if (!sim.value.err || !refused) throw new Error(`create with a non-transferable mint was not refused: ${JSON.stringify(sim.value.err)}`)
+  d.nonTransferableCreate = { simulated: true, err: sim.value.err, log: refused.replace(/^Program log: /, '') }
+  save()
+  console.log(`  a non-transferable mint's create, simulated: ${d.nonTransferableCreate.log}`)
+}
 
 console.log('done')

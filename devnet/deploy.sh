@@ -98,6 +98,10 @@ case "$what" in registry|escrow) ;; *) echo "usage: devnet/deploy.sh registry|es
 name=$what
 
 id=$(node -e "process.stdout.write(require(process.argv[1])['$name'].programId)" "$json")
+# A closed program's id can never hold a program again: refuse before writing a buffer.
+if node -e "process.exit(require(process.argv[1])['$name'].closed ? 0 : 1)" "$json"; then
+  echo "$name: $id was closed (devnet/devnet.json, $name.closed); nothing sent" >&2; exit 1
+fi
 [ "$(solana-keygen pubkey "$keys/$name-program.json")" = "$id" ] || { echo "$name: the program key is not $id" >&2; exit 1; }
 so="$out/forest_$name.so"
 [ -f "$so" ] || { echo "no $so: run devnet/build.sh first" >&2; exit 1; }

@@ -174,8 +174,9 @@ export type Token = { mint: PublicKey; program: PublicKey; decimals: number }
 /**
  * The mint, from its account as read from the chain (`owner` and `data`). Throws with the
  * program's own error name where `create` would refuse it: wrapped SOL of either program, or a
- * Token-2022 mint with a transfer fee. Whatever else an issuer can do with its mint (freeze,
- * pause, a permanent delegate, a transfer hook) is accepted; `escrow/v2/README.md` lists it.
+ * Token-2022 mint with a transfer fee or that cannot be transferred. Whatever else an issuer can
+ * do with its mint (freeze, pause, a permanent delegate, a transfer hook) is accepted;
+ * `escrow/v2/README.md` lists it.
  */
 export function tokenOf(mint: PublicKey, account: { owner: PublicKey; data: Uint8Array }): Token {
   const program = account.owner
@@ -188,6 +189,7 @@ export function tokenOf(mint: PublicKey, account: { owner: PublicKey; data: Uint
   if (types.includes(ExtensionType.TransferFeeConfig) || types.includes(CONFIDENTIAL_TRANSFER_FEE_CONFIG)) {
     throw new Error('TransferFee: a token with a transfer fee is not accepted')
   }
+  if (types.includes(ExtensionType.NonTransferable)) throw new Error('NonTransferable: a token that cannot be transferred is not accepted')
   return { mint, program, decimals: state.decimals }
 }
 

@@ -10,9 +10,9 @@ here is shipped, and no paid review has happened.
 
 | | |
 |---|---|
-| Program | `forest_escrow_v2`, version byte 2, `FoRE2EscrowV2objectsTimerFundedAtPayer222222` for local work, `FA6ZodkyhMDj9yjzY27dk8JDCtcHnJx8mr45Mx9TfKg8` on devnet (the first v2 deploy, classic only, at `B3p13G8xvNvUrAnaXg9AUtwffBAUHcp6XoMwGV2jKPi7`, untouched) |
+| Program | `forest_escrow_v2`, version byte 2, `FoRE2EscrowV2objectsTimerFundedAtPayer222222` for local work, `FA6ZodkyhMDj9yjzY27dk8JDCtcHnJx8mr45Mx9TfKg8` on devnet, upgraded in place once (the first v2 deploy, classic only, at `B3p13G8xvNvUrAnaXg9AUtwffBAUHcp6XoMwGV2jKPi7`, closed) |
 | Framework | Anchor 1.2 with `anchor-spl`'s token interface, `cargo build-sbf --arch v3` (Solana CLI 4.2.2), no IDL, no build warning |
-| Testing | LiteSVM, 86 tests: 64 on a classic mint, 22 on a Token-2022 mint made with Open USD's mainnet extensions (compared with the mainnet account's bytes), with a builtin test hook and a builtin spy standing in for Token-2022; a mutation check of each new rule (removing it fails at least one test); four deals on devnet through the client, two of them in a Token-2022 dollar with Open USD's extensions. **Not carried over from v1:** the Trident fuzzer and the local-validator test |
+| Testing | LiteSVM, 88 tests: 64 on a classic mint, 24 on Token-2022 mints (one made with Open USD's mainnet extensions compared with the mainnet account's bytes; others with one extension each), with a builtin test hook and a builtin spy standing in for Token-2022; a mutation check of each new rule (removing it fails at least one test); five deals on devnet through the client, three of them in a Token-2022 dollar with Open USD's extensions, and a non-transferable mint's `create` refused there. **Not carried over from v1:** the Trident fuzzer and the local-validator test |
 | Risk level | 🟡 Medium by the skill's table; treated as 🔴 **Critical**: sealed at deploy, holding other people's money |
 | Upgrade authority | Removed at mainnet deploy (`--final`, `README.md`). No admin key, no config, no pause, no fee. On devnet it stays on the deploy key |
 
@@ -32,10 +32,11 @@ be anyone, a party included; every way out pays the whole balance; anyone may se
    payer fronts the rent and charges the person for it (Kora, as `feepayer/` runs it), what the
    rent cuts free later goes to the fee payer's key, which was already paid for it. Intended
    (Carlos, 2026-09-30): the fee payer keeps it and says so plainly to people. See Known limit 3.
-9. **Any Token-2022 mint without a transfer fee, the issuer's powers included.** The skill says to
-   refuse a permanent delegate, an outside freeze authority and confidential transfers (§23.1), and
-   a mint close authority (§17). v2 refuses only the transfer fee and wrapped SOL; everything else
-   an issuer can do is the issuer's (Carlos, 2026-09-30), listed plainly in `README.md` ("What a
+9. **Any Token-2022 mint without a transfer fee that can be transferred, the issuer's powers
+   included.** The skill says to refuse a permanent delegate, an outside freeze authority and
+   confidential transfers (§23.1), and a mint close authority (§17). v2 refuses only the transfer
+   fee, non-transferable mints and wrapped SOL; everything else an issuer can do is the issuer's
+   (Carlos, 2026-09-30), listed plainly in `README.md` ("What a
    person accepts by choosing a dollar"). Open USD has every one: a permanent delegate that can
    empty any deposit account, a freeze authority, pause, a hook it can name at any time, a close
    authority. Known limits 7 to 12.
@@ -221,8 +222,10 @@ still closes (`after_an_objection_the_parties_agreeing_or_the_arbiter_end_it`).
 
 - **Refused at `create`:** the transfer fee and the confidential transfer fee extensions
   (`TransferFee`), any rate, since the rate can be raised later; §21.6's delta accounting is
-  therefore never needed. Token-2022's wrapped SOL, by address
-  (`a_transfer_fee_mint_is_refused_at_create`, `wrapped_sol_of_either_token_program_is_refused`).
+  therefore never needed. The non-transferable extension (`NonTransferable`): no payment in, and
+  what its issuer mints into a deposit account could never leave. Token-2022's wrapped SOL, by
+  address (`a_transfer_fee_mint_is_refused_at_create`, `a_non_transferable_mint_is_refused_at_create`,
+  `wrapped_sol_of_either_token_program_is_refused`). Removing the non-transferable rule fails its test.
 - **Accepted, as the issuer's powers** (High-risk decision 9): permanent delegate, freeze
   authority, pause, default account state, transfer hook, mint close authority, confidential
   transfers, metadata and its pointer; and every extension Open USD does not have (Known limits).
@@ -298,8 +301,8 @@ No stack-offset warning from `cargo build-sbf`; every instruction runs under Lit
   (§5 above), since `token_interface::transfer_checked` drops a hook's accounts.
 - **§2.4 `init_if_needed`.** Used twice, as v1, each checked.
 - **§2.5 `close`.** `close_unfunded`, to the creator, as v1.
-- **§6 Errors.** `#[error_code]`, 30 errors: v1's 25 at their numbers, then `NotAnObjector`,
-  `AlreadyObjected`, `TimerDue`, `Objected`, `TransferFee`.
+- **§6 Errors.** `#[error_code]`, 31 errors: v1's 25 at their numbers, then `NotAnObjector`,
+  `AlreadyObjected`, `TimerDue`, `Objected`, `TransferFee`, `NonTransferable`.
 - **§8 Tooling.** Anchor 1.2; `overflow-checks = true`; no warning.
 
 ## LiteSVM checklist (litesvm.md §9)
@@ -345,10 +348,10 @@ fuzzer's SBPF v0 build) does not apply: v2 has no fuzzer yet (6 below). New in v
    minimum fails, and can be sent again once more has built up (v1's limit 8, now the payer's).
 5. **An objection sent late may land after the deadline.** The chain's clock decides; the client's
    `canObject` reads the local clock.
-6. **Not carried over:** the Trident fuzzer and the local-validator test. Left to later sessions:
-   the CI workflow builds v2 and runs its LiteSVM tests but not its client's tests
-   (`.github/workflows/checks.yml`), and the fee payer's configuration and the index know neither
-   v2's program id nor Token-2022.
+6. **Not carried over:** the Trident fuzzer and the local-validator test. The CI workflow builds
+   v2 and runs its LiteSVM tests and its client's (`.github/workflows/checks.yml`). Left to later
+   sessions: the fee payer's configuration and the index know neither v2's program id nor
+   Token-2022.
 
 Taking both token programs:
 
@@ -363,10 +366,12 @@ Taking both token programs:
    even if its funding was marked, and the receipt is gone with it.
 10. **A closed mint strands an escrow that never held money.** Its ways out and `close_unfunded`
     need the mint, so its rent stays.
-11. **Extensions Open USD does not have are accepted too.** A non-transferable mint cannot be paid
-    in by transfer, and money its issuer mints into a deposit account can never leave: an escrow
-    holding its amount that way has no way out. An interest-bearing or scaled mint shows amounts
-    that drift over time, or when its issuer changes the scale; the escrow holds base units.
+11. **Extensions Open USD does not have are accepted too,** but for non-transferable. An
+    interest-bearing or scaled mint works on raw amounts: the escrow holds and pays base units, and
+    only the displayed amount drifts, with time or when its issuer changes the scale
+    (`interest_bearing_and_scaled_mints_deal_in_raw_amounts_and_only_their_display_drifts`: 1.00
+    shown as 1.051237 after a year at 5%, and as 3 instead of 2 after a rescale, paid as 1,000,000
+    raw both times).
 12. **A party can block its own payouts.** A standard account that requires a memo on incoming
     transfers is not paid until its owner turns that off: the escrow sends no memo.
 13. **Hook accounts are the client's to find.** Missing ones fail the transfer and nothing moves.

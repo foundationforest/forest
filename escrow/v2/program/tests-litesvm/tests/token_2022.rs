@@ -505,6 +505,56 @@ fn a_transfer_fee_mint_is_refused_at_create() {
 }
 
 #[test]
+fn a_non_transferable_mint_is_refused_at_create() {
+    // Nothing could be paid into its deposit account, and what its issuer minted there could
+    // never leave: the escrow and both rents would be stuck.
+    let mut h = Harness::open_usd(HookProgram::None);
+    let buyer = h.buyer.insecure_clone();
+    let (mint, _) = one_extension_mint(&mut h, OneExtension::NonTransferable);
+    let a = CreateAccounts { mint, ..h.create_accounts() };
+    let err = h.send(&[create_ix_under(&h.terms(1), &a, buyer.pubkey(), TOKEN_2022_PROGRAM)], &[&buyer]).expect_err("non-transferable");
+    assert!(err.contains("NonTransferable"), "{err}");
+    let escrow = escrow_address(&buyer.pubkey(), 1);
+    assert!(!h.exists(&escrow), "nothing written");
+    assert!(!h.exists(&ata_address_under(&escrow, &mint, &TOKEN_2022_PROGRAM)), "not even the deposit account");
+}
+
+#[test]
+fn interest_bearing_and_scaled_mints_deal_in_raw_amounts_and_only_their_display_drifts() {
+    for extension in [OneExtension::InterestBearing(500), OneExtension::ScaledUiAmount(2.0)] {
+        let mut h = Harness::open_usd(HookProgram::None);
+        let (mint, authority) = one_extension_mint(&mut h, extension);
+        use_mint(&mut h, mint, &authority);
+        let t = Terms { timer: Some(Timer { days: 30, to: Side::Seller }), ..h.terms(1) };
+        let escrow = h.marked(&t);
+        let before = shown(&mut h, AMOUNT);
+        // A year passes, or the issuer changes the scale: what the amount shows moves.
+        h.advance(365 * DAY);
+        if let OneExtension::ScaledUiAmount(_) = extension {
+            let ix = spl_token_2022_interface::extension::scaled_ui_amount::instruction::update_multiplier(
+                &TOKEN_2022_PROGRAM,
+                &mint,
+                &authority.pubkey(),
+                &[],
+                3.0,
+                0,
+            )
+            .unwrap();
+            h.send(&[ix], &[&authority]).expect("the issuer rescales");
+        }
+        let after = shown(&mut h, AMOUNT);
+        assert_ne!(before, after, "{extension:?}: the display drifted ({before} to {after})");
+        // The escrow holds and pays raw amounts: exactly the amount, whatever it shows.
+        assert_eq!(h.vault_balance(&escrow), AMOUNT);
+        h.timer_release(&escrow, Side::Seller).expect("the timer");
+        assert_eq!(h.balance(&h.seller_tokens), AMOUNT, "{extension:?}");
+        let e = h.escrow(&escrow);
+        assert_eq!((e.amount, e.to_seller), (AMOUNT, AMOUNT));
+        println!("{extension:?}: {AMOUNT} raw shown as {before}, then {after}; paid {AMOUNT} raw");
+    }
+}
+
+#[test]
 fn a_plain_token_2022_mint_works_too() {
     let mut h = Harness::open_usd(HookProgram::None);
     let plain = plain_2022_mint(&mut h);

@@ -25,8 +25,8 @@ use spl_discriminator::SplDiscriminate;
 use spl_tlv_account_resolution::{account::ExtraAccountMeta, seeds::Seed, state::ExtraAccountMetaList};
 use spl_token_2022_interface::extension::transfer_hook::{TransferHook, TransferHookAccount};
 use spl_token_2022_interface::extension::{
-    confidential_transfer, default_account_state, metadata_pointer, pausable, transfer_fee, transfer_hook, BaseStateWithExtensions,
-    ExtensionType, StateWithExtensions,
+    confidential_transfer, default_account_state, interest_bearing_mint, metadata_pointer, pausable, scaled_ui_amount, transfer_fee,
+    transfer_hook, BaseStateWithExtensions, ExtensionType, StateWithExtensions,
 };
 use spl_token_2022_interface::instruction as t22;
 use spl_token_2022_interface::state::{Account as TokenAccount22, AccountState, Mint as Mint22};
@@ -404,6 +404,69 @@ pub fn transfer_fee_mint(h: &mut Harness, bps: u16) -> Address {
     ];
     h.send(&ixs, &[&mint]).expect("a transfer-fee mint");
     m
+}
+
+/// One extension Open USD does not have, for a mint of its own.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum OneExtension {
+    NonTransferable,
+    /// Interest at this many basis points a year, shown in the displayed amount only.
+    InterestBearing(i16),
+    /// The displayed amount is the raw one times this, which the issuer can change.
+    ScaledUiAmount(f64),
+}
+
+/// A six-decimal Token-2022 mint with `extension` and nothing else. Returns its address and the
+/// key that is its mint authority and the extension's authority.
+pub fn one_extension_mint(h: &mut Harness, extension: OneExtension) -> (Address, Keypair) {
+    let mint = Keypair::new();
+    let m = mint.pubkey();
+    let authority = Keypair::new();
+    h.svm.airdrop(&authority.pubkey(), 1_000_000_000).unwrap();
+    let (kind, init) = match extension {
+        OneExtension::NonTransferable => (ExtensionType::NonTransferable, t22::initialize_non_transferable_mint(&TOKEN_2022_PROGRAM, &m).unwrap()),
+        OneExtension::InterestBearing(rate) => (
+            ExtensionType::InterestBearingConfig,
+            interest_bearing_mint::instruction::initialize(&TOKEN_2022_PROGRAM, &m, Some(authority.pubkey()), rate).unwrap(),
+        ),
+        OneExtension::ScaledUiAmount(multiplier) => (
+            ExtensionType::ScaledUiAmount,
+            scaled_ui_amount::instruction::initialize(&TOKEN_2022_PROGRAM, &m, Some(authority.pubkey()), multiplier).unwrap(),
+        ),
+    };
+    let space = ExtensionType::try_calculate_account_len::<Mint22>(&[kind]).unwrap();
+    let lamports = h.svm.minimum_balance_for_rent_exemption(space);
+    let ixs = [
+        system_create(&h.payer.pubkey(), &m, lamports, space, &TOKEN_2022_PROGRAM),
+        init,
+        t22::initialize_mint2(&TOKEN_2022_PROGRAM, &m, &authority.pubkey(), None, 6).unwrap(),
+    ];
+    h.send(&ixs, &[&mint]).expect("a one-extension mint");
+    (m, authority)
+}
+
+/// Makes `mint` the harness's: the buyer's non-standard account holding ten of it, both parties'
+/// standard accounts, a second seller account. `authority` mints.
+pub fn use_mint(h: &mut Harness, mint: Address, authority: &Keypair) {
+    h.mint = mint;
+    h.token_program = TOKEN_2022_PROGRAM;
+    h.decimals = 6;
+    let buyer = h.buyer.pubkey();
+    let seller = h.seller.pubkey();
+    h.buyer_tokens = make_other_account(h, &buyer);
+    let buyer_tokens = h.buyer_tokens;
+    h.send(&[t22::mint_to_checked(&TOKEN_2022_PROGRAM, &mint, &buyer_tokens, &authority.pubkey(), &[], BUYER_START, 6).unwrap()], &[authority])
+        .expect("ten to the buyer");
+    make_standard_account(h, &buyer);
+    h.seller_tokens = make_standard_account(h, &seller);
+    h.seller_other = make_other_account(h, &seller);
+}
+
+/// What Token-2022 shows for `amount` of the harness's mint now: its `AmountToUiAmount`.
+pub fn shown(h: &mut Harness, amount: u64) -> String {
+    let ix = t22::amount_to_ui_amount(&TOKEN_2022_PROGRAM, &h.mint, amount).unwrap();
+    let meta = h.send(&[ix], &[]).expect("amount to ui amount");
+    String::from_utf8(meta.return_data.data).unwrap()
 }
 
 /// A Token-2022 mint with no extension at all.

@@ -25,8 +25,8 @@ Four things, and nothing else.
    creator.
 4. **Both token programs.** A mint of the classic SPL Token program or of Token-2022, whichever
    owns it named as the token program in every instruction. Refused at `create`: wrapped SOL of
-   either program, and a Token-2022 mint with a transfer fee (any rate, zero included: the rate
-   can be raised later). Every payment out is a `transfer_checked`, carrying the mint and its
+   either program, a Token-2022 mint with a transfer fee (any rate, zero included: the rate can be
+   raised later), and a Token-2022 mint that cannot be transferred. Every payment out is a `transfer_checked`, carrying the mint and its
    decimals, so every way out now names the mint. A transfer hook's accounts, which the client
    resolves, follow the instruction's own and are forwarded to every transfer, so an escrow keeps
    working if an issuer switches a hook on after it is funded; they reach the token program as
@@ -38,7 +38,7 @@ Four things, and nothing else.
 Everything else is v1's: release or split by both, the optional arbiter and timer fixed at
 creation, anyone may fund, `mark_funded`, `close_unfunded`, `recover_late`, the addresses, the
 standard-account rule for payouts. The account keeps v1's 256 bytes at the same offsets and
-appends 41; the version byte is 2; v1's 25 error codes keep their numbers and five follow them.
+appends 41; the version byte is 2; v1's 25 error codes keep their numbers and six follow them.
 The client drops the Solana Pay link: pay links are the app's.
 
 ## What a person accepts by choosing a dollar
@@ -73,16 +73,23 @@ Confidential transfers, which Open USD allows, never reach a deposit account: tu
 needs a signature the escrow never gives, so a confidential payment to one is refused and nothing
 is lost; money arrives by plain transfer only.
 
+Interest-bearing and scaled dollars work as any other: the escrow holds and pays raw amounts, the
+mint's base units, and a deal's amount is fixed in them at creation. Only what they display
+drifts: an interest-bearing dollar's shown amount grows with time, and a scaled dollar's moves
+whenever its issuer changes the scale. So 1.00 agreed may show as more, or less, by the time it is
+paid; the raw amount paid is the one agreed.
+
 Refused outright, at `create`: a transfer fee, which would take part of every payment in and out
-while every way out pays the whole balance, and wrapped SOL, which a plain SOL transfer to its
-deposit account would not fund.
+while every way out pays the whole balance; a dollar that cannot be transferred, which nobody
+could pay in and which, minted into a deposit account by its issuer, could never leave; and
+wrapped SOL, which a plain SOL transfer to its deposit account would not fund.
 
 | | |
 |---|---|
 | `program/` | the program. Anchor 1.2, Rust, `cargo build-sbf`. |
-| `program/tests-litesvm/` | 86 LiteSVM tests with the clock moved by hand and the wire format written out a second time: `escrow.rs` (23), `adversarial.rs` (31), `one_tap.rs` (3) and `objection.rs` (7) on a classic mint; `token_2022.rs` (22) on a Token-2022 mint made with Open USD's extensions, its hook naming no program and naming a test hook, and the issuer's powers used. |
+| `program/tests-litesvm/` | 88 LiteSVM tests with the clock moved by hand and the wire format written out a second time: `escrow.rs` (23), `adversarial.rs` (31), `one_tap.rs` (3) and `objection.rs` (7) on a classic mint; `token_2022.rs` (24) on a Token-2022 mint made with Open USD's extensions, its hook naming no program and naming a test hook, the issuer's powers used, and mints with one other extension each. |
 | `client/` | TypeScript, browser and Node: a builder for every instruction under either token program, the mint read (`tokenOf`), a transfer hook's accounts resolved by `@solana/spl-token`'s resolver (`hookAccounts`), the terms from a post's optional terms block, the check a person runs before working or paying, the timer and until when an objection lands, the account and the events decoded. |
-| `devnet/` | `deploy.sh`, which builds and deploys v2 at its own devnet address, and `devnet.json`, what it and `client/scripts/devnet.ts` did there, the first v2 deploy's record kept under `earlier`. |
+| `devnet/` | `deploy.sh`, which builds v2 and deploys it at its own devnet address or upgrades it there, and `devnet.json`, what it and `client/scripts/devnet.ts` did there, the first v2 deploy's record, and its closing, under `earlier`. |
 | `security-checklist.md` | the safe-solana-builder checklist for v2. |
 
 ## Running it
@@ -148,9 +155,9 @@ As v1's README says, with these differences:
   accounts under the mint's token program, so a Token-2022 mint's differ from what the classic
   program's would be.
 - **Refused mints.** Wrapped SOL of either program, by address; a Token-2022 mint with the
-  transfer fee extension or the confidential transfer fee extension, by its extensions
-  (`TransferFee`, error 6029). A mint's extensions are fixed when it is made, so `create` checks
-  once.
+  transfer fee extension or the confidential transfer fee extension (`TransferFee`, error 6029),
+  or with the non-transferable extension (`NonTransferable`, error 6030), by its extensions. A
+  mint's extensions are fixed when it is made, so `create` checks once.
 
 ## What one escrow costs
 
@@ -245,9 +252,12 @@ As for v1: on the day it deploys to mainnet, `solana program set-upgrade-authori
 `FoRE2EscrowV2objectsTimerFundedAtPayer222222`; no keypair for it exists. Mainnet gets a fresh one.
 
 On devnet, v2 as it is here runs at `FA6ZodkyhMDj9yjzY27dk8JDCtcHnJx8mr45Mx9TfKg8` (label
-`escrow-v2-program-2`). The first v2 deploy, classic tokens only, stays at
-`B3p13G8xvNvUrAnaXg9AUtwffBAUHcp6XoMwGV2jKPi7`, never upgraded; its ways out lack the mint, so
-this client does not build them. Both keep their upgrade authority on the devnet deploy key.
+`escrow-v2-program-2`), upgraded in place once to refuse a non-transferable mint; its upgrade
+authority is the devnet deploy key. `devnet/deploy.sh` deploys a fresh id, leaves one holding the
+same bytes as it is, and upgrades one holding other bytes at the same address. The first v2
+deploy, classic tokens only, at `B3p13G8xvNvUrAnaXg9AUtwffBAUHcp6XoMwGV2jKPi7`, is closed: its
+deposit went back to the deploy key, its two receipts stay as accounts no program owns, and its id
+can never hold a program again.
 
 ## Decided
 
@@ -270,6 +280,8 @@ Carlos's answers, 2026-09-30, to what the request left open.
    client resolving them; deposit accounts made under the mint's own token program with the
    extensions it requires; the issuer's powers the issuer's, listed above. Redeployed on devnet at
    a new address, the earlier ids untouched.
+7. **A non-transferable mint is refused too; every other extension is accepted.** Interest-bearing
+   and scaled mints work on raw amounts, only their display drifting.
 
 ## Chosen, not decided
 
@@ -300,16 +312,15 @@ Chosen when v2 took both token programs (2026-09-30):
    the escrow's only as a plain account (Token-2022 passes it on that way).
 9. **The transfer-fee refusal covers the confidential transfer fee too,** which only exists beside
    a transfer fee; and Token-2022's wrapped SOL is refused as the classic one is.
-10. **Only the transfer fee is refused.** Every other extension (a permanent delegate, a freeze
-    authority, pause, a hook, confidential transfers, a close authority, and those Open USD does not
-    have) is accepted, as the request asked for the issuer's powers; see Known limits in
-    `security-checklist.md` for the ones Open USD does not have.
+10. **The refused extensions are the transfer fee, its confidential twin, and non-transferable**
+    (Decided 7); see Known limits in `security-checklist.md` for the accepted ones Open USD does not
+    have.
 
 ## What this does not do
 
 Nothing on mainnet. The Trident fuzzer and the local-validator test were not carried over; the
 devnet run is the client's only test against a real runtime, and on devnet no dollar names a hook
-program: a hook's program runs only under LiteSVM, as a builtin. Left to later sessions:
-`.github/workflows/checks.yml` builds v2 and runs its LiteSVM tests but not its client's tests;
+program: a hook's program runs only under LiteSVM, as a builtin. `.github/workflows/checks.yml`
+builds v2, runs its LiteSVM tests, and type-checks and tests its client. Left to later sessions:
 the fee payer's configuration (`feepayer/`) allows v1's program id, not v2's, nor Token-2022; and
 the index reads v1's escrow only. `security-checklist.md` lists every known limit.
