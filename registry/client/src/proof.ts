@@ -1,9 +1,14 @@
-// One Semaphore proof, made on the device.
+// One Semaphore proof, made on the device, against an issuer's list.
+//
+// An issuer publishes its list outside the registry: every identity commitment it vouches for, in
+// the order it took them, and the list's root. The device finds its own commitment in the list,
+// builds the Merkle path, and proves membership for one label and one profile. The registry takes
+// the root as given; readers decide which issuers' roots they trust.
 //
 // Semaphore's own `generateProof` hashes the scope and the message for you, as a 32-byte
-// big-endian number, which caps a market name at 32 bytes. The registry hashes a namespaced
-// string instead, so this calls snarkjs directly and hands the circuit the two field values the
-// program will derive for itself. Nothing else about the circuit or the artifacts changes.
+// big-endian number, which caps a label at 32 bytes. The registry hashes a namespaced string
+// instead, so this calls snarkjs directly and hands the circuit the two field values the program
+// derives for itself. Nothing else about the circuit or the artifacts changes.
 
 import { Group } from '@semaphore-protocol/group'
 import type { Identity } from '@semaphore-protocol/identity'
@@ -21,13 +26,10 @@ export type Artifacts = {
   zkey: string | Uint8Array
 }
 
-/** Every commitment in the list, in the order the issuer inserted them. */
-export type Leaves = bigint[] | (() => bigint[] | Promise<bigint[]>)
-
 export type MembershipProof = {
-  /** The list's root the proof was made against. */
+  /** The root of the list the proof was made against. */
   root: bigint
-  /** The nullifier: the badge's code. */
+  /** The nullifier: the line's code. */
   code: bigint
   scope: bigint
   message: bigint
@@ -38,30 +40,30 @@ export type MembershipProof = {
   publicSignals: string[]
 }
 
-export async function resolveLeaves(leaves: Leaves): Promise<bigint[]> {
-  return typeof leaves === 'function' ? await leaves() : leaves
+/** The root the circuit computes for a list, in order (Semaphore's LeanIMT). Zero when empty. */
+export function listRoot(commitments: bigint[]): bigint {
+  return commitments.length === 0 ? 0n : new Group(commitments).root
 }
 
 export async function proveMembership(input: {
   secret: Uint8Array | Identity
-  market: string
-  did: string
-  /** The profile's wallet: it signs the registration, and the proof names it. */
-  wallet: PublicKey | Uint8Array
-  leaves: Leaves
+  label: string
+  /** The profile's 32-byte key. The proof names it; only its line can be made or extended with it. */
+  profile: PublicKey | Uint8Array
+  /** The issuer's list: every commitment in it, in the order the issuer published them. */
+  commitments: bigint[]
   artifacts: Artifacts
 }): Promise<MembershipProof> {
   const identity = identityFrom(input.secret)
   const commitment = commitmentOf(identity)
-  const leaves = await resolveLeaves(input.leaves)
 
-  const group = new Group(leaves)
+  const group = new Group(input.commitments)
   const index = group.indexOf(commitment)
   if (index === -1) throw new Error('this identity is not in the list')
   const merkleProof = group.generateMerkleProof(index)
 
-  const scope = scopeOf(input.market)
-  const message = messageOf(input.wallet, input.did)
+  const scope = scopeOf(input.label)
+  const message = messageOf(input.profile)
 
   // The circuit walks `merkleProofLength` levels; the arrays are padded to the sealed depth and
   // the padding is never read.
@@ -90,7 +92,7 @@ export async function proveMembership(input: {
   // Semaphore's order: root, nullifier, message, scope. Checked here so a change in the library
   // or the artifacts shows up as an error and not as a proof the program silently rejects.
   const [rootSignal, nullifier, messageSignal, scopeSignal] = publicSignals
-  const code = codeFor(identity, input.market)
+  const code = codeFor(identity, input.label)
   if (BigInt(rootSignal) !== merkleProof.root) throw new Error('the proof is against another root')
   if (BigInt(nullifier) !== code) throw new Error('the proof carries another code')
   if (BigInt(messageSignal) !== message) throw new Error('the proof carries another message')

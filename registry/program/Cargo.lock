@@ -221,16 +221,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "anchor-spl"
-version = "1.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "85f6d2ad797b45d3e4b3364b433e78e4e95729ae2a187fe7032b976f54b5a2fb"
-dependencies = [
- "anchor-lang",
- "spl-token-interface",
-]
-
-[[package]]
 name = "anchor-syn"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -493,12 +483,6 @@ dependencies = [
  "num-traits",
  "rand",
 ]
-
-[[package]]
-name = "arrayref"
-version = "0.3.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "76a2e8124351fda1ef8aaaa3bbd7ebbcb486bbcd4225aca0aa0d84bb2db8fecb"
 
 [[package]]
 name = "arrayvec"
@@ -886,11 +870,8 @@ name = "forest-registry"
 version = "0.1.0"
 dependencies = [
  "anchor-lang",
- "anchor-spl",
- "bytemuck",
  "groth16-solana",
  "solana-keccak-hasher",
- "solana-poseidon",
 ]
 
 [[package]]
@@ -1019,30 +1000,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
 
 [[package]]
-name = "light-poseidon"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3c9a85a9752c549ceb7578064b4ed891179d20acd85f27318573b64d2d7ee7ee"
-dependencies = [
- "ark-bn254 0.4.0",
- "ark-ff 0.4.2",
- "num-bigint",
- "thiserror 1.0.69",
-]
-
-[[package]]
-name = "light-poseidon"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "47a1ccadd0bb5a32c196da536fd72c59183de24a055f6bf0513bf845fefab862"
-dependencies = [
- "ark-bn254 0.5.0",
- "ark-ff 0.5.0",
- "num-bigint",
- "thiserror 1.0.69",
-]
-
-[[package]]
 name = "lock_api"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1074,17 +1031,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "num-derive"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ed3955f1a9c7c0c15e092f9c887db08b1fc683305fdf6eb6684f22555355e202"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "num-integer"
 version = "0.1.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1100,28 +1046,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
 dependencies = [
  "autocfg",
-]
-
-[[package]]
-name = "num_enum"
-version = "0.7.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5d0bca838442ec211fa11de3a8b0e0e8f3a4522575b5c4c06ed722e005036f26"
-dependencies = [
- "num_enum_derive",
- "rustversion",
-]
-
-[[package]]
-name = "num_enum_derive"
-version = "0.7.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "680998035259dcfcafe653688bf2aa6d3e2dc05e98be6ab46afb089dc84f1df8"
-dependencies = [
- "proc-macro-crate",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
 ]
 
 [[package]]
@@ -1273,12 +1197,6 @@ checksum = "cfcb3a22ef46e85b45de6ee7e79d063319ebb6594faafcf1c225ea92ab6e9b92"
 dependencies = [
  "semver",
 ]
-
-[[package]]
-name = "rustversion"
-version = "1.0.23"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
 name = "scopeguard"
@@ -1704,20 +1622,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "solana-poseidon"
-version = "3.1.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "13ac13134287d7af80717353a8136e3c515d7f34d88e6f116b47350bd623e338"
-dependencies = [
- "ark-bn254 0.4.0",
- "ark-bn254 0.5.0",
- "light-poseidon 0.2.0",
- "light-poseidon 0.4.0",
- "solana-define-syscall 3.0.0",
- "thiserror 2.0.20",
-]
-
-[[package]]
 name = "solana-program-entrypoint"
 version = "3.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1969,26 +1873,6 @@ checksum = "17358d1e9a13e5b9c2264d301102126cf11a47fd394cdf3dec174fe7bc96e1de"
 dependencies = [
  "solana-address 2.7.0",
  "solana-sdk-ids",
-]
-
-[[package]]
-name = "spl-token-interface"
-version = "2.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8c564ac05a7c8d8b12e988a37d82695b5ba4db376d07ea98bc4882c81f96c7f3"
-dependencies = [
- "arrayref",
- "bytemuck",
- "num-derive",
- "num-traits",
- "num_enum",
- "solana-instruction 3.5.1",
- "solana-program-error",
- "solana-program-option",
- "solana-program-pack",
- "solana-pubkey 3.0.0",
- "solana-sdk-ids",
- "thiserror 2.0.20",
 ]
 
 [[package]]

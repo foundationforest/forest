@@ -2,7 +2,7 @@
 name = "forest-registry"
 version = "0.1.0"
 edition = "2021"
-description = "The Forest registry: one verified human, one badge per market, on Solana. Sealed per version."
+description = "The Forest registry: a free public list of badges, one line per verified human per label, on Solana. Sealed per version."
 license = "Apache-2.0"
 publish = false
 exclude = ["tests-litesvm"]
@@ -13,25 +13,23 @@ name = "forest_registry"
 
 [features]
 default = []
-# Bakes devnet's USDC mint in as `mints[0]` instead of mainnet's. Nothing else differs.
-devnet = []
 cpi = ["no-entrypoint"]
 no-entrypoint = []
 no-idl = []
 no-log-ix-name = []
-idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+idl-build = ["anchor-lang/idl-build"]
+# Features Anchor's macros test for; declared so the build has no warnings. None is turned on.
+custom-heap = []
+custom-panic = []
+anchor-debug = []
 
 [dependencies]
 anchor-lang = "1.2.0"
-anchor-spl = { version = "1.2.0", default-features = false, features = ["token"] }
-bytemuck = { version = "1", features = ["derive", "min_const_generics"] }
 groth16-solana = "0.2.0"
-solana-poseidon = { version = "3.1.14", features = ["agave-unstable-api"] }
 solana-keccak-hasher = "3.1.0"
 
-# Arithmetic that overflows panics instead of wrapping, beside the checked math in the source.
-# The three unchecked increments (list_count + 1, code_tree.count + 1, leaf_count += 1) are
-# unreachable in practice (2^32 lists, 2^64 leaves); this makes an overflow abort, never wrap.
+# Arithmetic that overflows panics instead of wrapping. The program does little arithmetic (a
+# line's size, and the refund's excess, which saturates); this makes any overflow abort, never wrap.
 [profile.release]
 overflow-checks = true
 

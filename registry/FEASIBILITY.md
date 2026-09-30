@@ -1,5 +1,7 @@
 # Registry feasibility check
 
+*This report measured the earlier design (a fee, lists on chain, a DID in the message). The registry today is `README.md`'s.*
+
 Session 3, September 15, 2026. Build-order item 4, taken before the `markets` repo session on purpose: the registry is the one piece nobody has built on Solana, and its answer can change the plan. Report only. Nothing here is built or shipped. Every number below was produced in this session; the scripts and tests that produced them are in `scratch/` and can be rerun.
 
 ## The short version

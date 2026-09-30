@@ -1,7 +1,9 @@
-// The Forest registry client: everything a device needs to turn an identity secret into one
-// registration, and nothing else. It talks to no network of its own. The caller passes in the
-// list's leaves (or reads them with `fetchListLeaves`, through a connection the caller chooses)
-// and a recent blockhash; the caller sends the transaction.
+// The Forest registry client: everything a device needs to turn an identity secret into a line,
+// and to read lines back. It talks to no network of its own. The caller passes in each issuer's
+// published list of commitments and a recent blockhash; the caller has the payer sign and sends.
+//
+// One proof per transaction: the first list's goes in `register`, every other list's in its own
+// `add_proof`. Only the payer signs. The profile key signs nothing: the proof names it.
 //
 // Nothing here is shipped.
 
@@ -14,95 +16,127 @@ import {
   type TransactionInstruction,
 } from '@solana/web3.js'
 
+import { codeFor } from './code.ts'
 import { toBytes32 } from './field.ts'
-import { proveMembership, type Artifacts, type Leaves, type MembershipProof } from './proof.ts'
-import {
-  PROGRAM_ID,
-  registerIx,
-  usedCodeAddress,
-  type RegisterAccounts,
-} from './program.ts'
+import { proveMembership, type Artifacts, type MembershipProof } from './proof.ts'
+import { MAX_LABEL, MAX_ROOTS, PROGRAM_ID, addProofIx, lineAddress, registerIx } from './program.ts'
 
 export * from './field.ts'
 export * from './compress.ts'
 export * from './code.ts'
 export * from './program.ts'
 export * from './proof.ts'
-export * from './leaves.ts'
+export * from './lines.ts'
 
-/**
- * A registration measured at about 133,000 compute units under LiteSVM and on a local validator
- * (session 11), rounded up with room for a runtime that prices a syscall differently. Well under
- * the 1,400,000 a transaction may ask for.
- */
-export const REGISTER_COMPUTE_UNITS = 220_000
-
-export type Registration = MembershipProof & {
-  codeBytes: Uint8Array
-  /** The account the program creates. Its existence is this human's badge in this market. */
-  codeAccount: PublicKey
+/** Unsigned, with the payer as fee payer. No compute-budget instruction unless one is asked for. */
+function transaction(input: {
   instruction: TransactionInstruction
-  /**
-   * Unsigned. The profile's wallet signs it for consent, whoever pays; the fee authority signs if it
-   * is another key; the fee payer co-signs for the network fee and sends.
-   */
-  transaction: VersionedTransaction
-}
-
-export async function buildRegistration(input: {
-  /** The 32 bytes `keys/`'s `identitySecret(seed)` returns, or the identity itself. */
-  secret: Uint8Array | Identity
-  market: string
-  did: string
-  listIndex: number
-  leaves: Leaves
-  artifacts: Artifacts
-  accounts: RegisterAccounts
+  payer: PublicKey
   recentBlockhash: string
-  /** Set to null to leave the compute budget instruction out. */
-  computeUnitLimit?: number | null
-  programId?: PublicKey
-}): Promise<Registration> {
-  const programId = input.programId ?? PROGRAM_ID
-  const membership = await proveMembership({
-    secret: input.secret,
-    market: input.market,
-    did: input.did,
-    wallet: input.accounts.profileWallet,
-    leaves: input.leaves,
-    artifacts: input.artifacts,
-  })
-
-  const instruction = registerIx({
-    market: input.market,
-    did: input.did,
-    listIndex: input.listIndex,
-    root: membership.root,
-    code: membership.code,
-    proof: membership.proof,
-    accounts: input.accounts,
-    programId,
-  })
-
-  const limit = input.computeUnitLimit === undefined ? REGISTER_COMPUTE_UNITS : input.computeUnitLimit
+  computeUnitLimit?: number
+}): VersionedTransaction {
   const instructions =
-    limit === null
-      ? [instruction]
-      : [ComputeBudgetProgram.setComputeUnitLimit({ units: limit }), instruction]
-
-  const transaction = new VersionedTransaction(
+    input.computeUnitLimit === undefined
+      ? [input.instruction]
+      : [ComputeBudgetProgram.setComputeUnitLimit({ units: input.computeUnitLimit }), input.instruction]
+  return new VersionedTransaction(
     new TransactionMessage({
-      payerKey: input.accounts.payer,
+      payerKey: input.payer,
       recentBlockhash: input.recentBlockhash,
       instructions,
     }).compileToV0Message(),
   )
+}
 
+export type Registration = {
+  code: bigint
+  codeBytes: Uint8Array
+  /** The line's address. */
+  line: PublicKey
+  /** One per list, in the order given. */
+  proofs: MembershipProof[]
+  instructions: TransactionInstruction[]
+  /**
+   * Unsigned, one per list: `register` with the first list's proof, then one `add_proof` for each
+   * other list. Send them in order; each needs only the payer's signature.
+   */
+  transactions: VersionedTransaction[]
+}
+
+/**
+ * A line for one profile under one label, backed by one or more issuers' lists. Each list is the
+ * issuer's published commitments, in its order; the person's own commitment must be in every one.
+ * Prove against each issuer's newest list.
+ */
+export async function buildRegistration(input: {
+  /** The 32 bytes `keys/`'s `identitySecret(seed)` returns, or the identity itself. */
+  secret: Uint8Array | Identity
+  label: string
+  /** The profile's key (`keys/`'s `profileKey(seed, n).publicKey`). It signs nothing here. */
+  profile: PublicKey | Uint8Array
+  lists: bigint[][]
+  artifacts: Artifacts
+  /** Pays the line's deposit and each transaction's fee, and signs each transaction. */
+  payer: PublicKey
+  recentBlockhash: string
+  /** Leave unset for no compute-budget instruction. */
+  computeUnitLimit?: number
+  programId?: PublicKey
+}): Promise<Registration> {
+  const programId = input.programId ?? PROGRAM_ID
+  if (input.lists.length < 1) throw new RangeError('at least one list')
+  if (input.lists.length > MAX_ROOTS) throw new RangeError(`a line holds at most ${MAX_ROOTS} roots`)
+  if (new TextEncoder().encode(input.label).length > MAX_LABEL) throw new RangeError(`a label is at most ${MAX_LABEL} bytes`)
+
+  const proofs: MembershipProof[] = []
+  for (const commitments of input.lists) {
+    const p = await proveMembership({
+      secret: input.secret,
+      label: input.label,
+      profile: input.profile,
+      commitments,
+      artifacts: input.artifacts,
+    })
+    if (proofs.some((q) => q.root === p.root)) throw new Error('two lists give the same root; a line holds each root once')
+    proofs.push(p)
+  }
+
+  const code = codeFor(input.secret, input.label)
+  const [first, ...rest] = proofs
+  const instructions = [
+    registerIx({ profile: input.profile, label: input.label, code, proof: first, payer: input.payer, programId }),
+    ...rest.map((p) => addProofIx({ code, proof: p, payer: input.payer, programId })),
+  ]
   return {
-    ...membership,
-    codeBytes: toBytes32(membership.code),
-    codeAccount: usedCodeAddress(membership.code, programId),
+    code,
+    codeBytes: toBytes32(code),
+    line: lineAddress(code, programId),
+    proofs,
+    instructions,
+    transactions: instructions.map((instruction) =>
+      transaction({ instruction, payer: input.payer, recentBlockhash: input.recentBlockhash, computeUnitLimit: input.computeUnitLimit }),
+    ),
+  }
+}
+
+/** One more issuer's list for a line that exists: one `add_proof`, needing only the payer's signature. */
+export async function buildAddProof(input: {
+  secret: Uint8Array | Identity
+  label: string
+  profile: PublicKey | Uint8Array
+  commitments: bigint[]
+  artifacts: Artifacts
+  payer: PublicKey
+  recentBlockhash: string
+  computeUnitLimit?: number
+  programId?: PublicKey
+}): Promise<MembershipProof & { instruction: TransactionInstruction; transaction: VersionedTransaction }> {
+  const programId = input.programId ?? PROGRAM_ID
+  const p = await proveMembership(input)
+  const instruction = addProofIx({ code: p.code, proof: p, payer: input.payer, programId })
+  return {
+    ...p,
     instruction,
-    transaction,
+    transaction: transaction({ instruction, payer: input.payer, recentBlockhash: input.recentBlockhash, computeUnitLimit: input.computeUnitLimit }),
   }
 }
