@@ -5,7 +5,7 @@ import { hex } from '../src/bytes.ts'
 import type { Body } from '../src/entry.ts'
 import { keyFromSecret, profileKey, seedFromPrf } from '../src/keys.ts'
 
-export const VECTORS = JSON.parse(readFileSync(new URL('../../../keys/test/vectors.json', import.meta.url), 'utf8')) as {
+export const VECTORS = JSON.parse(readFileSync(new URL('../../keys/test/vectors.json', import.meta.url), 'utf8')) as {
   prf: string
   seed: string
   profiles: Array<{ index: number; wallet: string }>
