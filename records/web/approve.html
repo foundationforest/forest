@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Only this page's own script and style; no HTML from strings (Trusted Types, no policies). The
+     loopback sources in connect-src are for the local test; a real page lists https: alone and is
+     also served with frame-ancestors 'none'. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src https: http://127.0.0.1:* http://localhost:*; base-uri 'none'; form-action 'none'; require-trusted-types-for 'script'; trusted-types 'none'">
+<title>Approve</title>
+<link rel="stylesheet" href="approve.css">
+<script type="module" src="approve.js"></script>
+</head>
+<body>
+<main>
+<h1>Forest</h1>
+<div id="note"></div>
+<p id="status" role="status"></p>
+<button id="approve" hidden>Approve</button>
+<button id="decline" hidden>Decline</button>
+</main>
+</body>
+</html>

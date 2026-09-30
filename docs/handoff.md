@@ -1,5 +1,7 @@
 # Forest: foundation handoff (September 26, 2026)
 
+**30 September 2026: the data layer changed.** Records are signed entries on plain hosts, one key per profile, as `records/SPEC.md` defines; where this file still says AT Protocol, did:plc, the host, the carrier or lexicons, `records/SPEC.md` wins.
+
 The plan for the `forest` repo, as the design stands in the code today. Claude Code reads `CLAUDE.md` and this file before every session. Nothing is shipped: everything below is design, and "Build status and order" says what exists and where it runs. The reason behind each choice is in `docs/changes.md`. When something here turns out wrong, change it and say what changed there.
 
 ## What Forest is

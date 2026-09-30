@@ -8,10 +8,10 @@ Plain words first, then the exact steps. The library in `src/` implements the st
 
 1. A passkey can do more than sign in: with the PRF extension it also returns a secret, 32 bytes that only that passkey can produce, the same every time it is asked with the same input. That secret never leaves the authenticator's owner's device.
 2. The secret is stretched into a seed with a standard key derivation function. The seed is the one thing a person must never lose. It is 32 bytes.
-3. Each profile the person opens (profile 0, profile 1, ...) gets three keys from the seed, each derived with its own label: a control key, a signing key, and a wallet key. Knowing one key tells you nothing about the others, and nothing about the seed.
+3. Each profile the person opens (profile 0, profile 1, ...) gets two keys from the seed, each derived with its own label: the profile key and the box key. The profile key is the profile's name, signs everything the profile says, and is its wallet. The box key opens notes sealed to the profile. Knowing one key tells you nothing about the others, and nothing about the seed.
 4. One more secret comes out of the seed and belongs to the person, not to any profile: the one the registry uses to show that a verified human is asking, without saying which one. It is the same for every profile, so the registry can hold one entry per human while the profiles stay apart.
 5. One more wallet belongs to the person, not to any profile: the central wallet, where money enters from a ramp and leaves to one. It has its own label and no profile index, so it is unrelated to every profile's keys.
-6. A profile's name is a did:plc. The control key signs the profile's first directory record (the genesis operation), and the name is a hash of that record. The signing key is the one the record names for signing the profile's folder.
+6. A profile's name is a did:key: its profile key's public key, written down. Nothing is registered anywhere.
 7. A second passkey can open the same seed through a seed file: the seed encrypted under the second passkey's secret, stored under a label the second passkey can recompute. Whoever stores the file learns nothing.
 8. The seed can also be written as 24 English words: the only backup, and the way to carry the seed anywhere. They are a backup, not a login: the one way in is a passkey.
 
@@ -37,20 +37,24 @@ Profile indexes are whole numbers starting at 0, written in decimal inside the i
 
 | Key | Derivation | Curve | Used for |
 |---|---|---|---|
-| control | `HKDF-SHA256(seed, salt = empty, info = "forest.foundation/profile/<n>/control/v1", 32)` as a private scalar | secp256k1 | did:plc rotation key: it can change the profile's directory record |
-| signing | `HKDF-SHA256(seed, salt = empty, info = "forest.foundation/profile/<n>/signing/v1", 32)` as a private scalar | secp256k1 | did:plc verification key: it signs the profile's folder |
-| wallet | `HKDF-SHA256(seed, salt = empty, info = "forest.foundation/profile/<n>/wallet/v1", 32)` as an ed25519 seed | ed25519 | Solana wallet: it pays, and pays into escrow. The address is the public key in base58 |
+| profile key | `HKDF-SHA256(seed, salt = empty, info = "forest.foundation/profile/<n>/wallet/v1", 32)` as an ed25519 seed | ed25519 | The profile's name (section 6), its signature on everything it says (`records/SPEC.md`), and its Solana wallet: it pays, and pays into escrow. The address is the public key in base58 |
+| box key | `HKDF-SHA256(seed, salt = empty, info = "forest.foundation/profile/<n>/box/v1", 32)` as age's post-quantum hybrid identity | ML-KEM-768 + X25519 | Opens entries sealed to the profile (`records/SPEC.md`, "Sealed entries") |
 
-Why these curves:
+The profile key:
 
-- did:plc accepts two key types, P-256 and secp256k1, as `did:key` strings. secp256k1 is the AT Protocol network's default (the reference host uses it for both rotation and signing keys) and the most exercised path in the AT Protocol libraries, so both did:plc keys use it. A `did:key` on secp256k1 starts with `did:key:zQ3s`.
-- Solana signs only with ed25519, so the wallet key is ed25519. Its 32-byte private seed is what Solana tooling accepts as a keypair seed.
+- One key is the name, the signature and the wallet, so a registry badge, which names a wallet, names the profile itself. Solana signs only with ed25519, so the key is ed25519. Its 32-byte private seed is what Solana tooling accepts as a keypair seed.
+- The label keeps the word `wallet` it was first made with, when this key was only the profile's wallet. So every seed gives the same profile keys it always gave.
+- It signs three kinds of things, kept apart by their first bytes: Solana transactions, Forest entries and Pkarr packets (`records/SPEC.md`, section 1). It must never go into a general wallet app, whose "sign any message" could be pointed at Forest's entries.
 
-Why one HKDF call per key: each call has its own info string, so every key is an independent output of the same one-way function. A control key cannot be computed from a signing key, a wallet from either, profile 1 from profile 0, or the seed from any key.
+The box key:
 
-The secp256k1 private scalar must be in `[1, n-1]`. An HKDF output outside it has a chance below one in 2^127. The library then throws; there is no retry rule.
+- The 32 bytes are used unchanged as an age post-quantum hybrid identity: the bech32 encoding of the bytes with the prefix `AGE-SECRET-KEY-PQ-`, in upper case.
+- The recipient others seal to (`age1pq1…`) is what age's own library computes from that identity. The profile publishes it in its folder.
+- age's hybrid identity is a 32-byte seed, so it comes from the seed like every other key.
 
-The control and signing keys are held as `@atproto/crypto` keypairs, not exportable. The wallet is returned as bytes because Solana tooling needs them.
+Why one HKDF call per key: each call has its own info string, so every key is an independent output of the same one-way function. A box key cannot be computed from a profile key, profile 1 from profile 0, or the seed from any key.
+
+The profile key is returned as bytes, because Solana tooling needs them.
 
 ## 4. The identity secret, one per person
 
@@ -86,28 +90,15 @@ Nothing links the central wallet to a profile until money moves between them. Th
 
 ## 6. The name
 
-A profile's name is a did:plc. Creating it takes one signed record, the genesis operation, and the name is a hash of that record. The recipe builds the record exactly as the directory's own library does, so the same inputs give the same name either way.
+A profile's name is the did:key of its profile key:
 
-Parameters, both left to the caller: `handle` (the profile's handle: at creation, the random name the app gives the folder under its own domain, for example `k7m2q.app.example`) and `pds` (the host that stores the profile's folder, an https URL).
+```
+name = "did:key:z" + base58btc(0xed 0x01 || the 32-byte public key)
+```
 
-Steps:
+`ed 01` is the multicodec prefix for an ed25519 public key, so every name starts with `did:key:z6Mk`. The same 32 bytes in base58 are the profile's wallet address. A did:key has exactly one spelling; `records/SPEC.md` section 1 says which keys Forest accepts.
 
-1. The unsigned operation:
-   ```
-   {
-     "type": "plc_operation",
-     "rotationKeys": [ <control key as did:key> ],
-     "verificationMethods": { "atproto": <signing key as did:key> },
-     "alsoKnownAs": [ "at://" + handle ],
-     "services": { "atproto_pds": { "type": "AtprotoPersonalDataServer", "endpoint": pds } },
-     "prev": null
-   }
-   ```
-   A handle already starting with `at://` is kept; a `pds` with no scheme gets `https://`.
-2. Sign: encode the unsigned operation as DAG-CBOR (which sorts map keys, so field order never matters), hash it with SHA-256, sign the hash with the control key on secp256k1 with a low-S signature, and take the 64-byte compact form. `sig` is that signature in base64url without padding. The signed operation is the unsigned one plus `sig`.
-3. The name: `did:plc:` followed by the first 24 characters of the lowercase, unpadded base32 (RFC 4648) of the SHA-256 of the DAG-CBOR of the signed operation.
-
-Building and signing talk to nothing. Sending the operation to the directory is a separate step: `POST <directory>/<did>` with the signed operation as JSON, directory `https://plc.directory`. Creating a name is permanent and public; a product does it when the person asks for the profile, not before.
+Nothing is registered and nothing is sent: the name exists as soon as the key does, and nobody can take it or change it.
 
 ## 7. The seed file, for extra passkeys
 
@@ -148,21 +139,23 @@ The words open everything. They are for paper, never for a screen that syncs, a 
 |---|---|
 | PRF input | UTF-8 of `forest.foundation/prf/v1` |
 | Seed info | `forest.foundation/seed/v1` |
-| Profile key info | `forest.foundation/profile/<n>/control/v1`, `.../signing/v1`, `.../wallet/v1` |
+| Profile key info | `forest.foundation/profile/<n>/wallet/v1` |
+| Box key info | `forest.foundation/profile/<n>/box/v1` |
 | Seed file info | `forest.foundation/seed-file/key/v1`, `forest.foundation/seed-file/label/v1` |
 | Identity info | `forest.foundation/identity/v1`, with no profile index |
 | Central wallet info | `forest.foundation/central/v1`, with no profile index |
 | HKDF | SHA-256, empty salt, output 32 bytes everywhere |
 | Cipher | AES-256-GCM, 12-byte nonce, 16-byte tag, label as additional data |
-| Encodings | did:key per the AT Protocol (`z` base58btc multikey); wallet address base58btc; label and ciphertext base64url without padding; DID suffix base32 lowercase without padding |
+| Encodings | name: did:key, `z` then base58btc of `ed 01` and the public key; wallet address base58btc; box identity bech32 with prefix `AGE-SECRET-KEY-PQ-`, upper case; label and ciphertext base64url without padding |
 
-A change to any value here is a new version with a new suffix. The old version keeps working for the seeds it made.
+A change to any value here is a new version with a new suffix. The old version keeps working for the seeds it made. Dropping the did:plc keys on 30 September 2026 changed no value: the labels still in use are the ones every seed was made with, and the box label is new.
 
 ## 10. What this does not do
 
 - No recovery without a passkey or the words. Lose every passkey and the paper, and the seed is gone. Nobody can reset it, because nobody else has it.
 - No way back into the registry once the seed is gone. The identity secret comes from the seed, so losing the seed loses the identity: the badges stay on the chain, nobody else can use them, and the same issuer's list does not take the person again, because its face check finds the face already there. The 24 words are the only backup.
-- No server. The recipe never sends anything anywhere; sending a genesis operation to the directory is a separate call the app makes on purpose.
+- No server. The recipe never sends anything anywhere.
+- No key rotation. A profile's name is its key, so a leaked profile key loses that profile, and its badge in that market, for good.
 - No email, no phone, no account. There is nothing to sign up for.
 - No storage inside the library. The app decides where a seed file goes; the library only makes and opens them.
 - No wiping of memory. JavaScript cannot guarantee that bytes are erased; a product closes the tab, not the recipe.
@@ -170,4 +163,13 @@ A change to any value here is a new version with a new suffix. The old version k
 
 ## 11. Test vectors
 
-`test/vectors.json` pins, for one PRF output: the seed, profiles 0 and 1 (control and signing `did:key`, wallet address, did:plc and signature for handle `handle.example` and host `https://host.example`), the identity secret with its secret scalar, public key and commitment, the central wallet's address, the 24 words, and one seed file made under a second PRF output. `npm test` checks them, checks HKDF against a second implementation, checks the genesis operation against the directory's own library, and recomputes the commitment step by step without the Semaphore wrapper.
+`test/vectors.json` pins, for one PRF output: the seed; profiles 0 and 1 (the name, the wallet address, and the box key's identity and recipient); the identity secret with its secret scalar, public key and commitment; the central wallet's address; the 24 words; and one seed file made under a second PRF output.
+
+`npm test` checks them. It also:
+
+- checks HKDF against a second implementation;
+- recomputes the profile key and its name without the library;
+- seals to the box key and opens with it through age;
+- recomputes the commitment step by step without the Semaphore wrapper.
+
+`records/` checks the profile keys and box keys against the same file, with its own implementation.

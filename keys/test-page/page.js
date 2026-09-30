@@ -1,19 +1,12 @@
 // Forest keys test page. Plain JS, no framework. Imports the library bundle
 // built by `npm run build:page`. Holds the seed in memory only.
 
-import {
-  PRF_INPUT,
-  seedFromPrf,
-  profileKeys,
-  didGenesis,
-  submitGenesis,
-  exportWords,
-} from './dist/forest-keys.js'
+import { PRF_INPUT, seedFromPrf, profileKey, boxKey, exportWords } from './dist/forest-keys.js'
 
 const PROFILES = [0, 1]
 const STORAGE_KEY = 'forest-keys-test-page'
 
-const state = { seed: null, genesis: {} }
+const state = { seed: null }
 const $ = (id) => document.getElementById(id)
 
 // localStorage holds only the credential id (so unlock can name it) and the
@@ -99,26 +92,20 @@ async function render() {
   $('same').textContent = previous ? (previous === fingerprint ? '(same as last time)' : '(DIFFERENT from last time)') : '(first time on this browser)'
   save({ fingerprint })
 
-  const params = { handle: $('handle').value.trim(), pds: $('pds').value.trim() }
   const container = $('profiles')
   container.textContent = ''
   for (const n of PROFILES) {
-    const keys = await profileKeys(state.seed, n)
-    const genesis = await didGenesis(keys, params)
-    state.genesis[n] = genesis
-    $(`submit-${n}`).disabled = false
-    container.append(profileTable(n, keys, genesis))
+    container.append(profileTable(n, await profileKey(state.seed, n), await boxKey(state.seed, n)))
   }
 }
 
-function profileTable(n, keys, genesis) {
+function profileTable(n, key, box) {
   const table = document.createElement('table')
   const rows = [
     ['Profile', String(n)],
-    ['did:plc', genesis.did],
-    ['Control key', keys.control.did()],
-    ['Signing key', keys.signing.did()],
-    ['Wallet', keys.wallet.address],
+    ['Name', key.did],
+    ['Wallet', key.address],
+    ['Box', `${box.recipient.slice(0, 24)}…${box.recipient.slice(-8)} (${box.recipient.length} characters)`],
   ]
   for (const [name, value] of rows) {
     const tr = document.createElement('tr')
@@ -148,18 +135,6 @@ function hideWords() {
   $('hide-words').hidden = true
 }
 
-async function submit(n) {
-  const genesis = state.genesis[n]
-  if (!genesis) throw new Error('unlock first')
-  const directory = $('directory').value.trim()
-  const ok = confirm(
-    `Create ${genesis.did} at ${directory}?\n\nThis is permanent and public. The handle and host in the operation are ${genesis.op.alsoKnownAs[0]} and ${genesis.op.services.atproto_pds.endpoint}.`,
-  )
-  if (!ok) return
-  await submitGenesis(genesis, directory)
-  log(`created ${genesis.did} at ${directory}`)
-}
-
 function guard(fn) {
   return async (...args) => {
     try {
@@ -178,8 +153,6 @@ $('forget').addEventListener('click', () => {
 })
 $('show-words').addEventListener('click', guard(showWords))
 $('hide-words').addEventListener('click', hideWords)
-for (const n of PROFILES) $(`submit-${n}`).addEventListener('click', guard(() => submit(n)))
-for (const id of ['handle', 'pds']) $(id).addEventListener('change', guard(render))
 
 if (!window.PublicKeyCredential) log('this browser has no WebAuthn; the passkey buttons will fail')
 if (!window.isSecureContext) log('not a secure context: serve this page over HTTPS or from localhost')

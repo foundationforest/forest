@@ -25,8 +25,8 @@
   <h1>Forest keys test page</h1>
   <p class="muted">
     Everything happens in this tab. The seed and the keys live in memory only; nothing is sent
-    anywhere unless you press the one button that says so. This page uses its own origin as the
-    passkey's relying party; the real relying party is <code>forest.foundation</code>.
+    anywhere. This page uses its own origin as the passkey's relying party; the real relying party
+    is <code>forest.foundation</code>.
   </p>
 
   <h2>1. Passkey</h2>
@@ -35,25 +35,16 @@
   <button id="forget">Forget the saved credential id</button>
   <p class="muted">Create once. Unlock as often as you like, and after a reload: the results must not change.</p>
 
-  <h2>2. Name parameters</h2>
-  <label>Handle <input id="handle" value="handle.example" autocomplete="off"></label>
-  <label>Host <input id="pds" value="https://host.example" autocomplete="off"></label>
-  <p class="muted">The did:plc is the hash of the genesis operation, which names both, so it changes when they change. The keys do not.</p>
-
-  <h2>3. Seed and profiles</h2>
+  <h2>2. Seed and profiles</h2>
   <p>Seed fingerprint: <span id="fingerprint" class="mono">not unlocked</span> <span id="same" class="muted"></span></p>
   <div id="profiles"></div>
 
-  <h2>4. Paper export</h2>
+  <p class="muted">Each profile has one key: its did:key is its name and its address is its wallet, the same 32 bytes. The box key opens notes sealed to the profile.</p>
+
+  <h2>3. Paper export</h2>
   <button id="show-words">Show the 24 words</button>
   <button id="hide-words" hidden>Hide the words</button>
   <p id="words" class="mono" hidden></p>
-
-  <h2>5. Create the DID at the directory (optional, permanent, public)</h2>
-  <label>Directory <input id="directory" value="https://plc.directory" autocomplete="off"></label>
-  <button id="submit-0" disabled>Create profile 0's DID</button>
-  <button id="submit-1" disabled>Create profile 1's DID</button>
-  <p class="muted">The only action on this page that leaves the tab. A DID cannot be deleted, and its record is public.</p>
 
   <h2>Log</h2>
   <div id="log"></div>

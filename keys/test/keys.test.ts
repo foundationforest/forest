@@ -6,7 +6,7 @@ import { sha256 as nobleSha256 } from '@noble/hashes/sha2.js'
 import { blake512 } from '@noble/hashes/blake1.js'
 import { base58, hex } from '@scure/base'
 import { ed25519 } from '@noble/curves/ed25519.js'
-import { assureValidCreationOp, createOp, validateOperationLog } from '@did-plc/lib'
+import { Decrypter, Encrypter } from 'age-encryption'
 import { Base8, mulPointEscalar, subOrder } from '@zk-kit/baby-jubjub'
 import { poseidon2 } from 'poseidon-lite/poseidon2'
 import {
@@ -14,15 +14,15 @@ import {
   PRF_INPUT,
   PRF_INPUT_TEXT,
   WORD_COUNT,
+  boxKey,
   centralWallet,
-  didGenesis,
+  didKey,
   exportWords,
-  genesisOperation,
   hkdf,
   humanIdentity,
   identitySecret,
   importWords,
-  profileKeys,
+  profileKey,
   seedFileLabel,
   seedFromPrf,
   unwrapSeed,
@@ -32,7 +32,6 @@ import {
 const vectors = JSON.parse(readFileSync(new URL('./vectors.json', import.meta.url), 'utf8'))
 const prf = hex.decode(vectors.prf)
 const otherPrf = hex.decode(vectors.seedFile.prf)
-const params = { handle: vectors.handle, pds: vectors.pds }
 const utf8 = (text: string) => new TextEncoder().encode(text)
 
 // The passkey step
@@ -56,7 +55,7 @@ test('a different PRF output gives a different seed', async () => {
 })
 
 test('HKDF agrees with an independent implementation', async () => {
-  for (const info of [INFO.seed, INFO.control(0), INFO.signing(1), INFO.wallet(7), INFO.seedFileKey, INFO.seedFileLabel, INFO.identity, INFO.central]) {
+  for (const info of [INFO.seed, INFO.profile(0), INFO.box(1), INFO.profile(7), INFO.seedFileKey, INFO.seedFileLabel, INFO.identity, INFO.central]) {
     const ours = await hkdf(prf, info, 32)
     const theirs = nobleHkdf(nobleSha256, prf, undefined, utf8(info), 32)
     assert.equal(hex.encode(ours), hex.encode(theirs), info)
@@ -70,60 +69,81 @@ test('the PRF output must be 32 bytes', async () => {
 
 // Keys per profile
 
-test('profiles 0 and 1 give the pinned keys, and give them again', async () => {
+test('the profile and box labels are fixed; the profile label keeps its first word, wallet', () => {
+  assert.equal(INFO.profile(0), 'forest.foundation/profile/0/wallet/v1')
+  assert.equal(INFO.box(12), 'forest.foundation/profile/12/box/v1')
+})
+
+test('profiles 0 and 1 give the pinned key and box key, and give them again', async () => {
   const seed = await seedFromPrf(prf)
   for (const expected of vectors.profiles) {
     for (let round = 0; round < 2; round++) {
-      const keys = await profileKeys(seed, expected.index)
-      assert.equal(keys.index, expected.index)
-      assert.equal(keys.control.did(), expected.control)
-      assert.equal(keys.signing.did(), expected.signing)
-      assert.equal(keys.wallet.address, expected.wallet)
-      assert.equal(keys.wallet.privateKey.length, 32)
-      assert.equal(keys.wallet.publicKey.length, 32)
+      const key = await profileKey(seed, expected.index)
+      assert.equal(key.index, expected.index)
+      assert.equal(key.did, expected.did)
+      assert.equal(key.address, expected.wallet)
+      assert.equal(key.privateKey.length, 32)
+      assert.equal(key.publicKey.length, 32)
+      assert.deepEqual(await boxKey(seed, expected.index), expected.box)
     }
   }
 })
 
-test('the did:plc keys are secp256k1 and the wallet is ed25519', async () => {
-  const keys = await profileKeys(await seedFromPrf(prf), 0)
-  // did:key with multicodec prefix 0xe7 (secp256k1) encodes as zQ3s...; P-256 would be zDn...
-  assert.match(keys.control.did(), /^did:key:zQ3s/)
-  assert.match(keys.signing.did(), /^did:key:zQ3s/)
-  assert.equal(keys.control.jwtAlg, 'ES256K')
-  assert.equal(keys.signing.jwtAlg, 'ES256K')
-  assert.match(keys.wallet.address, /^[1-9A-HJ-NP-Za-km-z]{32,44}$/)
+test('one key per profile: its did:key and its wallet address are the same 32 bytes', async () => {
+  const key = await profileKey(await seedFromPrf(prf), 0)
+  // Recomputed without the library: HKDF from a second implementation, ed25519, then the
+  // did:key multicodec prefix for ed25519 (0xed 0x01) in base58btc.
+  const privateKey = nobleHkdf(nobleSha256, await seedFromPrf(prf), undefined, utf8(INFO.profile(0)), 32)
+  const publicKey = ed25519.getPublicKey(privateKey)
+  assert.equal(hex.encode(key.privateKey), hex.encode(privateKey))
+  assert.equal(key.address, base58.encode(publicKey))
+  assert.equal(key.did, `did:key:z${base58.encode(Uint8Array.of(0xed, 0x01, ...publicKey))}`)
+  assert.match(key.did, /^did:key:z6Mk/)
+  assert.equal(didKey(key.publicKey), key.did)
+  assert.throws(() => didKey(key.publicKey.subarray(1)), /must be 32 bytes/)
 })
 
-test('every key is unrelated to every other: three per profile, across profiles', async () => {
+test("the box key is age's post-quantum identity: age seals to its recipient and opens with its identity", async () => {
+  const seed = await seedFromPrf(prf)
+  const box = await boxKey(seed, 0)
+  assert.match(box.identity, /^AGE-SECRET-KEY-PQ-1[0-9A-Z]+$/)
+  assert.match(box.recipient, /^age1pq1[0-9a-z]+$/)
+  const encrypter = new Encrypter()
+  encrypter.addRecipient(box.recipient)
+  const sealed = await encrypter.encrypt('only for profile 0')
+  const opener = new Decrypter()
+  opener.addIdentity(box.identity)
+  assert.equal(await opener.decrypt(sealed, 'text'), 'only for profile 0')
+  const other = new Decrypter()
+  other.addIdentity((await boxKey(seed, 1)).identity)
+  await assert.rejects(other.decrypt(sealed, 'text'))
+})
+
+test('every key is unrelated to every other: two per profile, across profiles', async () => {
   const seed = await seedFromPrf(prf)
   const all: string[] = []
   for (const n of [0, 1]) {
-    const keys = await profileKeys(seed, n)
-    all.push(keys.control.did(), keys.signing.did(), keys.wallet.address, hex.encode(keys.wallet.privateKey))
+    const key = await profileKey(seed, n)
+    const box = await boxKey(seed, n)
+    all.push(key.address, hex.encode(key.privateKey), box.identity, box.recipient, hex.encode(await hkdf(seed, INFO.box(n), 32)))
   }
   assert.equal(new Set(all).size, all.length)
 })
 
 test('keys of one seed have nothing to do with keys of another seed', async () => {
-  const a = await profileKeys(await seedFromPrf(prf), 0)
-  const b = await profileKeys(await seedFromPrf(otherPrf), 0)
-  assert.notEqual(a.control.did(), b.control.did())
-  assert.notEqual(a.signing.did(), b.signing.did())
-  assert.notEqual(a.wallet.address, b.wallet.address)
+  const seed = await seedFromPrf(prf)
+  const otherSeed = await seedFromPrf(otherPrf)
+  assert.notEqual((await profileKey(seed, 0)).did, (await profileKey(otherSeed, 0)).did)
+  assert.notEqual((await boxKey(seed, 0)).recipient, (await boxKey(otherSeed, 0)).recipient)
 })
 
 test('the seed must be 32 bytes and the profile index a whole number from 0', async () => {
   const seed = await seedFromPrf(prf)
-  await assert.rejects(profileKeys(seed.subarray(0, 16), 0), /seed must be 32 bytes/)
-  await assert.rejects(profileKeys(seed, -1), /whole number, 0 or more/)
-  await assert.rejects(profileKeys(seed, 1.5), /whole number, 0 or more/)
-})
-
-test('keys are not exportable', async () => {
-  const keys = await profileKeys(await seedFromPrf(prf), 0)
-  await assert.rejects(keys.control.export(), /not exportable/i)
-  await assert.rejects(keys.signing.export(), /not exportable/i)
+  for (const make of [profileKey, boxKey]) {
+    await assert.rejects(make(seed.subarray(0, 16), 0), /seed must be 32 bytes/)
+    await assert.rejects(make(seed, -1), /whole number, 0 or more/)
+    await assert.rejects(make(seed, 1.5), /whole number, 0 or more/)
+  }
 })
 
 // The identity, one per person
@@ -172,7 +192,7 @@ test('one identity per seed, not per profile, and unrelated to every profile key
   const seed = await seedFromPrf(prf)
   const secret = await identitySecret(seed)
   for (const n of [0, 1]) {
-    for (const info of [INFO.control(n), INFO.signing(n), INFO.wallet(n)]) {
+    for (const info of [INFO.profile(n), INFO.box(n)]) {
       assert.notEqual(hex.encode(await hkdf(seed, info, 32)), hex.encode(secret))
     }
   }
@@ -205,9 +225,9 @@ test('the central wallet is unrelated to every profile key and to the identity s
   const seed = await seedFromPrf(prf)
   const central = await centralWallet(seed)
   for (const n of [0, 1, 2, 3]) {
-    const keys = await profileKeys(seed, n)
-    assert.notEqual(keys.wallet.address, central.address, `profile ${n}'s wallet`)
-    for (const info of [INFO.control(n), INFO.signing(n), INFO.wallet(n)]) {
+    const key = await profileKey(seed, n)
+    assert.notEqual(key.address, central.address, `profile ${n}'s wallet`)
+    for (const info of [INFO.profile(n), INFO.box(n)]) {
       assert.notEqual(hex.encode(await hkdf(seed, info, 32)), hex.encode(central.privateKey), info)
     }
   }
@@ -218,65 +238,6 @@ test('the central wallet is unrelated to every profile key and to the identity s
 test('the central wallet needs a 32-byte seed', async () => {
   const seed = await seedFromPrf(prf)
   await assert.rejects(centralWallet(seed.subarray(0, 16)), /seed must be 32 bytes/)
-})
-
-// The name
-
-test('the genesis operation names the control key as rotation key and the signing key as verification key', async () => {
-  const keys = await profileKeys(await seedFromPrf(prf), 0)
-  const op = genesisOperation(keys, params)
-  assert.deepEqual(op, {
-    type: 'plc_operation',
-    rotationKeys: [keys.control.did()],
-    verificationMethods: { atproto: keys.signing.did() },
-    alsoKnownAs: ['at://handle.example'],
-    services: { atproto_pds: { type: 'AtprotoPersonalDataServer', endpoint: 'https://host.example' } },
-    prev: null,
-  })
-})
-
-test("the signed genesis operation equals the directory library's own, byte for byte, and passes its checks", async () => {
-  const seed = await seedFromPrf(prf)
-  for (const expected of vectors.profiles) {
-    const keys = await profileKeys(seed, expected.index)
-    const ours = await didGenesis(keys, params)
-    const theirs = await createOp({
-      signingKey: keys.signing.did(),
-      handle: params.handle,
-      pds: params.pds,
-      rotationKeys: [keys.control.did()],
-      signer: keys.control,
-    })
-    assert.deepEqual(ours.op, theirs.op)
-    assert.equal(ours.did, theirs.did)
-    assert.equal(ours.did, expected.did)
-    assert.equal(ours.op.sig, expected.sig)
-    assert.match(ours.did, /^did:plc:[a-z2-7]{24}$/)
-    const document = await assureValidCreationOp(ours.did, ours.op)
-    assert.equal(document.did, ours.did)
-    await validateOperationLog(ours.did, [ours.op])
-  }
-})
-
-test('the same keys and parameters give the same DID again; other parameters give another DID', async () => {
-  const keys = await profileKeys(await seedFromPrf(prf), 0)
-  const again = await didGenesis(keys, params)
-  assert.equal(again.did, vectors.profiles[0].did)
-  const moved = await didGenesis(keys, { handle: 'other.example', pds: params.pds })
-  assert.notEqual(moved.did, again.did)
-})
-
-test('handle and host are normalised the way the directory library does it', async () => {
-  const keys = await profileKeys(await seedFromPrf(prf), 0)
-  const spelled = await didGenesis(keys, { handle: 'at://handle.example', pds: 'host.example' })
-  assert.equal(spelled.did, vectors.profiles[0].did)
-})
-
-test("a genesis operation changed after signing fails the library's checks", async () => {
-  const keys = await profileKeys(await seedFromPrf(prf), 0)
-  const { did, op } = await didGenesis(keys, params)
-  const forged = { ...op, alsoKnownAs: ['at://someone.else'] }
-  await assert.rejects(assureValidCreationOp(did, forged))
 })
 
 // The seed file
