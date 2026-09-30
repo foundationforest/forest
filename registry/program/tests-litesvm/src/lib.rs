@@ -26,7 +26,6 @@ pub const PROGRAM_ID: Address = solana_address::address!("FoRBadgeLineFreeNoFeeN
 pub const SYSTEM_PROGRAM: Address = solana_system_interface::program::ID;
 
 pub const MAX_LABEL: usize = 128;
-pub const MAX_ROOTS: usize = 16;
 
 /// Anchor's error codes start at 6000, in the order `errors.rs` declares them.
 pub mod err {
@@ -34,10 +33,10 @@ pub mod err {
     pub const NOT_A_FIELD_ELEMENT: u32 = 6001;
     pub const PROOF_MALFORMED: u32 = 6002;
     pub const PROOF_REJECTED: u32 = 6003;
-    pub const ROOT_ALREADY_IN_LINE: u32 = 6004;
-    pub const LINE_FULL: u32 = 6005;
-    pub const NOTHING_TO_REFUND: u32 = 6006;
-    pub const NOT_THE_PAYER: u32 = 6007;
+    pub const NOTHING_TO_REFUND: u32 = 6004;
+    pub const NOT_THE_PAYER: u32 = 6005;
+    /// Anchor's own: no instruction has this discriminator.
+    pub const INSTRUCTION_FALLBACK_NOT_FOUND: u32 = 101;
 }
 
 /// `Err` holds the runtime's error and the log, so a test can look for the exact code.
@@ -64,14 +63,12 @@ pub struct Lists {
     pub a: Vec<String>,
     #[serde(rename = "B")]
     pub b: Vec<String>,
-    pub growth: Vec<String>,
 }
 
 #[derive(Deserialize)]
 pub struct FixtureProof {
     pub name: String,
     pub list: String,
-    pub grown: usize,
     pub label: String,
     /// The profile's key, base58.
     pub profile: String,
@@ -104,8 +101,6 @@ pub struct Wire {
     #[serde(rename = "lineAddress")]
     pub line_address: String,
     pub register: String,
-    #[serde(rename = "addProof")]
-    pub add_proof: String,
     pub refund: String,
     pub line: String,
 }
@@ -122,20 +117,10 @@ impl Fixtures {
         self.proofs.iter().find(|p| p.name == name).unwrap_or_else(|| panic!("no fixture {name}"))
     }
 
-    /// The commitments a proof was made against: list A (grown by `grown` strangers) or list B.
+    /// The commitments a proof was made against: list A or list B.
     pub fn commitments_of(&self, p: &FixtureProof) -> Vec<[u8; 32]> {
-        let base = if p.list == "A" { &self.lists.a } else { &self.lists.b };
-        base.iter().chain(self.lists.growth[..p.grown].iter()).map(|s| dec_to_be32(s)).collect()
-    }
-
-    /// Alice's sixteen distinct `tutoring/seller` roots from list A as it grew, then list B's.
-    pub fn alice_tutoring(&self) -> Vec<&FixtureProof> {
-        let mut out = vec![self.proof("alice-tutoring-A")];
-        for i in 1..=15 {
-            out.push(self.proof(&format!("alice-tutoring-A{i}")));
-        }
-        out.push(self.proof("alice-tutoring-B"));
-        out
+        let list = if p.list == "A" { &self.lists.a } else { &self.lists.b };
+        list.iter().map(|s| dec_to_be32(s)).collect()
     }
 }
 
@@ -227,9 +212,9 @@ pub fn line_address(code: &[u8; 32]) -> Address {
     Address::find_program_address(&[b"code", code], &PROGRAM_ID).0
 }
 
-/// A line's size, discriminator included.
-pub fn line_space(label_len: usize, roots: usize) -> usize {
-    8 + 32 + 32 + 32 + 8 + 1 + 4 + label_len + 4 + 32 * roots
+/// A line's size, discriminator included. It never changes.
+pub fn line_space(label_len: usize) -> usize {
+    8 + 32 + 32 + 32 + 8 + 1 + 32 + 4 + label_len
 }
 
 /// One proof on the wire: the root, then the compressed points. 160 bytes.
@@ -274,14 +259,13 @@ pub fn register_fixture_ix(payer: Address, p: &FixtureProof) -> Instruction {
     register_ix(payer, &p.profile_address(), &p.label, &p.code_bytes(), &p.proof())
 }
 
-pub fn add_proof_data(code: &[u8; 32], proof: &Proof) -> Vec<u8> {
+/// The instruction the earlier version had for appending a root, as its bytes were: discriminator,
+/// code, proof. This program has no such instruction; the tests send it to show that nothing
+/// answers it.
+pub fn old_add_proof_ix(payer: Address, code: &[u8; 32], proof: &Proof) -> Instruction {
     let mut data = discriminator("global", "add_proof").to_vec();
     data.extend_from_slice(code);
     data.extend_from_slice(&proof.bytes());
-    data
-}
-
-pub fn add_proof_ix(payer: Address, code: &[u8; 32], proof: &Proof) -> Instruction {
     Instruction {
         program_id: PROGRAM_ID,
         accounts: vec![
@@ -289,7 +273,7 @@ pub fn add_proof_ix(payer: Address, code: &[u8; 32], proof: &Proof) -> Instructi
             AccountMeta::new(payer, true),
             AccountMeta::new_readonly(SYSTEM_PROGRAM, false),
         ],
-        data: add_proof_data(code, proof),
+        data,
     }
 }
 
@@ -314,26 +298,24 @@ pub struct LineView {
     pub payer: Address,
     pub time: i64,
     pub bump: u8,
+    pub root: [u8; 32],
     pub label: String,
-    pub roots: Vec<[u8; 32]>,
 }
 
 /// A line's bytes, read strictly: the discriminator, the fixed fields at their offsets, then the
-/// label and the roots, and nothing after them.
+/// label, and nothing after it.
 pub fn read_line(data: &[u8]) -> LineView {
     assert_eq!(&data[..8], &discriminator("account", "Line"), "not a line");
-    let label_len = u32::from_le_bytes(data[113..117].try_into().unwrap()) as usize;
-    let at = 117 + label_len;
-    let count = u32::from_le_bytes(data[at..at + 4].try_into().unwrap()) as usize;
-    assert_eq!(data.len(), line_space(label_len, count), "a line is exactly its size");
+    let label_len = u32::from_le_bytes(data[145..149].try_into().unwrap()) as usize;
+    assert_eq!(data.len(), line_space(label_len), "a line is exactly its size");
     LineView {
         profile: Address::try_from(&data[8..40]).unwrap(),
         code: data[40..72].try_into().unwrap(),
         payer: Address::try_from(&data[72..104]).unwrap(),
         time: i64::from_le_bytes(data[104..112].try_into().unwrap()),
         bump: data[112],
-        label: String::from_utf8(data[117..at].to_vec()).unwrap(),
-        roots: (0..count).map(|i| data[at + 4 + 32 * i..at + 36 + 32 * i].try_into().unwrap()).collect(),
+        root: data[113..145].try_into().unwrap(),
+        label: String::from_utf8(data[149..].to_vec()).unwrap(),
     }
 }
 
@@ -418,12 +400,6 @@ impl Harness {
     /// The fixture's line, registered by the harness's payer.
     pub fn register(&mut self, p: &FixtureProof) -> Result<litesvm::types::TransactionMetadata, String> {
         let ix = register_fixture_ix(self.payer.pubkey(), p);
-        self.send(&[ix], &[])
-    }
-
-    /// One more root for the line at `p`'s code, the harness's payer paying.
-    pub fn add_proof(&mut self, p: &FixtureProof) -> Result<litesvm::types::TransactionMetadata, String> {
-        let ix = add_proof_ix(self.payer.pubkey(), &p.code_bytes(), &p.proof());
         self.send(&[ix], &[])
     }
 

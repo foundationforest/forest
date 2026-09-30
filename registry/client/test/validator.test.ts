@@ -1,5 +1,6 @@
 // The client against a real validator: start one, load the program, and make a line end to end,
-// from the keys recipe's seed to a line on the chain backed by two issuers' lists.
+// from the keys recipe's seed to a line on the chain, then a second issuer's membership checked
+// against it off chain.
 //
 //   npm run test:validator
 //
@@ -30,18 +31,20 @@ import {
   VersionedTransaction,
 } from '@solana/web3.js'
 
-import { identitySecret, profileKey } from '../../../keys/src/index.ts'
+import { didKey, identitySecret, profileKey } from '../../../keys/src/index.ts'
 import {
   PROGRAM_ID,
-  addProofIx,
-  buildAddProof,
   buildRegistration,
   commitmentOf,
   fetchLine,
   fetchLines,
+  lineSpace,
   listRoot,
+  makeMembership,
   refundIx,
+  registerIx,
   toBytes32,
+  verifyMembership,
 } from '../src/index.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -124,7 +127,7 @@ after(() => {
   if (ledger) rmSync(ledger, { recursive: true, force: true })
 })
 
-test('a line goes through a real validator, the profile key signing nothing', { timeout: 300_000 }, async (t) => {
+test('a line goes through a real validator, the profile key signing nothing, and never changes', { timeout: 300_000 }, async (t) => {
   const why = missing()
   if (why) return t.skip(why)
   if (!validator) return t.skip('solana-test-validator did not start (is it on the PATH?)')
@@ -140,7 +143,6 @@ test('a line goes through a real validator, the profile key signing nothing', { 
   const stranger = (n: number) => commitmentOf(new Identity(Buffer.from(`validator test stranger ${n}`)))
   const listA = [stranger(1), stranger(2), mine, stranger(3)]
   const listB = [mine, stranger(4)]
-  const listC = [stranger(5), mine]
 
   // A relayer pays for everything; the person's profile key never signs.
   const relayer = Keypair.generate()
@@ -152,61 +154,45 @@ test('a line goes through a real validator, the profile key signing nothing', { 
     secret,
     label: LABEL,
     profile,
-    lists: [listA, listB],
+    commitments: listA,
     artifacts,
     payer: relayer.publicKey,
     recentBlockhash: (await connection.getLatestBlockhash('confirmed')).blockhash,
   })
-  assert.equal(reg.transactions.length, 2, 'register, then one add_proof')
-  for (const tx of reg.transactions) {
-    assert.equal(tx.message.header.numRequiredSignatures, 1, 'only the payer signs')
-    assert.ok(!tx.message.staticAccountKeys.some((k) => k.equals(profile)), 'the profile key is not in the transaction')
-    assert.ok(!tx.message.staticAccountKeys.some((k) => k.equals(ComputeBudgetProgram.programId)), 'no compute-budget instruction')
-  }
-  const units: number[] = []
-  for (const tx of reg.transactions) {
-    const { signature, err } = await sendVersioned(tx, [relayer])
-    assert.equal(err, null, signature)
-    const meta = await connection.getTransaction(signature, { commitment: 'confirmed', maxSupportedTransactionVersion: 0 })
-    units.push(meta?.meta?.computeUnitsConsumed ?? 0)
-  }
+  const tx = reg.transaction
+  assert.equal(tx.message.header.numRequiredSignatures, 1, 'only the payer signs')
+  assert.ok(!tx.message.staticAccountKeys.some((k) => k.equals(profile)), 'the profile key is not in the transaction')
+  assert.ok(!tx.message.staticAccountKeys.some((k) => k.equals(ComputeBudgetProgram.programId)), 'no compute-budget instruction')
+  const { signature, err } = await sendVersioned(tx, [relayer])
+  assert.equal(err, null, signature)
+  const meta = await connection.getTransaction(signature, { commitment: 'confirmed', maxSupportedTransactionVersion: 0 })
+  const units = meta?.meta?.computeUnitsConsumed ?? 0
 
   const line = await fetchLine(connection, reg.code)
   assert.ok(line)
   assert.equal(line.profile.toBase58(), profile.toBase58())
   assert.equal(line.label, LABEL)
   assert.equal(line.payer.toBase58(), relayer.publicKey.toBase58())
-  assert.deepEqual(line.roots.map((r) => Buffer.from(r).toString('hex')), [listA, listB].map((l) => Buffer.from(toBytes32(listRoot(l))).toString('hex')))
+  assert.equal(Buffer.from(line.root).toString('hex'), Buffer.from(toBytes32(listRoot(listA))).toString('hex'))
   const lines = await fetchLines(connection, { profile })
   assert.equal(lines.length, 1)
   assert.equal(lines[0].address.toBase58(), reg.line.toBase58())
+  const written = (await connection.getAccountInfo(reg.line))!.data
+  assert.equal(written.length, lineSpace(Buffer.byteLength(LABEL)))
 
-  // A third issuer's list, added by anyone: here the other key pays.
-  const third = await buildAddProof({
-    secret,
-    label: LABEL,
-    profile,
-    commitments: listC,
-    artifacts,
-    payer: other.publicKey,
-    recentBlockhash: (await connection.getLatestBlockhash('confirmed')).blockhash,
-  })
-  assert.equal((await sendVersioned(third.transaction, [other])).err, null)
-  assert.equal((await fetchLine(connection, reg.code))?.roots.length, 3)
-
-  // Refused on chain: a second register for the same code, and list B's proof replayed.
+  // Refused on chain: a second register for the same code, from the other issuer's list.
   const again = await buildRegistration({
     secret,
     label: LABEL,
     profile,
-    lists: [listC],
+    commitments: listB,
     artifacts,
     payer: other.publicKey,
     recentBlockhash: (await connection.getLatestBlockhash('confirmed')).blockhash,
   })
-  assert.notEqual((await sendVersioned(again.transactions[0], [other], true)).err, null, 'a second line for the code')
-  const replay = new Transaction().add(addProofIx({ code: reg.code, proof: reg.proofs[1], payer: other.publicKey }))
-  assert.notEqual((await sendLegacy(replay, other, true)).err, null, 'a root already in the line')
+  assert.notEqual((await sendVersioned(again.transaction, [other], true)).err, null, 'a second line for the code')
+  const replay = new Transaction().add(registerIx({ profile, label: LABEL, code: reg.code, proof: reg, payer: other.publicKey }))
+  assert.notEqual((await sendLegacy(replay, other, true)).err, null, 'the same proof again')
 
   // Refund: someone sends the line lamports; anyone sends refund; the relayer, its recorded payer,
   // gets exactly them back.
@@ -215,6 +201,17 @@ test('a line goes through a real validator, the profile key signing nothing', { 
   const before = await connection.getBalance(relayer.publicKey)
   assert.equal((await sendLegacy(new Transaction().add(refundIx({ code: reg.code, payer: relayer.publicKey })), other)).err, null)
   assert.equal((await connection.getBalance(relayer.publicKey)) - before, 1_000_000)
+  assert.deepEqual((await connection.getAccountInfo(reg.line))!.data, written, 'the line is byte for byte what register wrote')
 
-  console.log(`register ${units[0]} and add_proof ${units[1]} compute units on a local validator; three roots; a refund to the relayer`)
+  // A second issuer, off chain: the person proves they are on list B for the same label and
+  // profile, and a reader checks the record against the line on chain and B's published root.
+  const issuerB = didKey(Keypair.generate().publicKey.toBytes())
+  const record = await makeMembership({ secret, label: LABEL, profile, commitments: listB, issuer: issuerB, artifacts })
+  const verificationKey = JSON.parse(readFileSync(join(here, '../../artifacts/semaphore-32.json'), 'utf8'))
+  const onChain = (await fetchLine(connection, Buffer.from(record.membership.code, 'hex')))!
+  const issuer = { key: issuerB, roots: [listRoot(listB)] }
+  assert.equal(await verifyMembership(record, { profile, line: onChain, issuer, verificationKey }), true, 'B vouches, off chain')
+  assert.equal(await verifyMembership(record, { profile, line: onChain, issuer: { key: issuerB, roots: [listRoot(listA)] }, verificationKey }), false, 'a root B did not publish')
+
+  console.log(`register ${units} compute units on a local validator; one root, a refund to the relayer, and a second issuer off chain`)
 })

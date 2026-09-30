@@ -6,10 +6,13 @@
 // Writes ../program/tests-litesvm/fixtures/proofs.json. The file is committed so `cargo test`
 // needs nothing but Rust; this script is what proves the file was not written by hand.
 //
-// The `wire` section is the client's own bytes for one line's register, add_proof and refund, and
-// the bytes that line should hold. The Rust harness encodes the same instructions by hand and must
-// get the same bytes, the program must write exactly that line, and the client's tests decode it:
-// the wire format written twice, checked against each other.
+// The `wire` section is the client's own bytes for one line's register and refund, and the bytes
+// that line should hold. The Rust harness encodes the same instructions by hand and must get the
+// same bytes, the program must write exactly that line, and the client's tests decode it: the wire
+// format written twice, checked against each other.
+//
+// The `membership` section is a record the client's `makeMembership` made for that line against a
+// second issuer's list: the client's tests verify it, and records/test checks it fits the schema.
 
 import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -20,10 +23,11 @@ import { sha256 } from '@noble/hashes/sha2.js'
 import { Identity } from '@semaphore-protocol/identity'
 import { Keypair, PublicKey } from '@solana/web3.js'
 
-import { profileKey } from '../../../keys/src/index.ts'
+import { didKey, profileKey } from '../../../keys/src/index.ts'
 import { commitmentOf } from '../src/code.ts'
 import { MESSAGE_NS, SCOPE_NS, toBytes32 } from '../src/field.ts'
-import { LINE_DISCRIMINATOR, addProofIx, lineAddress, lineSpace, refundIx, registerIx } from '../src/program.ts'
+import { makeMembership } from '../src/membership.ts'
+import { LINE_DISCRIMINATOR, lineAddress, lineSpace, refundIx, registerIx } from '../src/program.ts'
 import { listRoot, proveMembership } from '../src/proof.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -63,30 +67,25 @@ const longest = ['c'.repeat(42), 'm'.repeat(42), 'r'.repeat(42)].join('/')
 if (Buffer.byteLength(longest) !== 128) throw new Error('the longest label is not 128 bytes')
 
 // Two issuers' published lists. A holds Alice and Bob with strangers between them, so nobody is at
-// index 0 or the end; B holds Carol and Alice. A also grows by one stranger at a time, fifteen
-// times: the same issuer publishing newer roots, which gives Alice sixteen distinct roots in
-// `tutoring/seller` from A and one from B, one more than a line holds.
+// index 0 or the end; B holds Carol and Alice.
 const filler = (n: number) => commitmentOf(new Identity(Buffer.from(`forest registry fixture: filler ${n}`)))
 const listA = [filler(1), commitmentOf(secrets.alice), filler(2), filler(3), commitmentOf(secrets.bob)]
 const listB = [filler(4), commitmentOf(secrets.carol), filler(5), commitmentOf(secrets.alice)]
-const growth = Array.from({ length: 15 }, (_, i) => filler(100 + i))
-const listOf = (list: 'A' | 'B', grown: number) => (list === 'A' ? [...listA, ...growth.slice(0, grown)] : listB)
+const listOf = (list: 'A' | 'B') => (list === 'A' ? listA : listB)
 
 type Who = keyof typeof secrets
-const cases: { name: string; who: Who; label: string; list: 'A' | 'B'; grown: number }[] = [
-  { name: 'alice-tutoring-A', who: 'alice', label: labels.tutoring, list: 'A', grown: 0 },
-  { name: 'alice-tutoring-B', who: 'alice', label: labels.tutoring, list: 'B', grown: 0 },
-  { name: 'alice-cleaning-A', who: 'alice', label: labels.cleaning, list: 'A', grown: 0 },
-  { name: 'bob-tutoring-A', who: 'bob', label: labels.tutoring, list: 'A', grown: 0 },
-  { name: 'carol-tutoring-B', who: 'carol', label: labels.tutoring, list: 'B', grown: 0 },
-  { name: 'alice-longest-A', who: 'alice', label: longest, list: 'A', grown: 0 },
-  ...growth.map((_, i) => ({ name: `alice-tutoring-A${i + 1}`, who: 'alice' as Who, label: labels.tutoring, list: 'A' as const, grown: i + 1 })),
+const cases: { name: string; who: Who; label: string; list: 'A' | 'B' }[] = [
+  { name: 'alice-tutoring-A', who: 'alice', label: labels.tutoring, list: 'A' },
+  { name: 'alice-tutoring-B', who: 'alice', label: labels.tutoring, list: 'B' },
+  { name: 'alice-cleaning-A', who: 'alice', label: labels.cleaning, list: 'A' },
+  { name: 'bob-tutoring-A', who: 'bob', label: labels.tutoring, list: 'A' },
+  { name: 'carol-tutoring-B', who: 'carol', label: labels.tutoring, list: 'B' },
+  { name: 'alice-longest-A', who: 'alice', label: longest, list: 'A' },
 ]
 
 type FixtureProof = {
   name: string
   list: 'A' | 'B'
-  grown: number
   label: string
   profile: string
   root: string
@@ -101,14 +100,13 @@ type FixtureProof = {
 const proofs: FixtureProof[] = []
 for (const c of cases) {
   const t0 = performance.now()
-  const commitments = listOf(c.list, c.grown)
+  const commitments = listOf(c.list)
   const p = await proveMembership({ secret: secrets[c.who], label: c.label, profile: profiles[c.who], commitments, artifacts })
   if (p.root !== listRoot(commitments)) throw new Error(`${c.name}: the proof's root is not the list's`)
   console.log(`${c.name}: ${Math.round(performance.now() - t0)} ms, code ${p.code}`)
   proofs.push({
     name: c.name,
     list: c.list,
-    grown: c.grown,
     label: c.label,
     profile: profiles[c.who].toBase58(),
     root: hex(toBytes32(p.root)),
@@ -135,20 +133,18 @@ for (const c of cases) {
   })
 }
 
-// The wire vectors: Alice's `tutoring/seller` line, registered against A and extended with B, paid
-// by a fixed key at a fixed time, as the client writes it.
+// The wire vectors: Alice's `tutoring/seller` line, registered against A, paid by a fixed key at a
+// fixed time, as the client writes it.
 const byName = (name: string) => proofs.find((p) => p.name === name)!
 const onWire = (p: FixtureProof) => ({
   root: Buffer.from(p.root, 'hex'),
   proof: { a: Buffer.from(p.a, 'hex'), b: Buffer.from(p.b, 'hex'), c: Buffer.from(p.c, 'hex') },
 })
 const first = byName('alice-tutoring-A')
-const second = byName('alice-tutoring-B')
 const code = Buffer.from(first.code, 'hex')
 const payer = fixtureKey('payer')
 const time = 1_790_000_000n
 const register = registerIx({ profile: profiles.alice, label: first.label, code, proof: onWire(first), payer: payer.publicKey })
-const addProof = addProofIx({ code, proof: onWire(second), payer: payer.publicKey })
 const refund = refundIx({ code, payer: payer.publicKey })
 const label = Buffer.from(first.label, 'utf8')
 const timeBytes = Buffer.alloc(8)
@@ -161,13 +157,25 @@ const lineBytes = Buffer.concat([
   payer.publicKey.toBytes(),
   timeBytes,
   Buffer.from([bump]),
+  Buffer.from(first.root, 'hex'),
   Buffer.from(Uint32Array.of(label.length).buffer),
   label,
-  Buffer.from(Uint32Array.of(2).buffer),
-  Buffer.from(first.root, 'hex'),
-  Buffer.from(second.root, 'hex'),
 ])
-if (lineBytes.length !== lineSpace(label.length, 2)) throw new Error('the expected line is not its own size')
+if (lineBytes.length !== lineSpace(label.length)) throw new Error('the expected line is not its own size')
+
+// A membership for that line: Alice on issuer B's list, for the same label and profile, as the
+// client's own `makeMembership` makes it. Issuer B's key is a fixed key, named by its did:key.
+const issuerB = fixtureKey('issuer B')
+const membership = await makeMembership({
+  secret: secrets.alice,
+  label: first.label,
+  profile: profiles.alice,
+  commitments: listB,
+  issuer: didKey(issuerB.publicKey.toBytes()),
+  artifacts,
+  createdAt: '2026-09-30T12:00:00.000Z',
+})
+if (membership.membership.code !== first.code) throw new Error("the membership's code is not the line's")
 
 const out = {
   note: 'Generated by registry/client/scripts/fixtures.ts. Real proofs, real ceremony artifacts.',
@@ -183,20 +191,23 @@ const out = {
   lists: {
     A: listA.map(String),
     B: listB.map(String),
-    growth: growth.map(String),
   },
   proofs,
   wire: {
-    what: "Alice's tutoring/seller line: register against list A, then add_proof with list B, paid by payerSeed's key at time",
+    what: "Alice's tutoring/seller line: register against list A, paid by payerSeed's key at time",
     programId: register.programId.toBase58(),
     payer: payer.publicKey.toBase58(),
     payerSeed: hex(sha256(new TextEncoder().encode('forest registry fixture: payer'))),
     time: Number(time),
     lineAddress: lineAddress(code).toBase58(),
     register: hex(register.data),
-    addProof: hex(addProof.data),
     refund: hex(refund.data),
     line: hex(lineBytes),
+  },
+  membership: {
+    what: "Alice on issuer B's list, for the wire line's label and profile: a proof/<id> record of the membership kind, made by makeMembership",
+    issuerSeed: hex(sha256(new TextEncoder().encode('forest registry fixture: issuer B'))),
+    body: membership,
   },
 }
 

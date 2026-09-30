@@ -5,7 +5,7 @@
 
 use anchor_lang::prelude::*;
 
-/// One badge: this profile is one verified human under this label, backed by these roots.
+/// One badge: this profile is one verified human under this label, proven against this root.
 ///
 /// At `[CODE_SEED, code]`. Borsh, as Anchor writes it after the 8-byte discriminator:
 ///
@@ -16,11 +16,13 @@ use anchor_lang::prelude::*;
 /// | 72 | 32 | payer |
 /// | 104 | 8 | time, i64 little-endian |
 /// | 112 | 1 | bump |
-/// | 113 | 4 + n | label: u32 length, then UTF-8 |
-/// | 117 + n | 4 + 32k | roots: u32 count, then k roots |
+/// | 113 | 32 | root |
+/// | 145 | 4 + n | label: u32 length, then UTF-8 |
 ///
-/// Sized exactly: `space(label, roots)`, and 32 bytes more for every root `add_proof` appends.
-/// It never closes: its existence is the one-line-per-code rule.
+/// Every fixed field comes first, so each sits at a fixed offset; the label, the one of variable
+/// length, is last. Sized exactly, `space(label)`, at `register`, and never written again: a line
+/// never grows and never changes. It never closes either: its existence is the one-line-per-code
+/// rule.
 #[account]
 pub struct Line {
     /// The profile's ed25519 key: its did:key name and its Solana wallet. First, so a reader can
@@ -36,20 +38,20 @@ pub struct Line {
     pub time: i64,
     /// The canonical bump of the line's address.
     pub bump: u8,
+    /// The root of the issuer's list the proof was made against. The program does not check it;
+    /// readers decide which roots they trust. More issuers are proofs kept off chain, in the
+    /// profile's folder (`registry/README.md`).
+    pub root: [u8; 32],
     /// Free text, at most `MAX_LABEL` bytes. The proof's scope is its hash.
     pub label: String,
-    /// The roots of the issuers' lists the proofs were made against, in the order they came,
-    /// each at most once, at most `MAX_ROOTS`. The program checks none of them.
-    pub roots: Vec<[u8; 32]>,
 }
 
 impl Line {
-    /// profile, code, payer, time and bump.
-    pub const FIXED: usize = 32 + 32 + 32 + 8 + 1;
+    /// profile, code, payer, time, bump and root.
+    pub const FIXED: usize = 32 + 32 + 32 + 8 + 1 + 32;
 
-    /// The account's size, discriminator included, for a label of `label_len` bytes and `roots`
-    /// roots.
-    pub const fn space(label_len: usize, roots: usize) -> usize {
-        8 + Self::FIXED + 4 + label_len + 4 + 32 * roots
+    /// The account's size, discriminator included, for a label of `label_len` bytes.
+    pub const fn space(label_len: usize) -> usize {
+        8 + Self::FIXED + 4 + label_len
     }
 }

@@ -1,64 +1,66 @@
 {
-  "note": "The devnet deploy of the registry, the free list of badges, beside the earlier registry (devnet/devnet.json), which it does not touch. Public keys, addresses and signatures only. The program id is derived from the devnet phrase under the label registry-badges-program; the deploy key and the payer are the ones devnet/devnet.json names. Written by registry/devnet/deploy.sh and registry/client/scripts/devnet.ts; read by registry/client/test/devnet.test.ts.",
+  "note": "The devnet deploy of the registry whose lines never change, beside the earlier registries, which it does not touch. Public keys, addresses and signatures only. The program id is derived from the devnet phrase under the label registry-lines-program; the deploy key and the payer are the ones devnet/devnet.json names. Written by registry/devnet/deploy.sh and registry/client/scripts/devnet.ts; read by registry/client/test/devnet.test.ts.",
   "cluster": "devnet",
   "rpc": "https://api.devnet.solana.com",
+  "earlier": [
+    {
+      "programId": "GWyKGgoRg2g3kpKNgsXBWS1ayHTHHzwbtLJW4XGVP2RW",
+      "what": "the free list of badges whose lines grew by add_proof, key label registry-badges-program; untouched. Its record is this file at commit fdb16ea."
+    },
+    {
+      "programId": "8sUyd9JXRGEUqf2hYVnLCybi74549VG27dAK6YvbbU3i",
+      "what": "the first registry, with lists, a code tree and a fee; untouched. Its record is devnet/devnet.json."
+    }
+  ],
   "registry": {
-    "programId": "GWyKGgoRg2g3kpKNgsXBWS1ayHTHHzwbtLJW4XGVP2RW",
-    "programData": "FnNYuVuFyJ3S6CAwiJ1iJZaJKCCGy9ZvbTinAZtbZFTe",
+    "programId": "Hyh5Lt1ErzYV3pF9ZkFWTdjhE2wwTuXnPMVgzCKEv9hf",
+    "programData": "A7RsBQdNTuUXcBCJoMsqPzmH6Brx8UiLgGSjXemGPJnC",
     "upgradeAuthority": "2mz33wBK7FKRXoAi7LptGGTwVQJDbrSyrVwbYRCqwP3A",
-    "lastDeploySlot": 505783416,
-    "soSha256": "9118c23f2e6e52ca1d5ee81baa131e29678143be7adc5d1d090d7fe81f4193db",
-    "soBytes": 188680,
+    "lastDeploySlot": 505982873,
+    "soSha256": "7546409d84dc86c9e67fc7cc7739c34487e908f68cc93c1daf907b6ea5c4d7d3",
+    "soBytes": 165320,
     "sbpfVersion": "v3",
-    "deploySignature": "tWpU4DNrPH9gs5mA8KTbtQbKGA2HUioYdR2nrTriCFHRZfvNBXwX89AVEeJN3s15RrdRMbtbf6wKh5vA5AfnEWN",
+    "deploySignature": "58P5pSkm8EENgcXuJu9mBbvqznGuC9hd1uwww2fzFo6X7Wf3LSCr1s6gR8QYVR6n2JWcmAy1sjbqmPVGbFFcbg4X",
     "deployCost": {
-      "bytes": 188680,
-      "programDataRent": 959373240,
+      "bytes": 165320,
+      "programDataRent": 840704440,
       "programRent": 833120,
-      "writes": 187,
-      "fees": 955000,
-      "total": 961161360,
-      "balanceBefore": 4317179640,
-      "balanceAfter": 3356018280,
-      "spent": 961161360
+      "writes": 164,
+      "fees": 840000,
+      "total": 842377560,
+      "balanceBefore": 3356018280,
+      "balanceAfter": 2513640720,
+      "spent": 842377560
     }
   },
   "transactions": [
     {
       "what": "deploy: the registry (SBPF v3), upgrade authority kept on the deploy key",
-      "signature": "tWpU4DNrPH9gs5mA8KTbtQbKGA2HUioYdR2nrTriCFHRZfvNBXwX89AVEeJN3s15RrdRMbtbf6wKh5vA5AfnEWN"
+      "signature": "58P5pSkm8EENgcXuJu9mBbvqznGuC9hd1uwww2fzFo6X7Wf3LSCr1s6gR8QYVR6n2JWcmAy1sjbqmPVGbFFcbg4X"
     },
     {
       "what": "register: profile 0 under \"freelance/seller\", list A's proof, the relayer paying; the profile key signed nothing",
-      "signature": "5DC4mzG4RiE9RzGKjA3P2Puif5tYxPtLVpSyj9LzwxzhBUReqgxFDnyMZv74Bp48v2HznuTdKXdgFNc6EqCoMNy5"
+      "signature": "3v99SKtktdhYyg4TYrLLhWk7fjekc8zehnDiWnYEi2d7kQeJU4Qzbgpp6vsW2XxfVXn8QSXMFrS2YksASFST5jn9"
     },
     {
-      "what": "add_proof: list B's proof appended to the same line, the relayer paying the 32 new bytes",
-      "signature": "4Z8BXVXnaaa9YuHbYWCWdeNx6Pbpw5XM5MZQqK4ZZwQ2yjkJf1B1XaFhd6p5vxigzXvwrYRjEG47LvrAJu5X6dnc"
-    },
-    {
-      "what": "register again for the same code: refused, the line already exists",
-      "signature": "39jNUfkYax9LrAWREZnqGkPFfoGoqhVrRC9HMffGZBUXn2GAiQMPcaq8HDqQXbZWu7gwDnPwBKnhVeWRBq7XEHU3"
-    },
-    {
-      "what": "add_proof with list B's proof again: refused, the root is already in the line",
-      "signature": "2PjuBrkTYaH5pwgDStZ87KrWoqT5nizCjkxdvwtY5yPvW79orekQDvgiTrFdbqn1UkuA9rswjdivSL93ced3vxGz"
+      "what": "register again for the same code, with list B's proof: refused, the line already exists",
+      "signature": "3gsQLSSchL282DcGxM6SXdxatJPupqyqN7drMNs88kgkQWmCFmYziNY75YjRYrG71GbGeJLfM2Mf4ZPmRDS4L5WW"
     },
     {
       "what": "0.001 SOL sent to the line, above its minimum",
-      "signature": "4TnEv8BJQxqXFjJ8Xk2S7ky3HyT5HU8nP2sKR9HYmtHVuuMJVHQVmVVi8PV11q9KzjkCQQqTzEhzqB4Bwfi1goBL"
+      "signature": "5qCi272F8LP9mZotZQS81LLB8KqyFpHJS6JMvJNwxWsYU5YAQVeCaRYsD2WusYf8x1cPLeWvvSZtXu8BMsgw4ezt"
     },
     {
       "what": "refund: exactly the 0.001 SOL above the minimum, back to the payer the line records",
-      "signature": "29czG39RkPKC9GqBXJA6C6gi4vMR77QwuyGt8xh1NaUo46JU6wqjYwDNJboULJR3kEFG6hEzzzGYGzxRmqHvya6v"
+      "signature": "2BXADd3KPQqxxcWhtURnp5hAHjTvDKVfC5Umpv4Dcaxh27YpEQaMx14wNdP2Ud2AuZwXcwRwNADu5sNduECv6MP5"
     }
   ],
   "line": {
-    "what": "profile 0 of the keys recipe's test seed, one verified human under freelance/seller, backed by two stand-in issuers' lists; a relayer (the payer) sends everything, the profile key signs nothing",
+    "what": "profile 0 of the keys recipe's test seed, one verified human under freelance/seller, proven against a stand-in issuer's list (A); a second stand-in issuer (B) vouches off chain, in a membership record; a relayer (the payer) sends everything, the profile key signs nothing",
     "label": "freelance/seller",
     "profile": "Azh4zBXfQsXLKrrD6YanN7VZhpNyQot7vVdtB2r41UWx",
     "code": "13a8925799f4da90c705505d75e6e80cfc760b8c29f50fe0e42353bbd784c236",
-    "address": "8dWFoHs96hoez6jzvfGJKPz7kkiwUEhG5BJ46aHQjh5U",
+    "address": "469GDtZ4yNERtQJHHAFvQvGUmMWJgtzw1oFGinYuDaKt",
     "lists": {
       "A": {
         "standIn": true,
@@ -82,21 +84,15 @@
       }
     },
     "register": {
-      "signature": "5DC4mzG4RiE9RzGKjA3P2Puif5tYxPtLVpSyj9LzwxzhBUReqgxFDnyMZv74Bp48v2HznuTdKXdgFNc6EqCoMNy5",
-      "provingMs": 1851,
+      "signature": "3v99SKtktdhYyg4TYrLLhWk7fjekc8zehnDiWnYEi2d7kQeJU4Qzbgpp6vsW2XxfVXn8QSXMFrS2YksASFST5jn9",
+      "provingMs": 1547,
       "bytes": 491,
-      "computeUnits": 120920,
-      "fee": 5000
-    },
-    "addProof": {
-      "signature": "4Z8BXVXnaaa9YuHbYWCWdeNx6Pbpw5XM5MZQqK4ZZwQ2yjkJf1B1XaFhd6p5vxigzXvwrYRjEG47LvrAJu5X6dnc",
-      "bytes": 439,
-      "computeUnits": 120267,
+      "computeUnits": 125258,
       "fee": 5000
     },
     "refused": {
       "secondRegister": {
-        "signature": "39jNUfkYax9LrAWREZnqGkPFfoGoqhVrRC9HMffGZBUXn2GAiQMPcaq8HDqQXbZWu7gwDnPwBKnhVeWRBq7XEHU3",
+        "signature": "3gsQLSSchL282DcGxM6SXdxatJPupqyqN7drMNs88kgkQWmCFmYziNY75YjRYrG71GbGeJLfM2Mf4ZPmRDS4L5WW",
         "err": {
           "InstructionError": [
             0,
@@ -106,45 +102,47 @@
           ]
         },
         "log": [
-          "Allocate: account Address { address: 8dWFoHs96hoez6jzvfGJKPz7kkiwUEhG5BJ46aHQjh5U, base: None } already in use",
+          "Allocate: account Address { address: 469GDtZ4yNERtQJHHAFvQvGUmMWJgtzw1oFGinYuDaKt, base: None } already in use",
           "Program 11111111111111111111111111111111 failed: custom program error: 0x0",
-          "Program GWyKGgoRg2g3kpKNgsXBWS1ayHTHHzwbtLJW4XGVP2RW failed: custom program error: 0x0"
-        ]
-      },
-      "replayedRoot": {
-        "signature": "2PjuBrkTYaH5pwgDStZ87KrWoqT5nizCjkxdvwtY5yPvW79orekQDvgiTrFdbqn1UkuA9rswjdivSL93ced3vxGz",
-        "err": {
-          "InstructionError": [
-            0,
-            {
-              "Custom": 6004
-            }
-          ]
-        },
-        "log": [
-          "Program log: AnchorError thrown in src/lib.rs:125. Error Code: RootAlreadyInLine. Error Number: 6004. Error Message: this root is already in the line.",
-          "Program GWyKGgoRg2g3kpKNgsXBWS1ayHTHHzwbtLJW4XGVP2RW failed: custom program error: 0x1774"
+          "Program Hyh5Lt1ErzYV3pF9ZkFWTdjhE2wwTuXnPMVgzCKEv9hf failed: custom program error: 0x0"
         ]
       }
     },
     "refund": {
-      "gift": "4TnEv8BJQxqXFjJ8Xk2S7ky3HyT5HU8nP2sKR9HYmtHVuuMJVHQVmVVi8PV11q9KzjkCQQqTzEhzqB4Bwfi1goBL",
-      "signature": "29czG39RkPKC9GqBXJA6C6gi4vMR77QwuyGt8xh1NaUo46JU6wqjYwDNJboULJR3kEFG6hEzzzGYGzxRmqHvya6v",
+      "gift": "5qCi272F8LP9mZotZQS81LLB8KqyFpHJS6JMvJNwxWsYU5YAQVeCaRYsD2WusYf8x1cPLeWvvSZtXu8BMsgw4ezt",
+      "signature": "2BXADd3KPQqxxcWhtURnp5hAHjTvDKVfC5Umpv4Dcaxh27YpEQaMx14wNdP2Ud2AuZwXcwRwNADu5sNduECv6MP5",
       "lamports": 1000000,
-      "computeUnits": 5000
+      "computeUnits": 4769
+    },
+    "membership": {
+      "issuer": "did:key:z6MkvwV2QLMkm9ipRS5dRpCQMKqtNozhevvnrFgz6KoE6xqW",
+      "membership": {
+        "label": "freelance/seller",
+        "code": "13a8925799f4da90c705505d75e6e80cfc760b8c29f50fe0e42353bbd784c236",
+        "root": "243a73e7b24e703b2f7ee391de7f6e8129dc0cb73804ef6d952b9e138b53de9c",
+        "proof": [
+          "08cb4abbc3df2dde9612784b524feb86e739d4e96936d3fce2aa34b1dad3b4a0",
+          "00e433fc89f63b935a7c00d9267f43a658df6a9f6da544db76e33e4bc394e3ff",
+          "08db4616693351acb0c032a7156911517e62a7c6738d914ac76a1d7ba980961e",
+          "2a56826746b082f1a28dbbfd060c24c19b86362d2ef4e42b0075ea7b38ccd47c",
+          "2e74b365af5b2663d73e281bc80bd5cd7f35a007e3312b4308998307ce12cdc0",
+          "07b960532a8da984f3429399dd580f84e05df8347d5356006be20db7db8db310",
+          "1734cfa7ef9b39f93cd05fe65e1cb0b19770648b633ef4ba46b937fbf5e286e3",
+          "0ab09b7ead3cf917a8029b0e5d61de303e0f9d8d9bce3f75180669ea25758a89"
+        ]
+      },
+      "createdAt": "2026-09-30T17:38:50.686Z"
     },
     "onChain": {
       "readBy": "getProgramAccounts, filtered by profile",
       "linesOfThisProfile": 1,
       "profile": "Azh4zBXfQsXLKrrD6YanN7VZhpNyQot7vVdtB2r41UWx",
       "payer": "9CKUm2s7nwT7HrCpjtaffNH3PnUUVyQr2gELjHrWYBUd",
-      "time": 1790743456,
+      "time": 1790789924,
       "label": "freelance/seller",
-      "roots": [
-        "1d13615ac341b9c932f13fb484f3a35cb5d417a1712cea7e88ddc13960b69be6",
-        "243a73e7b24e703b2f7ee391de7f6e8129dc0cb73804ef6d952b9e138b53de9c"
-      ],
-      "lamports": 1671320
+      "root": "1d13615ac341b9c932f13fb484f3a35cb5d417a1712cea7e88ddc13960b69be6",
+      "bytes": 165,
+      "lamports": 1488440
     }
   }
 }

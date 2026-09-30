@@ -1,6 +1,6 @@
 // The registry on devnet, used for real: a relayer writes one line for profile 0 of the keys
-// recipe's test seed, backed by two issuers' lists, then shows what the program refuses and what a
-// refund does.
+// recipe's test seed against one issuer's list, shows what the program refuses and what a refund
+// does, then makes a second issuer's membership for that line and checks it against the chain.
 //
 //   FOREST_DEVNET_KEYS=<dir> node scripts/devnet.ts        (after registry/devnet/deploy.sh)
 //
@@ -12,30 +12,32 @@
 //
 // The person is the keys recipe's pinned test seed (`keys/test/vectors.json`): profile 0's key and
 // the identity secret, both derived here through `keys/` itself. The profile key signs nothing. The
-// two issuers' lists are stand-ins this script makes (strangers' commitments around the person's),
-// because issuers publish their lists outside the registry and no issuer publishes one yet; they are
-// recorded as such.
+// two issuers' lists, and issuer B's key, are stand-ins this script makes (strangers' commitments
+// around the person's), because issuers publish their lists outside the registry and no issuer
+// publishes one yet; they are recorded as such.
 
 import { readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { sha256 } from '@noble/hashes/sha2.js'
 import { Identity } from '@semaphore-protocol/identity'
 import { Connection, Keypair, PublicKey, SystemProgram, Transaction, VersionedTransaction } from '@solana/web3.js'
 
-import { humanIdentity, identitySecret, profileKey } from '../../../keys/src/index.ts'
+import { didKey, humanIdentity, identitySecret, profileKey } from '../../../keys/src/index.ts'
 import {
-  addProofIx,
-  buildAddProof,
   buildRegistration,
   codeFor,
   commitmentOf,
   fetchLine,
   fetchLines,
   lineAddress,
+  lineSpace,
   listRoot,
+  makeMembership,
   refundIx,
   toBytes32,
+  verifyMembership,
 } from '../src/index.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -129,12 +131,14 @@ if (profile.toBase58() !== vectors.profiles[0].wallet || human.commitment.toStri
 }
 const mine = commitmentOf(secret)
 
-// Two issuers' lists, stand-ins: strangers' commitments around the person's.
+// Two issuers' lists, stand-ins: strangers' commitments around the person's. Issuer B's key, a
+// stand-in too, is named by its did:key in the membership.
 const stranger = (issuer: string, n: number) => commitmentOf(new Identity(Buffer.from(`forest devnet stand-in issuer ${issuer}: member ${n}`)))
 const lists = {
   A: [stranger('A', 1), stranger('A', 2), mine, stranger('A', 3), stranger('A', 4)],
   B: [stranger('B', 1), mine, stranger('B', 2)],
 }
+const issuerB = didKey(Keypair.fromSeed(sha256(new TextEncoder().encode('forest devnet stand-in issuer B: key'))).publicKey.toBytes())
 const code = codeFor(secret, LABEL)
 const address = lineAddress(code, programId)
 const artifacts = {
@@ -143,7 +147,7 @@ const artifacts = {
 }
 record.line = {
   ...(record.line ?? {}),
-  what: "profile 0 of the keys recipe's test seed, one verified human under freelance/seller, backed by two stand-in issuers' lists; a relayer (the payer) sends everything, the profile key signs nothing",
+  what: "profile 0 of the keys recipe's test seed, one verified human under freelance/seller, proven against a stand-in issuer's list (A); a second stand-in issuer (B) vouches off chain, in a membership record; a relayer (the payer) sends everything, the profile key signs nothing",
   label: LABEL,
   profile: profile.toBase58(),
   code: hex(toBytes32(code)),
@@ -158,45 +162,29 @@ save()
 let line = await fetchLine(connection, code, { programId })
 if (!line) {
   const started = Date.now()
-  const reg = await buildRegistration({ secret, label: LABEL, profile, lists: [lists.A], artifacts, payer: payer.publicKey, recentBlockhash: await blockhash(), programId })
+  const reg = await buildRegistration({ secret, label: LABEL, profile, commitments: lists.A, artifacts, payer: payer.publicKey, recentBlockhash: await blockhash(), programId })
   const provingMs = Date.now() - started
-  const bytes = reg.transactions[0].serialize().length
-  const { signature, err } = await sendVersioned(reg.transactions[0])
+  const bytes = reg.transaction.serialize().length
+  const { signature, err } = await sendVersioned(reg.transaction)
   if (err) throw new Error(`register failed: ${JSON.stringify(err)}`)
   const m = await meta(signature)
   record.line.register = { signature, provingMs, bytes, computeUnits: m.computeUnitsConsumed ?? null, fee: m.fee }
   note(`register: profile 0 under "${LABEL}", list A's proof, the relayer paying; the profile key signed nothing`, signature)
   line = await fetchLine(connection, code, { programId })
 }
+const written = (await connection.getAccountInfo(address, 'confirmed'))!.data
 
-// add_proof, with list B's proof.
-const rootB = toBytes32(listRoot(lists.B))
-if (!line!.roots.some((r) => hex(r) === hex(rootB))) {
-  const add = await buildAddProof({ secret, label: LABEL, profile, commitments: lists.B, artifacts, payer: payer.publicKey, recentBlockhash: await blockhash(), programId })
-  const bytes = add.transaction.serialize().length
-  const { signature, err } = await sendVersioned(add.transaction)
-  if (err) throw new Error(`add_proof failed: ${JSON.stringify(err)}`)
-  const m = await meta(signature)
-  record.line.addProof = { signature, bytes, computeUnits: m.computeUnitsConsumed ?? null, fee: m.fee }
-  note('add_proof: list B\'s proof appended to the same line, the relayer paying the 32 new bytes', signature)
-  line = await fetchLine(connection, code, { programId })
-}
-
-// Refused on chain, sent without a preflight so each refusal has a signature: a second register for
-// the same code (list B's proof this time), and list B's proof replayed into the line.
+// Refused on chain, sent without a preflight so the refusal has a signature: a second register for
+// the same code, with list B's proof. A line never changes; another issuer goes off chain instead.
 if (!record.line.refused) {
-  const again = await buildRegistration({ secret, label: LABEL, profile, lists: [lists.B], artifacts, payer: payer.publicKey, recentBlockhash: await blockhash(), programId })
-  const second = await sendVersioned(again.transactions[0], true)
+  const again = await buildRegistration({ secret, label: LABEL, profile, commitments: lists.B, artifacts, payer: payer.publicKey, recentBlockhash: await blockhash(), programId })
+  const second = await sendVersioned(again.transaction, true)
   if (!second.err) throw new Error('a second register for the code landed')
-  const replay = await sendLegacy(new Transaction().add(addProofIx({ code, proof: again.proofs[0], payer: payer.publicKey, programId })), true)
-  if (!replay.err) throw new Error('a replayed root landed')
   const logs = async (s: string) => ((await meta(s)).logMessages ?? []).filter((l) => /already in use|Error Code|failed/.test(l))
   record.line.refused = {
     secondRegister: { signature: second.signature, err: second.err, log: await logs(second.signature) },
-    replayedRoot: { signature: replay.signature, err: replay.err, log: await logs(replay.signature) },
   }
-  note('register again for the same code: refused, the line already exists', second.signature)
-  note("add_proof with list B's proof again: refused, the root is already in the line", replay.signature)
+  note("register again for the same code, with list B's proof: refused, the line already exists", second.signature)
 }
 
 // Refund: 0.001 SOL sent to the line, then refund, which anyone may send, pays exactly that back
@@ -215,6 +203,21 @@ if (!record.line.refund) {
   note('refund: exactly the 0.001 SOL above the minimum, back to the payer the line records', refund.signature)
 }
 
+// A second issuer, off chain: the person proves they are on list B for the same label and profile.
+// The record would be published in the profile's folder; here it is kept in this file, and checked
+// the way a reader checks it, against the line on chain and B's published root.
+const verificationKey = JSON.parse(readFileSync(join(here, '../../artifacts/semaphore-32.json'), 'utf8'))
+record.line.membership ??= await makeMembership({ secret, label: LABEL, profile, commitments: lists.B, issuer: issuerB, artifacts })
+const onChain = await fetchLine(connection, Buffer.from(record.line.membership.membership.code, 'hex'), { programId })
+if (!onChain) throw new Error('no line at the membership\'s code')
+const issuer = { key: issuerB, roots: [listRoot(lists.B)] }
+if (!(await verifyMembership(record.line.membership, { profile, line: onChain, issuer, verificationKey }))) throw new Error('the membership does not verify')
+if (await verifyMembership(record.line.membership, { profile, line: onChain, issuer: { key: issuerB, roots: [listRoot(lists.A)] }, verificationKey })) {
+  throw new Error('the membership verified against a root B did not publish')
+}
+save()
+console.log("  membership: list B vouches for the line off chain, checked against the line on chain")
+
 // Read back the way any reader would: every line of this profile.
 const read = await fetchLines(connection, { profile, programId }).catch((e) => {
   console.log(`  getProgramAccounts refused by this RPC (${String(e).slice(0, 80)}); read the one line directly`)
@@ -222,6 +225,8 @@ const read = await fetchLines(connection, { profile, programId }).catch((e) => {
 })
 const final = await fetchLine(connection, code, { programId })
 if (!final) throw new Error('the line is gone')
+const account = (await connection.getAccountInfo(address, 'confirmed'))!
+if (!account.data.equals(written) || account.data.length !== lineSpace(Buffer.byteLength(LABEL))) throw new Error('the line changed')
 record.line.onChain = {
   readBy: read ? 'getProgramAccounts, filtered by profile' : 'getAccountInfo at the code\'s address',
   linesOfThisProfile: read?.length ?? null,
@@ -229,11 +234,12 @@ record.line.onChain = {
   payer: final.payer.toBase58(),
   time: Number(final.time),
   label: final.label,
-  roots: final.roots.map(hex),
-  lamports: await connection.getBalance(address, 'confirmed'),
+  root: hex(final.root),
+  bytes: account.data.length,
+  lamports: account.lamports,
 }
 save()
-if (final.roots.length !== 2 || final.profile.toBase58() !== profile.toBase58() || !final.payer.equals(payer.publicKey)) {
+if (hex(final.root) !== record.line.lists.A.root || final.profile.toBase58() !== profile.toBase58() || !final.payer.equals(payer.publicKey)) {
   throw new Error('the line is not what was sent')
 }
 console.log('done')

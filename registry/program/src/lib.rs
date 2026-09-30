@@ -9,19 +9,24 @@
 
 //! The Forest registry: a free public list of badges.
 //!
-//! A badge is one line: this profile is one verified human under this label, backed by these
-//! issuers' lists. Nothing else lives in the program. There is no fee, no token, no treasury, no
+//! A badge is one line: this profile is one verified human under this label, proven against one
+//! issuer's list. Nothing else lives in the program. There is no fee, no token, no treasury, no
 //! admin and no list: the only costs are Solana's own, paid by whoever sends the transaction.
 //!
 //! A line sits at the address derived from its code, the Semaphore proof's nullifier, so one
-//! human (one identity secret) has at most one line per label. Each proof is made against an
+//! human (one identity secret) has at most one line per label. The proof is made against an
 //! issuer's list; the list lives with the issuer, and its root is an input the program does not
 //! check. Readers decide which roots they trust.
 //!
+//! A line is written once, by `register`, and never grows and never changes. More issuers live
+//! off chain: the person proves membership in another issuer's list for the same label and
+//! profile, and keeps that proof in the profile's folder, where readers check it against the
+//! line's code and the issuer's published roots.
+//!
 //! The proof is the consent. Its message is the profile key, so only the holder of the identity
-//! secret can make one, and a proof can only ever create or extend that profile's own line under
-//! that label. So nobody's signature is asked but the payer's, and anyone may send any
-//! instruction here: the person, an app, a relayer.
+//! secret can make one, and a proof can only ever create that profile's own line under that
+//! label. So nobody's signature is asked but the payer's, and anyone may send either instruction
+//! here: the person, an app, a relayer.
 //!
 //! This program is sealed per version. The upgrade authority is removed at deploy, so nothing
 //! here can be patched: read `registry/README.md`. Nothing is shipped.
@@ -41,8 +46,6 @@ declare_id!("FoRBadgeLineFreeNoFeeNoAdmin1111111111111111");
 /// The longest label a line can carry, in bytes. Our convention is `market/role`; the program
 /// does not care what the text says.
 pub const MAX_LABEL: usize = 128;
-/// The most roots one line can hold: its first, from `register`, and fifteen more.
-pub const MAX_ROOTS: usize = 16;
 
 /// The scope is a hash of the namespaced label, so a label of any text works and a scope from one
 /// namespace can never collide with one from another.
@@ -79,8 +82,8 @@ pub fn message_of(profile: &Pubkey) -> [u8; 32] {
 pub mod forest_registry {
     use super::*;
 
-    /// Write one line: this profile is one verified human under this label, backed by the list
-    /// this proof was made against.
+    /// Write one line: this profile is one verified human under this label, proven against the
+    /// list this proof was made against. The line is never written again.
     ///
     /// The program derives the scope from the label and the message from the profile, and verifies
     /// the proof with public inputs [root, code, message, scope]. So the proof counts for this
@@ -104,31 +107,8 @@ pub mod forest_registry {
         line.payer = ctx.accounts.payer.key();
         line.time = Clock::get()?.unix_timestamp;
         line.bump = ctx.bumps.line;
+        line.root = p.root;
         line.label = args.label;
-        line.roots = vec![p.root];
-        Ok(())
-    }
-
-    /// Append one root to a line: one more issuer's list backs the same profile under the same
-    /// label.
-    ///
-    /// The scope and the message are derived from the line itself, and the code is the line's, so
-    /// only a proof made by the same human for the same profile and label verifies. Anyone may
-    /// send it; the payer pays the 32 bytes the line grows by.
-    ///
-    /// A root already in the line is refused. A proof is public once sent, so without this a
-    /// stranger could replay one proof until the line is full, and no other issuer could ever be
-    /// added. With it, a line only ever holds distinct roots its human proved.
-    pub fn add_proof(ctx: Context<AddProof>, code: [u8; 32], proof: MembershipProof) -> Result<()> {
-        let line = &mut ctx.accounts.line;
-        require!(line.roots.len() < MAX_ROOTS, RegistryError::LineFull);
-        require!(!line.roots.contains(&proof.root), RegistryError::RootAlreadyInLine);
-
-        let scope = scope_of(&line.label);
-        let message = message_of(&line.profile);
-        proof::verify(&proof.a, &proof.b, &proof.c, &[proof.root, code, message, scope])?;
-
-        line.roots.push(proof.root);
         Ok(())
     }
 
@@ -182,31 +162,12 @@ pub struct Register<'info> {
     #[account(
         init,
         payer = payer,
-        space = Line::space(args.label.len(), 1),
+        space = Line::space(args.label.len()),
         seeds = [CODE_SEED, args.code.as_ref()],
         bump
     )]
     pub line: Account<'info, Line>,
     /// Pays the deposit and the network fee, and is recorded in the line. Anyone.
-    #[account(mut)]
-    pub payer: Signer<'info>,
-    pub system_program: Program<'info, System>,
-}
-
-#[derive(Accounts)]
-#[instruction(code: [u8; 32])]
-pub struct AddProof<'info> {
-    /// The line at this code's address, grown by one root. The payer covers the deposit for the
-    /// 32 new bytes, if the line does not already hold it.
-    #[account(
-        mut,
-        seeds = [CODE_SEED, code.as_ref()],
-        bump = line.bump,
-        realloc = line.to_account_info().data_len() + 32,
-        realloc::payer = payer,
-        realloc::zero = false,
-    )]
-    pub line: Account<'info, Line>,
     #[account(mut)]
     pub payer: Signer<'info>,
     pub system_program: Program<'info, System>,
@@ -229,7 +190,7 @@ pub struct Refund<'info> {
 
 /// Compile-time proof that the sealed sizes are what this file says they are.
 const _: () = {
-    assert!(Line::FIXED == 105);
-    assert!(Line::space(0, 1) == 153);
-    assert!(Line::space(MAX_LABEL, MAX_ROOTS) == 761);
+    assert!(Line::FIXED == 137);
+    assert!(Line::space(0) == 149);
+    assert!(Line::space(MAX_LABEL) == 277);
 };
