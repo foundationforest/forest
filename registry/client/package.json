@@ -2,7 +2,7 @@
   "name": "@forest/registry-client",
   "version": "0.0.0",
   "private": true,
-  "description": "Builds a Forest registration: the code, the Merkle path, the proof, compressed points, and the transaction a fee payer co-signs.",
+  "description": "Builds a Forest registry line: the code, the proof against an issuer's list, compressed points, and the transactions any payer sends; reads lines back.",
   "license": "Apache-2.0",
   "type": "module",
   "main": "./dist/index.js",

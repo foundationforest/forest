@@ -9,7 +9,7 @@ export const BN254_R = 218882428718392752222464057452572750885483644004160343436
 export const BN254_P = 21888242871839275222246405745257275088696311157297823662689037894645226208583n
 
 /** The namespaces the program hashes with. Sealed: a change makes every existing code unreachable. */
-export const SCOPE_NS = 'forest.foundation/market/v1/'
+export const SCOPE_NS = 'forest.foundation/label/v1/'
 export const MESSAGE_NS = 'forest.foundation/profile/v1/'
 
 export function toBytes32(value: bigint): Uint8Array {
@@ -38,9 +38,9 @@ export function isFieldElement(value: bigint): boolean {
  * `keccak256(namespace || parts...) >> 8`, the same bytes the program hashes.
  *
  * Semaphore's own proof package hashes a 32-byte big-endian number this way, which caps a scope
- * at 32 bytes. Hashing a namespaced string instead lets a market name or a DID be any length,
- * and keeps one namespace's values from ever colliding with another's. The shift by one byte is
- * what keeps the result below `BN254_R`.
+ * at 32 bytes. Hashing a namespaced string instead lets a label be any text, and keeps one
+ * namespace's values from ever colliding with another's. The shift by one byte is what keeps the
+ * result below `BN254_R`.
  */
 export function fieldHash(namespace: string, ...parts: (string | Uint8Array)[]): bigint {
   const bytes = [namespace, ...parts].map((p) => (typeof p === 'string' ? new TextEncoder().encode(p) : p))
@@ -53,18 +53,18 @@ export function fieldHash(namespace: string, ...parts: (string | Uint8Array)[]):
   return fromBytes32(keccak_256(input)) >> 8n
 }
 
-/** The proof's scope: what makes a proof count for one market and no other. */
-export function scopeOf(market: string): bigint {
-  return fieldHash(SCOPE_NS, market)
+/** The proof's scope: what makes a proof count for one label and no other. */
+export function scopeOf(label: string): bigint {
+  return fieldHash(SCOPE_NS, label)
 }
 
 /**
- * The proof's message: what binds a proof to one profile, its wallet and its DID, so it cannot be
- * replayed for another profile or landed by any wallet but the one that must sign it. The wallet's
- * 32 bytes come first, then the DID.
+ * The proof's message: what binds a proof to one profile, so it cannot create or extend any other
+ * profile's line. The profile is its 32-byte ed25519 key, which is also its did:key name and its
+ * Solana wallet.
  */
-export function messageOf(wallet: PublicKey | Uint8Array, did: string): bigint {
-  const w = wallet instanceof Uint8Array ? wallet : wallet.toBytes()
-  if (w.length !== 32) throw new RangeError('a wallet is 32 bytes')
-  return fieldHash(MESSAGE_NS, w, did)
+export function messageOf(profile: PublicKey | Uint8Array): bigint {
+  const key = profile instanceof Uint8Array ? profile : profile.toBytes()
+  if (key.length !== 32) throw new RangeError('a profile key is 32 bytes')
+  return fieldHash(MESSAGE_NS, key)
 }

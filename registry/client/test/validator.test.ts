@@ -1,5 +1,5 @@
-// The client against a real validator: start one, load the program, and run a registration end
-// to end, from the identity secret to a badge on the chain.
+// The client against a real validator: start one, load the program, and make a line end to end,
+// from the keys recipe's seed to a line on the chain backed by two issuers' lists.
 //
 //   npm run test:validator
 //
@@ -12,7 +12,7 @@
 
 import assert from 'node:assert/strict'
 import { spawn, type ChildProcess } from 'node:child_process'
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { after, before, test } from 'node:test'
@@ -20,49 +20,28 @@ import { fileURLToPath } from 'node:url'
 
 import { Identity } from '@semaphore-protocol/identity'
 import {
-  ACCOUNT_SIZE,
-  MINT_SIZE,
-  TOKEN_PROGRAM_ID,
-  createInitializeAccount3Instruction,
-  createMintToInstruction,
-  getAccount,
-} from '@solana/spl-token'
-import {
+  ComputeBudgetProgram,
   Connection,
   Keypair,
   LAMPORTS_PER_SOL,
   PublicKey,
   SystemProgram,
   Transaction,
-  TransactionMessage,
   VersionedTransaction,
 } from '@solana/web3.js'
 
+import { identitySecret, profileKey } from '../../../keys/src/index.ts'
 import {
-  FOUNDATION_ISSUER,
-  FOUNDATION_ISSUER_PLACEHOLDER_SEED,
   PROGRAM_ID,
-  TREASURY_PLACEHOLDER_SEED,
-  USDC_MINT,
-  addIssuerIx,
-  openListIx,
-  type RegisterAccounts,
+  addProofIx,
+  buildAddProof,
   buildRegistration,
-  codeFor,
-  codeTreeAddress,
   commitmentOf,
-  configAddress,
-  decodeCodeTree,
-  decodeConfig,
-  decodeIdentityList,
-  decodeRegisteredEvents,
-  fromBytes32,
-  initIx,
-  insertIdentityIx,
-  listAddress,
-  registerIx,
-  USDC_FEE,
-  usedCodeAddress,
+  fetchLine,
+  fetchLines,
+  listRoot,
+  refundIx,
+  toBytes32,
 } from '../src/index.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -72,38 +51,7 @@ const artifacts = {
   zkey: join(here, '../../artifacts/semaphore-32.zkey'),
 }
 const RPC = 'http://127.0.0.1:8899'
-const MARKET = 'online-tutors'
-const DID = 'did:plc:wece24yzukt4pj6hqvmb2fn4'
-/** 0.25 at USDC's six decimals: the program's constant. */
-const QUARTER_USDC = USDC_FEE
-
-// The fee payer; Kora in production. Made before the validator starts, because the validator is
-// handed a USDC-shaped mint at the program's constant address whose mint authority is this key.
-const payer = Keypair.generate()
-
-/**
- * A classic SPL Token mint account in the validator's `--account` JSON form, planted at
- * USDC's address: six decimals, initialized, mint authority `payer`, no freeze authority.
- */
-function usdcAccountJson(): string {
-  const data = Buffer.alloc(MINT_SIZE)
-  data.writeUInt32LE(1, 0) // mint_authority: Some
-  payer.publicKey.toBuffer().copy(data, 4)
-  data.writeBigUInt64LE(0n, 36) // supply
-  data[44] = 6 // decimals
-  data[45] = 1 // is_initialized
-  return JSON.stringify({
-    pubkey: USDC_MINT.toBase58(),
-    account: {
-      lamports: 1_461_600,
-      data: [data.toString('base64'), 'base64'],
-      owner: TOKEN_PROGRAM_ID.toBase58(),
-      executable: false,
-      rentEpoch: 0,
-      space: MINT_SIZE,
-    },
-  })
-}
+const LABEL = 'tutoring/seller'
 
 function missing(): string | null {
   if (!existsSync(soPath)) return `no program at ${soPath}; run \`cargo build-sbf\` in registry/program`
@@ -113,59 +61,47 @@ function missing(): string | null {
 
 let validator: ChildProcess | undefined
 let ledger: string | undefined
-let accounts: string | undefined
 let connection: Connection
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-/** Wait for a signature without opening a websocket. */
-async function confirm(signature: string): Promise<void> {
+/** Wait for a signature without opening a websocket. Returns its error, if it failed. */
+async function settle(signature: string): Promise<unknown> {
   for (let i = 0; i < 120; i++) {
     const { value } = await connection.getSignatureStatuses([signature])
     const status = value[0]
-    if (status?.err) throw new Error(`${signature} failed: ${JSON.stringify(status.err)}`)
-    if (status && (status.confirmationStatus === 'confirmed' || status.confirmationStatus === 'finalized')) {
-      return
-    }
+    if (status && (status.confirmationStatus === 'confirmed' || status.confirmationStatus === 'finalized')) return status.err
     await sleep(250)
   }
   throw new Error(`${signature} was never confirmed`)
 }
 
-async function send(instructions: Transaction['instructions'], signers: Keypair[]): Promise<string> {
-  const tx = new Transaction().add(...instructions)
-  tx.feePayer = signers[0].publicKey
+async function sendVersioned(tx: VersionedTransaction, signers: Keypair[], skipPreflight = false): Promise<{ signature: string; err: unknown }> {
+  tx.sign(signers)
+  const signature = await connection.sendRawTransaction(tx.serialize(), { skipPreflight })
+  return { signature, err: await settle(signature) }
+}
+
+async function sendLegacy(tx: Transaction, signer: Keypair, skipPreflight = false): Promise<{ signature: string; err: unknown }> {
+  tx.feePayer = signer.publicKey
   tx.recentBlockhash = (await connection.getLatestBlockhash('confirmed')).blockhash
-  tx.sign(...signers)
-  const signature = await connection.sendRawTransaction(tx.serialize())
-  await confirm(signature)
-  return signature
+  tx.sign(signer)
+  const signature = await connection.sendRawTransaction(tx.serialize(), { skipPreflight })
+  return { signature, err: await settle(signature) }
+}
+
+async function fund(key: PublicKey): Promise<void> {
+  const err = await settle(await connection.requestAirdrop(key, 10 * LAMPORTS_PER_SOL))
+  if (err) throw new Error(`airdrop failed: ${JSON.stringify(err)}`)
 }
 
 before(
   async () => {
     if (missing()) return
     ledger = mkdtempSync(join(tmpdir(), 'forest-registry-ledger-'))
-    // Not inside the ledger directory: `--reset` empties that before `--account` files are read.
-    accounts = mkdtempSync(join(tmpdir(), 'forest-registry-accounts-'))
-    const usdcJson = join(accounts, 'usdc.json')
-    writeFileSync(usdcJson, usdcAccountJson())
-    validator = spawn(
-      'solana-test-validator',
-      [
-        '--reset',
-        '--quiet',
-        '--ledger',
-        ledger,
-        '--bpf-program',
-        PROGRAM_ID.toBase58(),
-        soPath,
-        '--account',
-        USDC_MINT.toBase58(),
-        usdcJson,
-      ],
-      { stdio: 'ignore' },
-    )
+    validator = spawn('solana-test-validator', ['--reset', '--quiet', '--ledger', ledger, '--bpf-program', PROGRAM_ID.toBase58(), soPath], {
+      stdio: 'ignore',
+    })
     validator.on('error', () => {
       validator = undefined
     })
@@ -186,208 +122,99 @@ before(
 after(() => {
   validator?.kill('SIGKILL')
   if (ledger) rmSync(ledger, { recursive: true, force: true })
-  if (accounts) rmSync(accounts, { recursive: true, force: true })
 })
 
-test('a registration goes through a real validator', { timeout: 300_000 }, async (t) => {
+test('a line goes through a real validator, the profile key signing nothing', { timeout: 300_000 }, async (t) => {
   const why = missing()
   if (why) return t.skip(why)
   if (!validator) return t.skip('solana-test-validator did not start (is it on the PATH?)')
 
-  // The treasury is the program's placeholder constant, which this seed signs for.
-  const treasury = Keypair.fromSeed(TREASURY_PLACEHOLDER_SEED)
-  // List 0's owner and first insert key is the program's placeholder issuer constant, likewise.
-  const issuer = Keypair.fromSeed(FOUNDATION_ISSUER_PLACEHOLDER_SEED)
-  const profileWallet = Keypair.generate()
+  // The person: the keys recipe's pinned test seed, its profile 0 and its identity secret.
+  const vectors = JSON.parse(readFileSync(join(here, '../../../keys/test/vectors.json'), 'utf8'))
+  const seed = Buffer.from(vectors.seed, 'hex')
+  const profile = new PublicKey((await profileKey(seed, 0)).publicKey)
+  const secret = await identitySecret(seed)
+  const mine = commitmentOf(secret)
 
-  const airdrop = await connection.requestAirdrop(payer.publicKey, 100 * LAMPORTS_PER_SOL)
-  await confirm(airdrop)
+  // Two issuers' published lists, the person in both.
+  const stranger = (n: number) => commitmentOf(new Identity(Buffer.from(`validator test stranger ${n}`)))
+  const listA = [stranger(1), stranger(2), mine, stranger(3)]
+  const listB = [mine, stranger(4)]
+  const listC = [stranger(5), mine]
 
-  // The mint at USDC's address was planted when the validator started. The two accounts the fee
-  // moves between are made here.
-  const usdc = USDC_MINT
-  const treasuryTokens = Keypair.generate()
-  const profileTokens = Keypair.generate()
-  // The fee payer's own tokens, for the attempts below where it pays the fee for someone else.
-  const payerTokens = Keypair.generate()
-  const accountRent = await connection.getMinimumBalanceForRentExemption(ACCOUNT_SIZE)
-  const newAccount = (key: PublicKey, space: number, lamports: number) =>
-    SystemProgram.createAccount({
-      fromPubkey: payer.publicKey,
-      newAccountPubkey: key,
-      space,
-      lamports,
-      programId: TOKEN_PROGRAM_ID,
-    })
-  await send(
-    [
-      newAccount(treasuryTokens.publicKey, ACCOUNT_SIZE, accountRent),
-      createInitializeAccount3Instruction(treasuryTokens.publicKey, usdc, treasury.publicKey),
-      newAccount(profileTokens.publicKey, ACCOUNT_SIZE, accountRent),
-      createInitializeAccount3Instruction(profileTokens.publicKey, usdc, profileWallet.publicKey),
-      createMintToInstruction(usdc, profileTokens.publicKey, payer.publicKey, 1_000_000),
-      newAccount(payerTokens.publicKey, ACCOUNT_SIZE, accountRent),
-      createInitializeAccount3Instruction(payerTokens.publicKey, usdc, payer.publicKey),
-      createMintToInstruction(usdc, payerTokens.publicKey, payer.publicKey, 1_000_000),
-    ],
-    [payer, treasuryTokens, profileTokens, payerTokens],
-  )
-
-  // init carries nothing that chooses anything, and only the payer signs it.
-  // List 0 opens owned by the foundation's issuer key, which inserts at once.
-  await send([initIx({ payer: payer.publicKey })], [payer])
-
-  const config = decodeConfig(new Uint8Array((await connection.getAccountInfo(configAddress()))!.data))
-  assert.equal(config.treasury.toBase58(), treasury.publicKey.toBase58())
-  assert.deepEqual(config.mints.map((m) => m.toBase58()), [usdc.toBase58()])
-  assert.deepEqual(config.fees, [QUARTER_USDC], "USDC at the program's constant fee")
-  assert.equal(config.listCount, 1)
-
-  // The issuer inserts the list, commitments only. Alice's secret is the one keys/ pins.
-  const alice = new Identity(
-    Buffer.from('54684ed3bd15671b1a07bd8ed840a049c60ce847afd7d8da73b4f71cc6884d85', 'hex'),
-  )
-  const others = [1, 2, 3].map((n) => new Identity(Buffer.from(`validator filler ${n}`)))
-  const leaves = [
-    commitmentOf(others[0]),
-    commitmentOf(alice),
-    commitmentOf(others[1]),
-    commitmentOf(others[2]),
-  ]
-  for (const commitment of leaves) {
-    await send([insertIdentityIx({ issuer: issuer.publicKey, listIndex: 0, commitment })], [payer, issuer])
-  }
-
-  const list = decodeIdentityList(new Uint8Array((await connection.getAccountInfo(listAddress(0)))!.data))
-  assert.equal(list.leafCount, BigInt(leaves.length))
-  assert.equal(list.issuers[0].toBase58(), issuer.publicKey.toBase58())
-  assert.equal(list.owner.toBase58(), FOUNDATION_ISSUER.toBase58())
-
-  // Anyone opens a list of their own, pays its rent, owns it and names its insert keys.
+  // A relayer pays for everything; the person's profile key never signs.
+  const relayer = Keypair.generate()
   const other = Keypair.generate()
-  await confirm(await connection.requestAirdrop(other.publicKey, LAMPORTS_PER_SOL))
-  const helper = Keypair.generate().publicKey
-  await send(
-    [
-      openListIx({ payer: other.publicKey, owner: other.publicKey, newIndex: 1 }),
-      addIssuerIx({ owner: other.publicKey, listIndex: 1, issuer: helper }),
-    ],
-    [payer, other],
-  )
-  const list1 = decodeIdentityList(new Uint8Array((await connection.getAccountInfo(listAddress(1)))!.data))
-  assert.equal(list1.owner.toBase58(), other.publicKey.toBase58())
-  assert.deepEqual(list1.issuers.map((k) => k.toBase58()), [other.publicKey.toBase58(), helper.toBase58()])
+  await fund(relayer.publicKey)
+  await fund(other.publicKey)
 
-  // Everything above is the issuers'. This is the only part a person's device ever does. The fee
-  // payer (Kora, in production) pays the network fee and the code account's rent, and charges the
-  // person for them outside the program; the profile's wallet pays the 25 cents and signs.
-  const accounts = {
-    payer: payer.publicKey,
-    profileWallet: profileWallet.publicKey,
-    feeAuthority: profileWallet.publicKey,
-    feeTokens: profileTokens.publicKey,
-    treasuryTokens: treasuryTokens.publicKey,
+  const reg = await buildRegistration({
+    secret,
+    label: LABEL,
+    profile,
+    lists: [listA, listB],
+    artifacts,
+    payer: relayer.publicKey,
+    recentBlockhash: (await connection.getLatestBlockhash('confirmed')).blockhash,
+  })
+  assert.equal(reg.transactions.length, 2, 'register, then one add_proof')
+  for (const tx of reg.transactions) {
+    assert.equal(tx.message.header.numRequiredSignatures, 1, 'only the payer signs')
+    assert.ok(!tx.message.staticAccountKeys.some((k) => k.equals(profile)), 'the profile key is not in the transaction')
+    assert.ok(!tx.message.staticAccountKeys.some((k) => k.equals(ComputeBudgetProgram.programId)), 'no compute-budget instruction')
   }
-  const build = async (accounts: RegisterAccounts) =>
-    buildRegistration({
-      secret: alice,
-      market: MARKET,
-      did: DID,
-      listIndex: 0,
-      leaves,
-      artifacts,
-      accounts,
-      recentBlockhash: (await connection.getLatestBlockhash('confirmed')).blockhash,
-    })
+  const units: number[] = []
+  for (const tx of reg.transactions) {
+    const { signature, err } = await sendVersioned(tx, [relayer])
+    assert.equal(err, null, signature)
+    const meta = await connection.getTransaction(signature, { commitment: 'confirmed', maxSupportedTransactionVersion: 0 })
+    units.push(meta?.meta?.computeUnitsConsumed ?? 0)
+  }
 
-  const started = performance.now()
-  const registration = await build(accounts)
-  const proveMs = Math.round(performance.now() - started)
+  const line = await fetchLine(connection, reg.code)
+  assert.ok(line)
+  assert.equal(line.profile.toBase58(), profile.toBase58())
+  assert.equal(line.label, LABEL)
+  assert.equal(line.payer.toBase58(), relayer.publicKey.toBase58())
+  assert.deepEqual(line.roots.map((r) => Buffer.from(r).toString('hex')), [listA, listB].map((l) => Buffer.from(toBytes32(listRoot(l))).toString('hex')))
+  const lines = await fetchLines(connection, { profile })
+  assert.equal(lines.length, 1)
+  assert.equal(lines[0].address.toBase58(), reg.line.toBase58())
 
-  assert.equal(registration.code, codeFor(alice, MARKET))
-  assert.equal(registration.root, fromBytes32(list.root), 'the proof is against the root on the chain')
-
-  // The fee payer saw the proof first. It tries to land it under its own key as the profile's wallet,
-  // paying the fee itself: the proof names the profile's wallet, so it does not verify, and the code
-  // is not burned.
-  const stolen = registerIx({
-    market: MARKET,
-    did: DID,
-    listIndex: 0,
-    root: registration.root,
-    code: registration.code,
-    proof: registration.proof,
-    accounts: { ...accounts, profileWallet: payer.publicKey, feeAuthority: payer.publicKey, feeTokens: payerTokens.publicKey },
+  // A third issuer's list, added by anyone: here the other key pays.
+  const third = await buildAddProof({
+    secret,
+    label: LABEL,
+    profile,
+    commitments: listC,
+    artifacts,
+    payer: other.publicKey,
+    recentBlockhash: (await connection.getLatestBlockhash('confirmed')).blockhash,
   })
-  const frontRun = new VersionedTransaction(
-    new TransactionMessage({
-      payerKey: payer.publicKey,
-      recentBlockhash: (await connection.getLatestBlockhash('confirmed')).blockhash,
-      instructions: [stolen],
-    }).compileToV0Message(),
-  )
-  frontRun.sign([payer])
-  await assert.rejects(
-    async () => confirm(await connection.sendRawTransaction(frontRun.serialize(), { skipPreflight: true })),
-    /failed/i,
-    'a proof cannot land under another wallet',
-  )
-  assert.equal(await connection.getAccountInfo(usedCodeAddress(registration.code)), null, 'and the code is still unused')
+  assert.equal((await sendVersioned(third.transaction, [other])).err, null)
+  assert.equal((await fetchLine(connection, reg.code))?.roots.length, 3)
 
-  // The device signs with the profile's wallet; the fee payer co-signs and sends.
-  registration.transaction.sign([profileWallet])
-  registration.transaction.sign([payer])
-  const wire = registration.transaction.serialize()
-  const signature = await connection.sendRawTransaction(wire)
-  await confirm(signature)
-
-  const tx = await connection.getTransaction(signature, {
-    commitment: 'confirmed',
-    maxSupportedTransactionVersion: 0,
+  // Refused on chain: a second register for the same code, and list B's proof replayed.
+  const again = await buildRegistration({
+    secret,
+    label: LABEL,
+    profile,
+    lists: [listC],
+    artifacts,
+    payer: other.publicKey,
+    recentBlockhash: (await connection.getLatestBlockhash('confirmed')).blockhash,
   })
-  assert.ok(tx, 'the registration landed')
+  assert.notEqual((await sendVersioned(again.transactions[0], [other], true)).err, null, 'a second line for the code')
+  const replay = new Transaction().add(addProofIx({ code: reg.code, proof: reg.proofs[1], payer: other.publicKey }))
+  assert.notEqual((await sendLegacy(replay, other, true)).err, null, 'a root already in the line')
 
-  console.log('\n== one registration on a local validator ==')
-  console.log(`   proof on this machine   : ${proveMs} ms (depth 32, snarkjs in Node)`)
-  console.log(`   transaction on the wire : ${wire.length} bytes of the 1,232 limit (v0, with a compute budget instruction)`)
-  console.log(`   compute units consumed  : ${tx.meta?.computeUnitsConsumed}\n`)
-  assert.ok(wire.length < 1232, 'a registration fits in one standard transaction')
+  // Refund: someone sends the line lamports; anyone sends refund; the relayer, its recorded payer,
+  // gets exactly them back.
+  const gift = new Transaction().add(SystemProgram.transfer({ fromPubkey: other.publicKey, toPubkey: reg.line, lamports: 1_000_000 }))
+  assert.equal((await sendLegacy(gift, other)).err, null)
+  const before = await connection.getBalance(relayer.publicKey)
+  assert.equal((await sendLegacy(new Transaction().add(refundIx({ code: reg.code, payer: relayer.publicKey })), other)).err, null)
+  assert.equal((await connection.getBalance(relayer.publicKey)) - before, 1_000_000)
 
-  const [entry] = decodeRegisteredEvents(tx.meta?.logMessages ?? [])
-  assert.equal(entry.market, MARKET)
-  assert.equal(entry.did, DID)
-  assert.equal(entry.wallet.toBase58(), profileWallet.publicKey.toBase58(), 'the entry names the profile wallet')
-  assert.equal(entry.listIndex, 0)
-  assert.equal(entry.listOwner.toBase58(), FOUNDATION_ISSUER.toBase58(), 'and who vouched')
-  assert.deepEqual(Buffer.from(entry.code), Buffer.from(registration.codeBytes))
-
-  const code = await connection.getAccountInfo(usedCodeAddress(registration.code))
-  assert.ok(code, 'the code account exists')
-  assert.equal(code.data.length, 9)
-  assert.equal(code.owner.toBase58(), PROGRAM_ID.toBase58())
-  assert.equal(usedCodeAddress(registration.code).toBase58(), registration.codeAccount.toBase58())
-
-  const tree = decodeCodeTree(new Uint8Array((await connection.getAccountInfo(codeTreeAddress()))!.data))
-  assert.equal(tree.count, 1n)
-
-  assert.equal((await getAccount(connection, treasuryTokens.publicKey)).amount, QUARTER_USDC)
-  assert.equal((await getAccount(connection, profileTokens.publicKey)).amount, 1_000_000n - QUARTER_USDC, 'the profile paid the fee')
-  assert.equal((await getAccount(connection, payerTokens.publicKey)).amount, 1_000_000n, 'the fee payer paid no fee')
-
-  // The same badge a second time cannot be bought, whoever pays: here another key pays the fee.
-  const again = await build({ ...accounts, feeAuthority: payer.publicKey, feeTokens: payerTokens.publicKey })
-  again.transaction.sign([profileWallet])
-  again.transaction.sign([payer])
-  await assert.rejects(
-    async () => {
-      const sig = await connection.sendRawTransaction(again.transaction.serialize(), {
-        skipPreflight: true,
-      })
-      await confirm(sig)
-    },
-    /already in use|custom program error|failed/i,
-    'one badge per market per human',
-  )
-  assert.equal((await getAccount(connection, treasuryTokens.publicKey)).amount, QUARTER_USDC)
-  console.log('the same badge a second time: refused, and the treasury still holds exactly one fee')
+  console.log(`register ${units[0]} and add_proof ${units[1]} compute units on a local validator; three roots; a refund to the relayer`)
 })

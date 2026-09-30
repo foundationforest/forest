@@ -67,7 +67,7 @@ fn negate_g1(g1: &[u8; 64]) -> [u8; 64] {
 /// `public_inputs` are in the order snarkjs and the Semaphore library use them:
 /// `[merkleTreeRoot, nullifier, message, scope]`. The caller supplies the root and the nullifier
 /// (the code); the program derives the message and the scope itself, so a proof made for another
-/// market or another profile simply does not verify.
+/// label or another profile simply does not verify.
 pub fn verify(
     proof_a: &[u8; 32],
     proof_b: &[u8; 64],

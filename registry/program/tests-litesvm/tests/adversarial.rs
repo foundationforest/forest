@@ -1,97 +1,19 @@
-//! Adversarial review 1: the registry, attacked.
-//!
-//! Every test here is an attack from `docs/decisions/adversarial-review-1.md`, run against the
-//! real Semaphore proofs in `fixtures/proofs.json`. A test named for what should be refused
-//! asserts that it is refused. A test named `finding_…` is an attack the program accepts: it
-//! asserts the acceptance, so the suite pins what the report describes.
-//!
-//! Run with `cargo test --test adversarial -- --nocapture` to see what each attack did.
+//! Attacks on the registry: bent proofs, replays, substituted and planted accounts, front-running,
+//! and the rent. Each test says what it tried and that it failed, or, for a `finding_`, what it
+//! showed that is true by design.
 
 use forest_registry_tests::*;
 use num_bigint::BigUint;
 use solana_account::Account;
 use solana_address::Address;
-use solana_compute_budget_interface::ComputeBudgetInstruction;
-use solana_instruction::Instruction;
+use solana_instruction::{AccountMeta, Instruction};
 use solana_keypair::Keypair;
 use solana_signer::Signer;
 
-const QUARTER_USDC: u64 = USDC_FEE;
-const TOKEN_2022_PROGRAM: Address = solana_address::address!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
-/// Wrapped SOL. A classic SPL Token mint. The escrow refuses it by name; the registry does not.
-const NATIVE_MINT: Address = solana_address::address!("So11111111111111111111111111111111111111112");
-
-/// BN254's scalar field order, the bound every public input must sit under.
-const BN254_R: &str = "21888242871839275222246405745257275088548364400416422360885981858940010000001";
+const BN254_R: &str = "21888242871839275222246405745257275088548364400416034343698204186575808495617";
 
 fn ready() -> (Harness, Fixtures) {
-    let f = Fixtures::load();
-    let mut h = Harness::new();
-    for leaf in &f.list(0).leaves {
-        h.insert(0, dec_to_be32(leaf));
-    }
-    (h, f)
-}
-
-/// A fixture's registration, as bytes an attacker can then change, and the profile's wallet that
-/// signs it.
-struct Reg {
-    profile: Keypair,
-    market: String,
-    did: String,
-    list_index: u32,
-    root: [u8; 32],
-    code: [u8; 32],
-    a: [u8; 32],
-    b: [u8; 64],
-    c: [u8; 32],
-}
-
-impl Reg {
-    fn of(p: &FixtureProof) -> Self {
-        Reg {
-            profile: p.wallet_keypair(),
-            market: p.market.clone(),
-            did: p.did.clone(),
-            list_index: p.list_index,
-            root: p.root_bytes(),
-            code: p.code_bytes(),
-            a: p.a_bytes(),
-            b: p.b_bytes(),
-            c: p.c_bytes(),
-        }
-    }
-    fn ix(&self, accounts: &RegisterAccounts) -> Instruction {
-        register_ix(
-            &RegisterArgs {
-                market: &self.market,
-                did: &self.did,
-                list_index: self.list_index,
-                root: self.root,
-                code: self.code,
-                proof_a: self.a,
-                proof_b: self.b,
-                proof_c: self.c,
-            },
-            accounts,
-        )
-    }
-}
-
-/// The profile's wallet signs; `fee_wallet` pays the fee from `tokens` (a sponsor, here).
-fn accounts(h: &Harness, r: &Reg, fee_wallet: &Keypair, tokens: Address) -> RegisterAccounts {
-    RegisterAccounts {
-        payer: h.payer.pubkey(),
-        profile_wallet: r.profile.pubkey(),
-        fee_authority: fee_wallet.pubkey(),
-        fee_tokens: tokens,
-        treasury_tokens: h.treasury_tokens,
-    }
-}
-
-fn send_reg(h: &mut Harness, r: &Reg, fee_wallet: &Keypair, tokens: Address) -> Result<litesvm::types::TransactionMetadata, String> {
-    let ix = r.ix(&accounts(h, r, fee_wallet, tokens));
-    h.send_signed(&[ix], &[&r.profile, fee_wallet])
+    (Harness::new(), Fixtures::load())
 }
 
 fn add_be(a: &[u8; 32], b: &str) -> [u8; 32] {
@@ -102,521 +24,253 @@ fn add_be(a: &[u8; 32], b: &str) -> [u8; 32] {
     out
 }
 
-// ---------------------------------------------------------------------------------------------
-// 0. The key everyone can derive
-// ---------------------------------------------------------------------------------------------
-
-#[test]
-fn finding_the_placeholder_treasury_is_anyones_key() {
-    // Deployed exactly as it is, the program's TREASURY is derived from the public string in its
-    // own source. A stranger who reads the repo signs as the treasury: takes the dials and is paid
-    // every fee. (Since session 14 the treasury has no say over any list; the placeholder issuer
-    // key below is the other half of this finding.)
-    let (mut h, f) = ready();
-    let anyone = Keypair::new_from_array(*b"REPLACE-BEFORE-DEPLOY-treasury-0");
-    assert_eq!(anyone.pubkey(), TREASURY, "the public seed is the treasury");
-    let attacker = Keypair::new();
-    h.svm.airdrop(&attacker.pubkey(), 1_000_000_000).unwrap();
-
-    h.send_signed(&[propose_treasury_ix(anyone.pubkey(), Some(attacker.pubkey()))], &[&anyone]).expect("propose");
-    h.send_signed(&[accept_treasury_ix(attacker.pubkey())], &[&attacker]).expect("accept");
-    assert_eq!(h.config().treasury, attacker.pubkey());
-
-    // And the next registration pays the attacker.
-    let attacker_tokens = h.token_account_for(h.usdc, attacker.pubkey());
-    let p = f.proof("alice-tutors");
-    let (wallet, tokens) = h.wallet_with(h.usdc, 1_000_000);
-    let r = Reg::of(p);
-    let mut a = accounts(&h, &r, &wallet, tokens);
-    a.treasury_tokens = attacker_tokens;
-    h.send_signed(&[r.ix(&a)], &[&r.profile, &wallet]).expect("registration pays the attacker");
-    assert_eq!(token_amount(&h.account(&attacker_tokens).data), QUARTER_USDC);
-    println!("FINDING (money, deploy blocker): the placeholder treasury is a public key pair; replace before deploy");
-}
-
-#[test]
-fn finding_the_placeholder_issuer_key_is_anyones_key() {
-    // The same for list 0's owner, the foundation's issuer key: derived from a public string, so a
-    // stranger who reads the repo owns list 0, names its own insert key, and adds humans who do not
-    // exist, whose badges every index would read as vouched for by the foundation.
-    let (mut h, _f) = ready();
-    let anyone = Keypair::new_from_array(*b"REPLACE-BEFORE-DEPLOY-issuer-000");
-    assert_eq!(anyone.pubkey(), FOUNDATION_ISSUER, "the public seed is list 0's owner");
-    let attacker = Keypair::new();
-    h.svm.airdrop(&attacker.pubkey(), 1_000_000_000).unwrap();
-    h.send_signed(&[issuer_ix("add_issuer", anyone.pubkey(), 0, attacker.pubkey())], &[&anyone]).expect("names its own key");
-    for i in 0..3u8 {
-        h.send_signed(&[insert_identity_ix(attacker.pubkey(), 0, [i + 1; 32].map(|b| b & 0x0f))], &[&attacker]).expect("a human who does not exist");
-    }
-    assert_eq!(h.list(0).leaf_count, 5 + 3);
-    println!("FINDING (promise, deploy blocker): the placeholder issuer key is a public key pair; replace before deploy");
+fn expect_err(result: Result<litesvm::types::TransactionMetadata, String>, what: &str, wants: &[&str]) {
+    let err = result.err().unwrap_or_else(|| panic!("{what}: accepted"));
+    assert!(wants.iter().any(|w| err.contains(w)), "{what}: expected one of {wants:?}, got\n{err}");
 }
 
 // ---------------------------------------------------------------------------------------------
-// 1. The proof and what it is bound to
+// 1. Bending a real proof
 // ---------------------------------------------------------------------------------------------
 
 #[test]
-fn proof_bound_to_its_did_market_root_and_code() {
+fn proof_bound_to_its_root_code_and_field() {
     let (mut h, f) = ready();
-    let alice = f.proof("alice-tutors");
-    let bob = f.proof("bob-tutors");
-    let (wallet, tokens) = h.wallet_with(h.usdc, 10_000_000);
+    let alice = f.proof("alice-tutoring-A");
+    let other_root = f.proof("alice-tutoring-B").proof().root;
+    let payer = h.payer.pubkey();
+    let (profile, label, code) = (alice.profile_address(), alice.label.clone(), alice.code_bytes());
+    let good = alice.proof();
+    let with_root = |root: [u8; 32]| Proof { root, ..good };
 
-    let cases: Vec<(&str, Box<dyn Fn(&mut Reg)>, &[&str])> = vec![
-        ("another profile's DID", Box::new(|r| r.did = bob.did.clone()), &["ProofRejected", "does not verify"]),
-        ("a lookalike market name", Box::new(|r| r.market = "online-tutors ".into()), &["ProofRejected", "does not verify"]),
-        ("the same name in capitals", Box::new(|r| r.market = "Online-Tutors".into()), &["ProofRejected", "does not verify"]),
-        ("another human's code", Box::new(|r| r.code = bob.code_bytes()), &["ProofRejected", "does not verify"]),
-        ("the same code plus the field order", Box::new(|r| r.code = add_be(&r.code, BN254_R)), &["NotAFieldElement", "field element"]),
-        ("the same root plus the field order", Box::new(|r| r.root = add_be(&r.root, BN254_R)), &["RootNotRecent", "last 128", "NotAFieldElement"]),
-        ("a root that was never the list's", Box::new(|r| r.root = [7u8; 32]), &["RootNotRecent", "last 128"]),
-        ("the zero root", Box::new(|r| r.root = [0u8; 32]), &["RootNotRecent", "last 128"]),
-        ("an empty market", Box::new(|r| r.market = String::new()), &["MarketNameLength", "between 1 and 256"]),
-        ("a 257-byte market", Box::new(|r| r.market = "m".repeat(257)), &["MarketNameLength", "between 1 and 256"]),
-        ("an empty DID", Box::new(|r| r.did = String::new()), &["DidLength", "between 1 and 64"]),
-        ("a 65-byte DID", Box::new(|r| r.did = "d".repeat(65)), &["DidLength", "between 1 and 64"]),
-        ("list 1 named for a list-0 proof", Box::new(|r| r.list_index = 1), &["AccountNotInitialized", "AccountOwnedByWrongProgram", "ConstraintSeeds", "3012"]),
-        ("another profile's wallet signing", Box::new(|r| r.profile = bob.wallet_keypair()), &["ProofRejected", "does not verify"]),
-        ("a stranger's wallet signing", Box::new(|r| r.profile = Keypair::new()), &["ProofRejected", "does not verify"]),
+    let cases: Vec<(&str, Instruction, &[&str])> = vec![
+        ("another list's root", register_ix(payer, &profile, &label, &code, &with_root(other_root)), &["ProofRejected"]),
+        ("a root nobody has", register_ix(payer, &profile, &label, &code, &with_root([7u8; 32])), &["ProofRejected"]),
+        ("the zero root", register_ix(payer, &profile, &label, &code, &with_root([0u8; 32])), &["ProofRejected"]),
+        ("the root plus the field order", register_ix(payer, &profile, &label, &code, &with_root(add_be(&good.root, BN254_R))), &["NotAFieldElement"]),
+        ("the code plus the field order", register_ix(payer, &profile, &label, &add_be(&code, BN254_R), &good), &["NotAFieldElement"]),
+        ("an empty label", register_ix(payer, &profile, "", &code, &good), &["ProofRejected"]),
     ];
-    for (what, change, wants) in cases {
-        let mut r = Reg::of(alice);
-        change(&mut r);
-        let err = send_reg(&mut h, &r, &wallet, tokens).err().unwrap_or_else(|| panic!("{what}: must be refused"));
-        assert!(wants.iter().any(|w| err.contains(w)), "{what}: expected one of {wants:?}, got\n{err}");
+    for (what, ix, wants) in cases {
+        expect_err(h.send(&[ix], &[]), what, wants);
     }
-    assert_eq!(h.code_tree().count, 0, "nothing written");
-    assert_eq!(token_amount(&h.account(&tokens).data), 10_000_000, "nothing paid");
-    println!("rejected as expected: fifteen ways of bending a real proof");
+    assert!(!h.exists(&line_address(&code)));
+    assert!(!h.exists(&line_address(&add_be(&code, BN254_R))));
+    println!("refused as expected: six ways of bending a real proof's public inputs");
 }
 
 #[test]
 fn proof_every_single_bit_flip_in_the_points_is_refused() {
-    // Every bit of A, B and C, flipped one at a time: 1,024 attempts. None may register.
+    // Every bit of A, B and C, flipped one at a time: 1,024 attempts in register (a proof for a line
+    // that does not exist yet) and 1,024 in add_proof (a proof for a root the line lacks). Unflipped,
+    // both would land, as the last two lines show.
     let (mut h, f) = ready();
-    let alice = f.proof("alice-tutors");
-    let (wallet, tokens) = h.wallet_with(h.usdc, 10_000_000);
+    let tutoring_a = f.proof("alice-tutoring-A");
+    let tutoring_b = f.proof("alice-tutoring-B");
+    let cleaning = f.proof("alice-cleaning-A");
+    h.register(tutoring_a).expect("the line add_proof aims at");
+    let wants: &[&str] = &["ProofMalformed", "ProofRejected"];
     let mut tried = 0;
     for part in 0..3 {
         let len = if part == 1 { 64 } else { 32 };
         for byte in 0..len {
             for bit in 0..8 {
-                let mut r = Reg::of(alice);
-                match part {
-                    0 => r.a[byte] ^= 1 << bit,
-                    1 => r.b[byte] ^= 1 << bit,
-                    _ => r.c[byte] ^= 1 << bit,
-                }
-                let err = send_reg(&mut h, &r, &wallet, tokens).err().unwrap_or_else(|| panic!("part {part} byte {byte} bit {bit}: accepted"));
-                assert!(err.contains("ProofMalformed") || err.contains("ProofRejected") || err.contains("does not verify") || err.contains("not a valid compressed"), "{err}");
+                let flip = |p: &FixtureProof| {
+                    let mut q = p.proof();
+                    match part {
+                        0 => q.a[byte] ^= 1 << bit,
+                        1 => q.b[byte] ^= 1 << bit,
+                        _ => q.c[byte] ^= 1 << bit,
+                    }
+                    q
+                };
+                let ix = register_ix(h.payer.pubkey(), &cleaning.profile_address(), &cleaning.label, &cleaning.code_bytes(), &flip(cleaning));
+                expect_err(h.send(&[ix], &[]), "register", wants);
+                let ix = add_proof_ix(h.payer.pubkey(), &tutoring_b.code_bytes(), &flip(tutoring_b));
+                expect_err(h.send(&[ix], &[]), "add_proof", wants);
                 tried += 1;
             }
         }
     }
     assert_eq!(tried, 1024);
-    assert_eq!(h.code_tree().count, 0);
-    println!("rejected as expected: {tried} single-bit changes to the proof points");
+    assert!(!h.exists(&line_address(&cleaning.code_bytes())));
+    assert_eq!(h.line(&tutoring_a.code_bytes()).roots.len(), 1);
+    h.register(cleaning).expect("unflipped, register lands");
+    h.add_proof(tutoring_b).expect("unflipped, add_proof lands");
+    println!("refused as expected: {tried} single-bit changes to the proof points, in register and in add_proof each");
 }
 
 #[test]
-fn proof_bound_to_the_profiles_wallet_and_nobody_else_can_land_it() {
-    // Session 10's finding 9: the proof bound the market and the DID, not the wallet, so the human
-    // who made a proof could badge a profile they did not control, and nothing in the entry said
-    // which wallet stood behind it. Now the profile's wallet signs and the proof's message names it.
+fn a_label_that_is_not_utf8_is_refused() {
     let (mut h, f) = ready();
-    let alice = f.proof("alice-tutors");
-    let (sponsor, sponsor_tokens) = h.wallet_with(h.usdc, 1_000_000);
-    let r = Reg::of(alice);
-
-    // A front-runner, a relay or the sponsor itself copies Alice's instruction and puts its own key
-    // in the profile's slot, signing for it: the proof no longer verifies, and Alice's code is not
-    // burned under a wallet her profile does not declare.
-    let mut a = accounts(&h, &r, &sponsor, sponsor_tokens);
-    a.profile_wallet = sponsor.pubkey();
-    let err = h.send_signed(&[r.ix(&a)], &[&sponsor]).expect_err("landed under another wallet");
-    assert!(err.contains("ProofRejected") || err.contains("does not verify"), "{err}");
-    assert!(h.svm.get_account(&used_code_address(&alice.code_bytes())).is_none(), "Alice's code is still hers");
-
-    // A relay that lands Alice's own instruction, signed by her wallet, paying the fee itself, does
-    // her no harm: the badge is hers, and the entry names her wallet.
-    let meta = send_reg(&mut h, &r, &sponsor, sponsor_tokens).expect("relayed, Alice signing");
-    let ev = registered_events(&meta.logs);
-    assert_eq!((ev[0].did.as_str(), ev[0].wallet.to_string()), (alice.did.as_str(), alice.wallet.clone()));
-    assert_eq!(token_amount(&h.account(&sponsor_tokens).data), 1_000_000 - QUARTER_USDC);
-    println!("rejected as expected: the proof names the profile's wallet; only it can land it; the entry says which wallet");
+    let a = f.proof("alice-tutoring-A");
+    let mut ix = register_fixture_ix(h.payer.pubkey(), a);
+    // The label starts after the discriminator, the profile and its four-byte length.
+    ix.data[8 + 32 + 4] = 0xff;
+    expect_err(h.send(&[ix], &[]), "invalid UTF-8", &["InstructionDidNotDeserialize"]);
+    println!("refused as expected: a label that is not UTF-8");
 }
 
 // ---------------------------------------------------------------------------------------------
-// 2. Replays and double spends
+// 2. Replays, front-running, pre-funding
 // ---------------------------------------------------------------------------------------------
 
 #[test]
 fn replay_one_code_twice_in_one_transaction_reverts_both() {
     let (mut h, f) = ready();
-    let alice = f.proof("alice-tutors");
-    let (w, t) = h.wallet_with(h.usdc, 1_000_000);
-    let r = Reg::of(alice);
-    let ix = r.ix(&accounts(&h, &r, &w, t));
-    let err = h.send_signed(&[ix.clone(), ix], &[&r.profile, &w]).expect_err("must be refused");
-    assert!(err.contains("already in use"), "{err}");
-    assert!(h.svm.get_account(&used_code_address(&alice.code_bytes())).is_none(), "not even the first one");
-    assert_eq!(token_amount(&h.account(&t).data), 1_000_000);
-    println!("rejected as expected: the same proof twice in one transaction, and nothing of the first survives");
+    let a = f.proof("alice-tutoring-A");
+    let ix = register_fixture_ix(h.payer.pubkey(), a);
+    expect_err(h.send(&[ix.clone(), ix], &[]), "twice in one transaction", &["already in use"]);
+    assert!(!h.exists(&line_address(&a.code_bytes())), "not even the first one");
+    println!("refused as expected: the same register twice in one transaction, and nothing of the first survives");
 }
 
 #[test]
-fn replay_lamports_sent_to_a_code_address_first_do_not_block_it() {
-    // Someone who can compute a code (only its human can) or who saw it in a failed transaction
-    // sends lamports to its address first, hoping `init` will find the address taken.
+fn lamports_sent_to_a_line_address_first_do_not_block_it() {
+    // Someone who saw a code (in a failed transaction, say) sends lamports to its address first,
+    // hoping `init` finds the address taken.
     let (mut h, f) = ready();
-    let alice = f.proof("alice-tutors");
-    let addr = used_code_address(&alice.code_bytes());
+    let a = f.proof("alice-tutoring-A");
+    let address = line_address(&a.code_bytes());
     h.svm
-        .set_account(addr, Account { lamports: 5_000_000, data: vec![], owner: solana_system_interface::program::ID, executable: false, rent_epoch: 0 })
+        .set_account(address, Account { lamports: 5_000_000, data: vec![], owner: SYSTEM_PROGRAM, executable: false, rent_epoch: 0 })
         .unwrap();
-    let (w, t) = h.wallet_with(h.usdc, 1_000_000);
-    send_reg(&mut h, &Reg::of(alice), &w, t).expect("registers anyway");
-    assert_eq!(h.account(&addr).owner, PROGRAM_ID);
-    println!("rejected as expected: pre-funding a code's address does not block its registration");
+    h.register(a).expect("registers anyway");
+    assert_eq!(h.account(&address).owner, PROGRAM_ID);
+    assert_eq!(h.line(&a.code_bytes()).roots.len(), 1);
+    println!("pre-funding a line's address does not block it");
+}
+
+#[test]
+fn finding_a_front_runner_who_strips_a_proof_costs_one_transaction_never_the_line() {
+    // By design anyone may send: the proof is the consent. Someone who sees Alice's register for
+    // list A pending can land it first, as the payer. Alice's own transaction then fails, and the
+    // line is exactly hers anyway: her profile, her label, her root. She adds list B next.
+    let (mut h, f) = ready();
+    let a = f.proof("alice-tutoring-A");
+    let b = f.proof("alice-tutoring-B");
+    let front = h.funded(1_000_000_000);
+    h.send_as(&front, &[register_fixture_ix(front.pubkey(), a)]).expect("front-run");
+    expect_err(h.register(a), "Alice's own register", &["already in use"]);
+    h.add_proof(b).expect("Alice adds B");
+    let line = h.line(&a.code_bytes());
+    assert_eq!((line.profile, line.label.as_str(), line.roots.len()), (a.profile_address(), "tutoring/seller", 2));
+    assert_eq!(line.payer, front.pubkey(), "the front-runner paid the deposit, and refunds go to it");
+    println!("finding: a front-runner can only pay for Alice's line; it stays hers");
 }
 
 // ---------------------------------------------------------------------------------------------
-// 3. Account substitution
+// 3. Substituted and planted accounts
 // ---------------------------------------------------------------------------------------------
 
 #[test]
-fn substitution_every_account_in_register() {
+fn substitution_every_account() {
     let (mut h, f) = ready();
-    let alice = Reg::of(f.proof("alice-tutors"));
-    let (w, t) = h.wallet_with(h.usdc, 1_000_000);
-    let stranger = Keypair::new();
+    let a = f.proof("alice-tutoring-A");
+    let bob = f.proof("bob-tutoring-A");
+    let code = a.code_bytes();
+    let payer = h.payer.pubkey();
+    let wrong_line = Address::find_program_address(&[b"code", &[1u8; 32]], &PROGRAM_ID).0;
+    let not_a_pda = Keypair::new().pubkey();
+    let fake_system = Keypair::new().pubkey();
 
-    let other_mint = Address::new_unique();
-    h.svm.set_account(other_mint, spl_mint_account(6)).unwrap();
-    let treasury_other_mint = h.token_account_for(other_mint, h.treasury);
-    let strangers_usdc = h.token_account_for(h.usdc, stranger.pubkey());
-    let (_victim, victims_usdc) = h.wallet_with(h.usdc, 5_000_000);
-    let t22 = Address::new_unique();
-    let mut acct = spl_token_account(&h.usdc, &h.treasury, 0);
-    acct.owner = TOKEN_2022_PROGRAM;
-    h.svm.set_account(t22, acct).unwrap();
-
-    let base = alice.ix(&accounts(&h, &alice, &w, t));
-    let cases: Vec<(&str, usize, Address, &[&str])> = vec![
-        ("list 0 swapped for the code tree", 1, code_tree_address(), &["ConstraintSeeds", "AccountDiscriminator", "2006"]),
-        ("the code tree swapped for list 0", 2, list_address(0), &["ConstraintSeeds", "AccountDiscriminator", "2006"]),
-        ("a config that is the code tree", 0, code_tree_address(), &["ConstraintSeeds", "AccountDiscriminator", "2006"]),
-        ("the code account at another address", 3, used_code_address(&[9u8; 32]), &["ConstraintSeeds", "2006"]),
-        ("paying from a victim's token account", 7, victims_usdc, &["ConstraintTokenOwner", "2015"]),
-        ("the fee to a stranger's account", 8, strangers_usdc, &["ConstraintTokenOwner", "2015"]),
-        ("the fee to the treasury's account for another mint", 8, treasury_other_mint, &["MintMismatch", "different mints"]),
-        ("the fee to a Token-2022 account", 8, t22, &["AccountOwnedByWrongProgram", "3007"]),
-        ("Token-2022 as the token program", 9, TOKEN_2022_PROGRAM, &["InvalidProgramId", "3008"]),
-    ];
-    for (what, at, key, wants) in cases {
-        let mut ix = base.clone();
-        ix.accounts[at].pubkey = key;
-        let err = h.send_signed(&[ix], &[&alice.profile, &w]).err().unwrap_or_else(|| panic!("{what}: must be refused"));
-        assert!(wants.iter().any(|x| err.contains(x)), "{what}: expected one of {wants:?}, got\n{err}");
+    for (what, slot, to) in [("another code's address", 0, wrong_line), ("a random address", 0, not_a_pda), ("a fake system program", 2, fake_system)] {
+        let mut ix = register_fixture_ix(payer, a);
+        ix.accounts[slot].pubkey = to;
+        expect_err(h.send(&[ix], &[]), what, &["ConstraintSeeds", "InvalidProgramId", "2006", "3008", "ProgramAccountNotFound", "not found"]);
     }
-    assert_eq!(h.code_tree().count, 0);
-    assert_eq!(token_amount(&h.account(&victims_usdc).data), 5_000_000, "the victim paid nothing");
-    println!("rejected as expected: nine substitutions in register");
+    assert!(!h.exists(&line_address(&code)));
+
+    // add_proof and refund: Bob's line passed where Alice's code names hers.
+    h.register(a).expect("Alice");
+    h.register(bob).expect("Bob");
+    let b = f.proof("alice-tutoring-B");
+    let mut ix = add_proof_ix(payer, &code, &b.proof());
+    ix.accounts[0].pubkey = line_address(&bob.code_bytes());
+    expect_err(h.send(&[ix], &[]), "Bob's line for Alice's code", &["ConstraintSeeds"]);
+    let mut ix = refund_ix(payer, &code);
+    ix.accounts[0].pubkey = line_address(&bob.code_bytes());
+    expect_err(h.send(&[ix], &[]), "refund, Bob's line for Alice's code", &["ConstraintSeeds"]);
+    assert_eq!(h.line(&bob.code_bytes()).roots.len(), 1);
+    println!("refused as expected: every account in register, add_proof and refund substituted");
 }
 
 #[test]
-fn substitution_a_token_2022_mint_cannot_be_accepted() {
-    let (mut h, _f) = ready();
-    let m22 = Address::new_unique();
-    let mut acct = spl_mint_account(6);
-    acct.owner = TOKEN_2022_PROGRAM;
-    h.svm.set_account(m22, acct).unwrap();
-    let err = h.send(&[add_token_ix(h.treasury, m22, QUARTER_USDC)], &[Harness::PAYER, Harness::TREASURY]).expect_err("Token-2022 mint");
-    assert!(err.contains("AccountOwnedByWrongProgram"), "{err}");
-    println!("rejected as expected: a Token-2022 mint at add_token");
+fn a_planted_line_owned_by_another_program_is_refused() {
+    let (mut h, f) = ready();
+    let a = f.proof("alice-tutoring-A");
+    let b = f.proof("alice-tutoring-B");
+    h.register(a).expect("register");
+    let address = line_address(&a.code_bytes());
+    let mut planted = h.account(&address);
+    planted.owner = Keypair::new().pubkey();
+    h.svm.set_account(address, planted).unwrap();
+    expect_err(h.add_proof(b), "add_proof", &["AccountOwnedByWrongProgram"]);
+    expect_err(h.send(&[refund_ix(h.payer.pubkey(), &a.code_bytes())], &[]), "refund", &["AccountOwnedByWrongProgram"]);
+    println!("refused as expected: a line's bytes under another program's ownership");
+}
+
+#[test]
+fn finding_the_program_takes_any_32_bytes_as_a_profile() {
+    // The program does not check that a profile is a usable ed25519 key (records/SPEC.md §1): only
+    // the holder of an identity secret can bind one, and readers apply the key rules. A line for
+    // the all-zero key would need a proof made for it, which only a human can make; here the zero
+    // key with Alice's proof is refused because the proof names another key.
+    let (mut h, f) = ready();
+    let a = f.proof("alice-tutoring-A");
+    let ix = register_ix(h.payer.pubkey(), &Address::new_from_array([0u8; 32]), &a.label, &a.code_bytes(), &a.proof());
+    expect_err(h.send(&[ix], &[]), "the zero key with Alice's proof", &["ProofRejected"]);
+    println!("finding: any 32 bytes can be a line's profile if its human proves for them; readers check the key");
 }
 
 // ---------------------------------------------------------------------------------------------
-// 4. Signers, issuers and the treasury
+// 4. Rent
 // ---------------------------------------------------------------------------------------------
 
 #[test]
-fn signers_an_issuer_of_one_list_cannot_insert_into_another() {
-    let (mut h, _f) = ready();
-    let stranger = Keypair::new();
-    h.svm.airdrop(&stranger.pubkey(), 1_000_000_000).unwrap();
-    h.open_list_as(&stranger).expect("open list 1");
-    let issuer = h.issuer.pubkey();
-    let err = h.send(&[insert_identity_ix(issuer, 1, dec_to_be32("5"))], &[Harness::PAYER, Harness::ISSUER]).expect_err("list 1");
-    assert!(err.contains("may not insert"), "{err}");
-    // Nor can an insert key that is not the list's owner manage its keys.
-    let helper = Keypair::new();
-    h.send_signed(&[issuer_ix("add_issuer", stranger.pubkey(), 1, helper.pubkey())], &[&stranger]).expect("the owner adds a helper");
-    let err = h.send_signed(&[issuer_ix("add_issuer", helper.pubkey(), 1, Keypair::new().pubkey())], &[&helper]).expect_err("insert key as owner");
-    assert!(err.contains("only the list's owner"), "{err}");
-    // And a commitment outside the field, or zero, is refused whoever inserts it.
-    let over = add_be(&[0u8; 32], BN254_R);
-    let err = h.send(&[insert_identity_ix(issuer, 0, over)], &[Harness::PAYER, Harness::ISSUER]).expect_err("r itself");
-    assert!(err.contains("field element"), "{err}");
-    let err = h.send(&[insert_identity_ix(issuer, 0, [0u8; 32])], &[Harness::PAYER, Harness::ISSUER]).expect_err("zero");
-    assert!(err.contains("field element"), "{err}");
-    println!("rejected as expected: an issuer outside its list, an insert key managing keys, out-of-field and zero commitments");
-}
-
-#[test]
-fn finding_an_issuer_can_insert_the_same_commitment_twice() {
-    // Harmless to the one-badge rule (a human's code depends on the secret and the market, not on
-    // the leaf), and a reminder that the list is only as honest as its issuers: an issuer that
-    // makes commitments itself makes humans.
+fn a_rent_rise_freezes_nothing_and_add_proof_tops_up_to_the_new_minimum() {
     let (mut h, f) = ready();
-    let leaf = dec_to_be32(&f.list(0).leaves[0]);
-    h.insert(0, leaf);
-    assert_eq!(h.list(0).leaf_count, 6);
-    println!("FINDING (trust, known): a duplicate leaf is accepted; the issuer key is the list's whole honesty");
+    let a = f.proof("alice-tutoring-A");
+    let b = f.proof("alice-tutoring-B");
+    let address = line_address(&a.code_bytes());
+    h.set_rent(RENT_FINAL);
+    h.register(a).expect("register at the low rate");
+    h.set_rent(RENT_HIGH);
+    expect_err(h.send(&[refund_ix(h.payer.pubkey(), &a.code_bytes())], &[]), "refund below the new minimum", &["NothingToRefund"]);
+    h.add_proof(b).expect("add_proof after a rise");
+    let size = h.account(&address).data.len();
+    assert_eq!(h.lamports_of(&address), rent_minimum(RENT_HIGH, size), "topped up to the new minimum, for the new size");
+    println!("after a rent rise: refund refuses, add_proof tops the line up to the new minimum");
 }
 
 #[test]
-fn treasury_a_handover_in_one_transaction_needs_both_keys_and_cannot_be_replayed() {
-    let (mut h, _f) = ready();
-    let old = h.treasury_signer();
-    let new = Keypair::new();
-    // Both steps in one transaction, both keys signing: allowed, and still proves the new key signs.
-    h.send_signed(&[propose_treasury_ix(old.pubkey(), Some(new.pubkey())), accept_treasury_ix(new.pubkey())], &[&old, &new])
-        .expect("one transaction, two signatures");
-    assert_eq!(h.config().treasury, new.pubkey());
-    // The accept again: nothing pending.
-    let err = h.send_signed(&[accept_treasury_ix(new.pubkey())], &[&new]).expect_err("replay");
-    assert!(err.contains("no treasury handover"), "{err}");
-    // A key only the program could sign for (its own config address) can be proposed, and never accepted.
-    h.send_signed(&[propose_treasury_ix(new.pubkey(), Some(config_address()))], &[&new]).expect("propose a PDA");
-    assert_eq!(h.config().treasury, new.pubkey());
-    println!("rejected as expected: an accept replayed; a key that cannot sign proposed and stuck pending");
-}
-
-#[test]
-fn finding_the_treasury_can_accept_a_token_it_mints_itself() {
-    // "No vouchers" is a rule in the program's text, but add_token takes any classic mint with two
-    // to nineteen decimals. A treasury that mints its own "dollar" and hands it out has vouchers
-    // again: registrations paid in a token that cost nobody anything.
+fn finding_a_refund_to_a_payer_holding_no_sol_fails_until_someone_funds_it() {
+    // The runtime refuses to leave a system account holding less than its own rent minimum, so a
+    // refund smaller than that cannot land on a payer that has spent everything. It waits: the
+    // excess stays in the line, and a refund lands once the payer holds a little SOL again.
     let (mut h, f) = ready();
-    let voucher = Address::new_unique();
-    h.svm.set_account(voucher, spl_mint_account(6)).unwrap();
-    // With a fee per token (session 11), the treasury also sets how much of its voucher counts.
-    h.send(&[add_token_ix(h.treasury, voucher, 1)], &[Harness::PAYER, Harness::TREASURY]).expect("add");
-    let (w, t) = h.wallet_with(voucher, 1);
-    let r = Reg::of(f.proof("alice-tutors"));
-    let mut a = accounts(&h, &r, &w, t);
-    a.treasury_tokens = h.token_account_for(voucher, h.treasury);
-    h.send_signed(&[r.ix(&a)], &[&r.profile, &w]).expect("paid in the voucher");
-    println!("FINDING (promise, for Carlos): the treasury can bring vouchers back as a token, now at any amount; the program cannot tell");
-}
-
-// ---------------------------------------------------------------------------------------------
-// 5. The rent sweep
-// ---------------------------------------------------------------------------------------------
-
-#[test]
-fn sweep_nothing_twice_nothing_missing_and_a_rent_rise_freezes_nothing() {
-    let (mut h, f) = ready();
-    h.svm.set_sysvar(&rent_at(RENT_HIGH));
-    let alice = f.proof("alice-tutors");
-    let (w, t) = h.wallet_with(h.usdc, 1_000_000);
-    send_reg(&mut h, &Reg::of(alice), &w, t).expect("register");
-    let treasury = h.treasury;
-
-    // Nothing to sweep at the rate the accounts were made at.
-    let err = h.send(&[sweep_rent_ix(&SweepTarget::CodeTree, treasury)], &[Harness::PAYER]).expect_err("nothing yet");
-    assert!(err.contains("nothing above"), "{err}");
-
-    // After the cut, once, then nothing. List 0's rent goes to its owner (session 15), the rest to
-    // the treasury.
-    h.svm.set_sysvar(&rent_at(RENT_FINAL));
-    for target in [SweepTarget::Config, SweepTarget::CodeTree, SweepTarget::List(0), SweepTarget::Code(alice.code_bytes())] {
-        let to = if matches!(target, SweepTarget::List(_)) { FOUNDATION_ISSUER } else { treasury };
-        h.send(&[sweep_rent_ix(&target, to)], &[Harness::PAYER]).expect("sweep");
-        let err = h.send(&[sweep_rent_ix(&target, to)], &[Harness::PAYER]).expect_err("twice");
-        assert!(err.contains("nothing above"), "{err}");
-    }
-
-    // A code nobody registered, and a list nobody opened: no account, so not a target.
-    for target in [SweepTarget::Code([3u8; 32]), SweepTarget::List(9)] {
-        let err = h.send(&[sweep_rent_ix(&target, treasury)], &[Harness::PAYER]).expect_err("absent");
-        assert!(err.contains("not the registry account"), "{err}");
-    }
-
-    // The rate goes back up. Every account is now below the new minimum. The registry must keep
-    // working: a registration writes the code tree and the list is read; neither may be frozen.
-    h.svm.set_sysvar(&rent_at(RENT_HIGH));
-    let bob = f.proof("bob-tutors");
-    let (w2, t2) = h.wallet_with(h.usdc, 1_000_000);
-    send_reg(&mut h, &Reg::of(bob), &w2, t2).expect("still registers after sweeping and a rent rise");
-    let issuer = h.issuer.pubkey();
-    h.send(&[insert_identity_ix(issuer, 0, dec_to_be32("77"))], &[Harness::PAYER, Harness::ISSUER]).expect("and still inserts");
-    let tk = h.treasury;
-    h.send(&[propose_treasury_ix(tk, Some(Keypair::new().pubkey()))], &[Harness::PAYER, Harness::TREASURY]).expect("and the config still takes writes");
-    println!("rejected as expected: no double sweep, no sweep of an absent account, and no freeze if rent rises again");
+    let a = f.proof("alice-tutoring-A");
+    let payer = h.funded(1_000_000_000);
+    h.set_rent(RENT_TODAY);
+    h.send_as(&payer, &[register_fixture_ix(payer.pubkey(), a)]).expect("register");
+    h.svm
+        .set_account(payer.pubkey(), Account { lamports: 0, data: vec![], owner: SYSTEM_PROGRAM, executable: false, rent_epoch: 0 })
+        .unwrap();
+    h.set_rent(RENT_TODAY - 10);
+    expect_err(h.send(&[refund_ix(payer.pubkey(), &a.code_bytes())], &[]), "a refund to an empty payer", &["InsufficientFundsForRent"]);
+    h.svm.airdrop(&payer.pubkey(), 10_000_000).unwrap();
+    h.send(&[refund_ix(payer.pubkey(), &a.code_bytes())], &[]).expect("lands once the payer holds SOL");
+    println!("finding: a small refund to an empty payer is refused by the runtime until the payer holds SOL, then lands");
 }
 
 #[test]
-fn sweep_takes_from_nothing_but_the_target_and_gives_to_nothing_but_the_treasury() {
-    let (mut h, f) = ready();
-    h.svm.set_sysvar(&rent_at(RENT_HIGH));
-    let alice = f.proof("alice-tutors");
-    let (w, t) = h.wallet_with(h.usdc, 1_000_000);
-    send_reg(&mut h, &Reg::of(alice), &w, t).expect("register");
-    h.svm.set_sysvar(&rent_at(RENT_FINAL));
-    let watch = [config_address(), code_tree_address(), list_address(0), used_code_address(&alice.code_bytes()), h.payer.pubkey(), h.treasury];
-    let before: Vec<u64> = watch.iter().map(|a| h.account(a).lamports).collect();
-    let target = SweepTarget::Code(alice.code_bytes());
-    let treasury = h.treasury;
-    h.send(&[sweep_rent_ix(&target, treasury)], &[Harness::PAYER]).expect("sweep");
-    let after: Vec<u64> = watch.iter().map(|a| h.account(a).lamports).collect();
-    let taken = before[3] - after[3];
-    assert_eq!(after[3], rent_minimum(RENT_FINAL, USED_CODE_LEN));
-    assert_eq!(after[5], before[5] + taken, "all of it to the treasury");
-    assert_eq!(&after[..3], &before[..3], "no other registry account moved");
-    assert_eq!(after[4], before[4] - 5_000, "the caller paid its fee and nothing else");
-    println!("rejected as expected: a sweep moved {taken} lamports from the one target to the treasury, nothing else");
-}
-
-#[test]
-fn finding_a_sweep_into_a_treasury_holding_no_sol_fails_until_someone_funds_it() {
-    // The runtime refuses any transaction that leaves a credited account below the rent-exempt
-    // minimum. A treasury key that holds no SOL (a fresh key, or a multisig vault, after a
-    // handover) is such an account: a sweep of less than an empty account's own rent (128 bytes'
-    // worth, 650,240 lamports at today's 5,080) fails whole. The money is not lost; anyone can
-    // send the treasury a little SOL and sweep again.
-    let (mut h, f) = ready();
-    h.svm.set_sysvar(&rent_at(RENT_HIGH));
-    let p = f.proof("alice-tutors");
-    let (w, t) = h.wallet_with(h.usdc, 1_000_000);
-    send_reg(&mut h, &Reg::of(p), &w, t).expect("register at the old rate");
-    let old = h.treasury_signer();
-    let fresh = Keypair::new(); // holds nothing
-    h.send_signed(&[propose_treasury_ix(old.pubkey(), Some(fresh.pubkey())), accept_treasury_ix(fresh.pubkey())], &[&old, &fresh])
-        .expect("handover");
-    h.svm.set_sysvar(&rent_at(RENT_TODAY));
-    let target = SweepTarget::Code(p.code_bytes());
-    let err = h.send(&[sweep_rent_ix(&target, fresh.pubkey())], &[Harness::PAYER]).expect_err("an empty treasury");
-    assert!(err.contains("InsufficientFundsForRent"), "{err}");
-    // The config's excess is bigger than an empty account's rent, so it lands, and after that the
-    // treasury holds enough for the small ones too.
-    h.send(&[sweep_rent_ix(&SweepTarget::Config, fresh.pubkey())], &[Harness::PAYER]).expect("a big sweep lands");
-    h.send(&[sweep_rent_ix(&target, fresh.pubkey())], &[Harness::PAYER]).expect("and then the small one");
-    println!("FINDING (nuisance, operations): an empty treasury refuses small sweeps until it holds ~0.00065 SOL");
-}
-
-// ---------------------------------------------------------------------------------------------
-// 6. The edges (session 16, the attack pass): the sealed tree depth, the fee at 1 and at the
-//    maximum, and wrapped SOL as a fee token.
-// ---------------------------------------------------------------------------------------------
-
-#[test]
-fn tree_full_at_depth_32_is_the_sealed_bound() {
-    // A list cannot grow past depth 32: the verification key is sealed at that depth, and the tree
-    // module refuses a 33rd level (`TreeFull`). Reaching it by real inserts is impossible (2^32
-    // leaves), so the boundary is forced with `set_account`. The last leaf a depth-32 tree holds
-    // lands at leaf_count = 2^32 - 1; the very next insert is a 33rd level and is refused.
-    let mut h = Harness::new();
-    let issuer_kp = Keypair::new();
-
-    // Plant a list at index 1 in a chosen state. `insert_identity` consults no other account, so a
-    // planted list with a consistent discriminator, length and issuer is all it reads.
-    let plant = |h: &mut Harness, leaf_count: u64| {
-        let mut data = vec![0u8; LIST_LEN];
-        data[..8].copy_from_slice(&discriminator("account", "IdentityList"));
-        let b = &mut data[8..];
-        b[0..8].copy_from_slice(&leaf_count.to_le_bytes());
-        b[8..12].copy_from_slice(&1u32.to_le_bytes()); // index
-        b[12] = 1; // issuer_count
-        b[5200..5232].copy_from_slice(issuer_kp.pubkey().as_ref()); // issuers[0]
-        b[5456..5488].copy_from_slice(issuer_kp.pubkey().as_ref()); // owner
-        h.svm
-            .set_account(
-                list_address(1),
-                Account { lamports: 100_000_000, data, owner: PROGRAM_ID, executable: false, rent_epoch: 0 },
-            )
-            .unwrap();
-    };
-
-    // The 2^32-th leaf lands at depth 32. The append walks 32 levels up the frontier, so a raised
-    // compute limit.
-    plant(&mut h, (1u64 << 32) - 1);
-    let budget = ComputeBudgetInstruction::set_compute_unit_limit(1_400_000);
-    h.send_signed(&[budget.clone(), insert_identity_ix(issuer_kp.pubkey(), 1, dec_to_be32("7"))], &[&issuer_kp])
-        .expect("the last leaf of a full depth-32 tree registers");
-    assert_eq!(h.list(1).leaf_count, 1u64 << 32);
-
-    // One more would be a 33rd level: refused before any hashing.
-    let err = h
-        .send_signed(&[budget, insert_identity_ix(issuer_kp.pubkey(), 1, dec_to_be32("8"))], &[&issuer_kp])
-        .expect_err("depth 33");
-    assert!(err.contains("TreeFull") || err.contains("full at depth 32"), "{err}");
-    println!("rejected as expected: a list is full at depth 32, the depth the verification key is sealed at");
-}
-
-#[test]
-fn register_pays_the_fee_at_one_base_unit_and_at_the_maximum() {
-    // Only a zero fee is refused (`add_token_records_the_fee...`). The two live extremes, one base
-    // unit and u64::MAX, are legal, and `register` must move exactly them and no more. This pins the
-    // fee arithmetic at the edges, on the one path that charges, beside `too_little_paid_writes_nothing`.
-    let (mut h, f) = ready();
-    let lo = Address::new_unique();
-    h.svm.set_account(lo, spl_mint_account(0)).unwrap();
-    h.send(&[add_token_ix(h.treasury, lo, 1)], &[Harness::PAYER, Harness::TREASURY]).expect("fee 1");
-    let hi = Address::new_unique();
-    h.svm.set_account(hi, spl_mint_account(0)).unwrap();
-    h.send(&[add_token_ix(h.treasury, hi, u64::MAX)], &[Harness::PAYER, Harness::TREASURY]).expect("fee u64::MAX");
-    let treasury_lo = h.token_account_for(lo, h.treasury);
-    let treasury_hi = h.token_account_for(hi, h.treasury);
-
-    // fee = 1: the wallet holds exactly one base unit, pays it, and the treasury has one.
-    let alice = Reg::of(f.proof("alice-tutors"));
-    let (wa, ta) = h.wallet_with(lo, 1);
-    let mut a = accounts(&h, &alice, &wa, ta);
-    a.treasury_tokens = treasury_lo;
-    h.send_signed(&[alice.ix(&a)], &[&alice.profile, &wa]).expect("one base unit paid");
-    assert_eq!(token_amount(&h.account(&ta).data), 0);
-    assert_eq!(token_amount(&h.account(&treasury_lo).data), 1);
-
-    // fee = u64::MAX: the wallet holds the maximum a u64 can, and all of it moves.
-    let bob = Reg::of(f.proof("bob-tutors"));
-    let (wb, tb) = h.wallet_with(hi, u64::MAX);
-    let mut b = accounts(&h, &bob, &wb, tb);
-    b.treasury_tokens = treasury_hi;
-    h.send_signed(&[bob.ix(&b)], &[&bob.profile, &wb]).expect("u64::MAX paid");
-    assert_eq!(token_amount(&h.account(&tb).data), 0);
-    assert_eq!(token_amount(&h.account(&treasury_hi).data), u64::MAX);
-
-    // One base unit short of the maximum: the token program refuses it, and nothing is written.
-    let carol = Reg::of(f.proof("alice-cleaning"));
-    let (wc, tc) = h.wallet_with(hi, u64::MAX - 1);
-    let mut c = accounts(&h, &carol, &wc, tc);
-    c.treasury_tokens = treasury_hi;
-    let err = h.send_signed(&[carol.ix(&c)], &[&carol.profile, &wc]).expect_err("one short of the maximum");
-    assert!(err.contains("insufficient funds"), "{err}");
-    assert_eq!(token_amount(&h.account(&tc).data), u64::MAX - 1, "nothing taken");
-    assert!(h.svm.get_account(&used_code_address(&carol.code)).is_none(), "and no code written");
-    println!("register moves exactly the fee at 1 and at u64::MAX; one unit short moves nothing");
-}
-
-#[test]
-fn wrapped_sol_is_a_classic_mint_the_registry_treats_like_any_other() {
-    // The escrow refuses wrapped SOL by name, because a plain SOL transfer to a deposit account
-    // would not count as funding. The registry has no such rule: WSOL is a classic SPL Token mint,
-    // so the treasury can accept it as a fee token and a registration can pay the fee in it. Nothing
-    // is broken by that (WSOL is real money), but it is pinned so the difference between the two
-    // programs is on the record rather than a surprise.
-    let (mut h, f) = ready();
-    h.svm.set_account(NATIVE_MINT, spl_mint_account(9)).unwrap();
-    h.send(&[add_token_ix(h.treasury, NATIVE_MINT, 250_000)], &[Harness::PAYER, Harness::TREASURY]).expect("WSOL accepted");
-    let treasury_wsol = h.token_account_for(NATIVE_MINT, h.treasury);
-    let alice = Reg::of(f.proof("alice-tutors"));
-    let (w, t) = h.wallet_with(NATIVE_MINT, 1_000_000);
-    let mut a = accounts(&h, &alice, &w, t);
-    a.treasury_tokens = treasury_wsol;
-    h.send_signed(&[alice.ix(&a)], &[&alice.profile, &w]).expect("registration paid in wrapped SOL");
-    assert_eq!(token_amount(&h.account(&treasury_wsol).data), 250_000);
-    println!("FINDING (behaviour, on the record): the registry accepts wrapped SOL as a fee token; the escrow refuses it");
+fn nothing_is_signed_but_the_payer() {
+    // Every instruction carries exactly one signer, the payer, and refund none.
+    let f = Fixtures::load();
+    let a = f.proof("alice-tutoring-A");
+    let payer = Keypair::new().pubkey();
+    let signers = |ix: &Instruction| ix.accounts.iter().filter(|m: &&AccountMeta| m.is_signer).count();
+    assert_eq!(signers(&register_fixture_ix(payer, a)), 1);
+    assert_eq!(signers(&add_proof_ix(payer, &a.code_bytes(), &a.proof())), 1);
+    assert_eq!(signers(&refund_ix(payer, &a.code_bytes())), 0);
 }

@@ -1,1178 +1,340 @@
-//! The registry, run under LiteSVM against real Semaphore proofs made with the pinned July 2024
-//! ceremony artifacts (`registry/client/scripts/fixtures.ts` writes them; the file is committed).
+//! The registry's rules, one by one, against real Semaphore proofs.
 //!
-//! Run with `cargo test -- --nocapture` to see the measured compute units and transaction bytes.
+//! `cargo test -- --nocapture` prints what each test showed.
 
 use forest_registry_tests::*;
 use groth16_solana::decompression::{decompress_g1, decompress_g2};
 use solana_address::Address;
-use solana_compute_budget_interface::ComputeBudgetInstruction;
-use solana_instruction::Instruction;
 use solana_keypair::Keypair;
 use solana_message::Message;
 use solana_signer::Signer;
 use solana_transaction::Transaction;
 
-const TUTORS: &str = "online-tutors";
-const CLEANING: &str = "house-cleaning";
-
-/// 0.25 at USDC's six decimals: the program's `USDC_FEE`.
-const QUARTER_USDC: u64 = USDC_FEE;
-
-/// A registry with list 0 filled and Alice's and Bob's wallets funded.
 fn ready() -> (Harness, Fixtures) {
-    let f = Fixtures::load();
-    let mut h = Harness::new();
-    for leaf in &f.list(0).leaves {
-        h.insert(0, dec_to_be32(leaf));
-    }
-    (h, f)
+    (Harness::new(), Fixtures::load())
 }
 
-/// A registration: the profile's own wallet (from the fixture) signs, and `fee_wallet` pays the fee
-/// from `tokens`. When `fee_wallet` is the profile's wallet that is the paid path; otherwise another
-/// key pays for it, which the program cannot tell apart.
-fn register(
-    h: &mut Harness,
-    p: &FixtureProof,
-    market: &str,
-    list_index: u32,
-    fee_wallet: &Keypair,
-    tokens: Address,
-) -> Result<litesvm::types::TransactionMetadata, String> {
-    let profile = p.wallet_keypair();
-    let accounts = RegisterAccounts {
-        payer: h.payer.pubkey(),
-        profile_wallet: profile.pubkey(),
-        fee_authority: fee_wallet.pubkey(),
-        fee_tokens: tokens,
-        treasury_tokens: h.treasury_tokens,
-    };
-    let args = RegisterArgs {
-        market,
-        did: &p.did,
-        list_index,
-        root: p.root_bytes(),
-        code: p.code_bytes(),
-        proof_a: p.a_bytes(),
-        proof_b: p.b_bytes(),
-        proof_c: p.c_bytes(),
-    };
-    let ix = register_ix(&args, &accounts);
-    sign_and_send(h, ix, &profile, fee_wallet)
+/// Refused, and for the reason named: an error name from `errors.rs` or Anchor's, or a runtime
+/// message.
+fn refused(result: Result<litesvm::types::TransactionMetadata, String>, wants: &[&str]) -> String {
+    let err = result.err().expect("must be refused");
+    assert!(wants.iter().any(|w| err.contains(w)), "expected one of {wants:?}, got\n{err}");
+    err
 }
-
-/// The profile's wallet and the fee authority both sign; once, when they are the same key.
-fn sign_and_send(
-    h: &mut Harness,
-    ix: Instruction,
-    profile: &Keypair,
-    fee_wallet: &Keypair,
-) -> Result<litesvm::types::TransactionMetadata, String> {
-    if profile.pubkey() == fee_wallet.pubkey() {
-        h.send_signed(&[ix], &[profile])
-    } else {
-        h.send_signed(&[ix], &[profile, fee_wallet])
-    }
-}
-
-// ---------------------------------------------------------------------------------------------
-// Happy path
-// ---------------------------------------------------------------------------------------------
 
 #[test]
-fn two_humans_register_in_two_markets_each() {
+fn a_line_is_written_with_its_profile_code_label_root_time_and_payer() {
     let (mut h, f) = ready();
+    let alice = f.proof("alice-tutoring-A");
+    h.set_time(1_790_000_123);
+    let meta = h.register(alice).expect("register");
 
-    // The list the program built from its frontier is the list Semaphore would have built.
-    let leaves: Vec<[u8; 32]> = f.list(0).leaves.iter().map(|l| dec_to_be32(l)).collect();
-    let list = h.list(0);
-    assert_eq!(list.leaf_count, leaves.len() as u64);
-    assert_eq!(list.root, lean_imt_root(&leaves), "the on-chain root must match a full rebuild");
-    assert_eq!(list.root, f.proof("alice-tutors").root_bytes(), "and the root the proofs were made against");
+    let line = h.line(&alice.code_bytes());
+    assert_eq!(line.profile, alice.profile_address());
+    assert_eq!(line.code, alice.code_bytes());
+    assert_eq!(line.payer, h.payer.pubkey());
+    assert_eq!(line.time, 1_790_000_123);
+    assert_eq!(line.label, "tutoring/seller");
+    assert_eq!(line.roots, vec![alice.proof().root]);
+    let address = line_address(&alice.code_bytes());
+    assert_eq!(line.bump, Address::find_program_address(&[b"code", &alice.code_bytes()], &PROGRAM_ID).1, "the canonical bump");
 
-    let mut codes = Vec::new();
-    for name in ["alice-tutors", "alice-cleaning", "bob-tutors", "bob-cleaning"] {
-        let p = f.proof(name);
-        // The paid path: each profile's own wallet signs and pays.
-        let (wallet, tokens) = h.profile_with(p, h.usdc, 1_000_000);
-        let meta = register(&mut h, p, &p.market, 0, &wallet, tokens).unwrap_or_else(|e| panic!("{name}: {e}"));
-
-        // One entry per registration, in the transaction log and in no account.
-        let events = registered_events(&meta.logs);
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].market, p.market);
-        assert_eq!(events[0].did, p.did);
-        assert_eq!(events[0].wallet.to_string(), p.wallet, "the entry names the profile's wallet");
-        assert_eq!(events[0].code, p.code_bytes());
-        assert_eq!(events[0].list_index, 0);
-        assert_eq!(events[0].list_owner, FOUNDATION_ISSUER, "and the owner of the list that vouched");
-
-        // One account per code: nine bytes, owned by the registry, holding only its bump.
-        let account = h.account(&used_code_address(&p.code_bytes()));
-        assert_eq!(account.data.len(), USED_CODE_LEN);
-        assert_eq!(account.owner, PROGRAM_ID);
-        assert_eq!(account.data[..8], discriminator("account", "UsedCode"));
-
-        // The wallet paid exactly 0.25 and nothing more.
-        assert_eq!(token_amount(&h.account(&tokens).data), 1_000_000 - QUARTER_USDC);
-        codes.push(p.code_bytes());
-    }
-
-    // Alice's two codes differ, and so do Alice's and Bob's in the same market: one badge per
-    // market per human, and nothing on the chain links a human's two badges.
-    assert_ne!(codes[0], codes[1]);
-    assert_ne!(codes[0], codes[2]);
-
-    // The arrival-order tree holds all four codes, in the order they arrived.
-    let tree = h.code_tree();
-    assert_eq!(tree.count, 4);
-    assert_eq!(tree.root, lean_imt_root(&codes), "the code tree must match a full rebuild");
-
-    // The treasury has four quarters.
-    assert_eq!(token_amount(&h.account(&h.treasury_tokens).data), 4 * QUARTER_USDC);
-    println!("four registrations: treasury holds {} base units", 4 * QUARTER_USDC);
+    // Exactly its size, exactly rent exempt, owned by the program.
+    let account = h.account(&address);
+    assert_eq!(account.owner, PROGRAM_ID);
+    assert_eq!(account.data.len(), line_space("tutoring/seller".len(), 1));
+    assert_eq!(account.lamports, h.svm.minimum_balance_for_rent_exemption(account.data.len()));
+    println!(
+        "a line: {} bytes, {} lamports of deposit, {} compute units; the profile signed nothing",
+        account.data.len(),
+        account.lamports,
+        meta.compute_units_consumed
+    );
 }
 
 #[test]
-fn a_second_list_is_opened_and_a_proof_against_it_is_accepted() {
+fn the_profile_key_signs_nothing_and_anyone_may_send() {
+    // A relayer sends Alice's register and pays for it. Alice's profile key is not in the
+    // transaction at all: the proof names it, and only her secret could have made the proof.
     let (mut h, f) = ready();
-
-    // The foundation's issuer opens a second list of its own: it owns it and inserts at once.
-    let (payer, issuer) = (h.payer.pubkey(), h.issuer.pubkey());
-    h.send(&[open_list_ix(payer, issuer, 1)], &[Harness::PAYER, Harness::ISSUER]).expect("open_list");
-    assert_eq!(h.config().list_count, 2);
-    for leaf in &f.list(1).leaves {
-        h.insert(1, dec_to_be32(leaf));
-    }
-
-    let p = f.proof("carol-tutors-list1");
-    assert_eq!(h.list(1).root, p.root_bytes());
-    let (wallet, tokens) = h.wallet_with(h.usdc, 1_000_000);
-    register(&mut h, p, TUTORS, 1, &wallet, tokens).expect("a proof against list 1");
-    assert_eq!(h.code_tree().count, 1);
-    println!("list 1 opened by its owner, who inserts into it, and a proof against it accepted");
+    let alice = f.proof("alice-tutoring-A");
+    let relayer = h.funded(1_000_000_000);
+    let ix = register_fixture_ix(relayer.pubkey(), alice);
+    assert!(ix.accounts.iter().all(|m| m.pubkey != alice.profile_address()), "the profile is not an account");
+    assert_eq!(ix.accounts.iter().filter(|m| m.is_signer).count(), 1, "only the payer signs");
+    h.send_as(&relayer, &[ix]).expect("a relayer registers for Alice");
+    let line = h.line(&alice.code_bytes());
+    assert_eq!((line.profile, line.payer), (alice.profile_address(), relayer.pubkey()));
+    println!("a relayer registered Alice's line and is recorded as its payer; her profile key signed nothing");
 }
 
-// ---------------------------------------------------------------------------------------------
-// Rejections
-// ---------------------------------------------------------------------------------------------
-
 #[test]
-fn a_proof_for_another_market_is_rejected() {
+fn several_proofs_from_several_roots_make_one_line() {
+    // One proof per transaction: register with list A, then one add_proof each for list B and for
+    // list A as it grew. One line, its roots in the order they came, 32 bytes more per root, each
+    // paid by that transaction's payer.
     let (mut h, f) = ready();
-    let p = f.proof("alice-tutors");
-    let (wallet, tokens) = h.wallet_with(h.usdc, 1_000_000);
-    // The program never takes the scope from the client: it derives it from the market name in
-    // the instruction and hands it to the verifier, so the proof simply does not verify.
-    let err = register(&mut h, p, CLEANING, 0, &wallet, tokens).expect_err("must be rejected");
-    assert!(err.contains("does not verify"), "{err}");
-    assert!(h.svm.get_account(&used_code_address(&p.code_bytes())).is_none());
-    println!("a proof for \"{TUTORS}\" is rejected when the instruction says \"{CLEANING}\"");
-}
+    let a = f.proof("alice-tutoring-A");
+    let b = f.proof("alice-tutoring-B");
+    let a1 = f.proof("alice-tutoring-A1");
+    let address = line_address(&a.code_bytes());
+    h.register(a).expect("register against A");
+    let before = h.account(&address).lamports;
 
-#[test]
-fn the_128th_insert_pushes_a_root_out_of_the_ring() {
-    // List 0 has five leaves, so Alice's root sits at ring slot 4. The insert that writes slot 4
-    // again is the one with leaf_count 132, which is the 128th after hers.
-    let f = Fixtures::load();
-    let p = f.proof("alice-tutors");
-
-    for (extras, should_pass) in [(127usize, true), (128usize, false)] {
-        let mut h = Harness::new();
-        for leaf in &f.list(0).leaves {
-            h.insert(0, dec_to_be32(leaf));
-        }
-        for leaf in f.extra_leaves.iter().take(extras) {
-            h.insert(0, dec_to_be32(leaf));
-        }
-        assert_eq!(h.list(0).leaf_count, 5 + extras as u64);
-        let (wallet, tokens) = h.wallet_with(h.usdc, 1_000_000);
-        let out = register(&mut h, p, TUTORS, 0, &wallet, tokens);
-        if should_pass {
-            out.unwrap_or_else(|e| panic!("{extras} later it must still land: {e}"));
-        } else {
-            let err = out.expect_err("must be rejected");
-            assert!(err.contains("last 128"), "{err}");
-        }
-        println!("{extras} inserts later: {}", if should_pass { "still accepted" } else { "root gone, rejected" });
-    }
-}
-
-#[test]
-fn a_code_cannot_be_used_twice() {
-    let (mut h, f) = ready();
-    let p = f.proof("alice-tutors");
-    let (w1, t1) = h.wallet_with(h.usdc, 1_000_000);
-    register(&mut h, p, TUTORS, 0, &w1, t1).expect("the first one");
-
-    let (w2, t2) = h.wallet_with(h.usdc, 1_000_000);
-    let err = register(&mut h, p, TUTORS, 0, &w2, t2).expect_err("the second must fail");
-    assert!(err.contains("already in use"), "{err}");
-    assert_eq!(token_amount(&h.account(&t2).data), 1_000_000, "nothing was taken for the second");
-    assert_eq!(h.code_tree().count, 1);
-    println!("the same code a second time: {}", err.lines().next().unwrap());
-}
-
-#[test]
-fn a_proof_for_one_list_is_rejected_against_another() {
-    let (mut h, f) = ready();
-    let (payer, issuer) = (h.payer.pubkey(), h.issuer.pubkey());
-    h.send(&[open_list_ix(payer, issuer, 1)], &[Harness::PAYER, Harness::ISSUER]).expect("open_list");
-    for leaf in &f.list(1).leaves {
-        h.insert(1, dec_to_be32(leaf));
-    }
-
-    let p = f.proof("alice-tutors"); // made against list 0
-    let (wallet, tokens) = h.wallet_with(h.usdc, 1_000_000);
-    let err = register(&mut h, p, TUTORS, 1, &wallet, tokens).expect_err("must be rejected");
-    assert!(err.contains("last 128"), "{err}");
-    println!("a proof made against list 0, presented against list 1: rejected");
-}
-
-#[test]
-fn an_unaccepted_token_is_rejected() {
-    let (mut h, f) = ready();
-    let other = Address::new_unique();
-    h.svm.set_account(other, spl_mint_account(6)).unwrap();
-    let treasury_tokens = Address::new_unique();
-    let treasury = h.treasury;
-    h.svm.set_account(treasury_tokens, spl_token_account(&other, &treasury, 0)).unwrap();
-    let (wallet, tokens) = h.wallet_with(other, 1_000_000);
-
-    let p = f.proof("alice-tutors");
-    let profile = p.wallet_keypair();
-    let accounts = RegisterAccounts {
-        payer: h.payer.pubkey(),
-        profile_wallet: profile.pubkey(),
-        fee_authority: wallet.pubkey(),
-        fee_tokens: tokens,
-        treasury_tokens,
-    };
-    let args = RegisterArgs {
-        market: TUTORS,
-        did: &p.did,
-        list_index: 0,
-        root: p.root_bytes(),
-        code: p.code_bytes(),
-        proof_a: p.a_bytes(),
-        proof_b: p.b_bytes(),
-        proof_c: p.c_bytes(),
-    };
-    let err = h.send_signed(&[register_ix(&args, &accounts)], &[&profile, &wallet]).expect_err("must be rejected");
-    assert!(err.contains("does not accept this mint"), "{err}");
-    println!("a mint the treasury never added: rejected");
-}
-
-#[test]
-fn too_little_paid_writes_nothing() {
-    let (mut h, f) = ready();
-    let p = f.proof("alice-tutors");
-    // The fee is not a number the caller chooses: the program moves 0.25 or the whole thing
-    // reverts. A wallet one base unit short is the only way to pay too little.
-    let (wallet, tokens) = h.wallet_with(h.usdc, QUARTER_USDC - 1);
-    let err = register(&mut h, p, TUTORS, 0, &wallet, tokens).expect_err("must be rejected");
-    assert!(err.contains("insufficient funds"), "{err}");
-    assert!(h.svm.get_account(&used_code_address(&p.code_bytes())).is_none(), "no code account");
-    assert_eq!(h.code_tree().count, 0, "nothing appended");
-    assert_eq!(token_amount(&h.account(&h.treasury_tokens).data), 0);
-    println!("one base unit short: no code, no entry, no fee");
-}
-
-#[test]
-fn an_unauthorised_key_cannot_insert() {
-    let (mut h, _f) = ready();
-    let stranger = Keypair::new();
-    let ix = insert_identity_ix(stranger.pubkey(), 0, dec_to_be32("12345"));
-    let err = h.send_signed(&[ix], &[&stranger]).expect_err("must be rejected");
-    assert!(err.contains("may not insert"), "{err}");
-
-    // And once the list's owner removes an insert key, that key cannot insert either: here the
-    // owner removes its own, and stays the owner.
-    let issuer = h.issuer.pubkey();
-    h.send(&[issuer_ix("remove_issuer", issuer, 0, issuer)], &[Harness::PAYER, Harness::ISSUER]).expect("remove_issuer");
-    assert_eq!(h.list(0).owner, issuer, "removing its own insert key leaves the owner the owner");
-    assert_eq!(h.list(0).issuer_count, 0);
-    let before = h.list(0).leaf_count;
-    let err = h
-        .send(&[insert_identity_ix(issuer, 0, dec_to_be32("12345"))], &[Harness::PAYER, Harness::ISSUER])
-        .expect_err("must be rejected");
-    assert!(err.contains("may not insert"), "{err}");
-    assert_eq!(h.list(0).leaf_count, before, "and nobody was added or removed");
-    println!("a stranger, and a removed issuer, both rejected");
-}
-
-#[test]
-fn only_the_treasury_changes_settings() {
-    let (mut h, _f) = ready();
-    let stranger = Keypair::new();
-
-    // The treasury's dials are the accepted tokens and the handover. Nothing else is one.
-    for (what, ix) in [
-        ("add_token", add_token_ix(stranger.pubkey(), h.usdc, QUARTER_USDC)),
-        ("propose_treasury", propose_treasury_ix(stranger.pubkey(), Some(stranger.pubkey()))),
-    ] {
-        let err = h.send_signed(&[ix], &[&stranger]).expect_err("must be rejected");
-        assert!(err.contains("ConstraintHasOne") || err.contains("has one"), "{what}: {err}");
-    }
-    // Nor accept a handover nobody proposed.
-    let err = h.send_signed(&[accept_treasury_ix(stranger.pubkey())], &[&stranger]).expect_err("must be rejected");
-    assert!(err.contains("no treasury handover"), "accept_treasury: {err}");
-    let config = h.config();
-    assert_eq!(config.treasury, TREASURY, "and the treasury is still the constant");
-    assert_eq!(config.pending_treasury, Address::default(), "and nothing is pending");
-    assert_eq!(config.mints, vec![USDC_MINT], "and no token was added");
-    println!("a stranger cannot add a token or take the treasury");
-}
-
-#[test]
-fn add_token_records_the_fee_the_treasury_sets_once_and_refuses_zero() {
-    let (mut h, _f) = ready();
-    let tk = h.treasury;
-    assert_eq!(h.config().fees, vec![USDC_FEE], "USDC at its constant, from init");
-
-    // A fee of zero would be a free registration inside the program: refused, at any decimals.
-    let zero = Address::new_unique();
-    h.svm.set_account(zero, spl_mint_account(6)).unwrap();
-    let err = h.send(&[add_token_ix(tk, zero, 0)], &[Harness::PAYER, Harness::TREASURY]).expect_err("must be rejected");
-    assert!(err.contains("FeeZero") || err.contains("above zero"), "{err}");
-
-    // Not an SPL Token mint at all.
-    let impostor = Address::new_unique();
-    h.svm
-        .set_account(
-            impostor,
-            solana_account::Account {
-                lamports: 1_000_000,
-                data: vec![0u8; 82],
-                owner: PROGRAM_ID,
-                executable: false,
-                rent_epoch: 0,
-            },
-        )
-        .unwrap();
-    let err = h.send(&[add_token_ix(tk, impostor, 1)], &[Harness::PAYER, Harness::TREASURY]).expect_err("must be rejected");
-    assert!(err.contains("AccountOwnedByWrongProgram"), "{err}");
-
-    // Any decimals now: the fee is an amount, not a rule over decimals. A six-decimal dollar at
-    // 250,000; an eight-decimal one at 25,000,000; a zero-decimal token at 1 whole unit; an
-    // eighteen-decimal one at whatever amount the treasury judges is worth 25 cents.
-    let mut added = vec![h.usdc];
-    let mut fees = vec![USDC_FEE];
-    for (decimals, fee) in [(6u8, 250_000u64), (8, 25_000_000), (0, 1), (18, 83_000_000_000_000)] {
-        let mint = Address::new_unique();
-        h.svm.set_account(mint, spl_mint_account(decimals)).unwrap();
-        h.send(&[add_token_ix(tk, mint, fee)], &[Harness::PAYER, Harness::TREASURY]).expect("add_token");
-        added.push(mint);
-        fees.push(fee);
-    }
-    let config = h.config();
-    assert_eq!(config.mints, added, "USDC is mints[0] forever; nothing removes a mint");
-    assert_eq!(config.fees, fees, "each mint's fee, as set");
-
-    // Set once: a mint cannot be added again at another fee, and neither can USDC.
-    let err = h.send(&[add_token_ix(tk, added[1], 1)], &[Harness::PAYER, Harness::TREASURY]).expect_err("must be rejected");
-    assert!(err.contains("already accepts"), "{err}");
-    let err = h.send(&[add_token_ix(tk, h.usdc, 1)], &[Harness::PAYER, Harness::TREASURY]).expect_err("must be rejected");
-    assert!(err.contains("already accepts"), "{err}");
-    assert_eq!(h.config().fees, fees, "no fee moved");
-    println!("add_token: a zero fee, a non-mint and repeats refused; four mints recorded at the fees the treasury set");
-}
-
-#[test]
-fn each_mint_pays_the_fee_the_treasury_set_for_it_and_usdc_pays_its_constant() {
-    let (mut h, f) = ready();
-    let tk = h.treasury;
-    let treasury = h.treasury;
-
-    // Suppose the dollar fails: the treasury accepts another token, here one counting in eight
-    // decimals, at an amount it judges sensible. Registration continues in it.
-    let other = Address::new_unique();
-    h.svm.set_account(other, spl_mint_account(8)).unwrap();
-    let other_fee = 31_250_000; // 0.3125 of it, say
-    h.send(&[add_token_ix(tk, other, other_fee)], &[Harness::PAYER, Harness::TREASURY]).expect("add_token");
-    let treasury_other = h.token_account_for(other, treasury);
-
-    // Alice pays in USDC: the constant, 250,000.
-    let alice = f.proof("alice-tutors");
-    let (w6, t6) = h.profile_with(alice, h.usdc, 1_000_000);
-    register(&mut h, alice, TUTORS, 0, &w6, t6).expect("USDC");
-    assert_eq!(token_amount(&h.account(&t6).data), 1_000_000 - USDC_FEE);
-    assert_eq!(token_amount(&h.account(&h.treasury_tokens).data), USDC_FEE);
-
-    // Bob pays in the other token: exactly the fee the treasury set, nothing derived from decimals.
-    let bob = f.proof("bob-tutors");
-    let (w8, t8) = h.profile_with(bob, other, 100_000_000);
-    let accounts = RegisterAccounts {
-        payer: h.payer.pubkey(),
-        profile_wallet: w8.pubkey(),
-        fee_authority: w8.pubkey(),
-        fee_tokens: t8,
-        treasury_tokens: treasury_other,
-    };
-    let args = RegisterArgs {
-        market: TUTORS,
-        did: &bob.did,
-        list_index: 0,
-        root: bob.root_bytes(),
-        code: bob.code_bytes(),
-        proof_a: bob.a_bytes(),
-        proof_b: bob.b_bytes(),
-        proof_c: bob.c_bytes(),
-    };
-    h.send_signed(&[register_ix(&args, &accounts)], &[&w8]).expect("the other token");
-    assert_eq!(token_amount(&h.account(&t8).data), 100_000_000 - other_fee);
-    assert_eq!(token_amount(&h.account(&treasury_other).data), other_fee);
-
-    // One base unit short of the fee, in its own units, pays nothing.
-    let alice_cleaning = f.proof("alice-cleaning");
-    let (short, short_tokens) = h.profile_with(alice_cleaning, other, other_fee - 1);
-    let accounts = RegisterAccounts {
-        payer: h.payer.pubkey(),
-        profile_wallet: short.pubkey(),
-        fee_authority: short.pubkey(),
-        fee_tokens: short_tokens,
-        treasury_tokens: treasury_other,
-    };
-    let args = RegisterArgs {
-        market: CLEANING,
-        did: &alice_cleaning.did,
-        list_index: 0,
-        root: alice_cleaning.root_bytes(),
-        code: alice_cleaning.code_bytes(),
-        proof_a: alice_cleaning.a_bytes(),
-        proof_b: alice_cleaning.b_bytes(),
-        proof_c: alice_cleaning.c_bytes(),
-    };
-    let err = h.send_signed(&[register_ix(&args, &accounts)], &[&short]).expect_err("one unit short");
-    assert!(err.contains("insufficient funds"), "{err}");
-    assert_eq!(token_amount(&h.account(&short_tokens).data), other_fee - 1, "nothing taken");
-
-    // The mint's decimals play no part: rewriting them (which no transaction can) changes nothing.
-    h.svm.set_account(other, spl_mint_account(2)).unwrap();
-    let bob_cleaning = f.proof("bob-cleaning");
-    let (w, t) = h.profile_with(bob_cleaning, other, other_fee);
-    let accounts = RegisterAccounts {
-        payer: h.payer.pubkey(),
-        profile_wallet: w.pubkey(),
-        fee_authority: w.pubkey(),
-        fee_tokens: t,
-        treasury_tokens: treasury_other,
-    };
-    let args = RegisterArgs {
-        market: CLEANING,
-        did: &bob_cleaning.did,
-        list_index: 0,
-        root: bob_cleaning.root_bytes(),
-        code: bob_cleaning.code_bytes(),
-        proof_a: bob_cleaning.a_bytes(),
-        proof_b: bob_cleaning.b_bytes(),
-        proof_c: bob_cleaning.c_bytes(),
-    };
-    h.send_signed(&[register_ix(&args, &accounts)], &[&w]).expect("register");
-    assert_eq!(token_amount(&h.account(&t).data), 0);
-    println!("USDC paid its constant 250,000; the other token paid exactly the {other_fee} the treasury set");
-}
-
-// ---------------------------------------------------------------------------------------------
-// The profile's consent
-// ---------------------------------------------------------------------------------------------
-
-#[test]
-fn the_profiles_wallet_signs_on_the_paid_and_the_sponsored_path() {
-    let (mut h, f) = ready();
-    let alice = f.proof("alice-tutors");
-    let alice_wallet = alice.wallet_keypair();
-    fn args<'a>(p: &'a FixtureProof, market: &'a str) -> RegisterArgs<'a> {
-        RegisterArgs {
-            market,
-            did: &p.did,
-            list_index: 0,
-            root: p.root_bytes(),
-            code: p.code_bytes(),
-            proof_a: p.a_bytes(),
-            proof_b: p.b_bytes(),
-            proof_c: p.c_bytes(),
-        }
-    }
-    let (sponsor, sponsor_tokens) = h.wallet_with(h.usdc, 10_000_000);
-
-    // Sponsored, and the profile does not sign: refused. Nobody badges a profile without it.
-    let accounts = RegisterAccounts {
-        payer: h.payer.pubkey(),
-        profile_wallet: alice_wallet.pubkey(),
-        fee_authority: sponsor.pubkey(),
-        fee_tokens: sponsor_tokens,
-        treasury_tokens: h.treasury_tokens,
-    };
-    let mut ix = register_ix(&args(alice, TUTORS), &accounts);
-    ix.accounts[5].is_signer = false;
-    let err = h.send_signed(&[ix], &[&sponsor]).expect_err("the profile did not sign");
-    assert!(err.contains("AccountNotSigner"), "{err}");
-
-    // Another wallet signing in the profile's place, with Alice's proof: the proof names Alice's
-    // wallet, so it does not verify. A relay or a sponsor that saw the proof cannot land it under
-    // its own key and burn Alice's code.
-    let accounts_other = RegisterAccounts { profile_wallet: sponsor.pubkey(), ..accounts };
-    let err = h
-        .send_signed(&[register_ix(&args(alice, TUTORS), &accounts_other)], &[&sponsor])
-        .expect_err("another wallet as the profile");
-    assert!(err.contains("ProofRejected") || err.contains("does not verify"), "{err}");
-    assert!(h.svm.get_account(&used_code_address(&alice.code_bytes())).is_none(), "Alice's code is not burned");
-
-    // Sponsored, with the profile signing: the sponsor pays the fee, the profile consents.
-    let accounts = RegisterAccounts { profile_wallet: alice_wallet.pubkey(), ..accounts_other };
+    let other_payer = h.funded(1_000_000_000);
+    let paid_before = h.lamports_of(&other_payer.pubkey());
     let meta = h
-        .send_signed(&[register_ix(&args(alice, TUTORS), &accounts)], &[&alice_wallet, &sponsor])
-        .expect("sponsored, the profile signing");
-    assert_eq!(registered_events(&meta.logs)[0].wallet, alice_wallet.pubkey());
-    assert_eq!(token_amount(&h.account(&sponsor_tokens).data), 10_000_000 - USDC_FEE, "the sponsor paid");
+        .send_as(&other_payer, &[add_proof_ix(other_payer.pubkey(), &b.code_bytes(), &b.proof())])
+        .expect("add B, another payer");
+    let grown = h.account(&address);
+    assert_eq!(grown.data.len(), line_space(a.label.len(), 2));
+    assert_eq!(grown.lamports, h.svm.minimum_balance_for_rent_exemption(grown.data.len()));
+    assert_eq!(
+        paid_before - h.lamports_of(&other_payer.pubkey()),
+        grown.lamports - before + 5_000,
+        "the add_proof payer paid exactly the 32 bytes and one signature"
+    );
+    h.add_proof(a1).expect("add A, grown");
 
-    // The paid path: the profile's wallet is also the fee authority.
-    let cleaning = f.proof("alice-cleaning");
-    let (wallet, tokens) = h.profile_with(cleaning, h.usdc, USDC_FEE);
-    let meta = register(&mut h, cleaning, CLEANING, 0, &wallet, tokens).expect("paid");
-    assert_eq!(registered_events(&meta.logs)[0].wallet, alice_wallet.pubkey());
-    assert_eq!(token_amount(&h.account(&tokens).data), 0);
-    println!("the profile's wallet signs on both paths; unsigned, or another wallet in its place, refused");
+    let line = h.line(&a.code_bytes());
+    assert_eq!(line.roots, vec![a.proof().root, b.proof().root, a1.proof().root]);
+    assert_eq!(line.payer, h.payer.pubkey(), "the payer recorded is register's, whoever adds");
+    println!(
+        "one line, three roots from two issuers' lists; each add_proof: {} compute units, 32 bytes",
+        meta.compute_units_consumed
+    );
 }
 
-// ---------------------------------------------------------------------------------------------
-// Closing a list
-// ---------------------------------------------------------------------------------------------
+#[test]
+fn a_second_line_for_the_same_code_is_refused() {
+    let (mut h, f) = ready();
+    let a = f.proof("alice-tutoring-A");
+    let b = f.proof("alice-tutoring-B");
+    h.register(a).expect("first");
+    // The same human, the same label, another issuer's list: the same code, so the same address.
+    refused(h.register(b), &["already in use"]);
+    // The very same register again, by a stranger.
+    let stranger = h.funded(1_000_000_000);
+    refused(h.send_as(&stranger, &[register_fixture_ix(stranger.pubkey(), a)]), &["already in use"]);
+    let line = h.line(&a.code_bytes());
+    assert_eq!((line.roots.len(), line.payer), (1, h.payer.pubkey()), "nothing about the first line moved");
+    println!("refused as expected: a second line for the same code, from another list or the same proof again");
+}
 
 #[test]
-fn a_closed_list_takes_no_new_members_and_every_proof_against_it_stays_valid() {
+fn a_proof_with_a_different_code_is_refused() {
     let (mut h, f) = ready();
-    let issuer = h.issuer.pubkey();
-    let before = h.list(0);
-    let meta = h.send(&[close_list_ix(issuer, 0)], &[Harness::PAYER, Harness::ISSUER]).expect("close_list");
-    assert!(meta.logs.iter().any(|l| l.starts_with("Program data: ")), "an entry in the log");
-    let after = h.list(0);
-    assert!(after.closed);
-    assert_eq!((after.leaf_count, after.root, after.roots.clone(), after.issuers.clone()), (before.leaf_count, before.root, before.roots, before.issuers), "nothing else moved");
+    let alice = f.proof("alice-tutoring-A");
+    let bob = f.proof("bob-tutoring-A");
+    let alice_cleaning = f.proof("alice-cleaning-A");
 
-    // No new members, whoever inserts.
-    let err = h
-        .send(&[insert_identity_ix(issuer, 0, dec_to_be32("12345"))], &[Harness::PAYER, Harness::ISSUER])
-        .expect_err("closed");
-    assert!(err.contains("ListClosed") || err.contains("closed to new members"), "{err}");
-    // Closed once, for good: no second close, and no instruction reopens or deletes it.
-    let err = h.send(&[close_list_ix(issuer, 0)], &[Harness::PAYER, Harness::ISSUER]).expect_err("twice");
-    assert!(err.contains("ListClosed") || err.contains("closed to new members"), "{err}");
-
-    // The members already in it register as before, against the roots it kept.
-    for name in ["alice-tutors", "bob-cleaning"] {
-        let p = f.proof(name);
-        let (wallet, tokens) = h.profile_with(p, h.usdc, USDC_FEE);
-        register(&mut h, p, &p.market, 0, &wallet, tokens).unwrap_or_else(|e| panic!("{name}: {e}"));
+    // register: Alice's proof under Bob's code, and under her own other label's code.
+    for code in [bob.code_bytes(), alice_cleaning.code_bytes()] {
+        let ix = register_ix(h.payer.pubkey(), &alice.profile_address(), &alice.label, &code, &alice.proof());
+        refused(h.send(&[ix], &[]), &["ProofRejected"]);
+        assert!(!h.exists(&line_address(&code)), "nothing written");
     }
 
-    // New joiners go to a new list; closing one list does not touch another.
-    let payer = h.payer.pubkey();
-    h.send(&[open_list_ix(payer, issuer, 1)], &[Harness::PAYER, Harness::ISSUER]).expect("open_list");
-    h.insert(1, dec_to_be32("12345"));
-    assert!(!h.list(1).closed);
-    assert!(h.list(0).closed);
-    println!("list 0 closed: no inserts, no second close; its members still register; list 1 takes new joiners");
-}
-
-// ---------------------------------------------------------------------------------------------
-// Lists and their owners (session 14: issuers are open)
-// ---------------------------------------------------------------------------------------------
-
-#[test]
-fn list_0_opens_at_init_owned_by_the_foundations_issuer_key_which_is_its_first_insert_key() {
-    let mut h = Harness::bare();
-    let (payer, usdc) = (h.payer.pubkey(), h.usdc);
-    let meta = h.send(&[init_ix(payer, usdc)], &[Harness::PAYER]).expect("init");
-    let list = h.list(0);
-    assert_eq!(list.owner, FOUNDATION_ISSUER, "list 0 is the foundation issuer's, a program constant");
-    assert_eq!(list.issuers, vec![FOUNDATION_ISSUER], "and that key is its first insert key");
-    assert_eq!(list_opened_events(&meta.logs), vec![(0, FOUNDATION_ISSUER)], "init logs list 0's opening and owner");
-    // It inserts at once, with no other step.
-    h.insert(0, dec_to_be32("12345"));
-    assert_eq!(h.list(0).leaf_count, 1);
-    println!("init opens list 0 owned by the foundation's issuer key, which inserts at once");
+    // add_proof: into Alice's line, Carol's proof against list B, a root the line lacks: it yields
+    // Carol's code, not the line's. (Bob's proof and Alice's other label's share list A's root,
+    // already in the line, so they are refused one rule earlier.)
+    h.register(alice).expect("Alice's line");
+    let carol = f.proof("carol-tutoring-B");
+    let ix = add_proof_ix(h.payer.pubkey(), &alice.code_bytes(), &carol.proof());
+    refused(h.send(&[ix], &[]), &["ProofRejected"]);
+    for other in [bob, alice_cleaning] {
+        let ix = add_proof_ix(h.payer.pubkey(), &alice.code_bytes(), &other.proof());
+        refused(h.send(&[ix], &[]), &["RootAlreadyInLine"]);
+    }
+    // And the other way round: the other proof sent under its own code, where no line is.
+    refused(h.add_proof(bob), &["AccountNotInitialized"]);
+    assert_eq!(h.line(&alice.code_bytes()).roots.len(), 1);
+    println!("refused as expected: every proof must yield the line's one code");
 }
 
 #[test]
-fn anyone_opens_a_list_pays_its_rent_owns_it_and_inserts_at_once() {
-    let (mut h, _f) = ready();
-    let stranger = Keypair::new();
-    h.svm.airdrop(&stranger.pubkey(), 1_000_000_000).unwrap();
-    let before = h.lamports_of(&stranger.pubkey());
-    let (index, meta) = h.open_list_as(&stranger).expect("anyone may open a list; the treasury signs nothing");
-    assert_eq!(index, 1);
-    assert_eq!(h.config().list_count, 2);
-    let rent = h.svm.minimum_balance_for_rent_exemption(LIST_LEN);
-    assert_eq!(h.lamports_of(&stranger.pubkey()), before - rent, "the opener paid the list's rent, and only that");
-    assert_eq!(h.account(&list_address(1)).data.len(), LIST_LEN);
-    let list = h.list(1);
-    assert_eq!(list.owner, stranger.pubkey(), "the list records its owner");
-    assert_eq!(list.issuers, vec![stranger.pubkey()], "who is its first insert key");
-    assert_eq!(list_opened_events(&meta.logs), vec![(1, stranger.pubkey())], "the log names the owner");
-    h.insert_as(&stranger, 1, dec_to_be32("12345")).expect("the owner inserts at once");
-    assert_eq!(h.list(1).leaf_count, 1);
+fn a_proof_is_bound_to_its_label_and_profile() {
+    let (mut h, f) = ready();
+    let alice = f.proof("alice-tutoring-A");
+    let bob = f.proof("bob-tutoring-A");
+    let code = alice.code_bytes();
+    let cases: Vec<(&str, Address, String)> = vec![
+        ("Bob's profile", bob.profile_address(), alice.label.clone()),
+        ("a stranger's profile", Keypair::new().pubkey(), alice.label.clone()),
+        ("another label", alice.profile_address(), "cleaning/seller".into()),
+        ("a lookalike label", alice.profile_address(), "tutoring/seller ".into()),
+        ("the label in capitals", alice.profile_address(), "Tutoring/Seller".into()),
+    ];
+    for (what, profile, label) in cases {
+        let ix = register_ix(h.payer.pubkey(), &profile, &label, &code, &alice.proof());
+        let err = h.send(&[ix], &[]).err().unwrap_or_else(|| panic!("{what}: accepted"));
+        assert!(err.contains("ProofRejected"), "{what}: {err}");
+    }
+    assert!(!h.exists(&line_address(&code)));
 
-    // The payer and the owner may be two keys; the owner must sign, so a list is never recorded
-    // as owned by a key that did not agree to it.
-    let owner = Keypair::new();
-    let payer = h.payer.pubkey();
-    h.svm.expire_blockhash();
-    let msg = Message::new(&[open_list_ix(payer, owner.pubkey(), 2)], Some(&payer));
-    let mut tx = Transaction::new_unsigned(msg);
-    tx.partial_sign(&[&h.payer], h.svm.latest_blockhash());
-    let err = h.send_tx(tx).expect_err("the owner did not sign");
-    assert!(err.contains("Signature"), "{err}");
-    assert_eq!(h.config().list_count, 2, "and no list opened");
-    h.send_signed(&[open_list_ix(payer, owner.pubkey(), 2)], &[&owner]).expect("paid by one key, owned by another");
-    assert_eq!(h.list(2).owner, owner.pubkey());
-    println!("a stranger opened list 1, paid its rent, owns it and inserted; list 2 paid by one key and owned by another");
-}
-
-#[test]
-fn only_a_lists_owner_adds_or_removes_its_insert_keys_or_closes_it() {
-    let (mut h, _f) = ready();
-    let stranger = Keypair::new();
-    h.svm.airdrop(&stranger.pubkey(), 1_000_000_000).unwrap();
-    h.open_list_as(&stranger).expect("open list 1");
-    let treasury = h.treasury_signer();
-    let foundation = h.issuer.insecure_clone();
-    let helper = Keypair::new().pubkey();
-
-    // Nobody but a list's owner touches its keys or closes it: not the treasury, not the owner of
-    // another list.
-    for (who, key, list) in [("the treasury", &treasury, 0u32), ("the treasury", &treasury, 1), ("list 1's owner", &stranger, 0), ("list 0's owner", &foundation, 1)] {
-        let owner_key = h.list(list).owner;
-        for (what, ix) in [
-            ("add_issuer", issuer_ix("add_issuer", key.pubkey(), list, helper)),
-            ("remove_issuer", issuer_ix("remove_issuer", key.pubkey(), list, owner_key)),
-            ("close_list", close_list_ix(key.pubkey(), list)),
-        ] {
-            let err = h.send_signed(&[ix], &[key]).expect_err("must be rejected");
-            assert!(err.contains("only the list's owner"), "{who} {what} on list {list}: {err}");
+    // add_proof reads the label and the profile from the line itself. A line planted with another
+    // profile or another label under Alice's code (as if it had been written for them) takes none
+    // of her proofs.
+    h.register(alice).expect("Alice's line");
+    let address = line_address(&code);
+    let real = h.account(&address);
+    for (what, patch) in [("another profile", 0usize), ("another label", 1usize)] {
+        let mut planted = real.clone();
+        if patch == 0 {
+            planted.data[8..40].copy_from_slice(bob.profile_address().as_ref());
+        } else {
+            planted.data[117] = b'T'; // "Tutoring/seller"
         }
+        h.svm.set_account(address, planted).unwrap();
+        let b = f.proof("alice-tutoring-B");
+        let err = h.add_proof(b).err().unwrap_or_else(|| panic!("{what}: accepted"));
+        assert!(err.contains("ProofRejected"), "{what}: {err}");
     }
-    for list in [0, 1] {
-        let l = h.list(list);
-        assert!(!l.closed && l.issuers == vec![l.owner], "list {list} untouched");
-    }
-
-    // Its owner does all three.
-    h.send_signed(&[issuer_ix("add_issuer", stranger.pubkey(), 1, helper)], &[&stranger]).expect("add");
-    assert_eq!(h.list(1).issuers, vec![stranger.pubkey(), helper]);
-    h.send_signed(&[issuer_ix("remove_issuer", stranger.pubkey(), 1, stranger.pubkey())], &[&stranger]).expect("remove its own");
-    assert_eq!(h.list(1).issuers, vec![helper]);
-    assert_eq!(h.list(1).owner, stranger.pubkey(), "and stays the owner");
-    h.send_signed(&[close_list_ix(stranger.pubkey(), 1)], &[&stranger]).expect("close");
-    assert!(h.list(1).closed);
-    h.send_signed(&[issuer_ix("add_issuer", foundation.pubkey(), 0, helper)], &[&foundation]).expect("list 0's owner, on list 0");
-    assert_eq!(h.list(0).issuers, vec![FOUNDATION_ISSUER, helper]);
-    println!("the treasury and other lists' owners are refused; each list's owner manages its keys and closes it");
+    println!("refused as expected: a proof counts for its own label and profile only, in register and in add_proof");
 }
 
 #[test]
-fn the_longest_scope_and_did_register_and_the_entry_carries_both_whole() {
+fn anyone_may_add_a_root_the_person_proved() {
+    // The proof is the authority, not a key: a stranger who holds Alice's proof for list B (she
+    // sent it, it is public) lands it, pays for it, and changes nothing but adding that root.
     let (mut h, f) = ready();
-    // A 256-byte scope, the most `register` takes: longer than a `category/market/role` of three
-    // 64-character slugs. And a 64-byte DID, the most it takes of that.
-    let p = f.proof("alice-longest");
-    assert_eq!((p.market.len(), p.did.len()), (256, 64));
-
-    // A proof for a 256-byte scope counts for that scope only: the same proof under the scope one
-    // byte shorter does not verify. (Tried first: once the code is used, its account refuses
-    // anything before the proof is read.)
-    let (wallet, tokens) = h.profile_with(p, h.usdc, 1_000_000);
-    let err = register(&mut h, p, &p.market[..255], 0, &wallet, tokens).expect_err("another scope");
-    assert!(err.contains("ProofRejected") || err.contains("does not verify"), "{err}");
-
-    let meta = register(&mut h, p, &p.market, 0, &wallet, tokens).expect("the longest registration");
-    let events = registered_events(&meta.logs);
-    assert_eq!(events.len(), 1);
-    assert_eq!(events[0].market, p.market, "the entry carries the whole scope");
-    assert_eq!(events[0].did, p.did, "and the whole DID");
-    assert_eq!(events[0].code, p.code_bytes());
-    assert!(h.svm.get_account(&used_code_address(&p.code_bytes())).is_some(), "the code is used");
-    assert_eq!(token_amount(&h.account(&tokens).data), 1_000_000 - QUARTER_USDC);
-    println!("a 256-byte scope and a 64-byte DID register, and the entry carries both whole");
+    let a = f.proof("alice-tutoring-A");
+    let b = f.proof("alice-tutoring-B");
+    h.register(a).expect("register");
+    let stranger = h.funded(1_000_000_000);
+    h.send_as(&stranger, &[add_proof_ix(stranger.pubkey(), &b.code_bytes(), &b.proof())]).expect("a stranger adds B");
+    let line = h.line(&a.code_bytes());
+    assert_eq!(line.roots, vec![a.proof().root, b.proof().root]);
+    assert_eq!((line.profile, line.payer), (a.profile_address(), h.payer.pubkey()));
+    println!("a stranger added a root Alice proved; the line still names her profile and her payer");
 }
 
 #[test]
-fn the_entry_names_the_list_and_its_owner() {
+fn a_root_already_in_the_line_is_refused() {
+    // A proof is public once sent. Without this rule a stranger could replay one proof until the
+    // line was full, and no other issuer could ever be added.
     let (mut h, f) = ready();
-    // A stranger opens list 1 and vouches for its humans.
-    let stranger = Keypair::new();
-    h.svm.airdrop(&stranger.pubkey(), 1_000_000_000).unwrap();
-    h.open_list_as(&stranger).expect("open list 1");
-    for leaf in &f.list(1).leaves {
-        h.insert_as(&stranger, 1, dec_to_be32(leaf)).expect("insert");
+    let a = f.proof("alice-tutoring-A");
+    let b = f.proof("alice-tutoring-B");
+    h.register(a).expect("register");
+    refused(h.add_proof(a), &["RootAlreadyInLine"]);
+    h.add_proof(b).expect("add B");
+    let stranger = h.funded(1_000_000_000);
+    for p in [a, b] {
+        let ix = add_proof_ix(stranger.pubkey(), &p.code_bytes(), &p.proof());
+        refused(h.send_as(&stranger, &[ix]), &["RootAlreadyInLine"]);
     }
-    let p = f.proof("carol-tutors-list1");
-    let (wallet, tokens) = h.wallet_with(h.usdc, 1_000_000);
-    let meta = register(&mut h, p, TUTORS, 1, &wallet, tokens).expect("a proof against list 1");
-    let events = registered_events(&meta.logs);
-    assert_eq!(events.len(), 1);
-    assert_eq!(events[0].list_index, 1, "the entry names the list");
-    assert_eq!(events[0].list_owner, stranger.pubkey(), "and its owner, so an index can weigh who vouched");
-
-    // And against list 0, the foundation's issuer key.
-    let p = f.proof("alice-tutors");
-    let (wallet, tokens) = h.profile_with(p, h.usdc, 1_000_000);
-    let meta = register(&mut h, p, TUTORS, 0, &wallet, tokens).expect("a proof against list 0");
-    let events = registered_events(&meta.logs);
-    assert_eq!((events[0].list_index, events[0].list_owner), (0, FOUNDATION_ISSUER));
-    println!("each entry names its list and the list's owner");
+    // Two copies in one transaction: the second is refused, and with it the first.
+    h.register(f.proof("bob-tutoring-A")).expect("Bob's line");
+    let a1 = f.proof("alice-tutoring-A1");
+    let ix = add_proof_ix(h.payer.pubkey(), &a1.code_bytes(), &a1.proof());
+    refused(h.send(&[ix.clone(), ix], &[]), &["RootAlreadyInLine"]);
+    assert_eq!(h.line(&a.code_bytes()).roots.len(), 2);
+    println!("refused as expected: a root already in the line, from its human, a stranger, or twice in one transaction");
 }
 
-// ---------------------------------------------------------------------------------------------
-// The rent sweep
-// ---------------------------------------------------------------------------------------------
+#[test]
+fn a_line_holds_sixteen_roots_and_refuses_a_seventeenth() {
+    let (mut h, f) = ready();
+    let proofs = f.alice_tutoring();
+    assert_eq!(proofs.len(), MAX_ROOTS + 1);
+    h.register(proofs[0]).expect("register");
+    for p in &proofs[1..MAX_ROOTS] {
+        h.add_proof(p).expect("add");
+    }
+    let code = proofs[0].code_bytes();
+    let line = h.line(&code);
+    assert_eq!(line.roots.len(), MAX_ROOTS);
+    assert_eq!(h.account(&line_address(&code)).data.len(), line_space(line.label.len(), MAX_ROOTS));
+    refused(h.add_proof(proofs[MAX_ROOTS]), &["LineFull"]);
+    assert_eq!(h.line(&code).roots.len(), MAX_ROOTS);
+    println!("a line held sixteen distinct roots and refused a seventeenth, a real one");
+}
 
 #[test]
-fn a_sweep_leaves_exactly_the_new_minimum() {
+fn refund_reaches_the_payer() {
+    // Registered at the old high rate; the rate falls in steps; anyone sends refund each time; the
+    // payer the line records receives exactly what is above the new minimum, and the line keeps
+    // exactly the minimum.
+    let (mut h, f) = ready();
+    let a = f.proof("alice-tutoring-A");
+    let code = a.code_bytes();
+    let address = line_address(&code);
+    let payer = h.funded(1_000_000_000);
+    h.set_rent(RENT_HIGH);
+    h.send_as(&payer, &[register_fixture_ix(payer.pubkey(), a)]).expect("register");
+    let size = h.account(&address).data.len();
+    assert_eq!(h.lamports_of(&address), rent_minimum(RENT_HIGH, size));
+
+    let stranger = h.funded(1_000_000_000);
+    refused(h.send_as(&stranger, &[refund_ix(payer.pubkey(), &code)]), &["NothingToRefund"]);
+    let mut total = 0;
+    for rate in [RENT_TODAY, RENT_FINAL] {
+        h.set_rent(rate);
+        let (line_before, payer_before) = (h.lamports_of(&address), h.lamports_of(&payer.pubkey()));
+        h.send_as(&stranger, &[refund_ix(payer.pubkey(), &code)]).expect("refund");
+        let excess = line_before - rent_minimum(rate, size);
+        assert_eq!(h.lamports_of(&payer.pubkey()) - payer_before, excess, "the payer got exactly the excess");
+        assert_eq!(h.lamports_of(&address), rent_minimum(rate, size), "the line kept exactly the minimum");
+        total += excess;
+        refused(h.send_as(&stranger, &[refund_ix(payer.pubkey(), &code)]), &["NothingToRefund"]);
+    }
+    assert_eq!(h.line(&code).roots.len(), 1, "the data is untouched");
+
+    // Lamports anyone sends to a line are the payer's too.
+    let gift = solana_system_interface::instruction::transfer(&stranger.pubkey(), &address, 1_000_000);
+    h.send_as(&stranger, &[gift]).expect("a gift");
+    let payer_before = h.lamports_of(&payer.pubkey());
+    h.send_as(&stranger, &[refund_ix(payer.pubkey(), &code)]).expect("refund the gift");
+    assert_eq!(h.lamports_of(&payer.pubkey()) - payer_before, 1_000_000);
+    println!("refunded to the payer: {total} lamports as the rate fell from {RENT_HIGH} to {RENT_FINAL} a byte, and a gift");
+}
+
+#[test]
+fn refund_goes_only_to_the_recorded_payer() {
+    let (mut h, f) = ready();
+    let a = f.proof("alice-tutoring-A");
+    let code = a.code_bytes();
+    h.set_rent(RENT_HIGH);
+    h.register(a).expect("register");
+    h.set_rent(RENT_FINAL);
+    let thief = h.funded(1_000_000_000);
+    let before = h.lamports_of(&line_address(&code));
+    for to in [thief.pubkey(), a.profile_address(), line_address(&code)] {
+        refused(h.send_as(&thief, &[refund_ix(to, &code)]), &["NotThePayer", "Duplicate"]);
+    }
+    assert_eq!(h.lamports_of(&line_address(&code)), before);
+    // A code with no line has nothing to refund.
+    refused(h.send_as(&thief, &[refund_ix(thief.pubkey(), &f.proof("bob-tutoring-A").code_bytes())]), &["AccountNotInitialized"]);
+    println!("refused as expected: a refund to anyone but the recorded payer");
+}
+
+#[test]
+fn the_label_is_free_text_up_to_128_bytes() {
+    let (mut h, f) = ready();
+    let longest = f.proof("alice-longest-A");
+    assert_eq!(longest.label.len(), MAX_LABEL);
+    let meta = h.register(longest).expect("a 128-byte label");
+    assert_eq!(h.line(&longest.code_bytes()).label, longest.label);
+    // 129 bytes is refused before the proof is even looked at.
+    let ix = register_ix(h.payer.pubkey(), &longest.profile_address(), &format!("{}x", longest.label), &[9u8; 32], &longest.proof());
+    refused(h.send(&[ix], &[]), &["LabelTooLong"]);
+    println!("a 128-byte label registered ({} compute units); 129 bytes refused", meta.compute_units_consumed);
+}
+
+#[test]
+fn every_fixture_root_is_its_lists_leanimt_root() {
+    // The program takes roots as given, so this is the client's side: each proof's root is the root
+    // of the list it names, rebuilt here the slow way.
     let f = Fixtures::load();
-    let mut h = Harness::new();
-    // Start at the rate mainnet charged before September 2026, so the code account is created
-    // with the larger deposit.
-    h.svm.set_sysvar(&rent_at(RENT_HIGH));
-    for leaf in &f.list(0).leaves {
-        h.insert(0, dec_to_be32(leaf));
+    for p in &f.proofs {
+        assert_eq!(lean_imt_root(&f.commitments_of(p)), p.proof().root, "{}", p.name);
+        assert_eq!(from_hex32(&p.scope), scope_of(&p.label), "{}: scope", p.name);
+        assert_eq!(from_hex32(&p.message), message_of(&p.profile_address()), "{}: message", p.name);
     }
-    let p = f.proof("alice-tutors");
-    let (wallet, tokens) = h.wallet_with(h.usdc, 1_000_000);
-    register(&mut h, p, TUTORS, 0, &wallet, tokens).expect("register");
-
-    let code_account = used_code_address(&p.code_bytes());
-    let created = h.account(&code_account).lamports;
-    assert_eq!(created, rent_minimum(RENT_HIGH, USED_CODE_LEN));
-
-    // Now the rate falls, the way SIMD-0437 lowers it in steps. The deposit does not move on
-    // its own: only an instruction in the owning program can move it.
-    h.svm.set_sysvar(&rent_at(RENT_TODAY));
-    let minimum = rent_minimum(RENT_TODAY, USED_CODE_LEN);
-    let treasury_before = h.svm.get_balance(&h.treasury).unwrap();
-
-    let treasury = h.treasury;
-    let target = SweepTarget::Code(p.code_bytes());
-    h.send(&[sweep_rent_ix(&target, treasury)], &[Harness::PAYER]).expect("sweep");
-
-    let left = h.account(&code_account).lamports;
-    assert_eq!(left, minimum, "the account keeps exactly the new minimum and not one lamport less");
-    assert_eq!(h.svm.get_balance(&h.treasury).unwrap(), treasury_before + (created - minimum));
-    assert_eq!(h.account(&code_account).data.len(), USED_CODE_LEN, "and its data is untouched");
-
-    // A second sweep at the same rate has nothing to take, so it fails rather than touching it.
-    let err = h.send(&[sweep_rent_ix(&target, treasury)], &[Harness::PAYER]).expect_err("nothing left");
-    assert!(err.contains("nothing above"), "{err}");
-
-    // The step after that takes the rest, and anyone may call it: no signer for the target.
-    h.svm.set_sysvar(&rent_at(RENT_FINAL));
-    let stranger = Keypair::new();
-    h.svm.airdrop(&stranger.pubkey(), 1_000_000_000).unwrap();
-    let ix = sweep_rent_ix(&target, treasury);
-    h.svm.expire_blockhash();
-    let msg = Message::new(&[ix], Some(&stranger.pubkey()));
-    let tx = Transaction::new(&[&stranger], msg, h.svm.latest_blockhash());
-    h.send_tx(tx).expect("a stranger may sweep");
-    assert_eq!(h.account(&code_account).lamports, rent_minimum(RENT_FINAL, USED_CODE_LEN));
-
-    // The list account sweeps the same way, to its owner (session 15), and the config and the code
-    // tree to the treasury, so nothing the registry owns can end up holding rent nobody can reach.
-    for target in [SweepTarget::List(0), SweepTarget::Config, SweepTarget::CodeTree] {
-        let address = target.address();
-        let before = h.account(&address).lamports;
-        let to = if matches!(target, SweepTarget::List(_)) { FOUNDATION_ISSUER } else { treasury };
-        h.send(&[sweep_rent_ix(&target, to)], &[Harness::PAYER]).expect("sweep");
-        let after = h.account(&address).lamports;
-        let expected = rent_minimum(RENT_FINAL, h.account(&address).data.len());
-        assert_eq!(after, expected);
-        println!("swept {address}: {before} -> {after}");
-    }
-}
-
-#[test]
-fn a_sweep_cannot_be_pointed_anywhere_else() {
-    let (mut h, f) = ready();
-    h.svm.set_sysvar(&rent_at(RENT_HIGH));
-    let p = f.proof("alice-tutors");
-    let (wallet, tokens) = h.wallet_with(h.usdc, 1_000_000);
-    register(&mut h, p, TUTORS, 0, &wallet, tokens).expect("register");
-    h.svm.set_sysvar(&rent_at(RENT_TODAY));
-
-    let treasury = h.treasury;
-    let code = p.code_bytes();
-
-    // The target names one account; the instruction carries another. The program derives the
-    // address itself, so the substitution cannot pass.
-    let mut ix = sweep_rent_ix(&SweepTarget::Code(code), treasury);
-    ix.accounts[1].pubkey = list_address(0);
-    let err = h.send(&[ix], &[Harness::PAYER]).expect_err("must be rejected");
-    assert!(err.contains("not the registry account"), "{err}");
-
-    // A code account's destination is the treasury and nothing else.
-    let mut ix = sweep_rent_ix(&SweepTarget::Code(code), treasury);
-    ix.accounts[2].pubkey = h.payer.pubkey();
-    let err = h.send(&[ix], &[Harness::PAYER]).expect_err("must be rejected");
-    assert!(err.contains("WrongSweepRecipient"), "{err}");
-
-    // An account this program does not own is not a sweep target either.
-    let stranger = Address::new_unique();
-    h.svm
-        .set_account(
-            stranger,
-            solana_account::Account {
-                lamports: 10_000_000_000,
-                data: vec![],
-                owner: solana_system_interface::program::ID,
-                executable: false,
-                rent_epoch: 0,
-            },
-        )
-        .unwrap();
-    let mut ix = sweep_rent_ix(&SweepTarget::Code(code), treasury);
-    ix.accounts[1].pubkey = stranger;
-    let err = h.send(&[ix], &[Harness::PAYER]).expect_err("must be rejected");
-    assert!(err.contains("not the registry account"), "{err}");
-    println!("a sweep aimed at the wrong account, the wrong treasury, or a stranger's: all refused");
-}
-
-// ---------------------------------------------------------------------------------------------
-// A list's spare rent and its handover (session 15, decided by Carlos)
-// ---------------------------------------------------------------------------------------------
-
-/// A funded key that is nothing else: it sends transactions so the balances of the keys under test
-/// move by exactly what the program moves, and not by a network fee.
-fn bystander(h: &mut Harness) -> Keypair {
-    let k = Keypair::new();
-    h.svm.airdrop(&k.pubkey(), 1_000_000_000).unwrap();
-    k
-}
-
-fn sweep_as(h: &mut Harness, sender: &Keypair, target: &SweepTarget, recipient: Address) -> Result<litesvm::types::TransactionMetadata, String> {
-    h.svm.expire_blockhash();
-    let msg = Message::new(&[sweep_rent_ix(target, recipient)], Some(&sender.pubkey()));
-    let tx = Transaction::new(&[sender], msg, h.svm.latest_blockhash());
-    h.send_tx(tx)
-}
-
-#[test]
-fn a_lists_spare_rent_goes_to_its_owner_and_everything_else_to_the_treasury() {
-    let mut h = Harness::new();
-    // Lists open at the higher rate, so the cut leaves something above the minimum.
-    h.svm.set_sysvar(&rent_at(RENT_HIGH));
-    // One key pays, another owns: the rent follows the owner, the key the list records.
-    let owner = Keypair::new();
-    let payer = h.payer.pubkey();
-    h.send_signed(&[open_list_ix(payer, owner.pubkey(), 1)], &[&owner]).expect("open list 1");
-    h.svm.set_sysvar(&rent_at(RENT_TODAY));
-
-    let sender = bystander(&mut h);
-    let list = list_address(1);
-    let created = h.lamports_of(&list);
-    let minimum = rent_minimum(RENT_TODAY, LIST_LEN);
-    assert!(created > minimum);
-    let treasury = h.treasury;
-    let treasury_before = h.lamports_of(&treasury);
-
-    // Not to the treasury.
-    let err = sweep_as(&mut h, &sender, &SweepTarget::List(1), treasury).expect_err("a list's rent is not the treasury's");
-    assert!(err.contains("goes to its owner"), "{err}");
-    // Not to whoever paid for it either, nor to anyone else: to the owner.
-    let err = sweep_as(&mut h, &sender, &SweepTarget::List(1), payer).expect_err("nor the payer's");
-    assert!(err.contains("goes to its owner"), "{err}");
-    assert_eq!(h.lamports_of(&list), created, "nothing moved");
-
-    let owner_before = h.lamports_of(&owner.pubkey());
-    sweep_as(&mut h, &sender, &SweepTarget::List(1), owner.pubkey()).expect("to the list's owner, sent by anyone");
-    assert_eq!(h.lamports_of(&list), minimum, "the list keeps exactly the new minimum");
-    assert_eq!(h.lamports_of(&owner.pubkey()), owner_before + (created - minimum), "its owner gets exactly the excess");
-    assert_eq!(h.lamports_of(&treasury), treasury_before, "and the treasury nothing");
-
-    // List 0 is the foundation issuer's: its rent goes there, although whoever sent `init` paid it.
-    let before = h.lamports_of(&FOUNDATION_ISSUER);
-    let excess = h.lamports_of(&list_address(0)) - rent_minimum(RENT_TODAY, LIST_LEN);
-    let err = sweep_as(&mut h, &sender, &SweepTarget::List(0), treasury).expect_err("not the treasury's");
-    assert!(err.contains("goes to its owner"), "{err}");
-    sweep_as(&mut h, &sender, &SweepTarget::List(0), FOUNDATION_ISSUER).expect("to list 0's owner");
-    assert_eq!(h.lamports_of(&FOUNDATION_ISSUER), before + excess);
-
-    // The config and the code tree still pay the treasury, and only the treasury.
-    for target in [SweepTarget::Config, SweepTarget::CodeTree] {
-        let address = target.address();
-        let err = sweep_as(&mut h, &sender, &target, owner.pubkey()).expect_err("a list owner is not the treasury");
-        assert!(err.contains("goes to its owner"), "{err}");
-        let before = h.lamports_of(&treasury);
-        let excess = h.lamports_of(&address) - rent_minimum(RENT_TODAY, h.account(&address).data.len());
-        sweep_as(&mut h, &sender, &target, treasury).expect("to the treasury");
-        assert_eq!(h.lamports_of(&treasury), before + excess);
-    }
-    println!("list rent swept to each list's owner; config and code tree rent to the treasury; every other destination refused");
-}
-
-#[test]
-fn a_lists_owner_hands_it_over_in_two_steps_and_only_then_does_anything_move() {
-    let (mut h, _f) = ready();
-    h.svm.set_sysvar(&rent_at(RENT_HIGH));
-    let old = h.issuer.insecure_clone();
-    let treasury = h.treasury_signer();
-    let multisig = bystander(&mut h);
-    let helper = Keypair::new().pubkey();
-
-    // Not the zero key, not the current owner, and nobody but the owner proposes.
-    let err = h.send_signed(&[propose_list_owner_ix(old.pubkey(), 0, Some(Address::default()))], &[&old]).expect_err("zero");
-    assert!(err.contains("owner cannot be the zero key"), "{err}");
-    let err = h.send_signed(&[propose_list_owner_ix(old.pubkey(), 0, Some(old.pubkey()))], &[&old]).expect_err("current");
-    assert!(err.contains("already owns this list"), "{err}");
-    for key in [&treasury, &multisig] {
-        let err = h.send_signed(&[propose_list_owner_ix(key.pubkey(), 0, Some(key.pubkey()))], &[key]).expect_err("not the owner");
-        assert!(err.contains("only the list's owner"), "{err}");
-    }
-    assert_eq!(h.list(0).pending_owner, Address::default());
-
-    // Step one. A plain key here; a multisig's vault address works the same way.
-    let meta = h.send_signed(&[propose_list_owner_ix(old.pubkey(), 0, Some(multisig.pubkey()))], &[&old]).expect("propose");
-    assert_eq!(list_owner_proposed_events(&meta.logs), vec![(0, old.pubkey(), multisig.pubkey())]);
-    let list = h.list(0);
-    assert_eq!(list.owner, old.pubkey(), "nothing has moved");
-    assert_eq!(list.pending_owner, multisig.pubkey(), "the proposal is recorded");
-
-    // Between the steps the old owner keeps every power; the proposed key has none yet.
-    let err = h.send_signed(&[issuer_ix("add_issuer", multisig.pubkey(), 0, helper)], &[&multisig]).expect_err("not yet");
-    assert!(err.contains("only the list's owner"), "{err}");
-    h.send_signed(&[issuer_ix("add_issuer", old.pubkey(), 0, helper)], &[&old]).expect("the old owner still manages keys");
-    h.send_signed(&[issuer_ix("remove_issuer", old.pubkey(), 0, helper)], &[&old]).expect("and again");
-
-    // Only the proposed key accepts: not a stranger, not the old owner.
-    let stranger = bystander(&mut h);
-    for key in [&stranger, &old] {
-        let err = h.send_signed(&[accept_list_owner_ix(key.pubkey(), 0)], &[key]).expect_err("not the proposed key");
-        assert!(err.contains("only the proposed owner"), "{err}");
-    }
-    // And only on the list it was proposed for.
-    h.open_list_as(&stranger).expect("open list 1");
-    let err = h.send_signed(&[accept_list_owner_ix(multisig.pubkey(), 1)], &[&multisig]).expect_err("nothing pending on list 1");
-    assert!(err.contains("no handover of this list"), "{err}");
-    assert_eq!(h.list(0).owner, old.pubkey(), "still nothing has moved");
-
-    // Step two.
-    let meta = h.send_signed(&[accept_list_owner_ix(multisig.pubkey(), 0)], &[&multisig]).expect("accept");
-    assert_eq!(list_owner_changed_events(&meta.logs), vec![(0, old.pubkey(), multisig.pubkey())]);
-    let list = h.list(0);
-    assert_eq!(list.owner, multisig.pubkey());
-    assert_eq!(list.pending_owner, Address::default(), "the slot is cleared");
-    assert_eq!(list.issuers, vec![FOUNDATION_ISSUER], "ownership moved, and only ownership: the insert keys are as they were");
-
-    // The old owner has no power left over the list, a handover back to itself included.
-    for (what, ix) in [
-        ("add_issuer", issuer_ix("add_issuer", old.pubkey(), 0, helper)),
-        ("remove_issuer", issuer_ix("remove_issuer", old.pubkey(), 0, FOUNDATION_ISSUER)),
-        ("close_list", close_list_ix(old.pubkey(), 0)),
-        ("propose_list_owner", propose_list_owner_ix(old.pubkey(), 0, Some(old.pubkey()))),
-    ] {
-        let err = h.send_signed(&[ix], &[&old]).expect_err("the old owner");
-        assert!(err.contains("only the list's owner"), "{what}: {err}");
-    }
-
-    // Its insert key stays until the new owner removes it, which is how a leaked key is dropped.
-    h.insert(0, dec_to_be32("777"));
-    h.send_signed(
-        &[issuer_ix("add_issuer", multisig.pubkey(), 0, multisig.pubkey()), issuer_ix("remove_issuer", multisig.pubkey(), 0, FOUNDATION_ISSUER)],
-        &[&multisig],
-    )
-    .expect("the new owner swaps the insert keys");
-    let err = h.send(&[insert_identity_ix(old.pubkey(), 0, dec_to_be32("778"))], &[Harness::PAYER, Harness::ISSUER]).expect_err("removed");
-    assert!(err.contains("may not insert"), "{err}");
-    h.insert_as(&multisig, 0, dec_to_be32("778")).expect("the new owner's key inserts");
-
-    // The list's rent follows its owner.
-    h.svm.set_sysvar(&rent_at(RENT_TODAY));
-    let sender = bystander(&mut h);
-    let err = sweep_as(&mut h, &sender, &SweepTarget::List(0), old.pubkey()).expect_err("not the old owner");
-    assert!(err.contains("goes to its owner"), "{err}");
-    let before = h.lamports_of(&multisig.pubkey());
-    let excess = h.lamports_of(&list_address(0)) - rent_minimum(RENT_TODAY, LIST_LEN);
-    sweep_as(&mut h, &sender, &SweepTarget::List(0), multisig.pubkey()).expect("to the new owner");
-    assert_eq!(h.lamports_of(&multisig.pubkey()), before + excess);
-    println!("list 0 handed over in two steps: nothing moved until the new key signed; its insert keys stayed until the new owner changed them");
-}
-
-#[test]
-fn a_second_list_owner_proposal_overwrites_the_first_nothing_clears_it_and_a_closed_list_hands_over_too() {
-    let (mut h, _f) = ready();
-    let owner = bystander(&mut h);
-    h.open_list_as(&owner).expect("open list 1");
-    let first = bystander(&mut h);
-    let second = bystander(&mut h);
-
-    h.send_signed(&[propose_list_owner_ix(owner.pubkey(), 1, Some(first.pubkey()))], &[&owner]).expect("first");
-    h.send_signed(&[propose_list_owner_ix(owner.pubkey(), 1, Some(second.pubkey()))], &[&owner]).expect("second");
-    assert_eq!(h.list(1).pending_owner, second.pubkey(), "the second proposal replaced the first");
-    let err = h.send_signed(&[accept_list_owner_ix(first.pubkey(), 1)], &[&first]).expect_err("replaced");
-    assert!(err.contains("only the proposed owner"), "{err}");
-
-    // Proposing nothing clears the slot, and then nobody can accept.
-    let meta = h.send_signed(&[propose_list_owner_ix(owner.pubkey(), 1, None)], &[&owner]).expect("clear");
-    assert_eq!(list_owner_proposed_events(&meta.logs), vec![(1, owner.pubkey(), Address::default())]);
-    assert_eq!(h.list(1).pending_owner, Address::default());
-    let err = h.send_signed(&[accept_list_owner_ix(second.pubkey(), 1)], &[&second]).expect_err("cleared");
-    assert!(err.contains("no handover of this list"), "{err}");
-    assert_eq!(h.list(1).owner, owner.pubkey(), "the list never moved");
-
-    // A closed list still has an owner, whose key its rent pays, so it can still be handed over.
-    h.send_signed(&[close_list_ix(owner.pubkey(), 1)], &[&owner]).expect("close");
-    h.send_signed(&[propose_list_owner_ix(owner.pubkey(), 1, Some(second.pubkey()))], &[&owner]).expect("propose on a closed list");
-    h.send_signed(&[accept_list_owner_ix(second.pubkey(), 1)], &[&second]).expect("accept on a closed list");
-    let list = h.list(1);
-    assert!(list.closed, "and it stays closed");
-    assert_eq!(list.owner, second.pubkey());
-
-    // Both steps fit in one transaction when both keys sign it, which leaves no moment between
-    // them for anyone else holding the old key to step in.
-    let third = Keypair::new();
-    h.send_signed(
-        &[propose_list_owner_ix(second.pubkey(), 1, Some(third.pubkey())), accept_list_owner_ix(third.pubkey(), 1)],
-        &[&second, &third],
-    )
-    .expect("propose and accept together");
-    assert_eq!(h.list(1).owner, third.pubkey());
-    assert_eq!(h.list(1).pending_owner, Address::default());
-    println!("a second proposal overwrites the first; proposing nothing clears it; a closed list hands over; both steps fit in one transaction");
-}
-
-// ---------------------------------------------------------------------------------------------
-// What a registration costs, and what the client's compression really encodes
-// ---------------------------------------------------------------------------------------------
-
-#[test]
-fn what_a_registration_costs() {
-    let (mut h, f) = ready();
-    println!("\n== one registration, one proof, compressed points ==");
-    // The paid path: the profile's wallet signs and pays the fee; a fee payer covers the rest.
-    // The other path: one key pays everything for someone else, and the profile's wallet signs
-    // for consent. The program cannot tell the two apart and does not need to.
-    let payer = h.payer.insecure_clone();
-    let payer_tokens = h.token_account_for(h.usdc, payer.pubkey());
-    h.svm.set_account(payer_tokens, spl_token_account(&h.usdc, &payer.pubkey(), 1_000_000)).unwrap();
-    for (name, path) in [("alice-tutors", "paid"), ("bob-tutors", "paid for by another key")] {
-        let p = f.proof(name);
-        let profile = p.wallet_keypair();
-        let (fee_authority, fee_tokens) = if path == "paid" {
-            h.profile_with(p, h.usdc, 1_000_000)
-        } else {
-            (payer.insecure_clone(), payer_tokens)
-        };
-        let accounts = RegisterAccounts {
-            payer: payer.pubkey(),
-            profile_wallet: profile.pubkey(),
-            fee_authority: fee_authority.pubkey(),
-            fee_tokens,
-            treasury_tokens: h.treasury_tokens,
-        };
-        let args = RegisterArgs {
-            market: TUTORS,
-            did: &p.did,
-            list_index: 0,
-            root: p.root_bytes(),
-            code: p.code_bytes(),
-            proof_a: p.a_bytes(),
-            proof_b: p.b_bytes(),
-            proof_c: p.c_bytes(),
-        };
-        let ix = register_ix(&args, &accounts);
-        let data_len = ix.data.len();
-        let accounts_len = ix.accounts.len();
-
-        let with_budget = vec![ComputeBudgetInstruction::set_compute_unit_limit(220_000), ix.clone()];
-        h.svm.expire_blockhash();
-        let msg = Message::new(&with_budget, Some(&payer.pubkey()));
-        let tx = Transaction::new(&[&payer, &profile], msg, h.svm.latest_blockhash());
-        let bytes = bincode::serialize(&tx).unwrap().len();
-
-        let meta = h.send_tx(tx).unwrap_or_else(|e| panic!("{path}: {e}"));
-        let cu = meta.compute_units_consumed;
-
-        println!("   {path} path");
-        println!("     instruction data       : {data_len} bytes ({accounts_len} accounts)");
-        println!("     transaction, on the wire: {bytes} bytes of the 1,232 limit ({:.0}%)", bytes as f64 / 1232.0 * 100.0);
-        println!("     compute units consumed : {cu} of the 1,400,000 limit ({:.1}%)", cu as f64 / 1_400_000.0 * 100.0);
-        assert!(bytes < 1232, "a registration must fit in one standard transaction");
-        assert!(cu < 1_400_000);
-    }
-    println!("   (legacy transactions with a compute-budget instruction; the client's v0 form is two bytes more)\n");
-
-    // The largest registration there can be: a 256-byte scope and a 64-byte DID, the program's
-    // two bounds, on both paths, and on the paid path again with the payment instruction a fee
-    // payer that charges in the token adds (a plain transfer to its own token account, one more
-    // account). Each is sent for real, in a registry of its own, since a code lands once.
-    println!("== the largest registration: a 256-byte scope and a 64-byte DID ==");
-    for path in ["paid", "paid for by another key", "paid, with a fee payer's payment instruction"] {
-        let (mut h, f) = ready();
-        let p = f.proof("alice-longest");
-        assert_eq!((p.market.len(), p.did.len()), (256, 64), "the fixture is at both bounds");
-        let profile = p.wallet_keypair();
-        let payer = h.payer.insecure_clone();
-        let (fee_authority, fee_tokens) = if path == "paid for by another key" {
-            let tokens = Address::new_unique();
-            h.svm.set_account(tokens, spl_token_account(&h.usdc, &payer.pubkey(), 1_000_000)).unwrap();
-            (payer.insecure_clone(), tokens)
-        } else {
-            h.profile_with(p, h.usdc, 1_000_000)
-        };
-        let accounts = RegisterAccounts {
-            payer: payer.pubkey(),
-            profile_wallet: profile.pubkey(),
-            fee_authority: fee_authority.pubkey(),
-            fee_tokens,
-            treasury_tokens: h.treasury_tokens,
-        };
-        let mut ixs = vec![
-            ComputeBudgetInstruction::set_compute_unit_limit(220_000),
-            register_ix(&register_args(p), &accounts),
-        ];
-        if path.ends_with("payment instruction") {
-            let fee_payer_tokens = h.token_account_for(h.usdc, payer.pubkey());
-            ixs.push(token_transfer_ix(fee_tokens, fee_payer_tokens, profile.pubkey(), 1_000));
-        }
-        h.svm.expire_blockhash();
-        let msg = Message::new(&ixs, Some(&payer.pubkey()));
-        let tx = Transaction::new(&[&payer, &profile], msg, h.svm.latest_blockhash());
-        let bytes = bincode::serialize(&tx).unwrap().len();
-        let meta = h.send_tx(tx).unwrap_or_else(|e| panic!("{path}: {e}"));
-        let events = registered_events(&meta.logs);
-        assert_eq!((events[0].market.as_str(), events[0].did.as_str()), (p.market.as_str(), p.did.as_str()));
-        println!("   {path}: {bytes} bytes of the 1,232 limit, {} to spare; {} compute units", 1232 - bytes, meta.compute_units_consumed);
-        assert!(bytes < 1232, "the largest registration must fit in one standard transaction");
-    }
-    println!();
-}
-
-fn register_args(p: &FixtureProof) -> RegisterArgs<'_> {
-    RegisterArgs {
-        market: &p.market,
-        did: &p.did,
-        list_index: 0,
-        root: p.root_bytes(),
-        code: p.code_bytes(),
-        proof_a: p.a_bytes(),
-        proof_b: p.b_bytes(),
-        proof_c: p.c_bytes(),
-    }
-}
-
-/// A plain SPL Token transfer (instruction 3): what a fee payer's payment instruction is.
-fn token_transfer_ix(from: Address, to: Address, owner: Address, amount: u64) -> Instruction {
-    let mut data = vec![3u8];
-    data.extend_from_slice(&amount.to_le_bytes());
-    Instruction {
-        program_id: TOKEN_PROGRAM,
-        accounts: vec![
-            solana_instruction::AccountMeta::new(from, false),
-            solana_instruction::AccountMeta::new(to, false),
-            solana_instruction::AccountMeta::new_readonly(owner, true),
-        ],
-        data,
-    }
+    let roots: std::collections::HashSet<_> = f.alice_tutoring().iter().map(|p| p.proof().root).collect();
+    assert_eq!(roots.len(), MAX_ROOTS + 1, "Alice's tutoring roots are all distinct");
+    println!("{} proofs: each root is its list's, each scope and message what the program derives", f.proofs.len());
 }
 
 #[test]
@@ -1181,261 +343,98 @@ fn the_clients_compressed_points_are_the_proofs_own_points() {
     // would decompress to a different point and nothing would verify; this says so directly.
     let f = Fixtures::load();
     for p in &f.proofs {
-        assert_eq!(decompress_g1(&p.a_bytes()).unwrap().to_vec(), hex(&p.uncompressed.a), "{}: A", p.name);
-        assert_eq!(decompress_g2(&p.b_bytes()).unwrap().to_vec(), hex(&p.uncompressed.b), "{}: B", p.name);
-        assert_eq!(decompress_g1(&p.c_bytes()).unwrap().to_vec(), hex(&p.uncompressed.c), "{}: C", p.name);
+        let q = p.proof();
+        assert_eq!(decompress_g1(&q.a).unwrap().to_vec(), hex(&p.uncompressed.a), "{}: A", p.name);
+        assert_eq!(decompress_g2(&q.b).unwrap().to_vec(), hex(&p.uncompressed.b), "{}: B", p.name);
+        assert_eq!(decompress_g1(&q.c).unwrap().to_vec(), hex(&p.uncompressed.c), "{}: C", p.name);
     }
     println!("{} proofs: the compressed points decompress to exactly snarkjs's points", f.proofs.len());
 }
 
 #[test]
-fn the_treasury_cannot_register_for_free() {
-    // 0.25, always. The only key that could arrange for the fee to move from an account to itself
-    // is the treasury's own, and the program refuses it: there is no exception for anyone.
+fn the_wire_format_written_twice_still_matches() {
+    // The client's bytes (`wire`, written by scripts/fixtures.ts) against this file's own encoders,
+    // and against what the program actually writes.
     let (mut h, f) = ready();
-    let usdc = h.usdc;
-    let treasury = h.treasury;
-    let treasury_tokens = h.treasury_tokens;
-    h.svm.set_account(treasury_tokens, spl_token_account(&usdc, &treasury, 1_000_000)).unwrap();
+    let w = &f.wire;
+    let a = f.proof("alice-tutoring-A");
+    let b = f.proof("alice-tutoring-B");
+    let code = a.code_bytes();
+    let payer = Keypair::new_from_array(from_hex32(&w.payer_seed));
+    assert_eq!(payer.pubkey().to_string(), w.payer);
+    assert_eq!(PROGRAM_ID.to_string(), w.program_id, "the program id");
+    assert_eq!(line_address(&code).to_string(), w.line_address, "the line's address");
+    assert_eq!(register_data(&a.profile_address(), &a.label, &code, &a.proof()), hex(&w.register), "register's bytes");
+    assert_eq!(add_proof_data(&code, &b.proof()), hex(&w.add_proof), "add_proof's bytes");
+    assert_eq!(refund_data(&code), hex(&w.refund), "refund's bytes");
 
-    let p = f.proof("alice-tutors");
-    let profile = p.wallet_keypair();
-    let accounts = RegisterAccounts {
-        payer: h.payer.pubkey(),
-        profile_wallet: profile.pubkey(),
-        fee_authority: treasury,
-        fee_tokens: treasury_tokens,
-        treasury_tokens,
+    // The client's own bytes, sent as they are, write exactly the line the client expects.
+    h.svm.airdrop(&payer.pubkey(), 1_000_000_000).unwrap();
+    h.set_time(w.time);
+    let ix = |data: &str, accounts: Vec<solana_instruction::AccountMeta>| solana_instruction::Instruction {
+        program_id: PROGRAM_ID,
+        accounts,
+        data: hex(data),
     };
-    let args = RegisterArgs {
-        market: TUTORS,
-        did: &p.did,
-        list_index: 0,
-        root: p.root_bytes(),
-        code: p.code_bytes(),
-        proof_a: p.a_bytes(),
-        proof_b: p.b_bytes(),
-        proof_c: p.c_bytes(),
+    let line = line_address(&code);
+    let system = solana_system_interface::program::ID;
+    use solana_instruction::AccountMeta as M;
+    h.send_as(&payer, &[ix(&w.register, vec![M::new(line, false), M::new(payer.pubkey(), true), M::new_readonly(system, false)])])
+        .expect("the client's register");
+    h.send_as(&payer, &[ix(&w.add_proof, vec![M::new(line, false), M::new(payer.pubkey(), true), M::new_readonly(system, false)])])
+        .expect("the client's add_proof");
+    assert_eq!(h.account(&line).data, hex(&w.line), "the line the program wrote is the client's expected bytes");
+    let view = read_line(&hex(&w.line));
+    assert_eq!((view.profile, view.payer, view.time, view.roots.len()), (a.profile_address(), payer.pubkey(), w.time, 2));
+    h.set_rent(RENT_FINAL);
+    h.send_as(&payer, &[ix(&w.refund, vec![M::new(line, false), M::new(payer.pubkey(), false)])]).expect("the client's refund");
+    println!("the client's bytes and this harness's agree, and the program wrote exactly the expected line");
+}
+
+#[test]
+fn what_a_line_costs() {
+    // Bytes on the wire and compute units, one proof per transaction, each with one signature (the
+    // payer) and no compute-budget instruction. Solana's default limit for one instruction is
+    // 200,000 units; each must fit under it.
+    let (mut h, f) = ready();
+    let short = f.proof("alice-tutoring-A");
+    let longest = f.proof("alice-longest-A");
+    let b = f.proof("alice-tutoring-B");
+    let size = |h: &Harness, ix: &solana_instruction::Instruction| {
+        let msg = Message::new(std::slice::from_ref(ix), Some(&h.payer.pubkey()));
+        let tx = Transaction::new(&[&h.payer], msg, h.svm.latest_blockhash());
+        bincode::serialize(&tx).unwrap().len()
     };
-    let signer = h.treasury_signer();
-    let err = h.send_signed(&[register_ix(&args, &accounts)], &[&profile, &signer]).expect_err("must be rejected");
-    // Anchor's duplicate-mutable-account check fires before the program's own, which is why the
-    // program says so anyway: the rule belongs in the program's text, not only in a macro's
-    // output, because the bytes are frozen at deploy and a reader has to be able to find it.
-    assert!(
-        err.contains("to itself") || err.contains("DuplicateMutableAccount"),
-        "{err}"
+    let mut rows = vec![];
+    for (what, ix) in [
+        ("register, a 15-byte label", register_fixture_ix(h.payer.pubkey(), short)),
+        ("register, a 128-byte label", register_fixture_ix(h.payer.pubkey(), longest)),
+    ] {
+        let bytes = size(&h, &ix);
+        let cu = h.send(&[ix], &[]).expect(what).compute_units_consumed;
+        rows.push((what, bytes, cu));
+    }
+    let ix = add_proof_ix(h.payer.pubkey(), &b.code_bytes(), &b.proof());
+    let bytes = size(&h, &ix);
+    rows.push(("add_proof", bytes, h.send(&[ix], &[]).expect("add").compute_units_consumed));
+    h.set_rent(RENT_FINAL);
+    let ix = refund_ix(h.payer.pubkey(), &short.code_bytes());
+    let bytes = size(&h, &ix);
+    rows.push(("refund", bytes, h.send(&[ix], &[]).expect("refund").compute_units_consumed));
+
+    println!("| | bytes of 1,232 | compute units of 200,000 |");
+    for (what, bytes, cu) in &rows {
+        println!("| {what} | {bytes} | {cu} |");
+        assert!(*bytes <= 1_232, "{what}: {bytes} bytes");
+        assert!(*cu < 200_000, "{what}: {cu} units, over the default limit");
+    }
+    let deposit = |rate: u64, label: usize, roots: usize| rent_minimum(rate, line_space(label, roots));
+    println!(
+        "deposit for a 15-byte label, one root: {} lamports today ({} a byte), {} after the cuts ({}); each more root {} today",
+        deposit(RENT_TODAY, 15, 1),
+        RENT_TODAY,
+        deposit(RENT_FINAL, 15, 1),
+        RENT_FINAL,
+        32 * RENT_TODAY
     );
-    assert_eq!(token_amount(&h.account(&treasury_tokens).data), 1_000_000, "nothing moved");
-    assert!(h.svm.get_account(&used_code_address(&p.code_bytes())).is_none(), "no badge either");
-    println!("the treasury paying itself: refused, and no badge written");
-}
-
-#[test]
-fn init_takes_usdc_only_at_its_address_and_in_six_decimals() {
-    let mut h = Harness::bare();
-    let payer = h.payer.pubkey();
-    let usdc = h.usdc;
-
-    // The mint must be the one at the program's constant. Any other address is refused before
-    // anything is read from it.
-    let other = Address::new_unique();
-    h.svm.set_account(other, spl_mint_account(6)).unwrap();
-    let err = h.send(&[init_ix(payer, other)], &[Harness::PAYER]).expect_err("must be rejected");
-    assert!(err.contains("ConstraintAddress") || err.contains("address"), "{err}");
-
-    // USDC's fee is the constant 250,000, which is 0.25 only at six decimals, so init reads the
-    // mint and refuses any other count. (USDC has six; this rewrites the planted account.)
-    for decimals in [1u8, 8] {
-        h.svm.set_account(usdc, spl_mint_account(decimals)).unwrap();
-        let err = h.send(&[init_ix(payer, usdc)], &[Harness::PAYER]).expect_err("must be rejected");
-        assert!(err.contains("six decimals"), "{decimals}: {err}");
-    }
-
-    h.svm.set_account(usdc, spl_mint_account(6)).unwrap();
-    h.send(&[init_ix(payer, usdc)], &[Harness::PAYER]).expect("init");
-    let config = h.config();
-    assert_eq!(config.mints, vec![USDC_MINT]);
-    assert_eq!(config.fees, vec![USDC_FEE]);
-    assert_eq!(config.treasury, TREASURY);
-    assert_eq!(config.list_count, 1, "the first list is opened at init");
-    assert_eq!(h.list(0).leaf_count, 0);
-    assert_eq!(h.code_tree().count, 0);
-    println!("init: the wrong mint address, and a USDC that does not count in six decimals, both refused");
-}
-
-#[test]
-fn init_runs_once_and_writes_only_the_constants() {
-    let mut h = Harness::bare();
-    let usdc = h.usdc;
-
-    // A stranger gets there first. They pay the rent and get nothing for it: the treasury is the
-    // program's constant, not theirs, and there is no argument or signer through which they could
-    // have named anything else.
-    let stranger = Keypair::new();
-    h.svm.airdrop(&stranger.pubkey(), 1_000_000_000).unwrap();
-    let ix = init_ix(stranger.pubkey(), usdc);
-    h.svm.expire_blockhash();
-    let msg = Message::new(&[ix], Some(&stranger.pubkey()));
-    let tx = Transaction::new(&[&stranger], msg, h.svm.latest_blockhash());
-    h.send_tx(tx).expect("anyone may init");
-    let config = h.config();
-    assert_eq!(config.treasury, TREASURY);
-    assert_ne!(config.treasury, stranger.pubkey());
-    assert_eq!(config.pending_treasury, Address::default(), "no handover is pending at init");
-    assert_eq!(config.mints, vec![USDC_MINT]);
-
-    // And the stranger can turn no dial.
-    let err = h
-        .send_signed(&[add_token_ix(stranger.pubkey(), usdc, USDC_FEE)], &[&stranger])
-        .expect_err("must be rejected");
-    assert!(err.contains("ConstraintHasOne") || err.contains("has one"), "{err}");
-
-    // A second init, from anyone, fails: the config account already exists.
-    let payer = h.payer.pubkey();
-    let err = h.send(&[init_ix(payer, usdc)], &[Harness::PAYER]).expect_err("must be rejected");
-    assert!(err.contains("already in use"), "{err}");
-    assert_eq!(h.config().treasury, TREASURY, "and nothing changed");
-    println!("init by a stranger writes the constants; a second init: {}", err.lines().next().unwrap());
-}
-
-/// Every dial, tried from one key: the ones that must pass `has_one = treasury`. The lists are not
-/// among them: a list is its owner's.
-fn dials(h: &Harness, key: Address) -> Vec<(&'static str, Instruction)> {
-    vec![
-        ("add_token", add_token_ix(key, h.usdc, USDC_FEE)),
-        ("propose_treasury", propose_treasury_ix(key, Some(key))),
-    ]
-}
-
-fn assert_no_dial(h: &mut Harness, key: &Keypair, who: &str) {
-    for (what, ix) in dials(h, key.pubkey()) {
-        let err = h.send_signed(&[ix], &[key]).expect_err("must be rejected");
-        assert!(err.contains("ConstraintHasOne") || err.contains("has one"), "{who} {what}: {err}");
-    }
-}
-
-#[test]
-fn a_handover_is_proposed_then_accepted_and_only_then_does_anything_move() {
-    let (mut h, f) = ready();
-    let old = h.treasury;
-    let old_key = h.treasury_signer();
-    let usdc = h.usdc;
-
-    // Not the zero key, and not the current key.
-    let err = h
-        .send(&[propose_treasury_ix(old, Some(Address::default()))], &[Harness::PAYER, Harness::TREASURY])
-        .expect_err("must be rejected");
-    assert!(err.contains("zero key"), "{err}");
-    let err = h
-        .send(&[propose_treasury_ix(old, Some(old))], &[Harness::PAYER, Harness::TREASURY])
-        .expect_err("must be rejected");
-    assert!(err.contains("is the current one"), "{err}");
-    assert_eq!(h.config().pending_treasury, Address::default());
-
-    // Step one. A plain key here; a multisig's vault address works the same way.
-    let multisig = Keypair::new();
-    h.svm.airdrop(&multisig.pubkey(), 1_000_000).unwrap();
-    h.send(&[propose_treasury_ix(old, Some(multisig.pubkey()))], &[Harness::PAYER, Harness::TREASURY])
-        .expect("propose_treasury");
-    let config = h.config();
-    assert_eq!(config.treasury, old, "nothing has moved");
-    assert_eq!(config.pending_treasury, multisig.pubkey(), "the proposal is recorded");
-
-    // Between the two steps the old key keeps every power: it turns the dials, is paid, and is
-    // swept. The pending key can do nothing yet.
-    h.send(&[add_token_ix(old, usdc, USDC_FEE)], &[Harness::PAYER, Harness::TREASURY])
-        .expect_err("USDC is already accepted: past has_one, refused on the merits");
-    let p = f.proof("alice-tutors");
-    let (wallet, tokens) = h.wallet_with(usdc, 1_000_000);
-    register(&mut h, p, TUTORS, 0, &wallet, tokens).expect("paid to the old treasury while a proposal is pending");
-    assert_eq!(token_amount(&h.account(&h.treasury_tokens).data), QUARTER_USDC);
-    h.svm.set_sysvar(&rent_at(RENT_FINAL));
-    let target = SweepTarget::Code(p.code_bytes());
-    h.send(&[sweep_rent_ix(&target, old)], &[Harness::PAYER]).expect("swept to the old treasury while a proposal is pending");
-    assert_no_dial(&mut h, &multisig, "the pending key, before accepting,");
-
-    // Only the pending key can accept: not a stranger, not the old treasury.
-    let stranger = Keypair::new();
-    h.svm.airdrop(&stranger.pubkey(), 1_000_000).unwrap();
-    let err = h.send_signed(&[accept_treasury_ix(stranger.pubkey())], &[&stranger]).expect_err("must be rejected");
-    assert!(err.contains("only the proposed treasury key"), "{err}");
-    let err = h.send_signed(&[accept_treasury_ix(old)], &[&old_key]).expect_err("must be rejected");
-    assert!(err.contains("only the proposed treasury key"), "{err}");
-    assert_eq!(h.config().treasury, old, "still nothing has moved");
-
-    // Step two.
-    h.send_signed(&[accept_treasury_ix(multisig.pubkey())], &[&multisig]).expect("accept_treasury");
-    let config = h.config();
-    assert_eq!(config.treasury, multisig.pubkey());
-    assert_eq!(config.pending_treasury, Address::default(), "the slot is cleared");
-
-    // Now the old key can turn no dial, including proposing a handover back to itself.
-    assert_no_dial(&mut h, &old_key, "the old key, after acceptance,");
-    let err = h.send_signed(&[accept_treasury_ix(old)], &[&old_key]).expect_err("must be rejected");
-    assert!(err.contains("no treasury handover"), "{err}");
-
-    // Nor be paid: a token account the old key owns is refused as the fee's destination, and
-    // one the new treasury owns is where the quarter goes. (The rent rate goes back up first, so
-    // this badge's account has something above the final minimum for the sweep below.)
-    h.svm.set_sysvar(&rent_at(RENT_TODAY));
-    let p = f.proof("alice-cleaning");
-    let (wallet, tokens) = h.wallet_with(usdc, 1_000_000);
-    let err = register(&mut h, p, CLEANING, 0, &wallet, tokens).expect_err("must be rejected");
-    assert!(err.contains("ConstraintTokenOwner") || err.contains("token owner"), "{err}");
-    assert_eq!(token_amount(&h.account(&tokens).data), 1_000_000, "nothing moved");
-    h.treasury_tokens = h.token_account_for(usdc, multisig.pubkey());
-    register(&mut h, p, CLEANING, 0, &wallet, tokens).expect("paid to the new treasury");
-    assert_eq!(token_amount(&h.account(&h.treasury_tokens).data), QUARTER_USDC);
-
-    // Nor receive swept rent: the sweep's destination is whatever the config says now.
-    h.svm.set_sysvar(&rent_at(RENT_FINAL));
-    let target = SweepTarget::Code(p.code_bytes());
-    let err = h.send(&[sweep_rent_ix(&target, old)], &[Harness::PAYER]).expect_err("must be rejected");
-    assert!(err.contains("WrongSweepRecipient"), "{err}");
-    h.send(&[sweep_rent_ix(&target, multisig.pubkey())], &[Harness::PAYER]).expect("swept to the new treasury");
-
-    // The new treasury holds every dial, the handover included, and can hand back the same way.
-    h.send_signed(&[propose_treasury_ix(multisig.pubkey(), Some(old))], &[&multisig]).expect("and proposes again");
-    h.send_signed(&[accept_treasury_ix(old)], &[&old_key]).expect("and the old key accepts");
-    assert_eq!(h.config().treasury, old);
-    println!("treasury handed over in two steps: nothing moved until the new key signed, then everything did");
-}
-
-#[test]
-fn a_second_proposal_overwrites_the_first_and_proposing_nothing_clears_it() {
-    let (mut h, _f) = ready();
-    let old = h.treasury;
-    let first = Keypair::new();
-    let second = Keypair::new();
-    h.svm.airdrop(&first.pubkey(), 1_000_000).unwrap();
-    h.svm.airdrop(&second.pubkey(), 1_000_000).unwrap();
-
-    h.send(&[propose_treasury_ix(old, Some(first.pubkey()))], &[Harness::PAYER, Harness::TREASURY]).expect("first");
-    h.send(&[propose_treasury_ix(old, Some(second.pubkey()))], &[Harness::PAYER, Harness::TREASURY]).expect("second");
-    assert_eq!(h.config().pending_treasury, second.pubkey(), "the second proposal replaced the first");
-
-    // The first key can no longer accept; the second can.
-    let err = h.send_signed(&[accept_treasury_ix(first.pubkey())], &[&first]).expect_err("must be rejected");
-    assert!(err.contains("only the proposed treasury key"), "{err}");
-    assert_eq!(h.config().treasury, old);
-
-    // A proposal of nothing clears the slot, and then nobody can accept.
-    h.send(&[propose_treasury_ix(old, None)], &[Harness::PAYER, Harness::TREASURY]).expect("clear");
-    assert_eq!(h.config().pending_treasury, Address::default());
-    let err = h.send_signed(&[accept_treasury_ix(second.pubkey())], &[&second]).expect_err("must be rejected");
-    assert!(err.contains("no treasury handover"), "{err}");
-    assert_eq!(h.config().treasury, old, "the treasury never moved");
-
-    // A typo, in other words a key nobody holds, can be proposed and simply never accepted.
-    let nobody = Address::new_unique();
-    h.send(&[propose_treasury_ix(old, Some(nobody))], &[Harness::PAYER, Harness::TREASURY]).expect("propose a typo");
-    assert_eq!(h.config().pending_treasury, nobody);
-    let usdc = h.usdc;
-    let err = h.send(&[add_token_ix(old, usdc, USDC_FEE)], &[Harness::PAYER, Harness::TREASURY]).expect_err("already accepted");
-    assert!(err.contains("already accepts this mint"), "past has_one, so the treasury still holds its dials: {err}");
-    h.send(&[propose_treasury_ix(old, Some(second.pubkey()))], &[Harness::PAYER, Harness::TREASURY]).expect("and corrects it");
-    h.send_signed(&[accept_treasury_ix(second.pubkey())], &[&second]).expect("accepted by the corrected key");
-    assert_eq!(h.config().treasury, second.pubkey());
-    println!("a second proposal overwrites the first; proposing nothing clears it; a typo is recoverable");
 }

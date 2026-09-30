@@ -1,12 +1,11 @@
-// The code: what makes one badge per market per human true.
+// The code: what makes one line per human per label true.
 //
-// A code is the proof's nullifier, `Poseidon(scope, secret)`. The same person in the same market
+// A code is the proof's nullifier, `Poseidon(scope, secret)`. The same person under the same label
 // always produces the same one; nobody else can produce it; and it says nothing about who they
-// are. The registry writes one account whose address is a hash of it, and that account existing
-// is the whole rule.
+// are. A line sits at an address derived from it, so a second line for it cannot exist.
 //
-// Deriving the code needs only the identity secret and the market name, so an app can check
-// whether a badge is already taken before anyone pays for anything.
+// Deriving the code needs only the identity secret and the label, so an app can check whether a
+// line already exists before making a proof.
 
 import { Identity } from '@semaphore-protocol/identity'
 import { poseidon2 } from 'poseidon-lite/poseidon2'
@@ -18,15 +17,15 @@ export function identityFrom(secret: Uint8Array | Identity): Identity {
   return secret instanceof Identity ? secret : new Identity(secret)
 }
 
-/** The identity commitment an issuer inserts into a list. */
+/** The identity commitment an issuer puts in its list. */
 export function commitmentOf(secret: Uint8Array | Identity): bigint {
   return identityFrom(secret).commitment
 }
 
-export function codeFor(secret: Uint8Array | Identity, market: string): bigint {
-  return poseidon2([scopeOf(market), identityFrom(secret).secretScalar])
+export function codeFor(secret: Uint8Array | Identity, label: string): bigint {
+  return poseidon2([scopeOf(label), identityFrom(secret).secretScalar])
 }
 
-export function codeBytesFor(secret: Uint8Array | Identity, market: string): Uint8Array {
-  return toBytes32(codeFor(secret, market))
+export function codeBytesFor(secret: Uint8Array | Identity, label: string): Uint8Array {
+  return toBytes32(codeFor(secret, label))
 }

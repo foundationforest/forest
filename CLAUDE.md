@@ -7,10 +7,10 @@ Rules Claude Code does not change (Carlos changes them, in a chat, then here):
 - The registry and escrow programs are sealed after deploy, per version. Design each as if it can never be touched again.
 - Anything someone needs to compete with us lives in this repo, open.
 - Use existing pieces unchanged: for records, Ed25519 keys named by did:key, RFC 8785 canonical JSON and age, with the one protocol around them in `records/SPEC.md`; Semaphore's circuit and its public setup files for the proof (its contracts are not used); groth16-solana and the Poseidon syscall for verifying; Kora as the fee payer service, with no custom code inside it (it co-signs a person's transaction and charges the network fee and any storage deposit it puts down in their dollar token; no sponsorship built in); Didit for the face check. Write only what does not exist.
-- Registration: one proof, one rule: 25 cents in USDC, always; other accepted tokens at the fee set for them. No free slots, no vouchers, no numbered codes in the program. The program charges everyone; any payer may pay for someone else; the program cannot tell and never needs to.
+- Registration is free: no fee, no token, no treasury in the program. The only costs are Solana's own (the network fee and the line's deposit), paid by whoever sends the transaction; any payer may pay for someone else; the program cannot tell and never needs to. No vouchers, no numbered codes in the program.
 - Escrow v1: one shape, money out only when both sides agree, options off by default; classic SPL tokens only; parties are keys.
 - No mixers, no custody, no arbitration by Forest.
-- Fees exist only at ramp in and out. Nothing inside charges anything except the sealed registry fee.
+- Fees exist only at ramp in and out. Nothing inside charges anything.
 - Reputation is computed per profile. Profiles link only when the user chooses. Never build a per-human score that links profiles by itself.
 - No address logs. Nothing server-side ever holds a person next to a profile.
 - Anyone can make any market: a market is a name, and the registry accepts any name. The `markets` repo is the foundation's directory of recommended spellings; the foundation excludes, prohibits and approves nothing. The recommended badge scope is `market/role`.

@@ -1,0 +1,150 @@
+{
+  "note": "The devnet deploy of the registry, the free list of badges, beside the earlier registry (devnet/devnet.json), which it does not touch. Public keys, addresses and signatures only. The program id is derived from the devnet phrase under the label registry-badges-program; the deploy key and the payer are the ones devnet/devnet.json names. Written by registry/devnet/deploy.sh and registry/client/scripts/devnet.ts; read by registry/client/test/devnet.test.ts.",
+  "cluster": "devnet",
+  "rpc": "https://api.devnet.solana.com",
+  "registry": {
+    "programId": "GWyKGgoRg2g3kpKNgsXBWS1ayHTHHzwbtLJW4XGVP2RW",
+    "programData": "FnNYuVuFyJ3S6CAwiJ1iJZaJKCCGy9ZvbTinAZtbZFTe",
+    "upgradeAuthority": "2mz33wBK7FKRXoAi7LptGGTwVQJDbrSyrVwbYRCqwP3A",
+    "lastDeploySlot": 505783416,
+    "soSha256": "9118c23f2e6e52ca1d5ee81baa131e29678143be7adc5d1d090d7fe81f4193db",
+    "soBytes": 188680,
+    "sbpfVersion": "v3",
+    "deploySignature": "tWpU4DNrPH9gs5mA8KTbtQbKGA2HUioYdR2nrTriCFHRZfvNBXwX89AVEeJN3s15RrdRMbtbf6wKh5vA5AfnEWN",
+    "deployCost": {
+      "bytes": 188680,
+      "programDataRent": 959373240,
+      "programRent": 833120,
+      "writes": 187,
+      "fees": 955000,
+      "total": 961161360,
+      "balanceBefore": 4317179640,
+      "balanceAfter": 3356018280,
+      "spent": 961161360
+    }
+  },
+  "transactions": [
+    {
+      "what": "deploy: the registry (SBPF v3), upgrade authority kept on the deploy key",
+      "signature": "tWpU4DNrPH9gs5mA8KTbtQbKGA2HUioYdR2nrTriCFHRZfvNBXwX89AVEeJN3s15RrdRMbtbf6wKh5vA5AfnEWN"
+    },
+    {
+      "what": "register: profile 0 under \"freelance/seller\", list A's proof, the relayer paying; the profile key signed nothing",
+      "signature": "5DC4mzG4RiE9RzGKjA3P2Puif5tYxPtLVpSyj9LzwxzhBUReqgxFDnyMZv74Bp48v2HznuTdKXdgFNc6EqCoMNy5"
+    },
+    {
+      "what": "add_proof: list B's proof appended to the same line, the relayer paying the 32 new bytes",
+      "signature": "4Z8BXVXnaaa9YuHbYWCWdeNx6Pbpw5XM5MZQqK4ZZwQ2yjkJf1B1XaFhd6p5vxigzXvwrYRjEG47LvrAJu5X6dnc"
+    },
+    {
+      "what": "register again for the same code: refused, the line already exists",
+      "signature": "39jNUfkYax9LrAWREZnqGkPFfoGoqhVrRC9HMffGZBUXn2GAiQMPcaq8HDqQXbZWu7gwDnPwBKnhVeWRBq7XEHU3"
+    },
+    {
+      "what": "add_proof with list B's proof again: refused, the root is already in the line",
+      "signature": "2PjuBrkTYaH5pwgDStZ87KrWoqT5nizCjkxdvwtY5yPvW79orekQDvgiTrFdbqn1UkuA9rswjdivSL93ced3vxGz"
+    },
+    {
+      "what": "0.001 SOL sent to the line, above its minimum",
+      "signature": "4TnEv8BJQxqXFjJ8Xk2S7ky3HyT5HU8nP2sKR9HYmtHVuuMJVHQVmVVi8PV11q9KzjkCQQqTzEhzqB4Bwfi1goBL"
+    },
+    {
+      "what": "refund: exactly the 0.001 SOL above the minimum, back to the payer the line records",
+      "signature": "29czG39RkPKC9GqBXJA6C6gi4vMR77QwuyGt8xh1NaUo46JU6wqjYwDNJboULJR3kEFG6hEzzzGYGzxRmqHvya6v"
+    }
+  ],
+  "line": {
+    "what": "profile 0 of the keys recipe's test seed, one verified human under freelance/seller, backed by two stand-in issuers' lists; a relayer (the payer) sends everything, the profile key signs nothing",
+    "label": "freelance/seller",
+    "profile": "Azh4zBXfQsXLKrrD6YanN7VZhpNyQot7vVdtB2r41UWx",
+    "code": "13a8925799f4da90c705505d75e6e80cfc760b8c29f50fe0e42353bbd784c236",
+    "address": "8dWFoHs96hoez6jzvfGJKPz7kkiwUEhG5BJ46aHQjh5U",
+    "lists": {
+      "A": {
+        "standIn": true,
+        "commitments": [
+          "17267500762544374024106351218309472160400766846653130248818773996455286420731",
+          "20835780386388904453293284057755017977131398289876578123071978205571469355504",
+          "14568690134484466610252976219100933485694269593799802854234702390895629808185",
+          "16366078799365875499563310419550784487746534383716144609294358391757663487543",
+          "15838149072391876804666341625599372647470768711346325733106674817994939545853"
+        ],
+        "root": "1d13615ac341b9c932f13fb484f3a35cb5d417a1712cea7e88ddc13960b69be6"
+      },
+      "B": {
+        "standIn": true,
+        "commitments": [
+          "17205727339291075842815701526866915711885890964839048909096086873765183355152",
+          "14568690134484466610252976219100933485694269593799802854234702390895629808185",
+          "12077280769117229052694791889390356995185134941023246911435926799323878606857"
+        ],
+        "root": "243a73e7b24e703b2f7ee391de7f6e8129dc0cb73804ef6d952b9e138b53de9c"
+      }
+    },
+    "register": {
+      "signature": "5DC4mzG4RiE9RzGKjA3P2Puif5tYxPtLVpSyj9LzwxzhBUReqgxFDnyMZv74Bp48v2HznuTdKXdgFNc6EqCoMNy5",
+      "provingMs": 1851,
+      "bytes": 491,
+      "computeUnits": 120920,
+      "fee": 5000
+    },
+    "addProof": {
+      "signature": "4Z8BXVXnaaa9YuHbYWCWdeNx6Pbpw5XM5MZQqK4ZZwQ2yjkJf1B1XaFhd6p5vxigzXvwrYRjEG47LvrAJu5X6dnc",
+      "bytes": 439,
+      "computeUnits": 120267,
+      "fee": 5000
+    },
+    "refused": {
+      "secondRegister": {
+        "signature": "39jNUfkYax9LrAWREZnqGkPFfoGoqhVrRC9HMffGZBUXn2GAiQMPcaq8HDqQXbZWu7gwDnPwBKnhVeWRBq7XEHU3",
+        "err": {
+          "InstructionError": [
+            0,
+            {
+              "Custom": 0
+            }
+          ]
+        },
+        "log": [
+          "Allocate: account Address { address: 8dWFoHs96hoez6jzvfGJKPz7kkiwUEhG5BJ46aHQjh5U, base: None } already in use",
+          "Program 11111111111111111111111111111111 failed: custom program error: 0x0",
+          "Program GWyKGgoRg2g3kpKNgsXBWS1ayHTHHzwbtLJW4XGVP2RW failed: custom program error: 0x0"
+        ]
+      },
+      "replayedRoot": {
+        "signature": "2PjuBrkTYaH5pwgDStZ87KrWoqT5nizCjkxdvwtY5yPvW79orekQDvgiTrFdbqn1UkuA9rswjdivSL93ced3vxGz",
+        "err": {
+          "InstructionError": [
+            0,
+            {
+              "Custom": 6004
+            }
+          ]
+        },
+        "log": [
+          "Program log: AnchorError thrown in src/lib.rs:125. Error Code: RootAlreadyInLine. Error Number: 6004. Error Message: this root is already in the line.",
+          "Program GWyKGgoRg2g3kpKNgsXBWS1ayHTHHzwbtLJW4XGVP2RW failed: custom program error: 0x1774"
+        ]
+      }
+    },
+    "refund": {
+      "gift": "4TnEv8BJQxqXFjJ8Xk2S7ky3HyT5HU8nP2sKR9HYmtHVuuMJVHQVmVVi8PV11q9KzjkCQQqTzEhzqB4Bwfi1goBL",
+      "signature": "29czG39RkPKC9GqBXJA6C6gi4vMR77QwuyGt8xh1NaUo46JU6wqjYwDNJboULJR3kEFG6hEzzzGYGzxRmqHvya6v",
+      "lamports": 1000000,
+      "computeUnits": 5000
+    },
+    "onChain": {
+      "readBy": "getProgramAccounts, filtered by profile",
+      "linesOfThisProfile": 1,
+      "profile": "Azh4zBXfQsXLKrrD6YanN7VZhpNyQot7vVdtB2r41UWx",
+      "payer": "9CKUm2s7nwT7HrCpjtaffNH3PnUUVyQr2gELjHrWYBUd",
+      "time": 1790743456,
+      "label": "freelance/seller",
+      "roots": [
+        "1d13615ac341b9c932f13fb484f3a35cb5d417a1712cea7e88ddc13960b69be6",
+        "243a73e7b24e703b2f7ee391de7f6e8129dc0cb73804ef6d952b9e138b53de9c"
+      ],
+      "lamports": 1671320
+    }
+  }
+}
