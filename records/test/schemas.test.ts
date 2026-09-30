@@ -22,6 +22,10 @@ formats.default(ajv)
 const validators = Object.fromEntries(KINDS.map((kind) => [kind, ajv.compile(read(`../schemas/${kind}.json`))]))
 const fits = (kind: Kind, body: unknown) => validators[kind]!(body) === true
 const example = (kind: Kind): Record<string, any> => read(`../schemas/examples/${kind}.json`)
+// A proof of the membership kind, as the registry client's makeMembership made it
+// (registry/client/scripts/fixtures.ts): the one the registry's tests verify.
+const membershipBody = (): Record<string, any> =>
+  read('../../registry/program/tests-litesvm/fixtures/proofs.json').membership.body
 
 /** The example with one field set (or removed, with undefined) at a path of keys. */
 function edit(kind: Kind, path: Array<string | number>, value: unknown): Record<string, any> {
@@ -44,10 +48,10 @@ describe('schemas', () => {
   })
 
   test('every example is a body an entry carries: it signs, travels and checks', () => {
-    for (const kind of KINDS) {
-      const body = example(kind)
-      checkValue(example(kind))
-      const entry = ownerEntry(alice, PATHS[kind], body, T0)
+    for (const [path, read] of [...KINDS.map((kind) => [PATHS[kind], () => example(kind)] as const), ['proof/x', membershipBody] as const]) {
+      const body = read()
+      checkValue(read())
+      const entry = ownerEntry(alice, path, body, T0)
       assert.deepEqual(decodeEntry(encodeEntry(entry)).entry.body, body)
     }
   })
@@ -148,5 +152,42 @@ describe('schemas', () => {
     assert.ok(fits('proof', edit('proof', ['issuer'], alice.did)))
     assert.ok(!fits('proof', edit('proof', ['issuer'], 'issuer.example')))
     assert.ok(!fits('proof', edit('proof', ['credential'], 42)))
+  })
+
+  test('a membership is the other kind of proof: the registry client\'s record fits', () => {
+    const body = membershipBody()
+    assert.ok(fits('proof', body), ajv.errorsText(validators.proof!.errors))
+    assert.ok(fits('proof', { ...body, anythingElse: 1 }), 'open, like every record')
+    assert.ok(fits('proof', { ...body, membership: { ...body.membership, anythingElse: 1 } }))
+    // One kind per proof: both, or neither, is refused.
+    assert.ok(!fits('proof', { ...body, credential: example('proof').credential }), 'a credential and a membership')
+    assert.ok(!fits('proof', { issuer: body.issuer, createdAt: body.createdAt }), 'neither')
+    for (const field of ['issuer', 'createdAt']) {
+      const { [field]: _, ...rest } = body
+      assert.ok(!fits('proof', rest), field)
+    }
+    for (const field of ['label', 'code', 'root', 'proof']) {
+      const { [field]: _, ...rest } = body.membership
+      assert.ok(!fits('proof', { ...body, membership: rest }), field)
+    }
+  })
+
+  test('a membership names its issuer by a did:key and its values are 32-byte lowercase hex', () => {
+    const body = membershipBody()
+    const m = (patch: Record<string, unknown>) => ({ ...body, membership: { ...body.membership, ...patch } })
+    assert.ok(!fits('proof', { ...body, issuer: 'did:web:issuer.example' }), 'a key, not any DID')
+    assert.ok(fits('proof', { ...example('proof'), issuer: 'did:web:issuer.example' }), 'a credential still names any DID')
+    for (const field of ['code', 'root']) {
+      for (const bad of [body.membership[field].toUpperCase(), body.membership[field].slice(2), `${body.membership[field]}00`, 42]) {
+        assert.ok(!fits('proof', m({ [field]: bad })), `${field} ${bad}`)
+      }
+    }
+    const proof: string[] = body.membership.proof
+    assert.ok(!fits('proof', m({ proof: proof.slice(1) })), 'seven coordinates')
+    assert.ok(!fits('proof', m({ proof: [...proof, proof[0]] })), 'nine coordinates')
+    assert.ok(!fits('proof', m({ proof: [...proof.slice(1), proof[0]!.toUpperCase()] })), 'upper-case hex')
+    assert.ok(!fits('proof', m({ proof: proof.join('') })), 'one string')
+    assert.ok(fits('proof', m({ label: 'x'.repeat(128) })))
+    assert.ok(!fits('proof', m({ label: 'x'.repeat(129) })), 'a label longer than a line can hold')
   })
 })

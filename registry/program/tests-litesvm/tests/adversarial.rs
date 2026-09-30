@@ -61,43 +61,32 @@ fn proof_bound_to_its_root_code_and_field() {
 
 #[test]
 fn proof_every_single_bit_flip_in_the_points_is_refused() {
-    // Every bit of A, B and C, flipped one at a time: 1,024 attempts in register (a proof for a line
-    // that does not exist yet) and 1,024 in add_proof (a proof for a root the line lacks). Unflipped,
-    // both would land, as the last two lines show.
+    // Every bit of A, B and C, flipped one at a time: 1,024 attempts at a register for a line that
+    // does not exist yet. Unflipped, it lands, as the last line shows.
     let (mut h, f) = ready();
-    let tutoring_a = f.proof("alice-tutoring-A");
-    let tutoring_b = f.proof("alice-tutoring-B");
     let cleaning = f.proof("alice-cleaning-A");
-    h.register(tutoring_a).expect("the line add_proof aims at");
     let wants: &[&str] = &["ProofMalformed", "ProofRejected"];
     let mut tried = 0;
     for part in 0..3 {
         let len = if part == 1 { 64 } else { 32 };
         for byte in 0..len {
             for bit in 0..8 {
-                let flip = |p: &FixtureProof| {
-                    let mut q = p.proof();
-                    match part {
-                        0 => q.a[byte] ^= 1 << bit,
-                        1 => q.b[byte] ^= 1 << bit,
-                        _ => q.c[byte] ^= 1 << bit,
-                    }
-                    q
-                };
-                let ix = register_ix(h.payer.pubkey(), &cleaning.profile_address(), &cleaning.label, &cleaning.code_bytes(), &flip(cleaning));
+                let mut q = cleaning.proof();
+                match part {
+                    0 => q.a[byte] ^= 1 << bit,
+                    1 => q.b[byte] ^= 1 << bit,
+                    _ => q.c[byte] ^= 1 << bit,
+                }
+                let ix = register_ix(h.payer.pubkey(), &cleaning.profile_address(), &cleaning.label, &cleaning.code_bytes(), &q);
                 expect_err(h.send(&[ix], &[]), "register", wants);
-                let ix = add_proof_ix(h.payer.pubkey(), &tutoring_b.code_bytes(), &flip(tutoring_b));
-                expect_err(h.send(&[ix], &[]), "add_proof", wants);
                 tried += 1;
             }
         }
     }
     assert_eq!(tried, 1024);
     assert!(!h.exists(&line_address(&cleaning.code_bytes())));
-    assert_eq!(h.line(&tutoring_a.code_bytes()).roots.len(), 1);
     h.register(cleaning).expect("unflipped, register lands");
-    h.add_proof(tutoring_b).expect("unflipped, add_proof lands");
-    println!("refused as expected: {tried} single-bit changes to the proof points, in register and in add_proof each");
+    println!("refused as expected: {tried} single-bit changes to the proof points");
 }
 
 #[test]
@@ -137,7 +126,8 @@ fn lamports_sent_to_a_line_address_first_do_not_block_it() {
         .unwrap();
     h.register(a).expect("registers anyway");
     assert_eq!(h.account(&address).owner, PROGRAM_ID);
-    assert_eq!(h.line(&a.code_bytes()).roots.len(), 1);
+    assert_eq!(h.line(&a.code_bytes()).root, a.proof().root);
+    assert_eq!(h.lamports_of(&address), 5_000_000.max(h.svm.minimum_balance_for_rent_exemption(line_space(a.label.len()))));
     println!("pre-funding a line's address does not block it");
 }
 
@@ -145,16 +135,14 @@ fn lamports_sent_to_a_line_address_first_do_not_block_it() {
 fn finding_a_front_runner_who_strips_a_proof_costs_one_transaction_never_the_line() {
     // By design anyone may send: the proof is the consent. Someone who sees Alice's register for
     // list A pending can land it first, as the payer. Alice's own transaction then fails, and the
-    // line is exactly hers anyway: her profile, her label, her root. She adds list B next.
+    // line is exactly hers anyway: her profile, her label, her root.
     let (mut h, f) = ready();
     let a = f.proof("alice-tutoring-A");
-    let b = f.proof("alice-tutoring-B");
     let front = h.funded(1_000_000_000);
     h.send_as(&front, &[register_fixture_ix(front.pubkey(), a)]).expect("front-run");
     expect_err(h.register(a), "Alice's own register", &["already in use"]);
-    h.add_proof(b).expect("Alice adds B");
     let line = h.line(&a.code_bytes());
-    assert_eq!((line.profile, line.label.as_str(), line.roots.len()), (a.profile_address(), "tutoring/seller", 2));
+    assert_eq!((line.profile, line.label.as_str(), line.root), (a.profile_address(), "tutoring/seller", a.proof().root));
     assert_eq!(line.payer, front.pubkey(), "the front-runner paid the deposit, and refunds go to it");
     println!("finding: a front-runner can only pay for Alice's line; it stays hers");
 }
@@ -181,31 +169,27 @@ fn substitution_every_account() {
     }
     assert!(!h.exists(&line_address(&code)));
 
-    // add_proof and refund: Bob's line passed where Alice's code names hers.
+    // refund: Bob's line passed where Alice's code names hers.
     h.register(a).expect("Alice");
     h.register(bob).expect("Bob");
-    let b = f.proof("alice-tutoring-B");
-    let mut ix = add_proof_ix(payer, &code, &b.proof());
-    ix.accounts[0].pubkey = line_address(&bob.code_bytes());
-    expect_err(h.send(&[ix], &[]), "Bob's line for Alice's code", &["ConstraintSeeds"]);
+    let bob_before = h.account(&line_address(&bob.code_bytes()));
     let mut ix = refund_ix(payer, &code);
     ix.accounts[0].pubkey = line_address(&bob.code_bytes());
     expect_err(h.send(&[ix], &[]), "refund, Bob's line for Alice's code", &["ConstraintSeeds"]);
-    assert_eq!(h.line(&bob.code_bytes()).roots.len(), 1);
-    println!("refused as expected: every account in register, add_proof and refund substituted");
+    assert_eq!(h.account(&line_address(&bob.code_bytes())), bob_before);
+    println!("refused as expected: every account in register and refund substituted");
 }
 
 #[test]
 fn a_planted_line_owned_by_another_program_is_refused() {
     let (mut h, f) = ready();
     let a = f.proof("alice-tutoring-A");
-    let b = f.proof("alice-tutoring-B");
     h.register(a).expect("register");
     let address = line_address(&a.code_bytes());
     let mut planted = h.account(&address);
     planted.owner = Keypair::new().pubkey();
+    planted.lamports += 1_000_000;
     h.svm.set_account(address, planted).unwrap();
-    expect_err(h.add_proof(b), "add_proof", &["AccountOwnedByWrongProgram"]);
     expect_err(h.send(&[refund_ix(h.payer.pubkey(), &a.code_bytes())], &[]), "refund", &["AccountOwnedByWrongProgram"]);
     println!("refused as expected: a line's bytes under another program's ownership");
 }
@@ -228,19 +212,23 @@ fn finding_the_program_takes_any_32_bytes_as_a_profile() {
 // ---------------------------------------------------------------------------------------------
 
 #[test]
-fn a_rent_rise_freezes_nothing_and_add_proof_tops_up_to_the_new_minimum() {
+fn finding_after_a_rent_rise_a_line_holds_less_than_the_minimum_and_nothing_needs_more() {
+    // A line is never written again, so nothing in the program ever needs it to hold the minimum
+    // of a higher rate. After a rise it simply holds less: refund refuses, the line still reads, and
+    // a later fall below what it holds makes the difference refundable again.
     let (mut h, f) = ready();
     let a = f.proof("alice-tutoring-A");
-    let b = f.proof("alice-tutoring-B");
-    let address = line_address(&a.code_bytes());
+    let code = a.code_bytes();
+    let address = line_address(&code);
     h.set_rent(RENT_FINAL);
     h.register(a).expect("register at the low rate");
+    let held = h.lamports_of(&address);
     h.set_rent(RENT_HIGH);
-    expect_err(h.send(&[refund_ix(h.payer.pubkey(), &a.code_bytes())], &[]), "refund below the new minimum", &["NothingToRefund"]);
-    h.add_proof(b).expect("add_proof after a rise");
-    let size = h.account(&address).data.len();
-    assert_eq!(h.lamports_of(&address), rent_minimum(RENT_HIGH, size), "topped up to the new minimum, for the new size");
-    println!("after a rent rise: refund refuses, add_proof tops the line up to the new minimum");
+    expect_err(h.send(&[refund_ix(h.payer.pubkey(), &code)], &[]), "refund below the new minimum", &["NothingToRefund"]);
+    assert!(held < h.svm.minimum_balance_for_rent_exemption(h.account(&address).data.len()));
+    assert_eq!(h.line(&code).root, a.proof().root, "the line still reads");
+    assert_eq!(h.lamports_of(&address), held, "and holds what it held");
+    println!("finding: after a rent rise a line holds less than the new minimum, reads as before, and refund refuses");
 }
 
 #[test]
@@ -265,12 +253,11 @@ fn finding_a_refund_to_a_payer_holding_no_sol_fails_until_someone_funds_it() {
 
 #[test]
 fn nothing_is_signed_but_the_payer() {
-    // Every instruction carries exactly one signer, the payer, and refund none.
+    // register carries exactly one signer, the payer, and refund none.
     let f = Fixtures::load();
     let a = f.proof("alice-tutoring-A");
     let payer = Keypair::new().pubkey();
     let signers = |ix: &Instruction| ix.accounts.iter().filter(|m: &&AccountMeta| m.is_signer).count();
     assert_eq!(signers(&register_fixture_ix(payer, a)), 1);
-    assert_eq!(signers(&add_proof_ix(payer, &a.code_bytes(), &a.proof())), 1);
     assert_eq!(signers(&refund_ix(payer, &a.code_bytes())), 0);
 }

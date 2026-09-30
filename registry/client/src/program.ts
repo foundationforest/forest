@@ -21,8 +21,6 @@ export const PROGRAM_ID = new PublicKey('FoRBadgeLineFreeNoFeeNoAdmin11111111111
 export const MAX_DEPTH = 32
 /** The longest label, in bytes. */
 export const MAX_LABEL = 128
-/** The most roots one line holds. */
-export const MAX_ROOTS = 16
 
 export const CODE_SEED = new TextEncoder().encode('code')
 
@@ -67,9 +65,9 @@ const bytes32 = (v: bigint | Uint8Array): Uint8Array => {
 
 const keyBytes = (k: PublicKey | Uint8Array): Uint8Array => bytes32(k instanceof PublicKey ? k.toBytes() : k)
 
-/** A line's size in bytes, discriminator included, for a label of `labelBytes` bytes and `roots` roots. */
-export function lineSpace(labelBytes: number, roots: number): number {
-  return 8 + 32 + 32 + 32 + 8 + 1 + 4 + labelBytes + 4 + 32 * roots
+/** A line's size in bytes, discriminator included, for a label of `labelBytes` bytes. It never changes. */
+export function lineSpace(labelBytes: number): number {
+  return 8 + 32 + 32 + 32 + 8 + 1 + 32 + 4 + labelBytes
 }
 
 /** A line's address: derived from its code, so one code has at most one line. */
@@ -123,25 +121,6 @@ export function registerIx(args: {
 }
 
 /**
- * Append one root to the line at `code`. Only the payer signs: it pays for the line's 32 new bytes.
- *
- * Data: discriminator, code (32), proof (160). Accounts: the line, the payer, the system program.
- */
-export function addProofIx(args: {
-  code: bigint | Uint8Array
-  proof: ProofOnWire
-  payer: PublicKey
-  programId?: PublicKey
-}): TransactionInstruction {
-  const programId = args.programId ?? PROGRAM_ID
-  return new TransactionInstruction({
-    programId,
-    keys: [rw(lineAddress(args.code, programId)), rw(args.payer, true), ro(SystemProgram.programId)],
-    data: concat([discriminator('global', 'add_proof'), bytes32(args.code), proofBytes(args.proof)]),
-  })
-}
-
-/**
  * Move what the line holds above its rent-exempt minimum to `payer`, which must be the payer the
  * line records. Nobody signs but whoever sends the transaction.
  *
@@ -166,37 +145,29 @@ export type Line = {
   /** When the line was written, unix seconds. */
   time: bigint
   bump: number
+  /** The root of the issuer's list the proof was made against. Checked by nobody but readers. */
+  root: Uint8Array
   label: string
-  /** The issuers' list roots the proofs were made against, in order, each once. Checked by nobody but readers. */
-  roots: Uint8Array[]
 }
 
 /**
  * A line's bytes, read back. Offsets after the discriminator: profile 8, code 40, payer 72, time
- * 104 (i64), bump 112, label 113 (u32 length then UTF-8), then the roots (u32 count then 32 each).
- * Refuses anything that is not exactly a line.
+ * 104 (i64), bump 112, root 113, label 145 (u32 length then UTF-8). Refuses anything that is not
+ * exactly a line.
  */
 export function decodeLine(data: Uint8Array): Line {
-  if (data.length < lineSpace(0, 0) || !LINE_DISCRIMINATOR.every((v, i) => data[i] === v)) {
+  if (data.length < lineSpace(0) || !LINE_DISCRIMINATOR.every((v, i) => data[i] === v)) {
     throw new RangeError('not a line')
   }
-  const labelLength = readU32le(data, 113)
-  if (labelLength > MAX_LABEL || data.length < lineSpace(labelLength, 0)) throw new RangeError('not a line: label')
-  const label = new TextDecoder('utf-8', { fatal: true }).decode(data.subarray(117, 117 + labelLength))
-  const count = readU32le(data, 117 + labelLength)
-  if (count > MAX_ROOTS || data.length !== lineSpace(labelLength, count)) throw new RangeError('not a line: roots')
-  const roots: Uint8Array[] = []
-  for (let i = 0; i < count; i++) {
-    const at = 121 + labelLength + 32 * i
-    roots.push(data.slice(at, at + 32))
-  }
+  const labelLength = readU32le(data, 145)
+  if (labelLength > MAX_LABEL || data.length !== lineSpace(labelLength)) throw new RangeError('not a line: label')
   return {
     profile: new PublicKey(data.subarray(8, 40)),
     code: data.slice(40, 72),
     payer: new PublicKey(data.subarray(72, 104)),
     time: readI64le(data, 104),
     bump: data[112],
-    label,
-    roots,
+    root: data.slice(113, 145),
+    label: new TextDecoder('utf-8', { fatal: true }).decode(data.subarray(149, 149 + labelLength)),
   }
 }

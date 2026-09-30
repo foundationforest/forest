@@ -2,18 +2,17 @@
 //! generator.
 //!
 //! Random flows by four keys, any of them sending anything: register (the real proofs, sometimes
-//! bent: another profile, another label, another code, a root nobody has, one flipped bit),
-//! add_proof (any proof, aimed at its own code or another's, sometimes flipped: strangers replay
-//! every public proof), refund (to the recorded payer or anyone else), lamports sent to a line's
-//! address before or after it exists, the rent rate moving between the three rates refund exists
-//! for, and the clock moving. A model says whether each must land; after each, the invariants:
+//! bent: another profile, another label, another code, a root nobody has, one flipped bit), the
+//! earlier version's add_proof bytes (any proof, at any code), refund (to the recorded payer or
+//! anyone else), lamports sent to a line's address before or after it exists, the rent rate moving
+//! between the three rates refund exists for, and the clock moving. A model says whether each must
+//! land; after each, the invariants:
 //!   I1 the program accepts exactly what the rules allow and refuses everything else;
-//!   I2 at most one line per code; a line's profile, code, payer, time and label never change after
-//!      register, and its roots only ever grow by appending a root it lacks, up to 16;
+//!   I2 at most one line per code, and a line never changes: its bytes and its size are exactly
+//!      what register wrote, whatever lands after;
 //!   I3 every code without a line has no account of the program's at its address;
 //!   I4 a refund pays exactly the excess over the current minimum, to the recorded payer only, and
-//!      leaves the line holding exactly the minimum; add_proof leaves it holding at least the new
-//!      minimum and takes only from the payer that signed;
+//!      leaves the line holding exactly the minimum;
 //!   I5 no key loses a lamport in a transaction it did not sign.
 //!
 //! `cargo test --release --test invariants -- --nocapture`; `FOREST_FUZZ_ITERATIONS` and
@@ -80,7 +79,8 @@ fn registry_invariants_hold_under_random_flows() {
         c.dedup();
         c
     };
-    let mut lines: HashMap<[u8; 32], LineView> = HashMap::new();
+    // The model: each line as register wrote it, and its bytes then.
+    let mut lines: HashMap<[u8; 32], (LineView, Vec<u8>)> = HashMap::new();
     // LiteSVM's starting rate, read rather than assumed.
     let mut rate = h.svm.get_sysvar::<solana_rent::Rent>().lamports_per_byte;
     let mut time: i64 = 1_790_000_000;
@@ -97,7 +97,7 @@ fn registry_invariants_hold_under_random_flows() {
 
         match rng.below(10) {
             // register, sometimes bent
-            0..=2 => {
+            0..=3 => {
                 what = "register";
                 let p = &f.proofs[rng.below(f.proofs.len())];
                 let (mut profile, mut label, mut code, mut proof) = (p.profile_address(), p.label.clone(), p.code_bytes(), p.proof());
@@ -115,50 +115,44 @@ fn registry_invariants_hold_under_random_flows() {
                 let k = &keys[sender];
                 result = h.send_as(k, &[register_ix(k.pubkey(), &profile, &label, &code, &proof)]);
                 if result.is_ok() {
-                    lines.insert(code, LineView { profile, code, payer: k.pubkey(), time, bump: Address::find_program_address(&[b"code", &code], &PROGRAM_ID).1, label, roots: vec![proof.root] });
+                    let view = LineView {
+                        profile,
+                        code,
+                        payer: k.pubkey(),
+                        time,
+                        bump: Address::find_program_address(&[b"code", &code], &PROGRAM_ID).1,
+                        root: proof.root,
+                        label,
+                    };
+                    let bytes = h.account(&line_address(&code)).data;
+                    assert_eq!(bytes.len(), line_space(view.label.len()));
+                    lines.insert(code, (view, bytes));
                 }
             }
-            // add_proof: its own code or another's, sometimes flipped, by anyone
-            3..=5 => {
+            // the earlier version's add_proof, by anyone, with any public proof: nothing answers it
+            4 => {
                 what = "add_proof";
                 let p = &f.proofs[rng.below(f.proofs.len())];
                 let code = if rng.chance(75) { p.code_bytes() } else { codes[rng.below(codes.len())] };
-                let mut proof = p.proof();
-                let bent = rng.chance(15);
-                if bent {
-                    flip(&mut proof, &mut rng);
-                }
-                expected = !bent
-                    && code == p.code_bytes()
-                    && lines.get(&code).is_some_and(|l| !l.roots.contains(&proof.root) && l.roots.len() < MAX_ROOTS);
-                let address = line_address(&code);
-                let before = h.lamports_of(&address);
+                expected = false;
                 let k = &keys[sender];
-                result = h.send_as(k, &[add_proof_ix(k.pubkey(), &code, &proof)]);
-                if result.is_ok() {
-                    let line = lines.get_mut(&code).unwrap();
-                    line.roots.push(proof.root);
-                    let size = line_space(line.label.len(), line.roots.len());
-                    let after = h.lamports_of(&address);
-                    assert_eq!(after, before.max(rent_minimum(rate, size)), "I4: add_proof tops up to exactly the new minimum, or nothing");
-                    assert_eq!(balances[sender] - h.lamports_of(&k.pubkey()), FEE + (after - before), "I4: only the signing payer paid");
-                }
+                result = h.send_as(k, &[old_add_proof_ix(k.pubkey(), &code, &p.proof())]);
             }
             // refund, to the recorded payer or to anyone
-            6..=7 => {
+            5..=6 => {
                 what = "refund";
                 let code = codes[rng.below(codes.len())];
                 let to = match lines.get(&code) {
-                    Some(l) if rng.chance(70) => l.payer,
+                    Some((l, _)) if rng.chance(70) => l.payer,
                     _ => keys[rng.below(keys.len())].pubkey(),
                 };
                 let address = line_address(&code);
                 let before = h.lamports_of(&address);
                 let excess = lines
                     .get(&code)
-                    .map(|l| before.saturating_sub(rent_minimum(rate, line_space(l.label.len(), l.roots.len()))))
+                    .map(|(l, _)| before.saturating_sub(rent_minimum(rate, line_space(l.label.len()))))
                     .unwrap_or(0);
-                expected = lines.get(&code).is_some_and(|l| l.payer == to) && excess > 0;
+                expected = lines.get(&code).is_some_and(|(l, _)| l.payer == to) && excess > 0;
                 let k = &keys[sender];
                 let to_before = h.lamports_of(&to);
                 result = h.send_as(k, &[refund_ix(to, &code)]);
@@ -169,7 +163,7 @@ fn registry_invariants_hold_under_random_flows() {
                 }
             }
             // lamports sent to a line's address, whether or not the line exists
-            8 => {
+            7..=8 => {
                 what = "gift";
                 let code = codes[rng.below(codes.len())];
                 let address = line_address(&code);
@@ -203,15 +197,11 @@ fn registry_invariants_hold_under_random_flows() {
         for code in &codes {
             let address = line_address(code);
             match lines.get(code) {
-                Some(model) => {
+                Some((model, bytes)) => {
                     let account = h.account(&address);
                     assert_eq!(account.owner, PROGRAM_ID);
-                    let chain = read_line(&account.data);
-                    assert_eq!(&chain, model, "I2: step {step}, the line is what the model says");
-                    let mut roots = chain.roots.clone();
-                    roots.sort();
-                    roots.dedup();
-                    assert!(roots.len() == chain.roots.len() && roots.len() <= MAX_ROOTS, "I2: distinct roots, at most 16");
+                    assert_eq!(&account.data, bytes, "I2: step {step}, the line is byte for byte what register wrote");
+                    assert_eq!(&read_line(&account.data), model, "I2: step {step}, the line is what the model says");
                 }
                 None => {
                     let owner = h.svm.get_account(&address).map(|a: Account| a.owner);
@@ -228,11 +218,6 @@ fn registry_invariants_hold_under_random_flows() {
         }
     }
 
-    let full = lines.values().filter(|l| l.roots.len() == MAX_ROOTS).count();
-    println!(
-        "{iterations} steps (seed {seed:#x}): landed {landed:?}, refused {refused_count:?}; {} lines, {} roots in all, {full} full",
-        lines.len(),
-        lines.values().map(|l| l.roots.len()).sum::<usize>()
-    );
+    println!("{iterations} steps (seed {seed:#x}): landed {landed:?}, refused {refused_count:?}; {} lines", lines.len());
     assert!(landed.get("register").copied().unwrap_or(0) > 0, "the run registered something");
 }

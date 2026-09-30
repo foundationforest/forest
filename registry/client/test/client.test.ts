@@ -17,11 +17,9 @@ import {
   CODE_SEED,
   LINE_DISCRIMINATOR,
   MAX_LABEL,
-  MAX_ROOTS,
   MESSAGE_NS,
   PROGRAM_ID,
   SCOPE_NS,
-  addProofIx,
   buildRegistration,
   codeBytesFor,
   codeFor,
@@ -40,12 +38,15 @@ import {
   registerIx,
   scopeOf,
   toBytes32,
+  verifyMembership,
+  type Membership,
 } from '../src/index.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const fixtures = JSON.parse(readFileSync(join(here, '../../program/tests-litesvm/fixtures/proofs.json'), 'utf8'))
 const lib = readFileSync(join(here, '../../program/src/lib.rs'), 'utf8')
 const keysVectors = JSON.parse(readFileSync(join(here, '../../../keys/test/vectors.json'), 'utf8'))
+const verificationKey = JSON.parse(readFileSync(join(here, '../../artifacts/semaphore-32.json'), 'utf8'))
 const hex = (b: Uint8Array) => Buffer.from(b).toString('hex')
 const bytes = (h: string) => new Uint8Array(Buffer.from(h, 'hex'))
 const proofNamed = (name: string) => fixtures.proofs.find((p: { name: string }) => p.name === name)
@@ -61,7 +62,7 @@ test('the namespaces, the program id, the seed and the limits are the program\'s
   assert.ok(lib.includes(`declare_id!("${PROGRAM_ID.toBase58()}")`), 'the program id')
   assert.ok(lib.includes(`pub const CODE_SEED: &[u8] = b"${new TextDecoder().decode(CODE_SEED)}";`), 'the seed')
   assert.ok(lib.includes(`pub const MAX_LABEL: usize = ${MAX_LABEL};`), 'the longest label')
-  assert.ok(lib.includes(`pub const MAX_ROOTS: usize = ${MAX_ROOTS};`), 'the most roots')
+  assert.ok(!lib.includes('add_proof') && !lib.includes('realloc'), 'a line is written once: no instruction grows it')
   assert.equal(fixtures.scopeNamespace, SCOPE_NS)
   assert.equal(fixtures.messageNamespace, MESSAGE_NS)
 })
@@ -128,48 +129,44 @@ test('the wire format written twice still matches', () => {
   // its own hand-written bytes and against the line the program actually writes.
   const w = fixtures.wire
   const a = proofNamed('alice-tutoring-A')
-  const b = proofNamed('alice-tutoring-B')
   const payer = new PublicKey(w.payer)
   const code = bytes(a.code)
   assert.equal(PROGRAM_ID.toBase58(), w.programId)
 
   const register = registerIx({ profile: new PublicKey(a.profile), label: a.label, code, proof: onWire(a), payer })
-  const add = addProofIx({ code, proof: onWire(b), payer })
   const refund = refundIx({ code, payer })
   assert.equal(hex(register.data), w.register, 'register')
-  assert.equal(hex(add.data), w.addProof, 'add_proof')
   assert.equal(hex(refund.data), w.refund, 'refund')
   assert.deepEqual([...register.data.subarray(0, 8)], [...discriminator('global', 'register')])
   assert.equal(register.data.length, 8 + 32 + 4 + a.label.length + 32 + 160)
-  assert.equal(add.data.length, 8 + 32 + 160)
 
   // Accounts: the line, the payer (the one signer), the system program; refund signs nothing.
   const line = lineAddress(code)
-  for (const ix of [register, add]) {
-    assert.deepEqual(
-      ix.keys.map((k) => [k.pubkey.toBase58(), k.isSigner, k.isWritable]),
-      [
-        [line.toBase58(), false, true],
-        [payer.toBase58(), true, true],
-        [SystemProgram.programId.toBase58(), false, false],
-      ],
-    )
-  }
+  assert.deepEqual(
+    register.keys.map((k) => [k.pubkey.toBase58(), k.isSigner, k.isWritable]),
+    [
+      [line.toBase58(), false, true],
+      [payer.toBase58(), true, true],
+      [SystemProgram.programId.toBase58(), false, false],
+    ],
+  )
   assert.deepEqual(refund.keys.map((k) => [k.pubkey.toBase58(), k.isSigner, k.isWritable]), [
     [line.toBase58(), false, true],
     [payer.toBase58(), false, true],
   ])
 
-  // The line the program wrote, decoded.
+  // The line the program wrote, decoded: every fixed field at its fixed offset, the label last.
   const decoded = decodeLine(bytes(w.line))
   assert.equal(decoded.profile.toBase58(), a.profile)
   assert.equal(hex(decoded.code), a.code)
   assert.equal(decoded.payer.toBase58(), w.payer)
   assert.equal(decoded.time, BigInt(w.time))
   assert.equal(decoded.bump, PublicKey.findProgramAddressSync([Buffer.from('code'), Buffer.from(code)], PROGRAM_ID)[1])
+  assert.equal(hex(decoded.root), a.root)
+  assert.equal(hex(bytes(w.line).subarray(113, 145)), a.root, 'the root at offset 113')
   assert.equal(decoded.label, a.label)
-  assert.deepEqual(decoded.roots.map(hex), [a.root, b.root])
-  assert.equal(bytes(w.line).length, lineSpace(a.label.length, 2))
+  assert.equal(bytes(w.line).length, lineSpace(a.label.length))
+  assert.equal(lineSpace(a.label.length), 164, 'a 15-byte label: 164 bytes, forever')
   assert.deepEqual([...bytes(w.line).subarray(0, 8)], [...LINE_DISCRIMINATOR])
 })
 
@@ -181,7 +178,7 @@ test('decodeLine refuses anything that is not exactly a line', () => {
   wrong[0] ^= 1
   assert.throws(() => decodeLine(wrong), /not a line/, 'another discriminator')
   const longLabel = good.slice()
-  new DataView(longLabel.buffer).setUint32(113, MAX_LABEL + 1, true)
+  new DataView(longLabel.buffer).setUint32(145, MAX_LABEL + 1, true)
   assert.throws(() => decodeLine(longLabel), /not a line/, 'a label over 128 bytes')
 })
 
@@ -194,10 +191,8 @@ test('the builders refuse what the program would refuse, before any proof is mad
   )
   assert.throws(() => registerIx({ profile: new Uint8Array(31), label: '', code: bytes(a.code), proof: onWire(a), payer }), /32 bytes/)
   const base = { secret: new Uint8Array(32), label: 'tutoring/seller', profile: payer, artifacts: { wasm: '', zkey: '' }, payer, recentBlockhash: PublicKey.default.toBase58() }
-  await assert.rejects(buildRegistration({ ...base, lists: [] }), /at least one list/)
-  await assert.rejects(buildRegistration({ ...base, lists: Array.from({ length: MAX_ROOTS + 1 }, () => [1n]) }), /at most 16 roots/)
-  await assert.rejects(buildRegistration({ ...base, label: 'x'.repeat(129), lists: [[1n]] }), /at most 128 bytes/)
-  await assert.rejects(buildRegistration({ ...base, lists: [[1n, 2n]] }), /not in the list/)
+  await assert.rejects(buildRegistration({ ...base, label: 'x'.repeat(129), commitments: [1n] }), /at most 128 bytes/)
+  await assert.rejects(buildRegistration({ ...base, commitments: [1n, 2n] }), /not in the list/)
 })
 
 test('lines read back through any connection, each checked to sit at its own code\'s address', async () => {
@@ -233,4 +228,49 @@ test('lines read back through any connection, each checked to sit at its own cod
   await assert.rejects(fetchLines(moved as never), /not at its code's address/)
   const foreign = { getAccountInfo: async () => ({ data, owner: Keypair.generate().publicKey, lamports: 1, executable: false }) }
   await assert.rejects(fetchLine(foreign as never, bytes(proofNamed('alice-tutoring-A').code)), /not the registry's/)
+})
+
+test('a membership record verifies against its line and the roots its issuer published', async () => {
+  // The record scripts/fixtures.ts made with makeMembership: Alice on issuer B's list, for the line
+  // the wire vectors describe (her tutoring/seller line, registered against list A).
+  const record: Membership = fixtures.membership.body
+  const line = decodeLine(bytes(fixtures.wire.line))
+  const profile = new PublicKey(proofNamed('alice-tutoring-A').profile)
+  const rootB = bytes(proofNamed('alice-tutoring-B').root)
+  const issuer = { key: record.issuer, roots: [bytes(proofNamed('alice-tutoring-A').root), rootB] }
+  const check = (r: Membership, over: Partial<Parameters<typeof verifyMembership>[1]> = {}) =>
+    verifyMembership(r, { profile, line, issuer, verificationKey, ...over })
+
+  assert.equal(record.membership.code, hex(line.code), 'the line\'s code')
+  assert.equal(record.membership.root, hex(rootB), 'issuer B\'s root, not the line\'s')
+  assert.notEqual(record.membership.root, hex(line.root))
+  assert.equal(await check(record), true)
+  assert.equal(await check(record, { profile: profile.toBytes(), issuer: { key: issuer.key, roots: [fromBytes32(rootB)] } }), true, 'a key or its bytes, a root or its number')
+
+  // Each of these changes one thing, and each is refused.
+  const edited = (f: (m: Membership) => void): Membership => {
+    const copy = structuredClone(record)
+    f(copy)
+    return copy
+  }
+  const bob = proofNamed('bob-tutoring-A')
+  const otherLine = { ...line, code: bytes(bob.code) }
+  const cases: [string, Promise<boolean>][] = [
+    ['another issuer named', check(edited((m) => (m.issuer = 'did:key:z6MkpSx7aRn6kR1oSMgun7YdDD3ZXPepph8UcWYp1Jp4vhJL')))],
+    ['a root the issuer never published', check(record, { issuer: { key: issuer.key, roots: [bytes(proofNamed('alice-tutoring-A').root)] } })],
+    ['another profile', check(record, { profile: new PublicKey(bob.profile) })],
+    ['the line of another profile', check(record, { line: { ...line, profile: new PublicKey(bob.profile) } })],
+    ['another label', check(edited((m) => (m.membership.label = 'cleaning/seller')))],
+    ['a line with another label', check(record, { line: { ...line, label: 'cleaning/seller' } })],
+    ['a line with another code', check(record, { line: otherLine })],
+    ['another code', check(edited((m) => (m.membership.code = bob.code)), { line: otherLine })],
+    ['another root, published', check(edited((m) => (m.membership.root = proofNamed('alice-tutoring-A').root)))],
+    ['a coordinate changed', check(edited((m) => (m.membership.proof[7] = m.membership.proof[7].replace(/.$/, (c) => (c === '0' ? '1' : '0')))))],
+    ['two coordinates swapped', check(edited((m) => ([m.membership.proof[2], m.membership.proof[3]] = [m.membership.proof[3], m.membership.proof[2]])))],
+    ['a coordinate plus the modulus', check(edited((m) => (m.membership.proof[0] = hex(toBytes32(BigInt(`0x${m.membership.proof[0]}`) + 21888242871839275222246405745257275088696311157297823662689037894645226208583n)))))],
+    ['seven coordinates', check(edited((m) => m.membership.proof.pop()))],
+    ['upper-case hex', check(edited((m) => (m.membership.code = m.membership.code.toUpperCase())))],
+    ['no membership at all', check({ issuer: record.issuer, createdAt: record.createdAt } as never)],
+  ]
+  for (const [what, result] of cases) assert.equal(await result, false, what)
 })

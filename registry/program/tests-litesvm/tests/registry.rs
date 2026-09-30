@@ -34,15 +34,16 @@ fn a_line_is_written_with_its_profile_code_label_root_time_and_payer() {
     assert_eq!(line.code, alice.code_bytes());
     assert_eq!(line.payer, h.payer.pubkey());
     assert_eq!(line.time, 1_790_000_123);
+    assert_eq!(line.root, alice.proof().root);
     assert_eq!(line.label, "tutoring/seller");
-    assert_eq!(line.roots, vec![alice.proof().root]);
     let address = line_address(&alice.code_bytes());
     assert_eq!(line.bump, Address::find_program_address(&[b"code", &alice.code_bytes()], &PROGRAM_ID).1, "the canonical bump");
 
     // Exactly its size, exactly rent exempt, owned by the program.
     let account = h.account(&address);
     assert_eq!(account.owner, PROGRAM_ID);
-    assert_eq!(account.data.len(), line_space("tutoring/seller".len(), 1));
+    assert_eq!(account.data.len(), line_space("tutoring/seller".len()));
+    assert_eq!(account.data.len(), 164);
     assert_eq!(account.lamports, h.svm.minimum_balance_for_rent_exemption(account.data.len()));
     println!(
         "a line: {} bytes, {} lamports of deposit, {} compute units; the profile signed nothing",
@@ -69,40 +70,37 @@ fn the_profile_key_signs_nothing_and_anyone_may_send() {
 }
 
 #[test]
-fn several_proofs_from_several_roots_make_one_line() {
-    // One proof per transaction: register with list A, then one add_proof each for list B and for
-    // list A as it grew. One line, its roots in the order they came, 32 bytes more per root, each
-    // paid by that transaction's payer.
+fn a_line_never_grows_and_never_changes() {
+    // Register once, then try everything that could touch the line: another issuer's proof for the
+    // same code, the same proof again, the earlier version's add_proof bytes (with a root the line
+    // lacks), a gift of lamports, and refunds as the rate falls. Its bytes and its size stay
+    // exactly what register wrote; only its lamports move, and only by refund.
     let (mut h, f) = ready();
     let a = f.proof("alice-tutoring-A");
     let b = f.proof("alice-tutoring-B");
-    let a1 = f.proof("alice-tutoring-A1");
-    let address = line_address(&a.code_bytes());
+    let code = a.code_bytes();
+    let address = line_address(&code);
+    h.set_rent(RENT_TODAY);
     h.register(a).expect("register against A");
-    let before = h.account(&address).lamports;
+    let written = h.account(&address).data;
 
-    let other_payer = h.funded(1_000_000_000);
-    let paid_before = h.lamports_of(&other_payer.pubkey());
-    let meta = h
-        .send_as(&other_payer, &[add_proof_ix(other_payer.pubkey(), &b.code_bytes(), &b.proof())])
-        .expect("add B, another payer");
-    let grown = h.account(&address);
-    assert_eq!(grown.data.len(), line_space(a.label.len(), 2));
-    assert_eq!(grown.lamports, h.svm.minimum_balance_for_rent_exemption(grown.data.len()));
-    assert_eq!(
-        paid_before - h.lamports_of(&other_payer.pubkey()),
-        grown.lamports - before + 5_000,
-        "the add_proof payer paid exactly the 32 bytes and one signature"
-    );
-    h.add_proof(a1).expect("add A, grown");
+    let stranger = h.funded(1_000_000_000);
+    refused(h.register(b), &["already in use"]);
+    refused(h.send_as(&stranger, &[register_fixture_ix(stranger.pubkey(), a)]), &["already in use"]);
+    for p in [a, b] {
+        let result = h.send_as(&stranger, &[old_add_proof_ix(stranger.pubkey(), &code, &p.proof())]);
+        assert_eq!(custom_error(&result), Some(err::INSTRUCTION_FALLBACK_NOT_FOUND), "no instruction answers add_proof's bytes");
+    }
+    let gift = solana_system_interface::instruction::transfer(&stranger.pubkey(), &address, 1_000_000);
+    h.send_as(&stranger, &[gift]).expect("a gift");
+    h.send_as(&stranger, &[refund_ix(h.payer.pubkey(), &code)]).expect("refund the gift");
+    h.set_rent(RENT_FINAL);
+    h.send_as(&stranger, &[refund_ix(h.payer.pubkey(), &code)]).expect("refund after the cuts");
 
-    let line = h.line(&a.code_bytes());
-    assert_eq!(line.roots, vec![a.proof().root, b.proof().root, a1.proof().root]);
-    assert_eq!(line.payer, h.payer.pubkey(), "the payer recorded is register's, whoever adds");
-    println!(
-        "one line, three roots from two issuers' lists; each add_proof: {} compute units, 32 bytes",
-        meta.compute_units_consumed
-    );
+    let account = h.account(&address);
+    assert_eq!(account.data, written, "byte for byte what register wrote");
+    assert_eq!(account.lamports, rent_minimum(RENT_FINAL, written.len()));
+    println!("a line never grew and never changed: another list, the same proof, add_proof's bytes, a gift and two refunds");
 }
 
 #[test]
@@ -117,7 +115,7 @@ fn a_second_line_for_the_same_code_is_refused() {
     let stranger = h.funded(1_000_000_000);
     refused(h.send_as(&stranger, &[register_fixture_ix(stranger.pubkey(), a)]), &["already in use"]);
     let line = h.line(&a.code_bytes());
-    assert_eq!((line.roots.len(), line.payer), (1, h.payer.pubkey()), "nothing about the first line moved");
+    assert_eq!((line.root, line.payer), (a.proof().root, h.payer.pubkey()), "nothing about the first line moved");
     println!("refused as expected: a second line for the same code, from another list or the same proof again");
 }
 
@@ -128,28 +126,13 @@ fn a_proof_with_a_different_code_is_refused() {
     let bob = f.proof("bob-tutoring-A");
     let alice_cleaning = f.proof("alice-cleaning-A");
 
-    // register: Alice's proof under Bob's code, and under her own other label's code.
+    // Alice's proof under Bob's code, and under her own other label's code.
     for code in [bob.code_bytes(), alice_cleaning.code_bytes()] {
         let ix = register_ix(h.payer.pubkey(), &alice.profile_address(), &alice.label, &code, &alice.proof());
         refused(h.send(&[ix], &[]), &["ProofRejected"]);
         assert!(!h.exists(&line_address(&code)), "nothing written");
     }
-
-    // add_proof: into Alice's line, Carol's proof against list B, a root the line lacks: it yields
-    // Carol's code, not the line's. (Bob's proof and Alice's other label's share list A's root,
-    // already in the line, so they are refused one rule earlier.)
-    h.register(alice).expect("Alice's line");
-    let carol = f.proof("carol-tutoring-B");
-    let ix = add_proof_ix(h.payer.pubkey(), &alice.code_bytes(), &carol.proof());
-    refused(h.send(&[ix], &[]), &["ProofRejected"]);
-    for other in [bob, alice_cleaning] {
-        let ix = add_proof_ix(h.payer.pubkey(), &alice.code_bytes(), &other.proof());
-        refused(h.send(&[ix], &[]), &["RootAlreadyInLine"]);
-    }
-    // And the other way round: the other proof sent under its own code, where no line is.
-    refused(h.add_proof(bob), &["AccountNotInitialized"]);
-    assert_eq!(h.line(&alice.code_bytes()).roots.len(), 1);
-    println!("refused as expected: every proof must yield the line's one code");
+    println!("refused as expected: a proof must yield the code its line sits at");
 }
 
 #[test]
@@ -171,84 +154,7 @@ fn a_proof_is_bound_to_its_label_and_profile() {
         assert!(err.contains("ProofRejected"), "{what}: {err}");
     }
     assert!(!h.exists(&line_address(&code)));
-
-    // add_proof reads the label and the profile from the line itself. A line planted with another
-    // profile or another label under Alice's code (as if it had been written for them) takes none
-    // of her proofs.
-    h.register(alice).expect("Alice's line");
-    let address = line_address(&code);
-    let real = h.account(&address);
-    for (what, patch) in [("another profile", 0usize), ("another label", 1usize)] {
-        let mut planted = real.clone();
-        if patch == 0 {
-            planted.data[8..40].copy_from_slice(bob.profile_address().as_ref());
-        } else {
-            planted.data[117] = b'T'; // "Tutoring/seller"
-        }
-        h.svm.set_account(address, planted).unwrap();
-        let b = f.proof("alice-tutoring-B");
-        let err = h.add_proof(b).err().unwrap_or_else(|| panic!("{what}: accepted"));
-        assert!(err.contains("ProofRejected"), "{what}: {err}");
-    }
-    println!("refused as expected: a proof counts for its own label and profile only, in register and in add_proof");
-}
-
-#[test]
-fn anyone_may_add_a_root_the_person_proved() {
-    // The proof is the authority, not a key: a stranger who holds Alice's proof for list B (she
-    // sent it, it is public) lands it, pays for it, and changes nothing but adding that root.
-    let (mut h, f) = ready();
-    let a = f.proof("alice-tutoring-A");
-    let b = f.proof("alice-tutoring-B");
-    h.register(a).expect("register");
-    let stranger = h.funded(1_000_000_000);
-    h.send_as(&stranger, &[add_proof_ix(stranger.pubkey(), &b.code_bytes(), &b.proof())]).expect("a stranger adds B");
-    let line = h.line(&a.code_bytes());
-    assert_eq!(line.roots, vec![a.proof().root, b.proof().root]);
-    assert_eq!((line.profile, line.payer), (a.profile_address(), h.payer.pubkey()));
-    println!("a stranger added a root Alice proved; the line still names her profile and her payer");
-}
-
-#[test]
-fn a_root_already_in_the_line_is_refused() {
-    // A proof is public once sent. Without this rule a stranger could replay one proof until the
-    // line was full, and no other issuer could ever be added.
-    let (mut h, f) = ready();
-    let a = f.proof("alice-tutoring-A");
-    let b = f.proof("alice-tutoring-B");
-    h.register(a).expect("register");
-    refused(h.add_proof(a), &["RootAlreadyInLine"]);
-    h.add_proof(b).expect("add B");
-    let stranger = h.funded(1_000_000_000);
-    for p in [a, b] {
-        let ix = add_proof_ix(stranger.pubkey(), &p.code_bytes(), &p.proof());
-        refused(h.send_as(&stranger, &[ix]), &["RootAlreadyInLine"]);
-    }
-    // Two copies in one transaction: the second is refused, and with it the first.
-    h.register(f.proof("bob-tutoring-A")).expect("Bob's line");
-    let a1 = f.proof("alice-tutoring-A1");
-    let ix = add_proof_ix(h.payer.pubkey(), &a1.code_bytes(), &a1.proof());
-    refused(h.send(&[ix.clone(), ix], &[]), &["RootAlreadyInLine"]);
-    assert_eq!(h.line(&a.code_bytes()).roots.len(), 2);
-    println!("refused as expected: a root already in the line, from its human, a stranger, or twice in one transaction");
-}
-
-#[test]
-fn a_line_holds_sixteen_roots_and_refuses_a_seventeenth() {
-    let (mut h, f) = ready();
-    let proofs = f.alice_tutoring();
-    assert_eq!(proofs.len(), MAX_ROOTS + 1);
-    h.register(proofs[0]).expect("register");
-    for p in &proofs[1..MAX_ROOTS] {
-        h.add_proof(p).expect("add");
-    }
-    let code = proofs[0].code_bytes();
-    let line = h.line(&code);
-    assert_eq!(line.roots.len(), MAX_ROOTS);
-    assert_eq!(h.account(&line_address(&code)).data.len(), line_space(line.label.len(), MAX_ROOTS));
-    refused(h.add_proof(proofs[MAX_ROOTS]), &["LineFull"]);
-    assert_eq!(h.line(&code).roots.len(), MAX_ROOTS);
-    println!("a line held sixteen distinct roots and refused a seventeenth, a real one");
+    println!("refused as expected: a proof counts for its own label and profile only");
 }
 
 #[test]
@@ -279,7 +185,7 @@ fn refund_reaches_the_payer() {
         total += excess;
         refused(h.send_as(&stranger, &[refund_ix(payer.pubkey(), &code)]), &["NothingToRefund"]);
     }
-    assert_eq!(h.line(&code).roots.len(), 1, "the data is untouched");
+    assert_eq!(h.line(&code).root, a.proof().root, "the data is untouched");
 
     // Lamports anyone sends to a line are the payer's too.
     let gift = solana_system_interface::instruction::transfer(&stranger.pubkey(), &address, 1_000_000);
@@ -316,6 +222,7 @@ fn the_label_is_free_text_up_to_128_bytes() {
     assert_eq!(longest.label.len(), MAX_LABEL);
     let meta = h.register(longest).expect("a 128-byte label");
     assert_eq!(h.line(&longest.code_bytes()).label, longest.label);
+    assert_eq!(h.account(&line_address(&longest.code_bytes())).data.len(), 277, "the largest line");
     // 129 bytes is refused before the proof is even looked at.
     let ix = register_ix(h.payer.pubkey(), &longest.profile_address(), &format!("{}x", longest.label), &[9u8; 32], &longest.proof());
     refused(h.send(&[ix], &[]), &["LabelTooLong"]);
@@ -332,8 +239,7 @@ fn every_fixture_root_is_its_lists_leanimt_root() {
         assert_eq!(from_hex32(&p.scope), scope_of(&p.label), "{}: scope", p.name);
         assert_eq!(from_hex32(&p.message), message_of(&p.profile_address()), "{}: message", p.name);
     }
-    let roots: std::collections::HashSet<_> = f.alice_tutoring().iter().map(|p| p.proof().root).collect();
-    assert_eq!(roots.len(), MAX_ROOTS + 1, "Alice's tutoring roots are all distinct");
+    assert_ne!(f.proof("alice-tutoring-A").proof().root, f.proof("alice-tutoring-B").proof().root, "two lists, two roots");
     println!("{} proofs: each root is its list's, each scope and message what the program derives", f.proofs.len());
 }
 
@@ -358,14 +264,12 @@ fn the_wire_format_written_twice_still_matches() {
     let (mut h, f) = ready();
     let w = &f.wire;
     let a = f.proof("alice-tutoring-A");
-    let b = f.proof("alice-tutoring-B");
     let code = a.code_bytes();
     let payer = Keypair::new_from_array(from_hex32(&w.payer_seed));
     assert_eq!(payer.pubkey().to_string(), w.payer);
     assert_eq!(PROGRAM_ID.to_string(), w.program_id, "the program id");
     assert_eq!(line_address(&code).to_string(), w.line_address, "the line's address");
     assert_eq!(register_data(&a.profile_address(), &a.label, &code, &a.proof()), hex(&w.register), "register's bytes");
-    assert_eq!(add_proof_data(&code, &b.proof()), hex(&w.add_proof), "add_proof's bytes");
     assert_eq!(refund_data(&code), hex(&w.refund), "refund's bytes");
 
     // The client's own bytes, sent as they are, write exactly the line the client expects.
@@ -381,11 +285,9 @@ fn the_wire_format_written_twice_still_matches() {
     use solana_instruction::AccountMeta as M;
     h.send_as(&payer, &[ix(&w.register, vec![M::new(line, false), M::new(payer.pubkey(), true), M::new_readonly(system, false)])])
         .expect("the client's register");
-    h.send_as(&payer, &[ix(&w.add_proof, vec![M::new(line, false), M::new(payer.pubkey(), true), M::new_readonly(system, false)])])
-        .expect("the client's add_proof");
     assert_eq!(h.account(&line).data, hex(&w.line), "the line the program wrote is the client's expected bytes");
     let view = read_line(&hex(&w.line));
-    assert_eq!((view.profile, view.payer, view.time, view.roots.len()), (a.profile_address(), payer.pubkey(), w.time, 2));
+    assert_eq!((view.profile, view.payer, view.time, view.root), (a.profile_address(), payer.pubkey(), w.time, a.proof().root));
     h.set_rent(RENT_FINAL);
     h.send_as(&payer, &[ix(&w.refund, vec![M::new(line, false), M::new(payer.pubkey(), false)])]).expect("the client's refund");
     println!("the client's bytes and this harness's agree, and the program wrote exactly the expected line");
@@ -399,7 +301,6 @@ fn what_a_line_costs() {
     let (mut h, f) = ready();
     let short = f.proof("alice-tutoring-A");
     let longest = f.proof("alice-longest-A");
-    let b = f.proof("alice-tutoring-B");
     let size = |h: &Harness, ix: &solana_instruction::Instruction| {
         let msg = Message::new(std::slice::from_ref(ix), Some(&h.payer.pubkey()));
         let tx = Transaction::new(&[&h.payer], msg, h.svm.latest_blockhash());
@@ -414,9 +315,6 @@ fn what_a_line_costs() {
         let cu = h.send(&[ix], &[]).expect(what).compute_units_consumed;
         rows.push((what, bytes, cu));
     }
-    let ix = add_proof_ix(h.payer.pubkey(), &b.code_bytes(), &b.proof());
-    let bytes = size(&h, &ix);
-    rows.push(("add_proof", bytes, h.send(&[ix], &[]).expect("add").compute_units_consumed));
     h.set_rent(RENT_FINAL);
     let ix = refund_ix(h.payer.pubkey(), &short.code_bytes());
     let bytes = size(&h, &ix);
@@ -428,13 +326,15 @@ fn what_a_line_costs() {
         assert!(*bytes <= 1_232, "{what}: {bytes} bytes");
         assert!(*cu < 200_000, "{what}: {cu} units, over the default limit");
     }
-    let deposit = |rate: u64, label: usize, roots: usize| rent_minimum(rate, line_space(label, roots));
+    let deposit = |rate: u64, label: usize| rent_minimum(rate, line_space(label));
     println!(
-        "deposit for a 15-byte label, one root: {} lamports today ({} a byte), {} after the cuts ({}); each more root {} today",
-        deposit(RENT_TODAY, 15, 1),
+        "deposit for a 15-byte label: {} lamports today ({} a byte), {} after the cuts ({}); a 128-byte label: {} today, {} after",
+        deposit(RENT_TODAY, 15),
         RENT_TODAY,
-        deposit(RENT_FINAL, 15, 1),
+        deposit(RENT_FINAL, 15),
         RENT_FINAL,
-        32 * RENT_TODAY
+        deposit(RENT_TODAY, MAX_LABEL),
+        deposit(RENT_FINAL, MAX_LABEL),
     );
+    assert_eq!((deposit(RENT_TODAY, 15), deposit(RENT_FINAL, 15)), (1_483_360, 203_232));
 }

@@ -1,21 +1,22 @@
 #!/usr/bin/env bash
-# Build the registry (the free list of badges) for devnet and deploy it at its own address, beside
-# the earlier registry, which it never touches: that program, its keypair and devnet/devnet.json
-# are only read.
+# Build the registry (a free list of badges whose lines never change) for devnet and deploy it at
+# its own address, beside the earlier registries, which it never touches: their programs, their
+# keypairs and devnet/devnet.json are only read, and the ids registry/devnet/devnet.json names as
+# earlier are refused as this one's.
 #
 #   FOREST_DEVNET_SEED=<the phrase> registry/devnet/deploy.sh
 #
 # 1. Keys. The program id is the key devnet/keys.sh's recipe derives from the phrase under the
-#    label `registry-badges-program`:
+#    label `registry-lines-program`:
 #
-#      seed = PBKDF2-HMAC-SHA256(phrase NFKD-trimmed-single-spaced, "forest-devnet:registry-badges-program",
+#      seed = PBKDF2-HMAC-SHA256(phrase NFKD-trimmed-single-spaced, "forest-devnet:registry-lines-program",
 #                                600,000 iterations, 32 bytes);  key = ed25519 from that seed
 #
 #    It, the deploy key (label `deploy`, which pays and keeps the upgrade authority) and the payer
 #    (label `payer`, which registry/client/scripts/devnet.ts sends from) are written to
 #    FOREST_DEVNET_KEYS (default ~/.forest-devnet/keys), never under the repo. The deploy key and
-#    the payer must be the ones devnet/devnet.json names, and the id must be no program that file or
-#    escrow/v2/devnet/devnet.json names.
+#    the payer must be the ones devnet/devnet.json names, and the id must be no program that file,
+#    escrow/v2/devnet/devnet.json or this folder's devnet.json (its `earlier`) names.
 # 2. Build. registry/program's Cargo.toml, Cargo.lock and src are copied into
 #    registry/devnet/target/ (ignored), `declare_id!` alone is replaced with the devnet id, checked
 #    to appear exactly once, and the copy is built for SBPF v3.
@@ -46,10 +47,10 @@ mkdir -p "$keys" "$out"
 chmod 700 "$keys"
 
 # 1. Keys.
-node - "$keys" "$base" "$escrow2" <<'JS'
+node - "$keys" "$base" "$escrow2" "$record" <<'JS'
 const crypto = require('crypto')
 const fs = require('fs')
-const [dir, base, escrow2] = process.argv.slice(2)
+const [dir, base, escrow2, own] = process.argv.slice(2)
 const phrase = process.env.FOREST_DEVNET_SEED.normalize('NFKD').trim().split(/\s+/).join(' ')
 const PKCS8_ED25519 = Buffer.from('302e020100300506032b657004220420', 'hex')
 const ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
@@ -63,8 +64,9 @@ function base58(bytes) {
 const record = JSON.parse(fs.readFileSync(base, 'utf8'))
 const taken = [record.registry.programId, record.escrow.programId]
 if (fs.existsSync(escrow2)) taken.push(JSON.parse(fs.readFileSync(escrow2, 'utf8')).escrow.programId)
+if (fs.existsSync(own)) for (const e of JSON.parse(fs.readFileSync(own, 'utf8')).earlier ?? []) taken.push(e.programId)
 const pk = {}
-for (const label of ['deploy', 'payer', 'registry-badges-program']) {
+for (const label of ['deploy', 'payer', 'registry-lines-program']) {
   const seed = crypto.pbkdf2Sync(Buffer.from(phrase, 'utf8'), Buffer.from(`forest-devnet:${label}`, 'utf8'), 600_000, 32, 'sha256')
   const priv = crypto.createPrivateKey({ key: Buffer.concat([PKCS8_ED25519, seed]), format: 'der', type: 'pkcs8' })
   const pub = crypto.createPublicKey(priv).export({ format: 'der', type: 'spki' }).subarray(-32)
@@ -77,11 +79,11 @@ for (const label of ['deploy', 'payer', 'registry-badges-program']) {
 }
 if (pk.deploy !== record.keys.deploy) throw new Error(`the phrase gives deploy key ${pk.deploy}, not ${record.keys.deploy}: another phrase`)
 if (pk.payer !== record.keys.payer) throw new Error(`the phrase gives payer ${pk.payer}, not ${record.keys.payer}`)
-const id = pk['registry-badges-program']
+const id = pk['registry-lines-program']
 if (taken.includes(id)) throw new Error('the id is one an earlier deploy already names')
 console.log(`registry program id ${id}, deploy key ${pk.deploy}, payer ${pk.payer}`)
 JS
-id=$(solana-keygen pubkey "$keys/registry-badges-program.json")
+id=$(solana-keygen pubkey "$keys/registry-lines-program.json")
 cli=(--url "$rpc" --keypair "$keys/deploy.json")
 deployer=$(solana-keygen pubkey "$keys/deploy.json")
 
@@ -140,7 +142,7 @@ JS
   have=$(solana balance "$deployer" "${cli[@]}" --lamports | cut -d' ' -f1)
   echo "cost $cost; the deploy key holds $have lamports"
   [ "$have" -ge "$need" ] || { echo "the deploy key holds less than the deploy costs; nothing deployed" >&2; exit 3; }
-  solana program deploy "${cli[@]}" --upgrade-authority "$keys/deploy.json" --program-id "$keys/registry-badges-program.json" \
+  solana program deploy "${cli[@]}" --upgrade-authority "$keys/deploy.json" --program-id "$keys/registry-lines-program.json" \
     --use-rpc --output json "$so" >"$out/deploy.json"
   after=$(solana balance "$deployer" "${cli[@]}" --lamports | cut -d' ' -f1)
   printf '{"cost":%s,"balanceBefore":%s,"balanceAfter":%s}\n' "$cost" "$have" "$after" >"$out/spend.json"
@@ -159,7 +161,7 @@ node - "$record" "$out" "$id" "$built" "$so" "$deployed_now" <<'JS'
 const fs = require('fs')
 const [recordPath, out, id, sha, so, now] = process.argv.slice(2)
 const record = fs.existsSync(recordPath) ? JSON.parse(fs.readFileSync(recordPath, 'utf8')) : {
-  note: 'The devnet deploy of the registry, the free list of badges, beside the earlier registry (devnet/devnet.json), which it does not touch. Public keys, addresses and signatures only. The program id is derived from the devnet phrase under the label registry-badges-program; the deploy key and the payer are the ones devnet/devnet.json names. Written by registry/devnet/deploy.sh and registry/client/scripts/devnet.ts; read by registry/client/test/devnet.test.ts.',
+  note: 'The devnet deploy of the registry whose lines never change, beside the earlier registries, which it does not touch. Public keys, addresses and signatures only. The program id is derived from the devnet phrase under the label registry-lines-program; the deploy key and the payer are the ones devnet/devnet.json names. Written by registry/devnet/deploy.sh and registry/client/scripts/devnet.ts; read by registry/client/test/devnet.test.ts.',
   cluster: 'devnet',
   rpc: 'https://api.devnet.solana.com',
 }
