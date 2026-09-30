@@ -15,9 +15,11 @@ export const PRF_INPUT: Uint8Array = utf8(PRF_INPUT_TEXT)
 /** HKDF info strings. `n` is the profile index, written in decimal. */
 export const INFO = {
   seed: `forest.foundation/seed/${VERSION}`,
-  control: (n: number) => `forest.foundation/profile/${n}/control/${VERSION}`,
-  signing: (n: number) => `forest.foundation/profile/${n}/signing/${VERSION}`,
-  wallet: (n: number) => `forest.foundation/profile/${n}/wallet/${VERSION}`,
+  // The profile key: the profile's name, its signatures and its wallet. The label keeps the word
+  // `wallet` it was first made with, so every seed gives the same profile keys it always gave.
+  profile: (n: number) => `forest.foundation/profile/${n}/wallet/${VERSION}`,
+  // The profile's box key, for sealed entries.
+  box: (n: number) => `forest.foundation/profile/${n}/box/${VERSION}`,
   seedFileKey: `forest.foundation/seed-file/key/${VERSION}`,
   seedFileLabel: `forest.foundation/seed-file/label/${VERSION}`,
   // No profile index: the registry's identity is per human, not per profile.
@@ -63,4 +65,8 @@ export function assertBytes(name: string, value: unknown, length: number): asser
   if (!(value instanceof Uint8Array) || value.length !== length) {
     throw new Error(`${name} must be ${length} bytes`)
   }
+}
+
+export function assertProfileIndex(n: number): void {
+  if (!Number.isInteger(n) || n < 0) throw new Error('profile index must be a whole number, 0 or more')
 }
