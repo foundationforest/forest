@@ -1,0 +1,84 @@
+# Two static test pages on GitHub Pages, so the founder can try them on a real phone:
+#
+#   /keys/      keys/test-page: create a passkey, unlock the seed, see the profiles
+#   /approve/   records/web: the approval page (one request in the link, one tap, one passkey)
+#
+# Both are served from one origin, foundationforest.github.io, so a passkey made on /keys/ is the
+# one /approve/ asks for. Neither is the real page: the real relying party is forest.foundation.
+#
+# Every pull request builds the site and keeps it as an artifact, so a broken build shows before
+# a merge. Only main, and a manual run from main, deploys: the github-pages environment refuses
+# any other branch.
+#
+# One setting only Carlos can turn, once: Settings > Pages > Source: GitHub Actions.
+
+name: pages
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/pages.yml'
+      - 'keys/**'
+      - 'records/**'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/pages.yml'
+      - 'keys/**'
+      - 'records/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - name: Install
+        run: for dir in keys records; do (cd "$dir" && npm ci --no-audit --no-fund); done
+      - name: Build the keys page
+        working-directory: keys
+        run: npm run build:page
+      - name: Build the approval page
+        working-directory: records
+        run: npm run build:page
+      - name: Assemble the site
+        run: |
+          mkdir -p _site/keys/dist _site/approve
+          cp keys/test-page/index.html keys/test-page/page.js _site/keys/
+          cp keys/test-page/dist/forest-keys.js _site/keys/dist/
+          cp records/web/dist/* _site/approve/
+          mv _site/approve/approve.html _site/approve/index.html
+          find _site -type f | sort
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5
