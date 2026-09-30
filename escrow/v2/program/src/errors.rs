@@ -61,4 +61,7 @@ pub enum EscrowError {
     TimerDue,
     #[msg("a party objected: the timer is off; the money moves only by the parties agreeing or by the arbiter")]
     Objected,
+    // Both token programs from here on.
+    #[msg("a token with a transfer fee is not accepted: the fee would take part of every payment in and out")]
+    TransferFee,
 }

@@ -607,7 +607,7 @@ fn timer_release_needs_a_timer_the_funding_marked_and_its_day() {
     // Marked and released in one breath: the mark is now, so the timer is not due.
     let vault = vault_address(&escrow, &h.mint);
     let err = h
-        .send(&[mark_funded_ix(escrow, vault), timer_release_ix(escrow, vault, h.seller_tokens, h.buyer.pubkey())], &[])
+        .send(&[mark_funded_ix(escrow, vault), timer_release_ix(escrow, vault, h.mint, h.seller_tokens, h.buyer.pubkey())], &[])
         .expect_err("mark and release together");
     assert!(err.contains("TimerNotDue"), "{err}");
     assert_eq!(h.escrow(&escrow).status, Status::Open, "the failed transaction marked nothing");
@@ -686,7 +686,7 @@ fn a_payout_lands_only_at_the_receiving_partys_standard_account() {
             "release_to_seller" => release_to_seller_ix(s, b),
             "split" => split_ix(s, b, sl, 5_000),
             "arbitrate" => arbitrate_ix(s, ar, 5_000),
-            "timer_release" => timer_release_ix(s.escrow, s.vault, if timer_to == Side::Buyer { s.buyer_tokens } else { s.seller_tokens }, s.rent_recipient),
+            "timer_release" => timer_release_ix(s.escrow, s.vault, s.mint, if timer_to == Side::Buyer { s.buyer_tokens } else { s.seller_tokens }, s.rent_recipient),
             _ => close_unfunded_ix(s, sl),
         };
         let signers: Vec<&Keypair> = match name {
@@ -726,7 +726,7 @@ fn a_payout_lands_only_at_the_receiving_partys_standard_account() {
         ("the deposit account itself", vault),
         ("the seller's wallet, not a token account", sl),
     ] {
-        let err = h.send(&[timer_release_ix(escrow, vault, to, b)], &[]).expect_err(what);
+        let err = h.send(&[timer_release_ix(escrow, vault, h.mint, to, b)], &[]).expect_err(what);
         assert!(err.contains("NotTheSellersAccount"), "{what}: {err}");
     }
     h.timer_release(&escrow, Side::Seller).expect("to the seller's standard account");
@@ -734,22 +734,22 @@ fn a_payout_lands_only_at_the_receiving_partys_standard_account() {
 }
 
 #[test]
-fn a_token_2022_mint_and_wrapped_sol_are_refused() {
+fn wrapped_sol_of_either_token_program_is_refused() {
+    // A Token-2022 mint is accepted (`token_2022.rs`); wrapped SOL is not, under either program.
     let mut h = Harness::new();
     let buyer = h.buyer.insecure_clone();
-    let mint22 = Address::new_unique();
-    h.svm.set_account(mint22, spl_mint_account(6, TOKEN_2022_PROGRAM)).unwrap();
-    let a = CreateAccounts { buyer: buyer.pubkey(), payer: h.payer.pubkey(), mint: mint22 };
-    let err = h.send(&[create_ix(&h.terms(1), &a)], &[&buyer]).expect_err("Token-2022");
-    assert!(err.contains("AccountOwnedByWrongProgram"), "{err}");
-    assert!(!h.exists(&escrow_address(&buyer.pubkey(), 1)));
-
     h.svm.set_account(NATIVE_MINT, spl_mint_account(9, TOKEN_PROGRAM)).unwrap();
     let a = CreateAccounts { buyer: buyer.pubkey(), payer: h.payer.pubkey(), mint: NATIVE_MINT };
     let err = h.send(&[create_ix(&h.terms(1), &a)], &[&buyer]).expect_err("wrapped SOL");
     assert!(err.contains("NativeMint"), "{err}");
     assert!(!h.exists(&escrow_address(&buyer.pubkey(), 1)));
-    println!("a Token-2022 mint and wrapped SOL: refused at create, nothing written");
+
+    h.svm.set_account(NATIVE_MINT_2022, spl_mint_account(9, TOKEN_2022_PROGRAM)).unwrap();
+    let a = CreateAccounts { buyer: buyer.pubkey(), payer: h.payer.pubkey(), mint: NATIVE_MINT_2022 };
+    let err = h.send(&[create_ix_under(&h.terms(1), &a, buyer.pubkey(), TOKEN_2022_PROGRAM)], &[&buyer]).expect_err("Token-2022's wrapped SOL");
+    assert!(err.contains("NativeMint"), "{err}");
+    assert!(!h.exists(&escrow_address(&buyer.pubkey(), 1)));
+    println!("wrapped SOL, classic and Token-2022: refused at create, nothing written");
 }
 
 #[test]
@@ -890,7 +890,7 @@ fn an_escrow_ends_once() {
         ("release_to_buyer", release_to_buyer_ix(&s, sl), vec![&seller]),
         ("split", split_ix(&s, b, sl, 5_000), vec![&buyer, &seller]),
         ("arbitrate", arbitrate_ix(&s, arbiter.pubkey(), 5_000), vec![&arbiter]),
-        ("timer_release", timer_release_ix(escrow, vault, h.seller_tokens, b), vec![]),
+        ("timer_release", timer_release_ix(escrow, vault, h.mint, h.seller_tokens, b), vec![]),
         ("close_unfunded", close_unfunded_ix(&s, b), vec![&buyer]),
         ("object", object_ix(escrow, sl), vec![&seller]),
     ];
@@ -1049,13 +1049,13 @@ fn what_each_way_out_costs() {
     let e = h.marked(&timed);
     h.advance(DAY);
     let v = vault_address(&e, &h.mint);
-    h.measure("timer_release, to the seller", &[timer_release_ix(e, v, h.seller_tokens, buyer.pubkey())], &[]);
+    h.measure("timer_release, to the seller", &[timer_release_ix(e, v, h.mint, h.seller_tokens, buyer.pubkey())], &[]);
     let mut timed = h.terms(6);
     timed.timer = Some(Timer { days: 1, to: Side::Buyer });
     let e = h.marked(&timed);
     h.advance(DAY);
     let v = vault_address(&e, &h.mint);
-    h.measure("timer_release, to the buyer", &[timer_release_ix(e, v, h.refund(), buyer.pubkey())], &[]);
+    h.measure("timer_release, to the buyer", &[timer_release_ix(e, v, h.mint, h.refund(), buyer.pubkey())], &[]);
 
     let (e, _) = h.create(&h.terms(7)).expect("create");
     let s = h.accounts(&e);

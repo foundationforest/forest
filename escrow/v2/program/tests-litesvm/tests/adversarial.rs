@@ -146,15 +146,27 @@ fn substitution_payout_accounts_of_the_wrong_mint_owner_or_program_are_refused()
     let err = h.send(&[release_to_seller_ix(&Accounts { seller_tokens: t22, ..base }, buyer.pubkey())], &[&buyer]).expect_err("Token-2022 account");
     assert!(err.contains("NotTheSellersAccount"), "{err}");
 
-    // Token-2022 passed as the token program, at a way out and at create.
+    // Token-2022 passed as the token program for a classic mint, at a way out and at create: the
+    // token program must be the one that owns the mint.
     let mut ix = release_to_seller_ix(&base, buyer.pubkey());
-    ix.accounts[4].pubkey = TOKEN_2022_PROGRAM;
+    assert_eq!(ix.accounts[5].pubkey, TOKEN_PROGRAM);
+    ix.accounts[5].pubkey = TOKEN_2022_PROGRAM;
     let err = h.send(&[ix], &[&buyer]).expect_err("Token-2022 program");
-    assert!(err.contains("InvalidProgramId"), "{err}");
+    assert!(err.contains("ConstraintMintTokenProgram"), "{err}");
     let mut ix = create_ix(&h.terms(2), &h.create_accounts());
     ix.accounts[5].pubkey = TOKEN_2022_PROGRAM;
     let err = h.send(&[ix], &[&buyer]).expect_err("Token-2022 program at create");
-    assert!(err.contains("InvalidProgramId") || err.contains("ConstraintAssociated") || err.contains("AccountOwnedByWrongProgram"), "{err}");
+    // The deposit address is derived under the token program named, so the associated token
+    // program is asked for an address this transaction does not carry.
+    assert!(err.contains("MissingAccount"), "{err}");
+    // Named with its address under Token-2022 too, the mint is still the classic program's.
+    let mut ix = create_ix(&h.terms(2), &h.create_accounts());
+    let escrow2 = escrow_address(&buyer.pubkey(), 2);
+    ix.accounts[1].pubkey = ata_address_under(&escrow2, &h.mint, &TOKEN_2022_PROGRAM);
+    ix.accounts[5].pubkey = TOKEN_2022_PROGRAM;
+    let err = h.send(&[ix], &[&buyer]).expect_err("Token-2022 program and its address at create");
+    assert!(err.contains("IncorrectProgramId") || err.contains("ConstraintMintTokenProgram"), "{err}");
+    assert!(!h.exists(&escrow2));
 
     assert_eq!(h.vault_balance(&escrow), AMOUNT, "nothing moved");
     println!("rejected as expected: wrong mint, the other party's account in either slot, a Token-2022 account, Token-2022 as the program");
@@ -325,14 +337,14 @@ fn arithmetic_splits_at_the_edges_add_up_and_never_overflow() {
         let vault = vault_address(&escrow, &h.mint);
         h.send(&[create_ix(&t, &a), spl_transfer_ix(big_tokens, vault, big.pubkey(), u64::MAX), mark_funded_ix(escrow, vault)], &[&big])
             .expect("create, fund and mark");
-        let s = Accounts { escrow, vault, buyer_tokens: big_tokens, seller_tokens: h.seller_tokens, rent_recipient: big.pubkey() };
+        let s = Accounts { escrow, vault, buyer_tokens: big_tokens, seller_tokens: h.seller_tokens, rent_recipient: big.pubkey(), ..h.accounts(&escrow) };
         let (ix, signers): (Instruction, Vec<&Keypair>) = match how {
             "split" => (split_ix(&s, big.pubkey(), seller.pubkey(), 7_777), vec![&big, &seller]),
             "arbitrate" => (arbitrate_ix(&s, arbiter.pubkey(), 1), vec![&arbiter]),
             "release_to_seller" => (release_to_seller_ix(&s, big.pubkey()), vec![&big]),
             _ => {
                 h.advance(DAY);
-                (timer_release_ix(escrow, vault, h.seller_tokens, big.pubkey()), vec![])
+                (timer_release_ix(escrow, vault, h.mint, h.seller_tokens, big.pubkey()), vec![])
             }
         };
         let meta = h.send(&[ix], &signers).unwrap_or_else(|e| panic!("{how}: {e}"));
@@ -416,7 +428,7 @@ fn timer_whoever_sends_the_sellers_timer_can_pay_only_its_standard_account() {
     let stranger = h.someone();
     let vault = vault_address(&escrow, &h.mint);
     let send_as_stranger = |h: &mut Harness, to: Address| {
-        let ix = timer_release_ix(escrow, vault, to, h.buyer.pubkey());
+        let ix = timer_release_ix(escrow, vault, h.mint, to, h.buyer.pubkey());
         h.svm.expire_blockhash();
         let tx = Transaction::new(&[&stranger], Message::new(&[ix], Some(&stranger.pubkey())), h.svm.latest_blockhash());
         h.send_tx(tx)
@@ -559,7 +571,7 @@ fn finding_a_self_minted_token_makes_a_receipt_that_looks_like_real_money() {
     let a = CreateAccounts { buyer: buyer.pubkey(), payer: h.payer.pubkey(), mint: fake };
     let escrow = escrow_address(&buyer.pubkey(), 1);
     let vault = vault_address(&escrow, &fake);
-    let s = Accounts { escrow, vault, buyer_tokens: fake_tokens, seller_tokens: seller_fake, rent_recipient: buyer.pubkey() };
+    let s = Accounts { escrow, vault, mint: fake, buyer_tokens: fake_tokens, seller_tokens: seller_fake, rent_recipient: buyer.pubkey(), token_program: TOKEN_PROGRAM };
     let meta = h
         .send(&[create_ix(&t, &a), spl_transfer_ix(fake_tokens, vault, buyer.pubkey(), t.amount), release_to_seller_ix(&s, buyer.pubkey())], &[&buyer])
         .expect("accepted");
@@ -816,6 +828,7 @@ fn finding_a_reused_deposit_address_adopts_a_stranger_buyers_money() {
         buyer_tokens: refund_address(&buyer_b.pubkey(), &h.mint),
         seller_tokens: h.seller_tokens,
         rent_recipient: seller.pubkey(),
+        ..h.accounts(&escrow)
     };
     h.send(&[release_to_seller_ix(&s, buyer_b.pubkey())], &[&buyer_b]).expect("buyer B releases to the seller");
     assert_eq!(h.balance(&h.seller_tokens), AMOUNT, "the seller has buyer A's money");

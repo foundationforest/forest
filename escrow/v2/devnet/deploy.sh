@@ -1,19 +1,20 @@
 #!/usr/bin/env bash
-# Build the escrow, v2, for devnet and deploy it at its own address, beside v1, which it never
-# touches: v1's program id, its keypair and devnet/devnet.json are only read.
+# Build the escrow, v2, for devnet and deploy it at its own address, beside v1 and the earlier v2
+# deploy, which it never touches: their program ids, keypairs and records are only read.
 #
 #   FOREST_DEVNET_SEED=<the phrase> escrow/v2/devnet/deploy.sh
 #
 # 1. Keys. The v2 program id is the key devnet/keys.sh's recipe derives from the phrase under the
-#    new label `escrow-v2-program`:
+#    label `escrow-v2-program-2` (the first v2 deploy, classic tokens only, used
+#    `escrow-v2-program`; it stays where it is, never upgraded, recorded under `earlier`):
 #
-#      seed = PBKDF2-HMAC-SHA256(phrase NFKD-trimmed-single-spaced, "forest-devnet:escrow-v2-program",
+#      seed = PBKDF2-HMAC-SHA256(phrase NFKD-trimmed-single-spaced, "forest-devnet:escrow-v2-program-2",
 #                                600,000 iterations, 32 bytes);  key = ed25519 from that seed
 #
 #    It and the deploy key (label `deploy`, which pays and keeps the upgrade authority, as for v1)
 #    are written to FOREST_DEVNET_KEYS (default ~/.forest-devnet/keys), never under the repo. The
-#    deploy key must be the one devnet/devnet.json names, and the v2 id must be neither program
-#    that file names.
+#    deploy key must be the one devnet/devnet.json names, and the v2 id must be none of the
+#    programs that file and this record's `earlier` name.
 # 2. Build. escrow/v2/program's Cargo.toml, Cargo.lock and src are copied into
 #    escrow/v2/devnet/target/ (ignored), `declare_id!` alone is replaced with the v2 id, checked to
 #    appear exactly once, and the copy is built for SBPF v3.
@@ -43,10 +44,11 @@ mkdir -p "$keys" "$out"
 chmod 700 "$keys"
 
 # 1. Keys.
-node - "$keys" "$base" <<'JS'
+label=escrow-v2-program-2
+node - "$keys" "$base" "$record" "$label" <<'JS'
 const crypto = require('crypto')
 const fs = require('fs')
-const [dir, base] = process.argv.slice(2)
+const [dir, base, own, v2label] = process.argv.slice(2)
 const phrase = process.env.FOREST_DEVNET_SEED.normalize('NFKD').trim().split(/\s+/).join(' ')
 const PKCS8_ED25519 = Buffer.from('302e020100300506032b657004220420', 'hex')
 const ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
@@ -59,7 +61,7 @@ function base58(bytes) {
 }
 const record = JSON.parse(fs.readFileSync(base, 'utf8'))
 const pk = {}
-for (const label of ['deploy', 'escrow-v2-program']) {
+for (const label of ['deploy', v2label]) {
   const seed = crypto.pbkdf2Sync(Buffer.from(phrase, 'utf8'), Buffer.from(`forest-devnet:${label}`, 'utf8'), 600_000, 32, 'sha256')
   const priv = crypto.createPrivateKey({ key: Buffer.concat([PKCS8_ED25519, seed]), format: 'der', type: 'pkcs8' })
   const pub = crypto.createPublicKey(priv).export({ format: 'der', type: 'spki' }).subarray(-32)
@@ -71,11 +73,12 @@ for (const label of ['deploy', 'escrow-v2-program']) {
   pk[label] = base58(pub)
 }
 if (pk.deploy !== record.keys.deploy) throw new Error(`the phrase gives deploy key ${pk.deploy}, not ${record.keys.deploy}: another phrase`)
-const id = pk['escrow-v2-program']
-if (id === record.escrow.programId || id === record.registry.programId) throw new Error('the v2 id is one devnet/devnet.json already names')
+const id = pk[v2label]
+const earlier = fs.existsSync(own) ? (JSON.parse(fs.readFileSync(own, 'utf8')).earlier ?? []).map((e) => e.escrow.programId) : []
+if ([record.escrow.programId, record.registry.programId, ...earlier].includes(id)) throw new Error('the v2 id is one already deployed for another program or version')
 console.log(`escrow v2 program id ${id}, deploy key ${pk.deploy}`)
 JS
-id=$(solana-keygen pubkey "$keys/escrow-v2-program.json")
+id=$(solana-keygen pubkey "$keys/$label.json")
 cli=(--url "$rpc" --keypair "$keys/deploy.json")
 deployer=$(solana-keygen pubkey "$keys/deploy.json")
 
@@ -134,7 +137,7 @@ JS
   have=$(solana balance "$deployer" "${cli[@]}" --lamports | cut -d' ' -f1)
   echo "cost $cost; the deploy key holds $have lamports"
   [ "$have" -ge "$need" ] || { echo "the deploy key holds less than the deploy costs; nothing deployed" >&2; exit 3; }
-  solana program deploy "${cli[@]}" --upgrade-authority "$keys/deploy.json" --program-id "$keys/escrow-v2-program.json" \
+  solana program deploy "${cli[@]}" --upgrade-authority "$keys/deploy.json" --program-id "$keys/$label.json" \
     --use-rpc --output json "$so" >"$out/deploy.json"
   after=$(solana balance "$deployer" "${cli[@]}" --lamports | cut -d' ' -f1)
   printf '{"cost":%s,"balanceBefore":%s,"balanceAfter":%s}\n' "$cost" "$have" "$after" >"$out/spend.json"
@@ -153,7 +156,7 @@ node - "$record" "$out" "$id" "$built" "$so" "$deployed_now" <<'JS'
 const fs = require('fs')
 const [recordPath, out, id, sha, so, now] = process.argv.slice(2)
 const record = fs.existsSync(recordPath) ? JSON.parse(fs.readFileSync(recordPath, 'utf8')) : {
-  note: 'The devnet deploy of the escrow, v2, beside v1 (devnet/devnet.json), which it does not touch. Public keys, addresses and signatures only. The program id is derived from the devnet phrase under the label escrow-v2-program; the other keys are the ones devnet/devnet.json names. Written by escrow/v2/devnet/deploy.sh and escrow/v2/client/scripts/devnet.ts.',
+  note: 'The devnet deploy of the escrow, v2, beside v1 (devnet/devnet.json), which it does not touch. Public keys, addresses and signatures only. The program id is derived from the devnet phrase under the label escrow-v2-program-2; the other keys are the ones devnet/devnet.json names. Written by escrow/v2/devnet/deploy.sh and escrow/v2/client/scripts/devnet.ts.',
   cluster: 'devnet',
   rpc: 'https://api.devnet.solana.com',
 }
