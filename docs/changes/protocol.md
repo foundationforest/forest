@@ -214,3 +214,74 @@
   - real phones and long links;
   - a Pkarr republisher;
   - an outside review and a parser fuzzer.
+
+## 2026-09-30: adopted; the lab moves into records/
+
+- **Built:**
+  - **`records/`** from `lab/protocol/`, moved with its history: `SPEC.md`, the library, the
+    reference host, the reference approval page, the tests, the vectors, the benchmark;
+    `REPORT.md` and `RESEARCH.md` under `records/docs/`, kept as written.
+    - A package, `@forest/records`, built to `dist/` with types on install and on pack. The core
+      (`@forest/records`) pulls in no SQLite, MCP, Pkarr or age; `/host`, `/indexer`, `/sealed`,
+      `/discovery`, `/connections` and `/schemas/*` are their own entry points. Checked from a
+      scratch app installed both by tarball and by folder link.
+    - 93 tests (81 from the lab, 12 for the schemas), 0 skipped; type-check clean.
+  - **`records/schemas/`:** `profile`, `offer`, `review`, `proof` as JSON Schema 2020-12, from the
+    four lexicons, with one example each from `shapes/examples`. No `$type`: the path says the
+    kind. Decimals stay text; blobs are `{ sha256, mimeType, size }`.
+  - **`keys/`:** one key per profile (`profileKey`: its did:key is the name, its address the
+    wallet) and the box key (`boxKey`). The secp256k1 keys, did:plc, `@atproto/crypto`,
+    `@ipld/dag-cbor` and `@did-plc/lib` are gone. `SPEC.md` sections 3, 6, 9, 10 and 11
+    rewritten; the passkey-to-seed steps unchanged. `test/vectors.json`: each profile is
+    `{ index, did, wallet, box }`; every wallet, the seed, identity, central wallet, words and
+    seed file unchanged byte for byte. `records/` recomputes them with its own code. The test
+    page shows name, wallet and box.
+  - **Deleted:** `host/`, `carrier/`, `shapes/`, `names/`, `registry/scratch/`, `lab/`, and
+    `index/`, `issuer/`, `feepayer/`, `deploy/`, `testsite/` (the services repo holds copies of the
+    first four, pinned to forest f0a87e5).
+  - **Text:** CLAUDE.md's three rule lines from the report's list (section 12 now; 11 when the
+    task was written); one line atop `docs/handoff.md`; the root README's folder list; the root
+    `.gitignore`'s host and testsite lines.
+  - **CI:** `records` in the node matrix (its browser test in the runner's Chrome) and in the
+    push-to-main type-check. The shapes, issuer, index and end-to-end jobs and the host build
+    went with their folders.
+- **Chosen, not decided** (the plan was silent; the option that adds least was taken):
+  - `profile.wallet` dropped: the profile key is the wallet (report section 11).
+  - `review.subject` is a did:key; `proof.issuer` any DID.
+  - `proof.credential` is text: the credential as issued, JSON or a JWT.
+  - Text limits are the lexicons' grapheme counts, applied as code points.
+  - `dealId`'s pattern checks the base58 alphabet and 32 to 44 characters, not the decoded length.
+  - Blob references are closed (`sha256`, `mimeType`, `size` and nothing else); records and
+    their other objects stay open.
+  - The degree patterns accept exactly the old rule's spellings, leading zeros included.
+  - `records/src/keys.ts` keeps its own synchronous derivation, which the approval page needs;
+    `keys/` stays the recipe. Both are checked against `keys/test/vectors.json`.
+  - `keys/`' box key returns age's recipient too, so `keys/` now depends on `age-encryption`.
+  - `@modelcontextprotocol/client` moved to devDependencies: only tests use it.
+  - This log, not `docs/changes.md`: the task left `docs/` alone but for the handoff line.
+- **Decided in this session's chat** (Carlos, 30 September):
+  - The lab design is adopted.
+  - Also delete `index/`, `issuer/`, `feepayer/`, `deploy/` and `testsite/`.
+  - `registry/client` is not touched: its devnet script stays red until the registry session.
+  - Market files stay as they are.
+- **Learned:**
+  - A W3C credential cannot be an entry body: `@context` breaks the entry key rule.
+  - JSON Schema counts code points, not graphemes, and cannot check a base58 string's byte length.
+  - The market-file format is written in lexicon field syntax (`maxGraphemes`, arrays with
+    `maxLength`). Moving it to JSON Schema changes the `markets` repo's files, so it was not
+    ported; its validator left with `shapes/`.
+  - `age-encryption` bundles for the browser: the keys test page opens the box key in Chromium.
+  - After `keys/` changed, the only code still using its old functions was
+    `registry/client/scripts/devnet.ts` (and the deleted `index/` and `deploy/`).
+- **Open:**
+  - **Red until the registry session:** `registry/client`'s type-check, two errors in
+    `scripts/devnet.ts` (`didGenesis`, `profileKeys`). Its tests pass. Report section 11 says
+    what the registry should bind: the profile key alone.
+  - **Markets:** `markets/check.sh` must pin a forest commit from before this change until the
+    Markets phase. The market-file format and its validator need a new home.
+  - **Stale text:** `docs/handoff.md` and `docs/changes.md` still describe AT Protocol, the host,
+    the carrier and did:plc (the handoff's first line points to `records/SPEC.md`); a comment in
+    `escrow/client/src/terms.ts` names `shapes/`. A consolidation session folds this log.
+  - The reference host is a class; a runnable service, and where the approval page is served,
+    belong to the services repo.
+  - Report section 13's questions are still open.
