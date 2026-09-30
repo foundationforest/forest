@@ -18,7 +18,9 @@ import {
   ESCROW_LEN,
   MAX_TIMER_DAYS,
   NATIVE_MINT,
+  NATIVE_MINT_2022,
   PROGRAM_ID,
+  TOKEN_2022_PROGRAM_ID,
   TOKEN_PROGRAM_ID,
   VERSION,
   arbitrateIx,
@@ -36,6 +38,7 @@ import {
   discriminator,
   escrowAddress,
   funds,
+  hookAccounts,
   invoiceIx,
   keysFor,
   keysOf,
@@ -48,6 +51,7 @@ import {
   payInOneTap,
   payInvoiceInOneTap,
   payoutAddress,
+  payoutTransfers,
   payout,
   randomId,
   recoverLateIx,
@@ -58,6 +62,8 @@ import {
   splitIx,
   sweepRentIx,
   termsFor,
+  tokenOf,
+  transferIx,
   timerDue,
   timerDueAt,
   timerReleaseIx,
@@ -262,11 +268,11 @@ test('each way out names the accounts it pays and the keys that sign it', () => 
   const account = escrowAccount({ arbiter })
   const k = keysOf(account)
   const escrow = escrowAddress(buyer, 7n)
-  assert.deepEqual(k, { escrow, vault: vaultAddress(escrow, mint), buyer, seller, mint, rentRecipient: buyer })
+  assert.deepEqual(k, { escrow, vault: vaultAddress(escrow, mint), buyer, seller, mint, tokenProgram: TOKEN_PROGRAM_ID, rentRecipient: buyer })
   assert.deepEqual(keysFor({ buyer, mint, terms: terms() }), k, 'from the terms, the same keys')
   // An invoice's keys: its address and its rent recipient are the seller's.
   const invoiced = escrowAddress(seller, 7n)
-  const ik = { escrow: invoiced, vault: vaultAddress(invoiced, mint), buyer, seller, mint, rentRecipient: seller }
+  const ik = { escrow: invoiced, vault: vaultAddress(invoiced, mint), buyer, seller, mint, tokenProgram: TOKEN_PROGRAM_ID, rentRecipient: seller }
   assert.deepEqual(keysOf(invoiceAccount()), ik)
   assert.deepEqual(keysFor({ buyer, mint, terms: terms(), creator: seller }), ik)
   assert.deepEqual([creatorKey(account), creatorKey(invoiceAccount())], [buyer, seller])
@@ -275,6 +281,7 @@ test('each way out names the accounts it pays and the keys that sign it', () => 
   const head = [
     [escrow.toBase58(), false, true],
     [vaultAddress(escrow, mint).toBase58(), false, true],
+    [mint.toBase58(), false, false],
   ]
   // Every rent refund to the creator: the buyer, here.
   const tail = [
@@ -349,6 +356,7 @@ test('the timer pays the side it names, and its builder refuses what the program
     [
       [k.escrow.toBase58(), false, true],
       [k.vault.toBase58(), false, true],
+      [mint.toBase58(), false, false],
       [payoutAddress(seller, mint).toBase58(), false, true],
       [buyer.toBase58(), false, true],
       [TOKEN_PROGRAM_ID.toBase58(), false, false],
@@ -356,10 +364,10 @@ test('the timer pays the side it names, and its builder refuses what the program
     'no signer: anyone may send it; the seller paid at its standard account',
   )
   const toBuyer = timerReleaseIx({ account: escrowAccount({ ...funded, timer: { days: 3, to: 'buyer' } }) })
-  assert.deepEqual(toBuyer.keys[2].pubkey, refundAddress(buyer, mint))
+  assert.deepEqual(toBuyer.keys[3].pubkey, refundAddress(buyer, mint))
   // An invoice's timer: its address and its rent recipient are the seller's.
   const inv = timerReleaseIx({ account: invoiceAccount({ ...funded, timer: { days: 1, to: 'seller' } }) })
-  assert.deepEqual([inv.keys[0].pubkey, inv.keys[2].pubkey, inv.keys[3].pubkey], [escrowAddress(seller, 7n), payoutAddress(seller, mint), seller])
+  assert.deepEqual([inv.keys[0].pubkey, inv.keys[3].pubkey, inv.keys[4].pubkey], [escrowAddress(seller, 7n), payoutAddress(seller, mint), seller])
   assert.throws(() => timerReleaseIx({ account: escrowAccount(funded) }), /NoTimer/)
   assert.throws(() => timerReleaseIx({ account: escrowAccount({ timer: { days: 3, to: 'seller' } }) }), /FundingNotMarked/)
   assert.throws(() => timerReleaseIx({ account: escrowAccount({ status: 'ended', timer: { days: 3, to: 'seller' } }) }), /Ended/)
@@ -378,10 +386,11 @@ test('the timer pays the side it names, and its builder refuses what the program
   assert.equal(timerDue(objected, T0 + 1_000n * DAY), false)
 })
 
-test('pay in one tap, and an invoice in one tap: the deposit address made first, create unless the seller opened it, a plain transfer of the amount, and the buyer\'s release', () => {
+test('pay in one tap, and an invoice in one tap: the deposit address made first, create unless the seller opened it, a transfer_checked of the amount, and the buyer\'s release', () => {
   const t = terms()
+  const token = { mint, program: TOKEN_PROGRAM_ID, decimals: 6 }
   const k = keysFor({ buyer, mint, terms: t })
-  const ixs = payInOneTap({ buyer, payer, mint, terms: t })
+  const ixs = payInOneTap({ buyer, payer, token, terms: t })
   assert.equal(ixs.length, 4)
   const [deposit, create, transfer, release] = ixs
   // The deposit address, made by the associated token program at the top of the transaction, the
@@ -399,44 +408,48 @@ test('pay in one tap, and an invoice in one tap: the deposit address made first,
   assert.deepEqual(meta(deposit), meta(makeDepositAddressIx({ payer, escrow: k.escrow, mint })))
   assert.equal(hex(create.data), hex(createIx({ buyer, payer, mint, terms: t }).data))
   assert.deepEqual(meta(create), meta(createIx({ buyer, payer, mint, terms: t })))
+  // transfer_checked: 12, the amount, the decimals; source, mint, destination, owner.
   assert.deepEqual(transfer.programId, TOKEN_PROGRAM_ID)
-  assert.equal(hex(transfer.data), '03' + '40420f0000000000')
+  assert.equal(hex(transfer.data), '0c' + '40420f0000000000' + '06')
   assert.deepEqual(meta(transfer), [
     [associatedTokenAddress(buyer, mint).toBase58(), false, true],
+    [mint.toBase58(), false, false],
     [k.vault.toBase58(), false, true],
     [buyer.toBase58(), true, false],
   ])
   assert.deepEqual(meta(release), meta(releaseToSellerIx({ keys: k })))
   const from = Keypair.generate().publicKey
-  assert.deepEqual(payInOneTap({ buyer, payer, mint, terms: t, from })[2].keys[0].pubkey, from)
+  assert.deepEqual(payInOneTap({ buyer, payer, token, terms: t, from })[2].keys[0].pubkey, from)
 
   // Funding in the same transaction without releasing: the same first three.
-  const funded = createAndFund({ buyer, payer, mint, terms: t })
+  const funded = createAndFund({ buyer, payer, token, terms: t })
   assert.deepEqual(funded.map(meta), ixs.slice(0, 3).map(meta))
-  assert.deepEqual(createAndFund({ buyer, payer, mint, terms: t, from })[2].keys[0].pubkey, from)
+  assert.deepEqual(createAndFund({ buyer, payer, token, terms: t, from })[2].keys[0].pubkey, from)
 
   // An invoice paid in one tap: the seller opened it, so no create; the deposit address made
   // first all the same, then the transfer of the amount and the buyer's release.
-  const inv = escrowAccount({ creator: 'seller', rentRecipient: seller })
+  const inv = invoiceAccount()
   const invKeys = keysOf(inv)
   assert.deepEqual(invKeys.escrow, escrowAddress(seller, 7n), "the invoice is at the seller's address")
-  const paid = payInvoiceInOneTap({ escrow: { ...inv, vault: vaultAddress(invKeys.escrow, mint) }, payer })
+  const paid = payInvoiceInOneTap({ escrow: inv, payer, token })
   assert.equal(paid.length, 3)
   const [invDeposit, invTransfer, invRelease] = paid
   assert.deepEqual(meta(invDeposit), meta(makeDepositAddressIx({ payer, escrow: invKeys.escrow, mint })))
   assert.equal(hex(invDeposit.data), '01', 'the idempotent create')
   assert.deepEqual(invTransfer.programId, TOKEN_PROGRAM_ID)
-  assert.equal(hex(invTransfer.data), '03' + '40420f0000000000')
+  assert.equal(hex(invTransfer.data), '0c' + '40420f0000000000' + '06')
   assert.deepEqual(meta(invTransfer), [
     [associatedTokenAddress(buyer, mint).toBase58(), false, true],
+    [mint.toBase58(), false, false],
     [vaultAddress(invKeys.escrow, mint).toBase58(), false, true],
     [buyer.toBase58(), true, false],
   ])
-  assert.deepEqual(meta(invRelease), meta(releaseToSellerIx({ keys: keysOf({ ...inv, vault: vaultAddress(invKeys.escrow, mint) }) })))
-  assert.deepEqual(meta(invRelease)[3], [seller.toBase58(), false, true], "the rent back to the seller, who opened it")
-  assert.deepEqual(payInvoiceInOneTap({ escrow: inv, payer, from })[1].keys[0].pubkey, from)
-  assert.throws(() => payInvoiceInOneTap({ escrow: { ...inv, status: 'funded' }, payer }), /already funded/)
-  assert.throws(() => payInvoiceInOneTap({ escrow: { ...inv, status: 'ended' }, payer }), /ended/)
+  assert.deepEqual(meta(invRelease), meta(releaseToSellerIx({ keys: invKeys })))
+  assert.deepEqual(meta(invRelease)[4], [seller.toBase58(), false, true], 'the rent back to the seller, who opened it')
+  assert.deepEqual(payInvoiceInOneTap({ escrow: inv, payer, token, from })[1].keys[0].pubkey, from)
+  assert.throws(() => payInvoiceInOneTap({ escrow: { ...inv, status: 'funded' }, payer, token }), /already funded/)
+  assert.throws(() => payInvoiceInOneTap({ escrow: { ...inv, status: 'ended' }, payer, token }), /ended/)
+  assert.throws(() => payInvoiceInOneTap({ escrow: inv, payer, token: { ...token, mint: stranger } }), /not the escrow's mint/)
 
   // The buyer's standard account, made when a way out pays the buyer.
   const make = makeRefundAddressIx({ payer, buyer, mint })
@@ -785,4 +798,205 @@ test('payouts: the whole balance, the seller\'s share of a split rounded down', 
   assert.throws(() => share(1n, 10_001), RangeError)
   assert.equal(funds(999_999n, 1_000_000n), false)
   assert.equal(funds(1_000_000n, 1_000_000n), true)
+})
+
+// ---------------------------------------------------------------------------------------------
+// Token-2022.
+// ---------------------------------------------------------------------------------------------
+
+/** A mint account's bytes: six decimals, initialized, and for Token-2022 its extensions as TLV. */
+function mintBytes(extensions: [number, Uint8Array][] | null): Uint8Array {
+  const base = Buffer.alloc(82)
+  base[44] = 6
+  base[45] = 1
+  if (!extensions) return new Uint8Array(base)
+  const parts: Buffer[] = [base, Buffer.alloc(165 - 82), Buffer.from([1])]
+  for (const [type, data] of extensions) {
+    const head = Buffer.alloc(4)
+    head.writeUInt16LE(type, 0)
+    head.writeUInt16LE(data.length, 2)
+    parts.push(head, Buffer.from(data))
+  }
+  return new Uint8Array(Buffer.concat(parts))
+}
+
+/** The transfer hook extension (14): its authority, then its program (the zero key for none). */
+function hookExtension(program: PublicKey | null): [number, Uint8Array] {
+  return [14, Buffer.concat([Keypair.generate().publicKey.toBuffer(), (program ?? PublicKey.default).toBuffer()])]
+}
+
+/** A hook's validation account: the execute discriminator, then its list of extra accounts. */
+function validationBytes(metas: { discriminator: number; config: Uint8Array; signer: boolean; writable: boolean }[]): Buffer {
+  const entries = metas.map((m) => {
+    const e = Buffer.alloc(35)
+    e[0] = m.discriminator
+    Buffer.from(m.config).copy(e, 1)
+    e[33] = m.signer ? 1 : 0
+    e[34] = m.writable ? 1 : 0
+    return e
+  })
+  const head = Buffer.alloc(16)
+  Buffer.from(sha256Prefix('spl-transfer-hook-interface:execute')).copy(head, 0)
+  head.writeUInt32LE(4 + 35 * entries.length, 8)
+  head.writeUInt32LE(entries.length, 12)
+  return Buffer.concat([head, ...entries])
+}
+
+function sha256Prefix(text: string): Uint8Array {
+  return discriminator(text.split(':')[0], text.split(':')[1])
+}
+
+/** A seed list: a literal, or bytes of an earlier account's data. */
+function literalSeed(bytes: string): Uint8Array {
+  const b = Buffer.alloc(32)
+  b[0] = 1
+  b[1] = bytes.length
+  Buffer.from(bytes).copy(b, 2)
+  return b
+}
+function literalThenAccountData(bytes: string, accountIndex: number, dataIndex: number, length: number): Uint8Array {
+  const b = Buffer.from(literalSeed(bytes))
+  b.set([4, accountIndex, dataIndex, length], 2 + bytes.length)
+  return b
+}
+
+/** A reader over a fixed set of accounts, as a `Connection` would read them. */
+function readerOf(accounts: Map<string, { owner: PublicKey; data: Uint8Array }>) {
+  return {
+    getAccountInfo: async (address: PublicKey) => {
+      const a = accounts.get(address.toBase58())
+      return a ? { owner: a.owner, data: Buffer.from(a.data), lamports: 1, executable: false } : null
+    },
+  }
+}
+
+test('a mint is read with its token program and decimals; wrapped SOL, a transfer fee and a non-transferable mint are refused', () => {
+  assert.deepEqual(tokenOf(mint, { owner: TOKEN_PROGRAM_ID, data: mintBytes(null) }), { mint, program: TOKEN_PROGRAM_ID, decimals: 6 })
+  const openUsdShaped = mintBytes([
+    [3, Buffer.alloc(32)], // mint close authority
+    [12, Buffer.alloc(32)], // permanent delegate
+    [6, Buffer.from([1])], // default account state
+    hookExtension(null),
+    [26, Buffer.alloc(33)], // pausable
+  ])
+  assert.deepEqual(tokenOf(mint, { owner: TOKEN_2022_PROGRAM_ID, data: openUsdShaped }), { mint, program: TOKEN_2022_PROGRAM_ID, decimals: 6 })
+  assert.throws(() => tokenOf(mint, { owner: TOKEN_2022_PROGRAM_ID, data: mintBytes([[1, Buffer.alloc(108)]]) }), /TransferFee/)
+  assert.throws(() => tokenOf(mint, { owner: TOKEN_2022_PROGRAM_ID, data: mintBytes([[16, Buffer.alloc(64)]]) }), /TransferFee/, 'the confidential fee too')
+  assert.throws(() => tokenOf(mint, { owner: TOKEN_2022_PROGRAM_ID, data: mintBytes([[9, Buffer.alloc(0)]]) }), /NonTransferable/)
+  // Interest-bearing (10) and scaled (25) mints are accepted: the escrow deals in raw amounts.
+  for (const [type, len] of [[10, 52], [25, 56]]) {
+    assert.deepEqual(tokenOf(mint, { owner: TOKEN_2022_PROGRAM_ID, data: mintBytes([[type, Buffer.alloc(len)]]) }).program, TOKEN_2022_PROGRAM_ID)
+  }
+  assert.throws(() => tokenOf(NATIVE_MINT, { owner: TOKEN_PROGRAM_ID, data: mintBytes(null) }), /NativeMint/)
+  assert.throws(() => tokenOf(NATIVE_MINT_2022, { owner: TOKEN_2022_PROGRAM_ID, data: mintBytes([]) }), /NativeMint/)
+  assert.throws(() => tokenOf(mint, { owner: PROGRAM_ID, data: mintBytes(null) }), /not a mint of either token program/)
+  assert.throws(() => createIx({ buyer, payer, mint: NATIVE_MINT_2022, terms: terms(), tokenProgram: TOKEN_2022_PROGRAM_ID }), /NativeMint/)
+})
+
+test('under Token-2022 every address is derived with it and every instruction names it; hook accounts go last, never signing', () => {
+  const t22 = TOKEN_2022_PROGRAM_ID
+  const escrow = escrowAddress(buyer, 7n)
+  const vault = vaultAddress(escrow, mint, t22)
+  assert.notDeepEqual(vault, vaultAddress(escrow, mint), 'another address than under the classic program')
+  assert.deepEqual(vault, getAssociatedTokenAddressSync(mint, escrow, true, t22, ASSOCIATED_TOKEN_PROGRAM_ID))
+  assert.deepEqual(refundAddress(buyer, mint, t22), getAssociatedTokenAddressSync(mint, buyer, false, t22, ASSOCIATED_TOKEN_PROGRAM_ID))
+  assert.deepEqual(payoutAddress(seller, mint, t22), getAssociatedTokenAddressSync(mint, seller, false, t22, ASSOCIATED_TOKEN_PROGRAM_ID))
+
+  const create = createIx({ buyer, payer, mint, terms: terms(), tokenProgram: t22 })
+  assert.deepEqual([create.keys[1].pubkey, create.keys[5].pubkey], [vault, t22])
+  const k = keysFor({ buyer, mint, terms: terms(), tokenProgram: t22 })
+  const account = escrowAccount({ vault, arbiter, status: 'funded', fundedAt: T0, timer: { days: 1, to: 'seller' } })
+  assert.deepEqual(keysOf(account, { tokenProgram: t22 }), k)
+  assert.throws(() => keysOf(account), /not under that token program/, 'the classic program named for a Token-2022 escrow')
+
+  const hook = [
+    { pubkey: stranger, isSigner: true, isWritable: false },
+    { pubkey: arbiter, isSigner: false, isWritable: true },
+  ]
+  const forwarded = [
+    [stranger.toBase58(), false, false],
+    [arbiter.toBase58(), false, true],
+  ]
+  const refund = refundAddress(buyer, mint, t22).toBase58()
+  const sellers = payoutAddress(seller, mint, t22).toBase58()
+  const head = [[escrow.toBase58(), false, true], [vault.toBase58(), false, true], [mint.toBase58(), false, false]]
+  const tail = [[buyer.toBase58(), false, true], [t22.toBase58(), false, false]]
+  assert.deepEqual(meta(releaseToSellerIx({ keys: k, hookAccounts: hook })), [...head, [sellers, false, true], ...tail, [buyer.toBase58(), true, false], ...forwarded])
+  assert.deepEqual(meta(releaseToBuyerIx({ keys: k, hookAccounts: hook })), [...head, [refund, false, true], ...tail, [seller.toBase58(), true, false], ...forwarded])
+  assert.deepEqual(meta(splitIx({ keys: k, sellerBps: 1, hookAccounts: hook })).slice(9), forwarded)
+  assert.deepEqual(meta(arbitrateIx({ keys: k, arbiter, sellerBps: 1, hookAccounts: hook })).slice(8), forwarded)
+  assert.deepEqual(meta(closeUnfundedIx({ keys: k, closer: buyer, hookAccounts: hook })).slice(7), forwarded)
+  const timer = timerReleaseIx({ account, tokenProgram: t22, hookAccounts: hook })
+  assert.deepEqual(meta(timer), [...head, [sellers, false, true], ...tail, ...forwarded])
+  const late = recoverLateIx({ account: { ...account, status: 'ended' }, caller: stranger, tokenProgram: t22, hookAccounts: hook })
+  assert.deepEqual([late.keys[3].pubkey, late.keys[6].pubkey], [refundAddress(buyer, mint, t22), t22])
+  assert.deepEqual(meta(late).slice(9), forwarded)
+
+  // A wallet's transfer_checked under Token-2022, hook accounts after its four.
+  const pay = transferIx({ from: payer, to: vault, owner: buyer, mint, amount: 5n, decimals: 6, tokenProgram: t22, hookAccounts: [{ pubkey: arbiter, isSigner: false, isWritable: true }] })
+  assert.deepEqual(pay.programId, t22)
+  assert.equal(hex(pay.data), '0c' + '0500000000000000' + '06')
+  assert.equal(pay.keys.length, 5)
+
+  // The one tap under Token-2022, with each transfer's hook accounts in place.
+  const token = { mint, program: t22, decimals: 6 }
+  const [deposit, , fund, release] = payInOneTap({ buyer, payer, token, terms: terms(), hookAccounts: { fund: [hook[1]], release: [hook[0]] } })
+  assert.deepEqual([deposit.keys[1].pubkey, deposit.keys[5].pubkey], [vault, t22])
+  assert.deepEqual(fund.keys.map((m) => m.pubkey).slice(4), [arbiter])
+  assert.deepEqual(meta(release).slice(7), [[stranger.toBase58(), false, false]])
+})
+
+test('a hook\'s accounts are resolved by spl-token\'s resolver: none without a hook program, each once, never signing', async () => {
+  const t22 = TOKEN_2022_PROGRAM_ID
+  const hookProgram = Keypair.generate().publicKey
+  const listed = Keypair.generate().publicKey
+  const k = keysFor({ buyer, mint, terms: terms(), tokenProgram: t22 })
+  const validation = PublicKey.findProgramAddressSync([Buffer.from('extra-account-metas'), mint.toBuffer()], hookProgram)[0]
+  const counter = PublicKey.findProgramAddressSync([Buffer.from('counter')], hookProgram)[0]
+  const tokenAccount = (owner: PublicKey) => {
+    const d = Buffer.alloc(165)
+    mint.toBuffer().copy(d, 0)
+    owner.toBuffer().copy(d, 32)
+    d[108] = 1
+    return { owner: t22, data: new Uint8Array(d) }
+  }
+  const accounts = new Map<string, { owner: PublicKey; data: Uint8Array }>([
+    [mint.toBase58(), { owner: t22, data: mintBytes([hookExtension(hookProgram)]) }],
+    [
+      validation.toBase58(),
+      {
+        owner: hookProgram,
+        data: validationBytes([
+          { discriminator: 0, config: listed.toBytes(), signer: true, writable: false },
+          { discriminator: 1, config: literalSeed('counter'), signer: false, writable: true },
+          { discriminator: 1, config: literalThenAccountData('wallet', 2, 32, 32), signer: false, writable: false },
+        ]),
+      },
+    ],
+    [payoutAddress(seller, mint, t22).toBase58(), tokenAccount(seller)],
+    [refundAddress(buyer, mint, t22).toBase58(), tokenAccount(buyer)],
+  ])
+  const reader = readerOf(accounts)
+  const entry = (owner: PublicKey) => PublicKey.findProgramAddressSync([Buffer.from('wallet'), owner.toBuffer()], hookProgram)[0]
+
+  const both = await hookAccounts({ reader, mint, transfers: payoutTransfers(k, ['seller', 'buyer']) })
+  const byKey = new Map(both.map((m) => [m.pubkey.toBase58(), m]))
+  assert.equal(both.length, 6, 'the program, the listed key, the counter, an entry per destination owner, the validation account')
+  for (const [key, writable] of [[hookProgram, false], [listed, false], [counter, true], [entry(seller), false], [entry(buyer), false], [validation, false]] as const) {
+    assert.deepEqual([byKey.get(key.toBase58())?.isWritable, byKey.get(key.toBase58())?.isSigner], [writable, false], key.toBase58())
+  }
+
+  // A payment into a deposit account the same transaction makes: read as planned.
+  const fund = { source: payer, destination: k.vault, authority: buyer }
+  await assert.rejects(hookAccounts({ reader, mint, transfers: [fund] }), 'the deposit account is not on the chain yet')
+  const planned = await hookAccounts({ reader, mint, transfers: [fund], planned: [{ address: k.vault, owner: k.escrow, mint, tokenProgram: t22 }] })
+  assert.ok(planned.some((m) => m.pubkey.equals(entry(k.escrow))))
+
+  // No hook program named, a classic mint, or no mint: nothing to forward.
+  accounts.set(mint.toBase58(), { owner: t22, data: mintBytes([hookExtension(null)]) })
+  assert.deepEqual(await hookAccounts({ reader, mint, transfers: payoutTransfers(k, ['seller']) }), [])
+  accounts.set(mint.toBase58(), { owner: TOKEN_PROGRAM_ID, data: mintBytes(null) })
+  assert.deepEqual(await hookAccounts({ reader, mint, transfers: payoutTransfers(k, ['seller']) }), [])
+  accounts.delete(mint.toBase58())
+  assert.deepEqual(await hookAccounts({ reader, mint, transfers: payoutTransfers(k, ['seller']) }), [])
 })

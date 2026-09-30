@@ -5,11 +5,33 @@
   "earlier": [
     {
       "programId": "GWyKGgoRg2g3kpKNgsXBWS1ayHTHHzwbtLJW4XGVP2RW",
-      "what": "the free list of badges whose lines grew by add_proof, key label registry-badges-program; untouched. Its record is this file at commit fdb16ea."
+      "what": "the free list of badges whose lines grew by add_proof, key label registry-badges-program; closed on 2026-09-30 (`closed`). Its record is this file at commit fdb16ea.",
+      "closed": {
+        "what": "closed: superseded by Hyh5\u2026, its program data's deposit returned to the deploy key. Its one line stays as an account no program owns any more, readable, its rent locked for good.",
+        "date": "2026-09-30",
+        "signature": "5ZqZT5QboYkcm6paacEqk3pZVexZcEzwXsBAya2nyvtZNUYf1zEMcZ1kbphsT1kfimefEBSTqVoJMsUgJ8x4yL4Y",
+        "slot": 506034576,
+        "programDataLamports": 959373240,
+        "returnedToDeployKey": 959368240,
+        "fee": 5000,
+        "strandedAccounts": 1,
+        "strandedLamports": 1671320
+      }
     },
     {
       "programId": "8sUyd9JXRGEUqf2hYVnLCybi74549VG27dAK6YvbbU3i",
-      "what": "the first registry, with lists, a code tree and a fee; untouched. Its record is devnet/devnet.json."
+      "what": "the first registry, with lists, a code tree and a fee; closed on 2026-09-30 (`closed`). Its record is devnet/devnet.json.",
+      "closed": {
+        "what": "closed: superseded by Hyh5\u2026, its program data's deposit returned to the deploy key. Its config, list, code tree and codes stay as accounts no program owns any more, readable, their rent locked for good.",
+        "date": "2026-09-30",
+        "signature": "3Nzwf1R8dhDQfMavjrRhYhNu941o4KAfoicYeerytR7rp5uRoTekVmZmxWPrPg7L3foUWVPcCnShyVe2C8podepG",
+        "slot": 506034586,
+        "programDataLamports": 1549913080,
+        "returnedToDeployKey": 1549908080,
+        "fee": 5000,
+        "strandedAccounts": 7,
+        "strandedLamports": 42113200
+      }
     }
   ],
   "registry": {

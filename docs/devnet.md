@@ -4,6 +4,25 @@ Devnet is Solana's practice network: test SOL from a faucet, and no real money. 
 test-only except the program ids and this record. `devnet/devnet.json` holds the same record in the
 form the scripts and the smoke tests read. Nothing is shipped, and devnet is not mainnet.
 
+## Status (2026-09-30): three programs run; three superseded ones closed
+
+| Runs on devnet | Program id | Its record |
+|---|---|---|
+| Escrow, v1 | `3vAVLwiwFkCUG4AHV3gK3t15HoyRSuKNEuBFvvy9CbeR` | `devnet/devnet.json` |
+| Escrow, v2 (both token programs; upgraded in place once) | `FA6ZodkyhMDj9yjzY27dk8JDCtcHnJx8mr45Mx9TfKg8` | `escrow/v2/devnet/devnet.json` |
+| Registry (lines) | `Hyh5Lt1ErzYV3pF9ZkFWTdjhE2wwTuXnPMVgzCKEv9hf` | `registry/devnet/devnet.json` |
+
+Closed on 2026-09-30, each program data's deposit returned to the deploy key; the accounts each
+owned stay, readable, their rent locked for good, and a closed id can never hold a program again:
+
+| Closed | Program id | Returned | Left in its accounts | Its record |
+|---|---|---|---|---|
+| The first registry, below | `8sUyd9JXRGEUqf2hYVnLCybi74549VG27dAK6YvbbU3i` | 1.549908080 SOL | 7 accounts, 0.042113200 SOL | `devnet/devnet.json`, `registry.closed` |
+| The registry of badges | `GWyKGgoRg2g3kpKNgsXBWS1ayHTHHzwbtLJW4XGVP2RW` | 0.959368240 SOL | 1 account, 0.001671320 SOL | `registry/devnet/devnet.json`, `earlier` |
+| The first escrow v2 | `B3p13G8xvNvUrAnaXg9AUtwffBAUHcp6XoMwGV2jKPi7` | 1.482039280 SOL | 2 accounts, 0.004399280 SOL | `escrow/v2/devnet/devnet.json`, `earlier` |
+
+Everything below this section describes 2026-09-25, when the first registry ran.
+
 ## Status (2026-09-25): both programs deployed, a real badge and two real deals
 
 **On devnet now:**

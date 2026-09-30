@@ -79,9 +79,12 @@ pub struct Escrow {
     pub seller: Pubkey,
     /// The zero key when no arbiter was named.
     pub arbiter: Pubkey,
+    /// A mint of the classic SPL Token program or of Token-2022; whichever owns it is the token
+    /// program every instruction here names. Not stored: a mint's owner never changes.
     pub mint: Pubkey,
-    /// The deposit account: this escrow's associated token account for `mint`. Derivable from
-    /// the escrow address alone, and recorded so a reader need not derive it.
+    /// The deposit account: this escrow's associated token account for `mint`, under the mint's
+    /// token program. Derivable from the escrow address and the mint, and recorded so a reader
+    /// need not derive it.
     pub vault: Pubkey,
     /// Where the deposit account's rent goes at every ending, and both rents at `close_unfunded`:
     /// the creator's key, always, whoever fronted the rent.
@@ -154,17 +157,19 @@ impl Escrow {
         }
     }
 
-    /// The buyer's refund address: the buyer's associated token account for the mint, the one
-    /// account any payout to the buyer lands in. Computed from two keys fixed at creation, so
-    /// nothing more is stored, and nobody who sends an instruction can name another.
-    pub fn refund_address(&self) -> Pubkey {
-        anchor_spl::associated_token::get_associated_token_address(&self.buyer, &self.mint)
+    /// The buyer's refund address: the buyer's associated token account for the mint, under the
+    /// mint's token program, the one account any payout to the buyer lands in. Computed from two
+    /// keys fixed at creation and the program that owns the mint (every caller has checked
+    /// `token_program` is it), so nothing more is stored, and nobody who sends an instruction
+    /// can name another.
+    pub fn refund_address(&self, token_program: &Pubkey) -> Pubkey {
+        anchor_spl::associated_token::get_associated_token_address_with_program_id(&self.buyer, &self.mint, token_program)
     }
 
     /// The seller's payout address: the seller's associated token account for the mint, the one
     /// account any payout to the seller lands in. The same rule as the buyer's.
-    pub fn payout_address(&self) -> Pubkey {
-        anchor_spl::associated_token::get_associated_token_address(&self.seller, &self.mint)
+    pub fn payout_address(&self, token_program: &Pubkey) -> Pubkey {
+        anchor_spl::associated_token::get_associated_token_address_with_program_id(&self.seller, &self.mint, token_program)
     }
 
     /// When the timer is due: `timer_days` whole days after the funding was marked. `None` with no

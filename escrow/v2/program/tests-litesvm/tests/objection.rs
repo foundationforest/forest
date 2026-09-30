@@ -87,7 +87,7 @@ fn an_objection_from_the_moment_the_timer_is_due_is_refused() {
                 Side::Buyer => h.refund(),
                 Side::Seller => h.seller_tokens,
             };
-            let release = timer_release_ix(escrow, vault, to_account, h.buyer.pubkey());
+            let release = timer_release_ix(escrow, vault, h.mint, to_account, h.buyer.pubkey());
             let err = h.send(&[object_ix(escrow, who.pubkey()), release.clone()], &[&who]).expect_err("object, then the timer");
             assert!(err.contains("TimerDue"), "{err}");
             let err = h.send(&[release, object_ix(escrow, who.pubkey())], &[&who]).expect_err("the timer, then object");

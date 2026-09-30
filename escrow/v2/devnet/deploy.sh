@@ -1,24 +1,26 @@
 #!/usr/bin/env bash
-# Build the escrow, v2, for devnet and deploy it at its own address, beside v1, which it never
-# touches: v1's program id, its keypair and devnet/devnet.json are only read.
+# Build the escrow, v2, for devnet and deploy it at its own address, beside v1 and the earlier v2
+# deploy, which it never touches: their program ids, keypairs and records are only read.
 #
 #   FOREST_DEVNET_SEED=<the phrase> escrow/v2/devnet/deploy.sh
 #
 # 1. Keys. The v2 program id is the key devnet/keys.sh's recipe derives from the phrase under the
-#    new label `escrow-v2-program`:
+#    label `escrow-v2-program-2` (the first v2 deploy, classic tokens only, used
+#    `escrow-v2-program`; it stays where it is, never upgraded, recorded under `earlier`):
 #
-#      seed = PBKDF2-HMAC-SHA256(phrase NFKD-trimmed-single-spaced, "forest-devnet:escrow-v2-program",
+#      seed = PBKDF2-HMAC-SHA256(phrase NFKD-trimmed-single-spaced, "forest-devnet:escrow-v2-program-2",
 #                                600,000 iterations, 32 bytes);  key = ed25519 from that seed
 #
 #    It and the deploy key (label `deploy`, which pays and keeps the upgrade authority, as for v1)
 #    are written to FOREST_DEVNET_KEYS (default ~/.forest-devnet/keys), never under the repo. The
-#    deploy key must be the one devnet/devnet.json names, and the v2 id must be neither program
-#    that file names.
+#    deploy key must be the one devnet/devnet.json names, and the v2 id must be none of the
+#    programs that file and this record's `earlier` name.
 # 2. Build. escrow/v2/program's Cargo.toml, Cargo.lock and src are copied into
 #    escrow/v2/devnet/target/ (ignored), `declare_id!` alone is replaced with the v2 id, checked to
 #    appear exactly once, and the copy is built for SBPF v3.
-# 3. Deploy, unless the id already holds a program: the exact cost computed first as
-#    devnet/deploy.sh computes it, refused (exit 3) if the deploy key holds less. Writes go over RPC.
+# 3. Deploy a fresh id, or upgrade it in place when it holds other bytes (the same bytes are left
+#    as they are): the exact cost computed first as devnet/deploy.sh computes it, refused (exit 3)
+#    if the deploy key holds less. Writes go over RPC.
 # 4. Check the deployed bytes are the built ones, and record everything public in
 #    escrow/v2/devnet/devnet.json.
 #
@@ -43,10 +45,11 @@ mkdir -p "$keys" "$out"
 chmod 700 "$keys"
 
 # 1. Keys.
-node - "$keys" "$base" <<'JS'
+label=escrow-v2-program-2
+node - "$keys" "$base" "$record" "$label" <<'JS'
 const crypto = require('crypto')
 const fs = require('fs')
-const [dir, base] = process.argv.slice(2)
+const [dir, base, own, v2label] = process.argv.slice(2)
 const phrase = process.env.FOREST_DEVNET_SEED.normalize('NFKD').trim().split(/\s+/).join(' ')
 const PKCS8_ED25519 = Buffer.from('302e020100300506032b657004220420', 'hex')
 const ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
@@ -59,7 +62,7 @@ function base58(bytes) {
 }
 const record = JSON.parse(fs.readFileSync(base, 'utf8'))
 const pk = {}
-for (const label of ['deploy', 'escrow-v2-program']) {
+for (const label of ['deploy', v2label]) {
   const seed = crypto.pbkdf2Sync(Buffer.from(phrase, 'utf8'), Buffer.from(`forest-devnet:${label}`, 'utf8'), 600_000, 32, 'sha256')
   const priv = crypto.createPrivateKey({ key: Buffer.concat([PKCS8_ED25519, seed]), format: 'der', type: 'pkcs8' })
   const pub = crypto.createPublicKey(priv).export({ format: 'der', type: 'spki' }).subarray(-32)
@@ -71,11 +74,12 @@ for (const label of ['deploy', 'escrow-v2-program']) {
   pk[label] = base58(pub)
 }
 if (pk.deploy !== record.keys.deploy) throw new Error(`the phrase gives deploy key ${pk.deploy}, not ${record.keys.deploy}: another phrase`)
-const id = pk['escrow-v2-program']
-if (id === record.escrow.programId || id === record.registry.programId) throw new Error('the v2 id is one devnet/devnet.json already names')
+const id = pk[v2label]
+const earlier = fs.existsSync(own) ? (JSON.parse(fs.readFileSync(own, 'utf8')).earlier ?? []).map((e) => e.escrow.programId) : []
+if ([record.escrow.programId, record.registry.programId, ...earlier].includes(id)) throw new Error('the v2 id is one already deployed for another program or version')
 console.log(`escrow v2 program id ${id}, deploy key ${pk.deploy}`)
 JS
-id=$(solana-keygen pubkey "$keys/escrow-v2-program.json")
+id=$(solana-keygen pubkey "$keys/$label.json")
 cli=(--url "$rpc" --keypair "$keys/deploy.json")
 deployer=$(solana-keygen pubkey "$keys/deploy.json")
 
@@ -104,14 +108,26 @@ rm -f "$out/program/target/deploy/"*-keypair.json
 built=$(sha256sum <"$so" | cut -d' ' -f1)
 echo "built $(wc -c <"$so") bytes, SBPF v$(node -e "process.stdout.write(String(require('fs').readFileSync(process.argv[1]).readUInt32LE(0x30)))" "$so"), sha256 $built"
 
-# 3. Deploy.
-deployed_now=false
-if solana program show "$id" "${cli[@]}" >/dev/null 2>&1; then
-  echo "already deployed at $id"
-else
-  cost=$(node - "$rpc" "$so" <<'JS'
+# 3. Deploy, or upgrade in place. A fresh id is deployed; an id already holding these bytes is left
+#    as it is; an id holding other bytes is upgraded at the same address, its program data extended
+#    first if the build is longer (the CLI's auto-extend). Either way the cost is computed first
+#    and refused (exit 3) if the deploy key holds less. An upgrade holds a buffer's rent while it
+#    writes, which comes back at the upgrade; it spends the fees and any extension's rent.
+mode=deploy
+if solana program show "$id" "${cli[@]}" --output json >"$out/before.json" 2>/dev/null; then
+  solana program dump "$id" "$out/before.so" "${cli[@]}" >/dev/null
+  if [ "$(head -c "$(wc -c <"$so")" "$out/before.so" | sha256sum | cut -d' ' -f1)" = "$built" ]; then
+    mode=none
+    echo "already deployed at $id, these bytes"
+  else
+    mode=upgrade
+    echo "deployed at $id with other bytes: upgrading in place"
+  fi
+fi
+if [ "$mode" != none ]; then
+  cost=$(node - "$rpc" "$so" "$mode" "$out/before.json" <<'JS'
 const fs = require('fs')
-const [rpc, so] = process.argv.slice(2)
+const [rpc, so, mode, beforePath] = process.argv.slice(2)
 const bytes = fs.readFileSync(so)
 const CHUNK = 1012 // Solana CLI 4.2.2: 1,232 minus an empty write transaction's 219 bytes, minus 1
 let writes = 0
@@ -124,22 +140,40 @@ async function rent(size) {
 }
 ;(async () => {
   const programDataRent = await rent(45 + bytes.length)
-  const programRent = await rent(36)
-  const fees = 10_000 + 5_000 * writes + 10_000
-  console.log(JSON.stringify({ bytes: bytes.length, programDataRent, programRent, writes, fees, total: programDataRent + programRent + fees }))
+  if (mode === 'deploy') {
+    const programRent = await rent(36)
+    const fees = 10_000 + 5_000 * writes + 10_000
+    console.log(JSON.stringify({ bytes: bytes.length, programDataRent, programRent, writes, fees, total: programDataRent + programRent + fees, spend: programDataRent + programRent + fees }))
+    return
+  }
+  // The buffer (37 bytes of header), made with the payer and the buffer key signing; the writes;
+  // the upgrade. If the build is longer than the program data holds, Solana CLI 4.2.2 extends it
+  // in the upgrade's own transaction by at least 10,240 bytes (on 2026-09-30 it added 10,240 for
+  // 768 needed), and that rent stays in the program data, back only if the program is closed.
+  const before = JSON.parse(fs.readFileSync(beforePath, 'utf8'))
+  const bufferRent = await rent(37 + bytes.length)
+  const extendBytes = bytes.length > before.dataLen ? Math.max(bytes.length - before.dataLen, 10_240) : 0
+  const extend = extendBytes > 0 ? Math.max(0, (await rent(45 + before.dataLen + extendBytes)) - before.lamports) : 0
+  const fees = 10_000 + 5_000 * writes + 5_000
+  console.log(JSON.stringify({ bytes: bytes.length, previousBytes: before.dataLen, extendBytes, bufferRent, extendRent: extend, writes, fees, total: bufferRent + extend + fees, spend: extend + fees }))
 })()
 JS
 )
   need=$(node -e "process.stdout.write(String(JSON.parse(process.argv[1]).total))" "$cost")
+  spend=$(node -e "process.stdout.write(String(JSON.parse(process.argv[1]).spend))" "$cost")
   have=$(solana balance "$deployer" "${cli[@]}" --lamports | cut -d' ' -f1)
   echo "cost $cost; the deploy key holds $have lamports"
-  [ "$have" -ge "$need" ] || { echo "the deploy key holds less than the deploy costs; nothing deployed" >&2; exit 3; }
-  solana program deploy "${cli[@]}" --upgrade-authority "$keys/deploy.json" --program-id "$keys/escrow-v2-program.json" \
-    --use-rpc --output json "$so" >"$out/deploy.json"
+  [ "$have" -ge "$need" ] || { echo "the deploy key holds less than the $mode needs; nothing sent" >&2; exit 3; }
+  if [ "$mode" = deploy ]; then
+    solana program deploy "${cli[@]}" --upgrade-authority "$keys/deploy.json" --program-id "$keys/$label.json" \
+      --use-rpc --output json "$so" >"$out/deploy.json"
+  else
+    solana program deploy "${cli[@]}" --upgrade-authority "$keys/deploy.json" --program-id "$id" \
+      --use-rpc --output json "$so" >"$out/deploy.json"
+  fi
   after=$(solana balance "$deployer" "${cli[@]}" --lamports | cut -d' ' -f1)
   printf '{"cost":%s,"balanceBefore":%s,"balanceAfter":%s}\n' "$cost" "$have" "$after" >"$out/spend.json"
-  echo "spent $((have - after)) lamports; computed $need"
-  deployed_now=true
+  echo "spent $((have - after)) lamports; computed $spend"
 fi
 
 # 4. Check and record.
@@ -149,11 +183,11 @@ deployed=$(head -c "$(wc -c <"$so")" "$out/dumped.so" | sha256sum | cut -d' ' -f
 [ "$built" = "$deployed" ] || { echo "the deployed bytes are not the built ones" >&2; exit 1; }
 echo "deployed bytes match the build ($built)"
 
-node - "$record" "$out" "$id" "$built" "$so" "$deployed_now" <<'JS'
+node - "$record" "$out" "$id" "$built" "$so" "$mode" <<'JS'
 const fs = require('fs')
-const [recordPath, out, id, sha, so, now] = process.argv.slice(2)
+const [recordPath, out, id, sha, so, mode] = process.argv.slice(2)
 const record = fs.existsSync(recordPath) ? JSON.parse(fs.readFileSync(recordPath, 'utf8')) : {
-  note: 'The devnet deploy of the escrow, v2, beside v1 (devnet/devnet.json), which it does not touch. Public keys, addresses and signatures only. The program id is derived from the devnet phrase under the label escrow-v2-program; the other keys are the ones devnet/devnet.json names. Written by escrow/v2/devnet/deploy.sh and escrow/v2/client/scripts/devnet.ts.',
+  note: 'The devnet deploy of the escrow, v2, beside v1 (devnet/devnet.json), which it does not touch. Public keys, addresses and signatures only. The program id is derived from the devnet phrase under the label escrow-v2-program-2; the other keys are the ones devnet/devnet.json names. Written by escrow/v2/devnet/deploy.sh and escrow/v2/client/scripts/devnet.ts.',
   cluster: 'devnet',
   rpc: 'https://api.devnet.solana.com',
 }
@@ -166,13 +200,20 @@ p.lastDeploySlot = show.lastDeploySlot
 p.soSha256 = sha
 p.soBytes = fs.statSync(so).size
 p.sbpfVersion = `v${fs.readFileSync(so).readUInt32LE(0x30)}`
-if (now === 'true') {
+if (mode !== 'none') {
   const d = JSON.parse(fs.readFileSync(`${out}/deploy.json`, 'utf8'))
   const s = JSON.parse(fs.readFileSync(`${out}/spend.json`, 'utf8'))
-  p.deploySignature = d.signature
-  p.deployCost = { ...s.cost, balanceBefore: s.balanceBefore, balanceAfter: s.balanceAfter, spent: s.balanceBefore - s.balanceAfter }
+  const cost = { ...s.cost, balanceBefore: s.balanceBefore, balanceAfter: s.balanceAfter, spent: s.balanceBefore - s.balanceAfter }
   record.transactions ??= []
-  record.transactions.push({ program: 'escrow-v2', what: `deploy: the escrow, v2 (SBPF ${p.sbpfVersion}), upgrade authority kept on the deploy key`, signature: d.signature })
+  if (mode === 'deploy') {
+    p.deploySignature = d.signature
+    p.deployCost = cost
+    record.transactions.push({ program: 'escrow-v2', what: `deploy: the escrow, v2 (SBPF ${p.sbpfVersion}), upgrade authority kept on the deploy key`, signature: d.signature })
+  } else {
+    p.upgrades ??= []
+    p.upgrades.push({ slot: show.lastDeploySlot, signature: d.signature, soSha256: sha, soBytes: p.soBytes, cost })
+    record.transactions.push({ program: 'escrow-v2', what: `upgrade in place: the escrow, v2, now ${p.soBytes} bytes (sha256 ${sha.slice(0, 16)}…), same address`, signature: d.signature })
+  }
 }
 fs.writeFileSync(recordPath, JSON.stringify(record, null, 2) + '\n')
 JS
