@@ -1,6 +1,6 @@
 // Live, over the internet: a profile's signed host list, put on a public Pkarr relay that nobody
 // runs for Forest, read back byte for byte, resolved through the official client, and found by
-// other public relays, which fetch from the Mainline DHT. From PR #35, on this lab's discovery
+// other public relays, which fetch from the Mainline DHT. From PR #35, on this folder's discovery
 // code. Not part of `npm test`: run `npm run test:net` (PKARR_RELAY and PKARR_OTHER_RELAYS pick
 // other relays).
 

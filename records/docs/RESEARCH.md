@@ -1,5 +1,7 @@
 # Research notes: what exists for Forest's data layer
 
+*Written in the lab (`lab/protocol/`, PR #36) and kept as written.*
+
 Read on 29 September 2026, from primary sources where they could be reached (specs, repositories,
 the authors' own posts). Anything taken from a secondary source, or not checked, says so. Nothing
 here is Forest's design; that is `SPEC.md`, and the choice is argued in `REPORT.md`.

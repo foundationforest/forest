@@ -1,5 +1,7 @@
 # Forest's data protocol: report
 
+*Written in the lab (`lab/protocol/`, PR #36) and adopted on 30 September 2026 as `records/`. Kept as written; paths below are the lab's.*
+
 Lab exploration, 29 September 2026, second round. Nothing here is shipped, and nothing outside
 `lab/protocol/` was changed. Claims marked **verified** name the test that shows them (`npm test`:
 81 tests, all passing; `npm run test:net`: 1 live test, passing). Everything else is marked

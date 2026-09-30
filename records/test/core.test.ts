@@ -11,10 +11,14 @@ import { ownerEntry } from '../src/write.ts'
 import { SEED, T0, VECTORS, alice, aliceBuyer, offerBody, profileBody } from './fixtures.ts'
 
 describe('keys', () => {
-  test('the seed and every profile key are exactly what keys/ pins: the profile id is its wallet', () => {
+  test('the seed and every profile key are exactly what keys/ pins: the profile id is its wallet', async () => {
     assert.equal(hex.encode(SEED), VECTORS.seed)
-    assert.equal(alice.address, VECTORS.profiles[0]!.wallet)
-    assert.equal(aliceBuyer.address, VECTORS.profiles[1]!.wallet)
+    for (const [key, pinned] of [alice, aliceBuyer].map((k, i) => [k, VECTORS.profiles[i]!] as const)) {
+      assert.equal(key.index, pinned.index)
+      assert.equal(key.did, pinned.did)
+      assert.equal(key.address, pinned.wallet)
+      assert.deepEqual(await boxKey(SEED, key.index), pinned.box)
+    }
     assert.equal(addressFromDid(alice.did), alice.address)
     assert.match(alice.did, /^did:key:z6Mk/)
   })

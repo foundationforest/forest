@@ -1,0 +1,13 @@
+{
+  "name": "Ana Ribeiro",
+  "market": "online-tutors",
+  "role": "seller",
+  "photo": {
+    "sha256": "5e3b1f3c2a8a8f2b6c4e9d0a7b1c3d5e7f9a0b2c4d6e8f0a1b3c5d7e9f1a3b5c",
+    "mimeType": "image/jpeg",
+    "size": 20
+  },
+  "contact": "Message me here first; video calls after a first reply.",
+  "about": "Portuguese and Spanish tutor. Ten years teaching adults online.",
+  "createdAt": "2026-09-14T10:00:00Z"
+}

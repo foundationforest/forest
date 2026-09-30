@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "review",
+  "description": "A review of another profile, at the path `review/<id>` in the reviewer's own profile. Only who it is about is required: a review can be as thin as pointing at a person. What is missing weighs less; nothing is refused. Its market is the market of the profile it is about, and that market may add fields.",
+  "type": "object",
+  "required": ["subject", "createdAt"],
+  "properties": {
+    "subject": {
+      "type": "string",
+      "description": "The reviewed profile's name: its did:key.",
+      "maxLength": 64,
+      "pattern": "^did:key:z[1-9A-HJ-NP-Za-km-z]+$"
+    },
+    "ratings": {
+      "$ref": "#/$defs/ratings"
+    },
+    "text": {
+      "type": "string",
+      "maxLength": 3000
+    },
+    "media": {
+      "type": "array",
+      "description": "Optional. Photos and short videos of the work.",
+      "items": {
+        "$ref": "#/$defs/media"
+      },
+      "maxItems": 10
+    },
+    "dealId": {
+      "type": "string",
+      "description": "The deal this review is about: the escrow account's address (base58 of 32 bytes) when an escrow exists, else 32 random bytes as lowercase hex, chosen when the deal began. Two reviews across one deal id are the two sides' receipts. Optional; an index weighs a review without one, or without evidence under it, near zero.",
+      "minLength": 32,
+      "maxLength": 64,
+      "pattern": "^([0-9a-f]{64}|[1-9A-HJ-NP-Za-km-z]{32,44})$"
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "$defs": {
+    "rating": {
+      "type": "string",
+      "description": "From \"1\" to \"10\", with at most one decimal (\"8.5\"): decimal text, since an entry holds no fractional numbers.",
+      "pattern": "^(10(\\.0)?|[1-9](\\.[0-9])?)$"
+    },
+    "ratings": {
+      "type": "object",
+      "description": "Optional. Ratings by name. Any name may be used; overall by convention, and a market file suggests others.",
+      "properties": {
+        "overall": {
+          "$ref": "#/$defs/rating",
+          "description": "The whole deal."
+        }
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/rating"
+      }
+    },
+    "media": {
+      "type": "object",
+      "description": "A photo or a short video, named by the SHA-256 of its bytes.",
+      "required": ["sha256", "mimeType", "size"],
+      "additionalProperties": false,
+      "properties": {
+        "sha256": {
+          "type": "string",
+          "description": "SHA-256 of the file, lowercase hex.",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "mimeType": {
+          "enum": ["image/png", "image/jpeg", "video/mp4"]
+        },
+        "size": {
+          "type": "integer",
+          "description": "Bytes.",
+          "minimum": 0,
+          "maximum": 50000000
+        }
+      }
+    }
+  }
+}

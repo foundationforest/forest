@@ -8,7 +8,7 @@ import { keyFromSecret, profileKey, seedFromPrf } from '../src/keys.ts'
 export const VECTORS = JSON.parse(readFileSync(new URL('../../keys/test/vectors.json', import.meta.url), 'utf8')) as {
   prf: string
   seed: string
-  profiles: Array<{ index: number; wallet: string }>
+  profiles: Array<{ index: number; did: string; wallet: string; box: { identity: string; recipient: string } }>
 }
 
 /** The keys recipe's fixed test seed: a stand-in for a passkey, in Node. */

@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "proof",
+  "description": "A proof held by the profile, at the path `proof/<id>`. A credential is one kind of proof: one copy of a W3C verifiable credential issued to the profile.",
+  "type": "object",
+  "required": ["issuer", "credential", "createdAt"],
+  "properties": {
+    "issuer": {
+      "type": "string",
+      "description": "The issuer's DID.",
+      "maxLength": 2048,
+      "pattern": "^did:[a-z]+:[a-zA-Z0-9._:%-]*[a-zA-Z0-9._-]$"
+    },
+    "credential": {
+      "type": "string",
+      "description": "The verifiable credential as issued, unchanged: its JSON text, or its compact form (a JWT). Text, because a credential's own keys, such as @context, are not keys an entry allows."
+    },
+    "createdAt": {
+      "type": "string",
+      "description": "When this copy was stored.",
+      "format": "date-time"
+    }
+  }
+}

@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "profile",
+  "description": "A profile's public card, at the path `profile`: one per profile. A profile lives in one market, as one side of it; a badge counts for it only under market/role. Markets may add fields.",
+  "type": "object",
+  "required": ["name", "market", "role", "createdAt"],
+  "properties": {
+    "market": {
+      "type": "string",
+      "description": "The one market this profile lives in, as the markets directory spells it.",
+      "maxLength": 64
+    },
+    "role": {
+      "type": "string",
+      "description": "Its side in that market: seller or buyer in a two-sided market, peer in a one-sided one.",
+      "maxLength": 64
+    },
+    "name": {
+      "type": "string",
+      "description": "Display name.",
+      "maxLength": 64
+    },
+    "photo": {
+      "$ref": "#/$defs/photo"
+    },
+    "contact": {
+      "type": "string",
+      "description": "How to reach this profile, in the owner's words.",
+      "maxLength": 256
+    },
+    "about": {
+      "type": "string",
+      "description": "What I do.",
+      "maxLength": 1000
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "$defs": {
+    "photo": {
+      "type": "object",
+      "description": "Profile photo, named by the SHA-256 of its bytes.",
+      "required": ["sha256", "mimeType", "size"],
+      "additionalProperties": false,
+      "properties": {
+        "sha256": {
+          "type": "string",
+          "description": "SHA-256 of the file, lowercase hex.",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "mimeType": {
+          "enum": ["image/png", "image/jpeg"]
+        },
+        "size": {
+          "type": "integer",
+          "description": "Bytes.",
+          "minimum": 0,
+          "maximum": 1000000
+        }
+      }
+    }
+  }
+}

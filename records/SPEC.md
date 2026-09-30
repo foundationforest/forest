@@ -1,7 +1,8 @@
-# Forest data protocol, lab draft v1
+# Forest data protocol, v1
 
-**Status:** a lab draft for a decision. Nothing here is shipped. The prototype in this folder
-implements every MUST below, and `test/` checks it. MUST, SHOULD and MAY are used as in RFC 2119.
+**Status:** the adopted design (30 September 2026), first drafted in the lab (`docs/REPORT.md`).
+Nothing here is shipped. The library in this folder implements every MUST below, and `test/`
+checks it. MUST, SHOULD and MAY are used as in RFC 2119.
 
 One idea: a profile is a public key; everything it says is a small signed JSON entry; hosts are
 plain HTTPS stores that check signatures and keep entries in the order they took them in; at each
@@ -105,6 +106,9 @@ parsed and refuse the entry unless the result equals the bytes it received. This
   - `offer/<id>` (an offer or a request, by its `direction`);
   - `review/<id>`;
   - `proof/<id>` (a credential is one kind of proof).
+
+  Their bodies' shapes are JSON Schemas in `schemas/`. A market adds fields to them, never a new
+  shape.
 - **Other kinds.** Other first segments are content too; readers MAY ignore them. Private notes and,
   later, personal data are examples.
 - **Prefix matching.** A prefix covers a path segment by segment: `offer` covers `offer` and

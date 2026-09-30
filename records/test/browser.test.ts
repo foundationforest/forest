@@ -124,7 +124,7 @@ describe('the approval page with a real passkey', { skip: existsSync(CHROME) ? f
     await h2?.close()
   })
 
-  test('the page’s code is this lab’s and four libraries’, and nothing else', () => {
+  test('the page’s code is this folder’s and four libraries’, and nothing else', () => {
     const libraries = readFileSync(`${DIST}approve.deps.txt`, 'utf8').trim().split('\n').map((line) => line.split(' ')[0])
     assert.deepEqual(libraries, ['@noble/curves', '@noble/hashes', '@scure/base', 'canonicalize'])
   })
