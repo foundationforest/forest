@@ -1,8 +1,8 @@
 # Forest data protocol, v1
 
-**Status:** the adopted design (30 September 2026), first drafted in the lab (`docs/REPORT.md`).
-Nothing here is shipped. The library in this folder implements every MUST below, and `test/`
-checks it. MUST, SHOULD and MAY are used as in RFC 2119.
+**Status:** the adopted design (30 September 2026). Devnet only: nothing here is shipped. The
+library in this folder implements every MUST below, and `test/` checks it. MUST, SHOULD and MAY
+are used as in RFC 2119.
 
 One idea: a profile is a public key; everything it says is a small signed JSON entry; hosts are
 plain HTTPS stores that check signatures and keep entries in the order they took them in; at each

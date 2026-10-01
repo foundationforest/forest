@@ -11,7 +11,7 @@ how this program applies it or why it does not apply, and every limit known toda
 |---|---|
 | Program | `forest_escrow`, v1, `FoRE4JYRAxFpqRoPBzuPZZ9Yfn6ovtkBfUggynex3MKT` for local work |
 | Framework | Anchor 1.2, `cargo build-sbf` (Solana CLI 4.2.2, platform-tools v1.54), no IDL |
-| Testing | LiteSVM (56 tests), a local validator (the client's `test:validator`, and `feepayer/`'s local test through Kora), a Trident fuzzer (fourteen invariants). Session 16 (the attack pass, `docs/attack-pass.md`) added four tests; all suites and the fuzzer at 50,000 iterations re-run green |
+| Testing | LiteSVM (56 tests), a local validator (the client's `test:validator`, and `feepayer/`'s local test through Kora), a Trident fuzzer (fourteen invariants). Session 16 (the attack pass) added four tests; all suites and the fuzzer at 50,000 iterations re-run green |
 | Risk level | 🟡 Medium by the skill's table (a simple escrow: token transfers, basic CPI, PDAs, no admin). Treated as 🔴 **Critical**, because it is sealed at deploy and holds other people's money, so this checklist carries a High-Risk Decisions section. |
 | Upgrade authority | Removed at mainnet deploy with `solana program set-upgrade-authority --final` (`README.md`). No admin key, no config, no pause, no fee. A v2 is a new program at a new address. |
 
@@ -362,8 +362,7 @@ signatures.
 
 ## Known limits
 
-Each is reported, not fixed, because fixing it would change a rule Carlos decided or add one. The
-ones marked open are questions in `docs/changes.md`.
+Each is reported, not fixed, because fixing it would change a rule Carlos decided or add one.
 
 1. **A frozen token account.** A classic mint's freeze authority (USDC has one) can freeze, and each
    is now pinned by a test (session 16, the attack pass):
