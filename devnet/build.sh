@@ -1,25 +1,21 @@
 #!/usr/bin/env bash
-# Build both programs for devnet from the committed source, with devnet's keys put into a copy.
+# Build escrow v1 for devnet from the committed source, with its devnet program id put into a copy.
 #
-# Nothing committed changes. The registry's source names placeholder keys (TREASURY,
-# FOUNDATION_ISSUER) that its tests sign for, and both programs name vanity program ids nobody holds
-# a keypair for. So this copies each program's Cargo.toml, Cargo.lock and src into devnet/target/
-# (ignored), replaces exactly these lines in the copy, each checked to appear exactly once, and
-# builds there:
+# Nothing committed changes. The source names a vanity program id nobody holds a keypair for, and
+# Anchor refuses to run at any other address. So this copies escrow/program's Cargo.toml,
+# Cargo.lock and src into devnet/target/escrow/ (ignored), replaces exactly one line in the copy,
+# checked to appear exactly once, and builds there:
 #
-#   registry  declare_id!               -> registry.programId      from devnet/devnet.json
-#             TREASURY                  -> keys.treasury
-#             FOUNDATION_ISSUER         -> keys.foundationIssuer
-#             built with --features devnet (USDC_MINT is devnet's USDC)
-#   escrow    declare_id!               -> escrow.programId
+#   escrow    declare_id!               -> escrow.programId      from devnet/devnet.json
 #
-# It prints each substitution as a diff against the committed file, and each .so's sha256. The
-# builds land in devnet/target/forest_registry.so and devnet/target/forest_escrow.so; the LiteSVM
-# tests' own builds in registry/program/target and escrow/program/target are not touched.
+# It prints the substitution as a diff against the committed file, and the .so's sha256. The build
+# lands in devnet/target/forest_escrow.so; the LiteSVM tests' own build in escrow/program/target is
+# not touched. The registry and escrow v2 build and deploy with their own folders' scripts
+# (registry/devnet/deploy.sh, escrow/v2/devnet/deploy.sh).
 #
-# Both are built for SBPF v3, the newer program format (`cargo build-sbf --arch v3`), which devnet
-# and mainnet already accept and which SIMD-0500 leaves deployable when it stops new deploys of v0
-# to v2. FOREST_SBPF_ARCH=v0 builds the old format instead.
+# It builds for SBPF v3, the newer program format (`cargo build-sbf --arch v3`), which devnet and
+# mainnet already accept and which SIMD-0500 leaves deployable when it stops new deploys of v0 to
+# v2. FOREST_SBPF_ARCH=v0 builds the old format instead.
 #
 # Usage: devnet/build.sh    (needs the Solana CLI's cargo-build-sbf on the PATH, and node)
 
@@ -80,21 +76,9 @@ only_lib_changed() {
   fi
 }
 
-registry_id=$(field .registry.programId)
 escrow_id=$(field .escrow.programId)
-treasury=$(field .keys.treasury)
-issuer=$(field .keys.foundationIssuer)
 
 mkdir -p "$out"
-
-copy_program registry
-lib="$out/registry/src/lib.rs"
-replace_once "$lib" 'declare_id!("FoRPzGfMyWjK8uLjMoZfae2yevnviyCsGsHM7AwBwK8B");' "declare_id!(\"$registry_id\");"
-replace_once "$lib" 'pub const TREASURY: Pubkey = pubkey!("F35kGoXPCdZLdanwTGuShYXxAkmkpHP9LWgV7dNvKU5s");' "pub const TREASURY: Pubkey = pubkey!(\"$treasury\");"
-replace_once "$lib" 'pub const FOUNDATION_ISSUER: Pubkey = pubkey!("H7qXWNAeAvedhwuvhAkBYK2WE2nA3KgbufnRz38zFdzS");' "pub const FOUNDATION_ISSUER: Pubkey = pubkey!(\"$issuer\");"
-echo "registry: the substitutions, against the committed source"
-diff -u "$root/registry/program/src/lib.rs" "$lib" | grep -E '^[-+][^-+]' || true
-only_lib_changed registry
 
 copy_program escrow
 lib="$out/escrow/src/lib.rs"
@@ -103,14 +87,10 @@ echo "escrow: the substitution, against the committed source"
 diff -u "$root/escrow/program/src/lib.rs" "$lib" | grep -E '^[-+][^-+]' || true
 only_lib_changed escrow
 
-echo "building the registry (--features devnet, --arch $arch) ..."
-build registry forest_registry.so --features devnet --arch "$arch"
 echo "building the escrow (--arch $arch) ..."
 build escrow forest_escrow.so --arch "$arch"
 
 echo "toolchain: $(solana --version 2>/dev/null || echo 'solana not on PATH'); $(cargo-build-sbf --version | tr '\n' ' ')"
-(cd "$out" && sha256sum forest_registry.so forest_escrow.so && wc -c forest_registry.so forest_escrow.so | head -2)
-# The SBPF version each file declares: the ELF header's e_flags.
-for so in forest_registry.so forest_escrow.so; do
-  echo "$so: SBPF v$(node -e "process.stdout.write(String(require('fs').readFileSync(process.argv[1]).readUInt32LE(0x30)))" "$out/$so")"
-done
+(cd "$out" && sha256sum forest_escrow.so && wc -c forest_escrow.so)
+# The SBPF version the file declares: the ELF header's e_flags.
+echo "forest_escrow.so: SBPF v$(node -e "process.stdout.write(String(require('fs').readFileSync(process.argv[1]).readUInt32LE(0x30)))" "$out/forest_escrow.so")"

@@ -1,7 +1,9 @@
 // The escrow on devnet, used for real: two deals between two throwaway parties, in the test
-// dollar the registry script made.
+// dollar devnet/devnet.json names. This script makes no mint, no token account and no test dollar:
+// the mint, the parties' token accounts and the buyer's dollars are already on devnet, made by the
+// first registry's devnet script, which is gone. A new phrase would need them made first.
 //
-//   FOREST_DEVNET_KEYS=<dir> node scripts/devnet.ts        (after registry/client/scripts/devnet.ts)
+//   FOREST_DEVNET_KEYS=<dir> node scripts/devnet.ts        (after devnet/deploy.sh escrow)
 //
 // 1. The seller invoices; the buyer reads it, checks its options, and pays with one tap
 //    (`payInvoiceInOneTap`: the deposit address made first, so a fee payer that checks every
@@ -12,8 +14,9 @@
 //
 // A payer key pays every network fee and fronts every rent, the way a fee payer would, so the
 // parties hold only test dollars; every rent refund goes to the party who opened the escrow. <dir> holds the devnet keypairs (payer, buyer, seller), read and never printed.
-// Everything public goes into devnet/devnet.json (FOREST_DEVNET_RECORD, FOREST_DEVNET_RPC as in the
-// registry script). Each step checks the chain first, so the script can be run again after a failure.
+// Everything public goes into devnet/devnet.json; FOREST_DEVNET_RECORD and FOREST_DEVNET_RPC point
+// it at another record and endpoint. Each step checks the chain first, so the script can be run
+// again after a failure.
 
 import { readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'

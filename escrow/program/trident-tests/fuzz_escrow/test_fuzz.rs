@@ -8,7 +8,7 @@
 //! Trident's runtime does not check signatures: an account marked as a signer is taken as signed.
 //! So every key here can "sign", and every authority rule has to hold on key comparisons alone.
 //!
-//! Invariants, for the escrow of "Escrow" in the handoff (money in, and out only when the two
+//! Invariants, for the escrow `escrow/README.md` describes (money in, and out only when the two
 //! sides agree; an arbiter and a timer only if the creator turned them on):
 //!   I1 every deposit account holds exactly what was sent to it;
 //!   I2 every way out pays out the whole balance, no more and no less, and a split gives the

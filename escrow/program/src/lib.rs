@@ -36,7 +36,7 @@
 //! here can be patched: read `escrow/README.md` for what is sealed and what the app decides.
 //! There is no admin, no config account, no pause and no fee.
 //!
-//! Nothing is shipped. Nothing here has run anywhere but a local validator and LiteSVM.
+//! Nothing is shipped. It runs on devnet only (`docs/devnet.md`); nothing is on mainnet.
 
 use anchor_lang::prelude::*;
 use anchor_spl::associated_token::AssociatedToken;

@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
-# Deploy one of devnet/build.sh's builds to devnet, check the deployed bytes are the built ones, and
-# record what was deployed in devnet/devnet.json. One program per run: the deploy key needs enough
-# for one program at a time, not both at once.
+# Deploy devnet/build.sh's build of escrow v1 to devnet, check the deployed bytes are the built
+# ones, and record what was deployed in devnet/devnet.json. The registry and escrow v2 deploy with
+# their own folders' scripts (registry/devnet/deploy.sh, escrow/v2/devnet/deploy.sh).
 #
-#   FOREST_DEVNET_KEYS=<dir> devnet/deploy.sh registry
 #   FOREST_DEVNET_KEYS=<dir> devnet/deploy.sh escrow
-#   FOREST_DEVNET_KEYS=<dir> devnet/deploy.sh cost      # print both programs' cost; deploy nothing
+#   FOREST_DEVNET_KEYS=<dir> devnet/deploy.sh cost      # print the deploy's cost; deploy nothing
 #
-# <dir> holds deploy.json (it pays, and it is the upgrade authority) and registry-program.json and
-# escrow-program.json (the program ids devnet/devnet.json names). Nothing is printed from them.
+# <dir> holds deploy.json (it pays, and it is the upgrade authority) and escrow-program.json (the
+# program id devnet/devnet.json names). Nothing is printed from them.
 #
 # Before a deploy it:
 #   1. closes any buffer the deploy key left behind (a deploy that died part way), returning its SOL;
@@ -34,8 +33,8 @@
 # buffer that the next run closes.
 #
 # The upgrade authority stays on the deploy key. Devnet is not sealed: sealing is the mainnet step
-# (`solana program set-upgrade-authority <id> --final`, in both programs' READMEs), done on the day
-# each deploys there. Write transactions go over RPC (`--use-rpc`), not to validators directly.
+# (`solana program set-upgrade-authority <id> --final`, in escrow/README.md), done on the day it
+# deploys there. Write transactions go over RPC (`--use-rpc`), not to validators directly.
 # A program already deployed is not deployed again; it is only checked and recorded.
 # FOREST_DEVNET_RPC and FOREST_DEVNET_RECORD point it elsewhere, for a rehearsal on a local validator.
 
@@ -47,7 +46,7 @@ json="${FOREST_DEVNET_RECORD:-$here/devnet.json}"
 keys="${FOREST_DEVNET_KEYS:?set FOREST_DEVNET_KEYS to the directory holding the devnet keypairs}"
 rpc="${FOREST_DEVNET_RPC:-$(node -e "process.stdout.write(require(process.argv[1]).rpc)" "$json")}"
 wait_minutes="${FOREST_DEVNET_WAIT_MINUTES:-90}"
-what="${1:?usage: devnet/deploy.sh registry|escrow|cost}"
+what="${1:?usage: devnet/deploy.sh escrow|cost}"
 # Every solana command names the deploy key: this CLI wants a signer even to read, and there is no
 # default keypair on the machine.
 cli=(--url "$rpc" --keypair "$keys/deploy.json")
@@ -88,13 +87,13 @@ sol() { node -e "process.stdout.write((Number(process.argv[1]) / 1e9).toFixed(9)
 balance() { solana balance "$deployer" "${cli[@]}" --lamports | cut -d' ' -f1; }
 
 if [ "$what" = cost ]; then
-  for name in registry escrow; do
+  for name in escrow; do
     c=$(cost "$out/forest_$name.so")
     echo "$name: $c"
   done
   exit 0
 fi
-case "$what" in registry|escrow) ;; *) echo "usage: devnet/deploy.sh registry|escrow|cost" >&2; exit 1 ;; esac
+case "$what" in escrow) ;; *) echo "usage: devnet/deploy.sh escrow|cost" >&2; exit 1 ;; esac
 name=$what
 
 id=$(node -e "process.stdout.write(require(process.argv[1])['$name'].programId)" "$json")

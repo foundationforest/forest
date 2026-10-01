@@ -5,8 +5,9 @@ its `references/shared-base.md` (sections 1 to 31), `references/anchor.md` and
 `references/litesvm.md`, how v2 applies it or why it does not apply, and every limit known today.
 v2 is v1 (`../security-checklist.md`) plus an objection, a funding time on every receipt, the
 sweep to the recorded payer, and both token programs; where a rule applies to v2 exactly as to v1,
-this says so and names the v2 test. The program is `program/src/`; the tests are in `program/tests-litesvm/tests/`. Nothing
-here is shipped, and no paid review has happened.
+this says so and names the v2 test. The program is `program/src/`; the tests are in
+`program/tests-litesvm/tests/`. Devnet only: nothing here is shipped or on mainnet, and no paid
+review has happened.
 
 | | |
 |---|---|
@@ -18,26 +19,25 @@ here is shipped, and no paid review has happened.
 
 ## High-risk decisions
 
-Each is Carlos's, on purpose, and none can be changed after deploy. 1 to 6 are v1's, unchanged
+Each is on purpose, and none can be changed after deploy. 1 to 6 are v1's, unchanged
 (`../security-checklist.md`): sealed; the creator sets a release gate (the timer); the arbiter may
 be anyone, a party included; every way out pays the whole balance; anyone may send `mark_funded`,
 `timer_release`, `recover_late` and `sweep_rent`; any classic mint.
 
 7. **Either party can turn the timer off, alone.** An objection before the timer is due ends it for
-   good. So a timer no longer guarantees the side it names anything: it pays that side only if the
+   good. So a timer guarantees the side it names nothing: it pays that side only if the
    other side stays silent until it is due. After an objection with no arbiter named, the money
    moves only when the parties agree; each side alone can still give (release everything to the
    other), so the program never strands it, but neither side can take it.
-8. **The sweep pays whoever fronted the rent, not the person who opened the escrow.** When a fee
-   payer fronts the rent and charges the person for it (Kora, as `feepayer/` runs it), what the
-   rent cuts free later goes to the fee payer's key, which was already paid for it. Intended
-   (Carlos, 2026-09-30): the fee payer keeps it and says so plainly to people. See Known limit 3.
+8. **The sweep pays whoever fronted the rent, not the person who opened the escrow.** When a
+   relayer fronts the rent and charges the person for it, what the rent cuts free later goes to the
+   relayer's key, which was already paid for it. Intended: the relayer keeps it and says so plainly
+   to people. See Known limit 3.
 9. **Any Token-2022 mint without a transfer fee that can be transferred, the issuer's powers
    included.** The skill says to refuse a permanent delegate, an outside freeze authority and
    confidential transfers (§23.1), and a mint close authority (§17). v2 refuses only the transfer
-   fee, non-transferable mints and wrapped SOL; everything else an issuer can do is the issuer's
-   (Carlos, 2026-09-30), listed plainly in `README.md` ("What a
-   person accepts by choosing a dollar"). Open USD has every one: a permanent delegate that can
+   fee, non-transferable mints and wrapped SOL; everything else an issuer can do is the issuer's,
+   listed plainly in `README.md` ("What a person accepts by choosing a dollar"). Open USD has every one: a permanent delegate that can
    empty any deposit account, a freeze authority, pause, a hook it can name at any time, a close
    authority. Known limits 7 to 12.
 10. **A hook's accounts are forwarded unchecked, and never signing.** Every way out passes the
@@ -51,7 +51,7 @@ be anyone, a party included; every way out pays the whole balance; anyone may se
 
 - **1.1 Signer checks. Applied.** As v1, and `object`'s party is an Anchor `Signer`, then compared
   to the recorded buyer and seller in the handler (`NotAnObjector`). `object` by a stranger, the
-  arbiter, the fee payer, and the buyer's key unsigned are refused
+  arbiter, the payer, and the buyer's key unsigned are refused
   (`the_wrong_signer_is_refused_for_every_instruction`,
   `a_stranger_or_the_arbiter_cannot_object_but_an_arbiter_who_is_a_party_objects_as_that_party`).
 - **1.2 Ownership checks. Applied**, as v1: `Account<Escrow>` everywhere, `object` included.
@@ -62,9 +62,9 @@ be anyone, a party included; every way out pays the whole balance; anyone may se
   program named for a Token-2022 mint, or the other way round, is refused
   (`only_the_mints_token_program_and_the_standard_accounts_under_it`,
   `substitution_payout_accounts_of_the_wrong_mint_owner_or_program_are_refused`).
-- **1.3 Account data matching. Applied.** v1's constraints; every way out now names the mint,
+- **1.3 Account data matching. Applied.** v1's constraints; every way out also names the mint,
   `has_one = mint`; each party's standard account is derived under the token program named, which
-  is the mint's; and `sweep_rent` now `has_one = payer`:
+  is the mint's; and `sweep_rent` has `has_one = payer`:
   a sweep to the creator, the seller or a thief is refused
   (`sweep_pays_only_the_recorded_payer_and_only_from_an_escrow`,
   `a_sweep_returns_rent_above_the_minimum_to_the_payer_and_never_goes_below_it`). The deposit
@@ -256,7 +256,7 @@ No stack-offset warning from `cargo build-sbf`; every instruction runs under Lit
   decide whether to write the funding time, and the objection has its own byte (`Objection`), so
   an objection made at a zero clock still counts.
 - **26.2 One cleanup for every terminal path. Applied:** `pay_out` then `end`, for all five ways
-  out; `end` now also writes the funding time, once, for all of them.
+  out; `end` also writes the funding time, once, for all of them.
 - **26.3 Zero after draining. Applied**, as v1.
 - **26.4 Allowlists. Applied:** `object` needs `live()` (open or funded); the timer needs funded and
   no objection.
@@ -327,9 +327,9 @@ token accounts; options nobody checked; a party key nobody controls; a part paym
 buyer and a reused deposit address; an overpayment follows the balance; a party's standard account
 must exist to be paid; `recover_late` checks who holds the buyer's standard account; tokens of
 another mint are lost; self-minted tokens; a one-sided receipt; unaudited; refunds in SOL. Limit 8
-(SOL sent to an escrow's address) now goes to the payer, not the creator: 4 below. Limit 12 (Solana
-Pay to a program-derived address) is now the app's: the client builds no pay link. Limit 13 (the
-fuzzer's SBPF v0 build) does not apply: v2 has no fuzzer yet (6 below). New in v2:
+(SOL sent to an escrow's address) goes to the payer in v2, not the creator: 4 below. Limit 12
+(Solana Pay to a program-derived address) is the app's in v2: the client builds no pay link.
+Limit 13 (the fuzzer's SBPF v0 build) does not apply: v2 has no fuzzer (6 below). New in v2:
 
 1. **An objection makes the timer a default, not a promise** (High-risk decision 7). A seller who
    works under a timer to itself can have it turned off the day before it is due; a buyer who pays
@@ -338,20 +338,20 @@ fuzzer's SBPF v0 build) does not apply: v2 has no fuzzer yet (6 below). New in v
 2. **A deadlock holds the money.** After an objection, with no arbiter, if neither side gives and
    they do not agree, the money stays in the deposit account for good. v1 had the same with no
    timer; v2 has it whenever someone objects. Nothing in the program can break it.
-3. **The fee payer gets the sweep, by decision.** With Kora as the payer, the rent excess goes to
-   Kora's key, which already charged the person, in dollars, for the whole deposit at the old rate.
-   Intended: the fee payer keeps refunds from Solana's rent cuts and says so to people; the line
-   "charges exactly what it spends" is updated to match in the services' repo. A product that wants
-   the person to get it back makes the person's own key the payer, which then needs SOL.
+3. **The relayer gets the sweep, by decision.** When a relayer is the payer, the rent excess goes
+   to the relayer's key, which already charged the person, in dollars, for the whole deposit at the
+   old rate. Intended: the relayer keeps refunds from Solana's rent cuts and says so to people. A
+   product that wants the person to get it back makes the person's own key the payer, which then
+   needs SOL.
 4. **A sweep into a closed payer account can fail.** If the payer's account holds nothing (a
    one-time sponsor key emptied), a sweep that would leave it below an empty account's rent-exempt
-   minimum fails, and can be sent again once more has built up (v1's limit 8, now the payer's).
+   minimum fails, and can be sent again once more has built up (v1's limit 8, here the payer's).
 5. **An objection sent late may land after the deadline.** The chain's clock decides; the client's
    `canObject` reads the local clock.
 6. **Not carried over:** the Trident fuzzer and the local-validator test. The CI workflow builds
-   v2 and runs its LiteSVM tests and its client's (`.github/workflows/checks.yml`). Left to later
-   sessions: the fee payer's configuration and the index know neither v2's program id nor
-   Token-2022.
+   v2 and runs its LiteSVM tests and its client's (`.github/workflows/checks.yml`). A relayer pays
+   for v2's transactions only if its configuration allows v2's program id and Token-2022; that
+   configuration lives in `foundationforest/services`.
 
 Taking both token programs:
 

@@ -1,8 +1,8 @@
 # Forest data protocol, v1
 
-**Status:** the adopted design (30 September 2026), first drafted in the lab (`docs/REPORT.md`).
-Nothing here is shipped. The library in this folder implements every MUST below, and `test/`
-checks it. MUST, SHOULD and MAY are used as in RFC 2119.
+**Status:** the adopted design (30 September 2026). Devnet only: nothing here is shipped. The
+library in this folder implements every MUST below, and `test/` checks it. MUST, SHOULD and MAY
+are used as in RFC 2119.
 
 One idea: a profile is a public key; everything it says is a small signed JSON entry; hosts are
 plain HTTPS stores that check signatures and keep entries in the order they took them in; at each
@@ -185,9 +185,11 @@ signature is its only credential.
 Three filters, in any combination:
 - `after`: only entries after this cursor.
 - `profile`: one profile's entries.
-- `badged=1`: only profiles the host counts as badged. It asks the public registry about the
-  profile key itself, since that key is the wallet the badge names. A profile badged later shows
-  from then on; a reader that wants its earlier entries reads it by `profile`.
+- `badged=1`: only profiles the host counts as badged. What counts is the host operator's choice,
+  by design: typically a registry line naming the profile key, since that key is the one a badge
+  names, proven against the root of an issuer the operator trusts. A host that checks nothing
+  counts no profile as badged. A profile badged later shows from then on; a reader that wants its
+  earlier entries reads it by `profile`.
 
 `limit` is at most 1000 lines a page. A page is at most 4 MB (4,194,304 bytes): a host ends it
 before a line that would pass that. Readers MAY refuse a larger page.

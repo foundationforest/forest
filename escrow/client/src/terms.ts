@@ -1,9 +1,9 @@
-// From a post's terms to the terms an escrow is created with, and back: what a person checks
+// From an offer's terms to the terms an escrow is created with, and back: what a person checks
 // before they work or pay, when the timer is due, and what a split pays.
 //
-// A post's `terms` block is optional and holds only the escrow's two options, each off unless set
-// (`shapes/lexicons/foundation/forest/post.json`, `#terms`): `arbiter`, a key that may decide any
-// split, and `timer`, `{ days, to }`. Everything else about a deal (the seller, the amount, the
+// An offer's `terms` block is optional and holds only the escrow's two options, each off unless set
+// (`records/schemas/offer.json`, `terms`): `arbiter`, a key that may decide any split, and `timer`,
+// `{ days, to }`. Everything else about a deal (the seller, the amount, the
 // token) comes from the deal itself. Nothing here reads a market file: a market says nothing about
 // money or time.
 
@@ -22,8 +22,8 @@ import {
 } from './program.ts'
 
 /**
- * A post's `terms` block, as `shapes/` defines it. Records stay open, so a block may carry other
- * keys (an old post's `autoReleaseDays`, say): they are ignored and mean nothing to an escrow.
+ * An offer's `terms` block, as `records/schemas/offer.json` defines it. Records stay open, so a
+ * block may carry other keys: they are ignored and mean nothing to an escrow.
  */
 export type PostTerms = {
   /** A Solana key, base58, that may decide any split. Absent: no arbiter. */

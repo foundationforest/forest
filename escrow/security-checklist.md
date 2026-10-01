@@ -1,23 +1,24 @@
 # Security checklist: the Forest escrow, v1
 
 Written with the safe-solana-builder skill (Frank Castle's, copied unchanged into
-`.claude/skills/safe-solana-builder/` by the plan-update session): every rule in its
+`.claude/skills/safe-solana-builder/`, its source in `SOURCE.md`): every rule in its
 `references/shared-base.md` (sections 1 to 31), `references/anchor.md` and `references/litesvm.md`,
 how this program applies it or why it does not apply, and every limit known today. The program is
 `program/src/`; the tests named here are in `program/tests-litesvm/tests/` and
-`program/trident-tests/`. Nothing here is shipped, and no paid review has happened.
+`program/trident-tests/`. Devnet only: nothing here is shipped or on mainnet, and no paid review
+has happened.
 
 | | |
 |---|---|
 | Program | `forest_escrow`, v1, `FoRE4JYRAxFpqRoPBzuPZZ9Yfn6ovtkBfUggynex3MKT` for local work |
 | Framework | Anchor 1.2, `cargo build-sbf` (Solana CLI 4.2.2, platform-tools v1.54), no IDL |
-| Testing | LiteSVM (56 tests), a local validator (the client's `test:validator`, and `feepayer/`'s local test through Kora), a Trident fuzzer (fourteen invariants). Session 16 (the attack pass, `docs/attack-pass.md`) added four tests; all suites and the fuzzer at 50,000 iterations re-run green |
+| Testing | LiteSVM (56 tests, on every pull request), a local validator (the client's `test:validator`, nightly), a Trident fuzzer (fourteen invariants, 50,000 iterations nightly, on an SBPF v0 build). On devnet: two deals and read-only smoke tests; `devnet/build.sh` rebuilds the deployed program byte for byte |
 | Risk level | 🟡 Medium by the skill's table (a simple escrow: token transfers, basic CPI, PDAs, no admin). Treated as 🔴 **Critical**, because it is sealed at deploy and holds other people's money, so this checklist carries a High-Risk Decisions section. |
 | Upgrade authority | Removed at mainnet deploy with `solana program set-upgrade-authority --final` (`README.md`). No admin key, no config, no pause, no fee. A v2 is a new program at a new address. |
 
 ## High-risk decisions
 
-Each is Carlos's, on purpose, and none can be changed after deploy.
+Each is on purpose, and none can be changed after deploy.
 
 1. **Sealed.** No upgrade, no pause, no admin. A bug found after deploy stays in every escrow made
    on this version; the only remedy is a new program for new deals.
@@ -109,9 +110,9 @@ Each is Carlos's, on purpose, and none can be changed after deploy.
 The unchecked ones are pinned by address or by `has_one`, and no two of them can be the same
 account: the buyer's and the seller's standard accounts are two different derivations (buyer and
 seller differ), the rent recipient is a key that signed `create` and so is not either of those
-program-derived addresses, nor the escrow, nor its deposit account. The last version's one case (a
-buyer's standard account handed to the seller, named in both payout slots) is gone: the seller's
-slot now takes only the seller's own standard address. The rent recipient may be the same key as a
+program-derived addresses, nor the escrow, nor its deposit account. A buyer's standard account
+cannot fill both payout slots: the seller's slot takes only the seller's own standard address. The
+rent recipient may be the same key as a
 signer (the buyer releasing its own escrow); the runtime passes one account for both, and it only
 receives lamports.
 
@@ -158,8 +159,8 @@ hold the same mint. Tested by `a_token_2022_mint_and_wrapped_sol_are_refused`.
   `release_to_seller` in one transaction; two ways out in one transaction revert together
   (`an_escrow_ends_once`).
 - **8.2 Compute. Applied.** No loop over input beyond the two payouts. The heaviest single
-  instruction measured is 52,137 units (`recover_late`, making the buyer's account), the one tap
-  76,989 (`README.md`).
+  instruction measured under LiteSVM is 52,137 units (`recover_late`, making the buyer's account),
+  the one tap 76,989.
 - **8.3 Address lookup tables. Does not apply.**
 - **8.4 Durable nonces. Does not apply.**
 
@@ -299,7 +300,7 @@ Every way out drains the whole balance and closes the deposit account; nothing i
   account to another key sends its own payouts there, and blocks nothing
   (`a_party_who_hands_its_standard_account_away_blocks_no_way_out`).
 - **31.5 Token-2022 mint space. Does not apply.**
-- **31.6 Signer-as-new-account. Does not apply:** PDAs only. The PDA analogue is 29.1, now applied.
+- **31.6 Signer-as-new-account. Does not apply:** PDAs only. The PDA analogue is 29.1, applied.
 - **31.7 Repeated actions resetting time. Applied:** `mark_funded` runs once (`AlreadyFunded`), so
   the timer can be neither restarted nor delayed.
 
@@ -355,25 +356,22 @@ Every way out drains the whole balance and closes the deposit account; nothing i
 
 What LiteSVM does not show is covered by the local-validator test (`client/test/validator.test.ts`:
 three deals built by the client and sent through `solana-test-validator`, the buyer and the seller
-holding no SOL) and by `feepayer/`'s local test (the same builders through Kora, which co-signs and
-charges each storage deposit to the person once). Trident's runtime checks
+holding no SOL), and by the client's devnet script and smoke tests. Trident's runtime checks
 no signatures, so the fuzzer's signer rules hold on key comparisons alone; LiteSVM checks the real
 signatures.
 
 ## Known limits
 
-Each is reported, not fixed, because fixing it would change a rule Carlos decided or add one. The
-ones marked open are questions in `docs/changes.md`.
+Each is reported, not fixed: fixing it would change a decided rule, or add one.
 
-1. **A frozen token account.** A classic mint's freeze authority (USDC has one) can freeze, and each
-   is now pinned by a test (session 16, the attack pass):
+1. **A frozen token account.** A classic mint's freeze authority (USDC has one) can freeze, each
+   pinned by a test:
    - the deposit account, which stops every way out until it is thawed, since each moves tokens out
      of it (`finding_a_frozen_deposit_account_blocks_every_way_out`);
    - the buyer's standard account, which stops every way out that pays the buyer anything; the ones
      that pay the buyer nothing still run (`finding_a_frozen_buyer_account_blocks_only_the_ways_out_that_pay_the_buyer`);
    - the seller's standard account, which, by the same rule, stops every way out that pays the
      seller anything (`finding_a_frozen_seller_account_blocks_only_the_ways_out_that_pay_the_seller`).
-     The last version let the seller name another account; this one does not.
 2. **Options nobody checked.** The program runs any option its creator set. A seller who works
    without reading the escrow can lose to a buyer's one-day timer to itself, and a buyer who pays
    without reading an invoice can lose to a one-day timer to the seller. `optionsNotAgreed` exists
@@ -388,17 +386,17 @@ ones marked open are questions in `docs/changes.md`.
    (`finding_a_part_payment_can_be_closed_under_the_buyer_by_the_seller`). More broadly, the deposit
    address is the creator's-key-and-id's, not the buyer's, so money sent to it before an escrow
    exists there, or after a close, is adopted by whatever deal next holds the id — even one naming a
-   different buyer, who then cannot recover it (`finding_a_reused_deposit_address_adopts_a_stranger_buyers_money`,
-   session 16). Ids must be unique per deal, and a buyer must pay only an escrow it has read and that
-   names it (the client's checks); the program cannot tell whose money arrived.
+   different buyer, who then cannot recover it
+   (`finding_a_reused_deposit_address_adopts_a_stranger_buyers_money`). Ids must be unique per deal,
+   and a buyer must pay only an escrow it has read and that names it (the client's checks); the
+   program cannot tell whose money arrived.
 5. **An overpayment follows the balance** (High-risk decision 4).
 6. **A party's standard account must exist to be paid.** A seller who has never held the token has
    none: whoever sends the way out makes it first, at their own cost
    (`makeStandardAccountIx`; anyone may). A timer to that seller waits until someone does.
 7. **`recover_late` checks who holds the buyer's standard account** (Anchor's create-if-missing
    does), so a buyer who hands that account away blocks its own late money there, and nothing else
-   (`finding_a_buyer_who_hands_its_standard_account_away_blocks_its_own_late_money`). Unchanged from
-   the last version, as asked.
+   (`finding_a_buyer_who_hands_its_standard_account_away_blocks_its_own_late_money`).
 8. **SOL sent to an escrow's address** goes to the creator by `sweep_rent`, not to whoever sent
    it; the program cannot tell it from rent. A sweep into a wallet that holds no SOL fails unless it
    leaves that wallet at least at the rent-exempt minimum of an empty account (128 bytes' worth);
@@ -408,12 +406,12 @@ ones marked open are questions in `docs/changes.md`.
    associated token account for that mint has no way out, since nothing here signs for it.
 10. **Self-minted tokens** make receipts of any size (High-risk decision 6).
 11. **A one-sided receipt.** A buyer can release money to a seller who never signed anything, for one
-    base unit. The receipt says the buyer created it; an index weighs it as one-sided.
+    base unit. The receipt says the buyer created it, so an index can weigh it as one-sided.
 12. **Solana Pay to a program-derived address** has not been tried in a wallet on a phone.
 13. **The fuzzer runs SBPF v0.** The program builds, passes its tests and runs on devnet as SBPF v3
     (`cargo build-sbf --arch v3`). Trident's runtime turns every feature off and runs only v0
     programs, so the fuzzer runs a v0 build of the same source.
 14. **Unaudited.** No paid review, no lawyer pass.
-15. **Refunds arrive in SOL.** In a fee payer's app the creator's wallet may hold no SOL, and pays
+15. **Refunds arrive in SOL.** In a relayer's app the creator's wallet may hold no SOL, and pays
     for each storage deposit in dollars. The refund comes back as SOL in that wallet. How the app
     shows or uses it, without saying "SOL", is the app's choice and open.

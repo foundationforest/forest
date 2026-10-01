@@ -1,9 +1,58 @@
 # forest
 
-All Forest Foundation code, open under Apache 2.0.
+Devnet only: everything here runs on Solana devnet or nowhere. Nothing is on mainnet, and nothing
+is shipped.
 
-Forest is an open environment where a person owns their profile, their offers and their reputation, and can transact with strangers with no platform in the middle. One human, one record, any market, no one in between.
+Forest lets a person own their profile, their offers and their reputation, and deal with strangers
+with no platform in between. A profile is one key the person holds; everything it says is a signed
+record, kept on boards (record hosts) that apps run. An issuer checks once that someone is one real
+human, which lets them put one badge per label on a free public registry without saying who they
+are. Money between two strangers waits in an escrow and leaves only when both sides agree. Any app,
+index or AI can read the records and the chain; none of them holds anyone's keys.
 
-This repo holds the foundation pieces: `records/`, the data protocol (its spec, library, reference host, approval page and record shapes); `keys/`, the keys recipe; and the registry and escrow programs (`registry/`, `escrow/`). The services (the index, the issuer flow, the fee payer's configuration) move to `foundationforest/services`. Products are thin apps on top, in their own repos.
+## What this repo holds
 
-Nothing is shipped. The plan, and the reason behind every choice, is in [docs/handoff.md](docs/handoff.md). Read `CLAUDE.md` and that file before any task. Session history is in [docs/changes.md](docs/changes.md).
+The pieces everyone shares: the records protocol, the keys recipe, and two sealed Solana programs,
+the registry and the escrow, each with its client.
+
+What it does not hold:
+
+- **Services:** the index, the issuer and the relayer live in
+  [foundationforest/services](https://github.com/foundationforest/services).
+- **The market directory:** the recommended labels live in
+  [foundationforest/markets](https://github.com/foundationforest/markets).
+- **Apps:** Roots and any other app live in their own repos.
+
+| Folder | What it is | Status |
+|---|---|---|
+| [`records/`](records/README.md) | The records protocol: its spec, the library, a reference board, the approval page, and the four record shapes (profile, offer, review, proof) | Tested; not deployed |
+| [`keys/`](keys/README.md) | The keys recipe: a passkey's secret becomes a seed, and the seed every key a person uses | Tested; not deployed |
+| [`registry/`](registry/README.md) | Sealed program and client: one badge per human per label, free | On devnet |
+| [`escrow/`](escrow/README.md) | Sealed program and client, v1: money out only when both sides agree; classic tokens | On devnet |
+| [`escrow/v2/`](escrow/v2/README.md) | v1 plus an objection, the funding time on every receipt, and both token programs | On devnet |
+| [`devnet/`](devnet/README.md) | The devnet key recipe, and escrow v1's build and deploy scripts and record | Rebuilds escrow v1's deployed bytes |
+| [`docs/`](docs/) | [Why things are as they are](docs/decisions.md); [what runs on devnet](docs/devnet.md) | |
+| [`.claude/skills/safe-solana-builder/`](.claude/skills/safe-solana-builder/SKILL.md) | The security checklist every program change goes through | |
+
+## Run the checks
+
+What `.github/workflows/checks.yml` runs on every pull request. Node 22.18 or later; Solana CLI
+4.2.2 for the programs.
+
+```
+# Each package: install, type-check, tests that need no chain. keys first: registry/client reads it.
+for d in keys records registry/client escrow/client escrow/v2/client; do
+  (cd "$d" && npm ci && npm run check && npm test)
+done
+
+# Each program: build as SBPF v3, then its LiteSVM tests against that build.
+for p in registry/program escrow/program escrow/v2/program; do
+  (cd "$p" && cargo build-sbf --arch v3 && cd tests-litesvm && cargo test)
+done
+```
+
+A test that cannot find what it needs (Chromium for `records/`'s browser test) skips; the workflow
+fails on any skip. The slower checks (local-validator tests, the registry's property test, escrow
+v1's fuzzer) run nightly there; each folder's README says how to run them.
+
+Licensed Apache 2.0. [`CLAUDE.md`](CLAUDE.md) holds the rules for AI sessions working here.

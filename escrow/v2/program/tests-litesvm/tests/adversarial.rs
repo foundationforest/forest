@@ -1,7 +1,7 @@
 //! The escrow, attacked.
 //!
-//! The attacks from `docs/decisions/adversarial-review-1.md` that still apply to the escrow of
-//! "Escrow" in the handoff, and the ones its options and its whole-balance rule open. A test named
+//! The attacks on the escrow `README.md` describes: those from the first adversarial review that
+//! still apply, and the ones its options and its whole-balance rule open. A test named
 //! for what should be refused asserts that it is refused. A test named `finding_…` is something
 //! the program accepts by design: it asserts the acceptance, so the suite pins the behaviour the
 //! README and the security checklist describe, and a later change shows up here as a failure.

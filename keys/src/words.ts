@@ -1,4 +1,4 @@
-// Paper export: the seed as 24 English words (BIP39), and back. The words
+// Backup words: the seed as 24 English words (BIP39), and back. The words
 // encode the 32 seed bytes plus an 8-bit checksum. BIP39's own "seed" step
 // (PBKDF2 over the words) is not used; the entropy is the seed.
 
@@ -20,7 +20,7 @@ export function importWords(text: string): Uint8Array {
   if (words.length !== WORD_COUNT) throw new Error(`expected ${WORD_COUNT} words, got ${words.length}`)
   const mnemonic = words.join(' ')
   if (!validateMnemonic(mnemonic, wordlist)) {
-    throw new Error('these words are not a paper export: a word is wrong, or in the wrong place')
+    throw new Error('these are not backup words: a word is wrong, or in the wrong place')
   }
   return mnemonicToEntropy(mnemonic, wordlist)
 }

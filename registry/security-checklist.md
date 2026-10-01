@@ -255,5 +255,5 @@ minimum after.
   in the line meanwhile.
 - **Whoever pays is recorded.** When a relayer sends `register`, refunds go to it, not to the person.
 - **The placeholder program id.** The source names `FoRBadgeLine…1111`, which nobody holds a key for;
-  every deploy substitutes its own (`devnet/deploy.sh`).
+  every deploy substitutes its own (`devnet/deploy.sh` in this folder).
 - **Not audited.** No paid review has happened.
