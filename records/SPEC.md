@@ -185,9 +185,11 @@ signature is its only credential.
 Three filters, in any combination:
 - `after`: only entries after this cursor.
 - `profile`: one profile's entries.
-- `badged=1`: only profiles the host counts as badged. It asks the public registry about the
-  profile key itself, since that key is the wallet the badge names. A profile badged later shows
-  from then on; a reader that wants its earlier entries reads it by `profile`.
+- `badged=1`: only profiles the host counts as badged. What counts is the host operator's choice,
+  by design: typically a registry line naming the profile key, since that key is the one a badge
+  names, proven against the root of an issuer the operator trusts. A host that checks nothing
+  counts no profile as badged. A profile badged later shows from then on; a reader that wants its
+  earlier entries reads it by `profile`.
 
 `limit` is at most 1000 lines a page. A page is at most 4 MB (4,194,304 bytes): a host ends it
 before a line that would pass that. Readers MAY refuse a larger page.

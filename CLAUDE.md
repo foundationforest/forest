@@ -19,5 +19,5 @@ Rules Claude Code does not change (Carlos changes them, in a chat, then here):
 
 How a session works:
 - For any change to a Solana program, use the safe-solana-builder skill and keep its security checklist next to the program.
-- When the plan is silent, choose the option that adds no rule and no text a person reads, and add it to `docs/decisions.md`, one line with its reason. Ask only when the choice changes a sealed program or spends money.
+- When the plan is silent, choose the option that adds no rule and no text a person reads, and write down its reason: in `docs/decisions.md`, one line, if it shapes Forest; otherwise in a comment beside the code. Ask only when the choice changes a sealed program or spends money.
 - Keep the docs true in the same pull request: a change that makes a README, a SPEC or `docs/devnet.md` wrong fixes it. Docs say only what the code does today, plain words first, in these words: profile, record, board, badge, issuer, relayer, index, app, label.

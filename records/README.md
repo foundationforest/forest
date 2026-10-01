@@ -35,8 +35,10 @@ The spec and the code say *host* for a board and *entry* for one signed version 
 - **Readers trust boards for order and presence, never content.** Arrival order decides only
   whether a delegate's record came in before or after a permission changed. A board that withholds
   records is routed around by reading the profile's other boards, or the app's own copies.
-- **Boards trust signatures, and whatever registry answer their operator plugs in** (`isBadged`),
-  for their own policy and for the `badged=1` feed. Nothing else.
+- **Boards trust signatures.** What counts as badged, for a board's policy and
+  its `badged=1` feed, is its operator's choice, by design: the reference board takes an
+  `isBadged` function (a registry lookup against the issuers the operator trusts, say), and
+  without one counts no profile as badged.
 - **The approval page trusts the device:** its passkey for the seed, its browser for the page. The
   boards a request names are hints; the page posts to the boards the profile's signed folder record
   names.
@@ -99,8 +101,7 @@ tarball `npm pack` makes.
 
 - **The reference board is a reference.** One process, one SQLite file, listening on `127.0.0.1`
   unless told otherwise; TLS is the operator's. It forgets old versions only when its operator calls
-  `prune()`. Its `badged=1` feed is empty unless the operator passes `isBadged`, and nothing in this
-  repo connects that to the registry; badge answers refresh on each write or on `refreshBadges()`.
+  `prune()`, and asks `isBadged` again only on each write or on `refreshBadges()`.
 - **Checking signatures is slow here.** Pure JavaScript checks about 340 a second on one core. A
   board or index under load should verify in native code with the same strict rules (SPEC §7).
 - **No blobs.** Records name photos and media by SHA-256; how those bytes are stored and served is

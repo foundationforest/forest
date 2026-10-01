@@ -202,7 +202,8 @@ export type GrantBody = {
   to: string
   /** Path prefixes it may write under, segment by segment. Never control paths. */
   paths: string[]
-  /** Nothing it signed counts once a reader's clock passes this (milliseconds since 1970). */
+  /** Milliseconds since 1970. An entry signed under it counts only if dated no later; a host also
+   * refuses one arriving after it, by the host's own clock. No reader's clock ends anything. */
   until: number
   /** Words for the owner's app: "Claude, for offers". */
   label?: string

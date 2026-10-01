@@ -14,8 +14,8 @@ from the same keys.
 | File | What it does |
 |---|---|
 | `keys.sh` | Derives every key from the phrase and writes the keypair files outside the repo |
-| `build.sh` | Builds the registry and escrow v1 from a copy of the source, with the devnet program ids put in |
-| `deploy.sh` | Deploys one build, its exact cost computed first, then checks the deployed bytes against the build and records them |
+| `build.sh` | Builds escrow v1 from a copy of the source, with its devnet program id put in |
+| `deploy.sh` | Deploys that build, its exact cost computed first, then checks the deployed bytes against the build and records them |
 | `devnet.json` | The public record: keys, escrow v1's deploy and deals, the closed first registry, the test dollar |
 
 ## The key recipe
@@ -57,8 +57,8 @@ registry used: `registry-program`, `treasury` and `issuer`. The per-program scri
 ```
 export FOREST_DEVNET_SEED='<the phrase>' FOREST_DEVNET_KEYS=~/.forest-devnet/keys
 devnet/keys.sh                       # the keys; the record is kept if it names the same keys
-devnet/build.sh                      # fails today: see Limits
-devnet/deploy.sh cost                # what each deploy would cost; deploys nothing
+devnet/build.sh                      # escrow v1, SBPF v3, into devnet/target/
+devnet/deploy.sh cost                # what the deploy would cost; deploys nothing
 devnet/deploy.sh escrow              # deploy, or check and record
 cd escrow/client && node scripts/devnet.ts     # escrow v1's two deals; skips what is done
 ```
@@ -69,10 +69,8 @@ without spending devnet SOL.
 
 ## Limits
 
-- **`build.sh` fails today.** It still looks in the registry's source for lines the current registry
-  no longer has (the closed registry's program id, treasury and issuer), and stops there, before
-  building either program. So `deploy.sh escrow` has no build to check escrow v1's deployed bytes
-  against.
-- **`deploy.sh registry` is refused:** the registry it deploys is closed. The current registry
-  deploys with `registry/devnet/deploy.sh`.
-- **Builds are not checked to be reproducible** byte for byte on another machine.
+- **The bytes check needs the same toolchain:** Solana CLI 4.2.2, `cargo-build-sbf` 4.1.0,
+  platform-tools v1.54. With it, `build.sh` reproduces escrow v1's deployed bytes on another machine.
+- **A new phrase starts from nothing.** Its deploy key needs SOL sent by hand, and escrow v1's deals
+  need a test dollar's mint, the parties' token accounts and the buyer's dollars, which no script
+  here makes.

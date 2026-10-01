@@ -274,7 +274,7 @@ test('a seed file opens only with the passkey that made it, and only undamaged',
   await assert.rejects(unwrapSeed({ label: 'x' + label.slice(1), ciphertext }, otherPrf), /not made by this passkey/)
 })
 
-// Paper export
+// Backup words
 
 test('the seed becomes 24 words, pinned, and comes back', () => {
   const seed = hex.decode(vectors.seed)
@@ -291,7 +291,7 @@ test('spacing and case are forgiven; a wrong or missing word is not', () => {
   assert.equal(hex.encode(importWords(messy)), vectors.seed)
   const wrongWord = words.split(' ')
   wrongWord[23] = 'abandon'
-  assert.throws(() => importWords(wrongWord.join(' ')), /not a paper export/)
+  assert.throws(() => importWords(wrongWord.join(' ')), /not backup words/)
   assert.throws(() => importWords(words.split(' ').slice(0, 23).join(' ')), /expected 24 words, got 23/)
   assert.throws(() => exportWords(new Uint8Array(16)), /seed must be 32 bytes/)
 })

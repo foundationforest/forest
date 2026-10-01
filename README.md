@@ -30,7 +30,7 @@ What it does not hold:
 | [`registry/`](registry/README.md) | Sealed program and client: one badge per human per label, free | On devnet |
 | [`escrow/`](escrow/README.md) | Sealed program and client, v1: money out only when both sides agree; classic tokens | On devnet |
 | [`escrow/v2/`](escrow/v2/README.md) | v1 plus an objection, the funding time on every receipt, and both token programs | On devnet |
-| [`devnet/`](devnet/README.md) | The devnet key recipe, and escrow v1's build and deploy scripts and record | Its build script fails today |
+| [`devnet/`](devnet/README.md) | The devnet key recipe, and escrow v1's build and deploy scripts and record | Rebuilds escrow v1's deployed bytes |
 | [`docs/`](docs/) | [Why things are as they are](docs/decisions.md); [what runs on devnet](docs/devnet.md) | |
 | [`.claude/skills/safe-solana-builder/`](.claude/skills/safe-solana-builder/SKILL.md) | The security checklist every program change goes through | |
 
