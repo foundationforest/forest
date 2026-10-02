@@ -1,6 +1,6 @@
-// The escrow, v2, on devnet, used for real: deals between the devnet parties through
-// escrow/devnet/deploy.sh's deploy, in the classic test dollar the registry script made and in
-// a Token-2022 dollar made here with Open USD's extensions.
+// The escrow on devnet, used for real: deals between the devnet parties through
+// escrow/devnet/deploy.sh's deploy, in the classic test dollar the record names and in a
+// Token-2022 dollar made here with Open USD's extensions.
 //
 //   FOREST_DEVNET_KEYS=<dir> node scripts/devnet.ts        (after escrow/devnet/deploy.sh)
 //
@@ -20,9 +20,10 @@
 //    Token-2022 mint made there, its `create` simulated, which must fail with `NonTransferable`.
 //
 // A payer key pays every network fee and fronts every rent, the way a fee payer would, and is
-// recorded as the escrow's payer. <dir> holds payer.json, buyer.json and seller.json, read and never
-// printed, and open-usd-shaped-mint.json, the Token-2022 mint's key, made there on the first run;
-// the classic mint and the keys are the ones devnet/devnet.json names, which this only reads.
+// recorded as the escrow's payer. <dir> holds payer.json, buyer.json and seller.json, as
+// escrow/devnet/deploy.sh writes them, read and never printed, and open-usd-shaped-mint.json, the
+// Token-2022 mint's key, made there on the first run. The keys must be the ones
+// escrow/devnet/devnet.json names in `keys`, and the classic mint is its `testDollar`.
 // Everything public goes into escrow/devnet/devnet.json. Each step checks the chain first, so
 // the script can be run again after a failure. FOREST_DEVNET_RPC points it at another devnet RPC.
 
@@ -84,12 +85,11 @@ const keysDir = process.env.FOREST_DEVNET_KEYS
 if (!keysDir) throw new Error('set FOREST_DEVNET_KEYS to the directory holding the devnet keypairs')
 const recordPath = resolve(join(here, '../../devnet/devnet.json'))
 const record = JSON.parse(readFileSync(recordPath, 'utf8'))
-const base = JSON.parse(readFileSync(resolve(join(here, '../../../devnet/devnet.json')), 'utf8'))
 const connection = new Connection(process.env.FOREST_DEVNET_RPC ?? record.rpc, 'confirmed')
 const programId = new PublicKey(record.escrow.programId)
 const earlier = (record.earlier ?? []).map((e: { escrow: { programId: string } }) => e.escrow.programId)
-if ([base.escrow.programId, ...earlier].includes(programId.toBase58())) throw new Error('that is v1\'s or an earlier v2\'s program id')
-const classicMint = new PublicKey(base.testDollar.mint)
+if (earlier.includes(programId.toBase58())) throw new Error('that is an earlier escrow program\'s id')
+const classicMint = new PublicKey(record.testDollar.mint)
 
 function key(name: string): Keypair {
   return Keypair.fromSecretKey(Uint8Array.from(JSON.parse(readFileSync(join(keysDir!, `${name}.json`), 'utf8'))))
@@ -98,7 +98,7 @@ const payer = key('payer')
 const buyer = key('buyer')
 const seller = key('seller')
 for (const [name, k] of [['payer', payer], ['buyer', buyer], ['seller', seller]] as const) {
-  if (k.publicKey.toBase58() !== base.keys[name]) throw new Error(`the ${name} key is not the one devnet/devnet.json names`)
+  if (k.publicKey.toBase58() !== record.keys[name]) throw new Error(`the ${name} key is not the one the record names`)
 }
 
 function save(): void {
@@ -151,7 +151,7 @@ async function kinds(signature: string): Promise<string> {
 
 async function escrowAt(address: PublicKey): Promise<EscrowAccount | null> {
   const info = await connection.getAccountInfo(address)
-  if (info && !info.owner.equals(programId)) throw new Error(`${address.toBase58()} is not owned by the v2 program`)
+  if (info && !info.owner.equals(programId)) throw new Error(`${address.toBase58()} is not owned by the escrow program`)
   return info ? decodeEscrow(new Uint8Array(info.data)) : null
 }
 
@@ -388,7 +388,7 @@ async function openUsdShaped(): Promise<Token> {
   return token
 }
 
-console.log(`escrow v2 ${programId.toBase58()}`)
+console.log(`escrow ${programId.toBase58()}`)
 
 // 1 and 2, in the classic test dollar.
 const classic = await readToken(classicMint)

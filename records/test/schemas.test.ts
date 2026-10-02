@@ -41,7 +41,7 @@ describe('schemas', () => {
     assert.ok(fits('profile', profileBody('Ana')))
     assert.ok(fits('offer', offerBody('30')))
     assert.ok(fits('review', reviewBody(alice.address)))
-    assert.ok(fits('offer', JSON.parse(read('./vectors.json').offer.wire).body), 'the offer SPEC.md pins')
+    assert.ok(fits('offer', JSON.parse(read('./vectors.json').offer.wire).body), 'the offer the test vectors pin')
   })
 
   test('every example is a body a record carries: it signs, travels and checks', () => {

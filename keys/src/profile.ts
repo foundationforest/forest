@@ -20,13 +20,13 @@ export type ProfileKey = {
 }
 
 /**
- * The key that opens private records sealed to a profile: age's post-quantum hybrid identity,
+ * The key that opens private records encrypted to a profile: age's post-quantum hybrid identity,
  * ML-KEM-768 with X25519 (mlkem768x25519).
  */
 export type ReadingKey = {
-  /** age's hybrid identity, `AGE-SECRET-KEY-PQ-1…`: it opens what is sealed to this profile. */
+  /** age's hybrid identity, `AGE-SECRET-KEY-PQ-1…`: it opens what is encrypted to this profile. */
   identity: string
-  /** What others seal to, `age1pq1…`. The profile's address does not give it. */
+  /** What others encrypt to, `age1pq1…`. The profile's address does not give it. */
   recipient: string
 }
 

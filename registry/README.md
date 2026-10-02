@@ -1,10 +1,10 @@
 # registry
 
-Devnet only: the program runs on devnet at `5zTPm1bGY8ANLcJd12fPiKSTd71bvnq38LAUDT4ToeoC`, still
-upgradable ([record](devnet/devnet.json)). Nothing is on mainnet.
+Devnet only: the program runs on devnet at `5zTPm1bGY8ANLcJd12fPiKSTd71bvnq38LAUDT4ToeoC`, still upgradable ([record](devnet/devnet.json)); nothing is on mainnet.
 
-Up: [the repo](../README.md). Down: [the setup files](artifacts/README.md), the
-[security checklist](security-checklist.md).
+Up: [the repo](../README.md). Down: the [security checklist](security-checklist.md).
+
+## What it is
 
 A free public list on Solana, and the client a device uses to add to it and read it. Each row says:
 *this profile holds a stamp on this keeper's list, under this label*. It is proven without saying
@@ -12,6 +12,12 @@ which stamp, so without saying who. One person gets at most one row per keeper p
 written once and never changes. The program holds nothing else: no fee, no token, no treasury, no
 admin and no list. The only costs are Solana's own: the network fee and the row's deposit, paid by
 whoever sends the transaction.
+
+- `program/`: the program (Anchor 1.2) and its LiteSVM tests, the property test among them.
+- `client/`: stamps, proofs, the two instructions, and rows read back. It talks to no network of
+  its own.
+- `artifacts/`: Semaphore's setup files the program is sealed against.
+- `devnet/`: the deploy script and the public record of what runs on devnet.
 
 ## How it works
 
@@ -42,7 +48,7 @@ whoever sends the transaction.
 - **Anyone pays.** Whoever signs as payer (the person, an app, a relayer) pays the deposit and is
   recorded, so a refund can find them.
 
-## The row
+### The row
 
 At `["row", market stamp]`. Every fixed field sits at a fixed offset; the label is last.
 
@@ -60,7 +66,7 @@ At `["row", market stamp]`. Every fixed field sits at a fixed offset; the label 
 A row is `205 + label` bytes, and never more. A reader finds every row of one profile with a filter
 at offset 8, of one keeper at offset 40, and of one label at offset 201 (`fetchRows`).
 
-## Instructions
+### Instructions
 
 | | What it does | Signs |
 |---|---|---|
@@ -72,7 +78,40 @@ The scope is `keccak256("forest.foundation/label/v1/" ‖ label) >> 8`, and the 
 proof counts for one label and one profile and no other. The program emits no events; readers read
 the rows.
 
-## Use it
+### The setup files
+
+Semaphore's circuit and its published setup files, in `artifacts/`, used unchanged. Forest wrote
+none of this.
+
+- **Which ones.** The `4.0.0` files at depth 32, from the public Semaphore V4 ceremony (PSE's
+  p0tion, over 400 participants, finished July 13, 2024). The newer `4.13.0` files in the library's
+  default path come from a later setup whose second phase has no published transcript, so these are
+  pinned instead. The library version that matches them is `@semaphore-protocol/*` 4.12.1, which
+  `client/` and `keys/` both use.
+- **What is committed.** `semaphore-32.json`, the verification key. The program has it baked in as
+  `program/src/verifying_key.rs`.
+- **What is not.** `semaphore-32.zkey` and `semaphore-32.wasm`, used only to make a proof on a
+  device. `manifest.json` pins them by URL and SHA-256, and `npm run fetch` refuses anything whose
+  hash does not match.
+
+```
+cd registry/artifacts
+npm ci
+npm run fetch      # the proving key and the witness generator, hash-checked
+npm run vk         # rewrite ../program/src/verifying_key.rs from semaphore-32.json
+```
+
+`parse_vk_to_rust.cjs` is `groth16-solana` 0.2.0's own converter, copied unchanged. `npm run vk` on
+an unchanged `semaphore-32.json` must leave `verifying_key.rs` byte for byte the same; if it does
+not, the program is no longer sealed against this ceremony.
+
+| File | Bytes | SHA-256 |
+|---|---|---|
+| `semaphore-32.json` | 3,741 | `9b3ab0a193f448714db224bd22540bf4e98f0e6418aa347b0a8cdfbc246ad588` |
+| `semaphore-32.zkey` | 5,841,577 | `0654f6692b026a0e98972db610a7084136ee6303a1960944e866205942d051c7` |
+| `semaphore-32.wasm` | 1,850,862 | `f5c50ff3847c1b93e3439098719739e34136f505d1899b620d1641339d67ee7a` |
+
+### Use it
 
 The client (`client/src/`) talks to no network of its own: the caller passes the keeper's list and
 signature, a recent blockhash and a connection.
@@ -110,7 +149,7 @@ cd registry/program/tests-litesvm && cargo test          # the rules, the attack
 cd registry/program/tests-litesvm && FOREST_FUZZ_ITERATIONS=1000 cargo test --release --test invariants -- --nocapture
 cd registry/client    && npm ci && npm test              # no chain needed (install keys/ first)
 cd registry/client    && npm run test:validator          # starts solana-test-validator itself
-cd registry/client    && npm run test:devnet             # read-only, against devnet/devnet.json
+cd registry/client    && npm run test:devnet             # read-only, against registry/devnet/devnet.json
 cd registry/client    && npm run fixtures                # remake the real proofs the Rust tests use
 ```
 
@@ -120,16 +159,17 @@ keys/'s: list secrets and two profiles from its test seed, through `keys/`. They
 format against a second copy written by hand in `program/tests-litesvm/src/lib.rs`.
 
 Devnet: `FOREST_DEVNET_SEED=<phrase> registry/devnet/deploy.sh` builds a copy with the devnet
-program id, deploys it (its exact cost checked first) and records it. Then
+program id, deploys it (its exact cost checked first) and records it in `devnet/devnet.json`; the
+script's header holds the recipe for every devnet key it needs. Then
 `FOREST_DEVNET_KEYS=<dir> node scripts/devnet.ts` in `client/` writes one row, shows the refusal of
 a second profile's row for the same market stamp, and a refund. The person is keys/'s test person:
 its test seed, and two of its profiles, all through `keys/`. The keeper is a stand-in. A row an
 earlier test person left stays on chain (rows never close), and the record keeps it under
-`earlierRows`. The devnet keys come from [devnet/](../devnet/README.md).
+`earlierRows`; the closed registries before this one are under `earlier`.
 
-## What one row costs
+### What one row costs
 
-From the row on devnet (`devnet/devnet.json`): a v0 transaction, two signatures, no compute-budget
+From the row on devnet (`devnet/devnet.json`, `row`): a v0 transaction, two signatures, no compute-budget
 instruction.
 
 | | Bytes of 1,232 | Compute units of 200,000 |
@@ -141,34 +181,15 @@ One proof is about 120,000 compute units to verify, and a second or two to make 
 deposit is the rent-exempt minimum for the row's size: 1,772,920 lamports for that 221-byte row at
 today's rate. The network fee is 5,000 lamports a signature. The program is 164,288 bytes.
 
-## What it promises
-
-- At most one row per market stamp: one per person per keeper per label.
-- Only the profile's key can put a row on a profile.
-- A proof counts for one label and one profile: the program derives the scope from the label and
-  the message from the profile, and verifies against them.
-- A row is never written again after `register`, and never closes.
-- `refund` moves only what a row holds above its rent-exempt minimum, and only to the payer it
-  records.
-
-## What it trusts
-
-- **Semaphore's circuit, unchanged,** with the depth-32 verification key of its public July 2024
-  setup, baked into the program ([artifacts](artifacts/README.md)).
-- **`groth16-solana` 0.2.0** and Solana's `alt_bn128` syscalls to verify; Anchor 1.2.
-- **Keepers,** to put on their lists only the stamps they say they do (the issuer: one per real,
-  distinct human). The program cannot tell; readers choose whom to trust.
-- **On the device:** `snarkjs` 0.7.5 and `@semaphore-protocol/*` 4.12.1 to make proofs.
-
-## Sealed on mainnet
+### Sealed on mainnet
 
 On mainnet the program is sealed the day it deploys: nothing in it can change, and a later version
 is a new program at a new address whose rows start empty. On devnet it stays upgradable, for
 testing. What a mainnet deploy seals:
 
-- **The circuit and the verification key.** Semaphore 4.0.0, depth 32. Public signals in the order
-  root, nullifier, message, scope; `proof_a` negated in the program; points arriving compressed;
-  every public input checked to be below BN254's scalar order.
+- **The circuit and the verification key.** Semaphore 4.0.0, depth 32 (the setup files above).
+  Public signals in the order root, nullifier, message, scope; `proof_a` negated in the program;
+  points arriving compressed; every public input checked to be below BN254's scalar order.
 - **The scope and the message,** as above.
 - **The row's address and layout, the instruction bytes and the discriminators.** Written twice on
   purpose, in `client/src/program.ts` and `program/tests-litesvm/src/lib.rs`, and checked against
@@ -183,8 +204,24 @@ solana program set-upgrade-authority <program id> --final
 solana program show <program id>          # Authority: none
 ```
 
+## Promises
+
+- At most one row per market stamp: one per person per keeper per label.
+- Only the profile's key can put a row on a profile.
+- A proof counts for one label and one profile: the program derives the scope from the label and
+  the message from the profile, and verifies against them.
+- A row is never written again after `register`, and never closes.
+- `refund` moves only what a row holds above its rent-exempt minimum, and only to the payer it
+  records.
+
 ## Limits
 
+- **It trusts Semaphore's circuit, unchanged,** with the depth-32 verification key of its public
+  July 2024 setup, baked into the program (the setup files, above).
+- **It trusts `groth16-solana` 0.2.0** and Solana's `alt_bn128` syscalls to verify, and Anchor 1.2.
+- **It trusts keepers** to put on their lists only the stamps they say they do (the issuer: one per
+  real, distinct human). The program cannot tell; readers choose whom to trust.
+- **On the device, it trusts** `snarkjs` 0.7.5 and `@semaphore-protocol/*` 4.12.1 to make proofs.
 - **A row is only as good as its keeper.** Roots and keepers are not checked, so anyone can keep a
   list of their own and write rows against it. A reader that trusts no keeper counts no row.
 - **The keeper's signature is checked by readers, not the program.** A row whose signature does not
@@ -216,12 +253,26 @@ market stamp, so the issuer's list gives you one row per market. A second row ne
 second keeper's list, and a second keeper that checks faces means a second face check. Nothing on
 chain ties the two rows to each other.
 
+**Why are rows not numbered?** A number shared across registrations would link a person's profiles.
+A row's address comes from its market stamp alone: one per keeper, per label, per person.
+
+**Why does the program not check the keeper or the root?** Anyone must be able to keep a list, so
+lists stay off chain and the program knows no keeper. Each reader weighs whose lists it trusts.
+
+**Who pays for a row?** Whoever signs as payer: the person, an app or a relayer. The program pays
+for no one and cannot tell who the payer is, so paying for someone else needs nothing in it. There
+is no fee: only Solana's network fee and the row's deposit.
+
 **Can a stranger register my profile?** No. `register` needs the profile's signature, and the proof
 names the profile, so a proof seen in flight cannot be landed under anyone else's profile either.
 
 **What is `refund` for?** Solana is cutting its rent rate in steps, and only the owning program can
-move the difference out of its accounts. `refund` sends what a row holds above the new minimum back
-to whoever paid for it. Anyone may send it: the amount and the destination are read from the chain.
+move the difference out of its accounts. `refund` sends what a row holds above the new minimum, or
+anything someone sent the row, back to whoever paid for it. Anyone may send it: the amount and the
+destination are read from the chain, never from the caller.
+
+**Why the July 2024 setup files, and not the newer ones?** The later setup's second phase has no
+published transcript, and a sealed program bakes one verification key in forever.
 
 **Why does a row never change or close?** Its existence is the one-row-per-market-stamp rule:
 closing it would free the market stamp for a second row.

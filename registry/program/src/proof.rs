@@ -2,7 +2,7 @@
 //!
 //! The verification key in `verifying_key.rs` was written by `groth16-solana`'s own converter
 //! from `semaphore-32.json`, the depth-32 verification key of the public July 2024 Semaphore
-//! ceremony. It is baked in forever; see `registry/artifacts/README.md`.
+//! ceremony. It is baked in forever; see `registry/README.md`.
 //!
 //! Two wire-format steps:
 //!

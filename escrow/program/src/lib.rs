@@ -1,5 +1,5 @@
 // ============================================================
-// Program:    Forest escrow, v2
+// Program:    Forest escrow
 // Framework:  Anchor 1.2
 // Testing:    LiteSVM
 // Risk level: Medium by the safe-solana-builder table; treated as Critical, because it is
@@ -8,7 +8,7 @@
 // Security:   see escrow/security-checklist.md
 // ============================================================
 
-//! The Forest escrow, v2.
+//! The Forest escrow.
 //!
 //! Money in, and out only when the two sides agree. One shape. An amount of a token held between
 //! two keys, buyer and seller. The token is any mint of the classic SPL Token program or of

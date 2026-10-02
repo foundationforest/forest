@@ -52,10 +52,9 @@ const record = JSON.parse(readFileSync(recordPath, 'utf8'))
 const rpc = process.env.FOREST_DEVNET_RPC ?? record.rpc
 const connection = new Connection(rpc, 'confirmed')
 const programId = new PublicKey(record.registry.programId)
-const base = JSON.parse(readFileSync(join(here, '../../../devnet/devnet.json'), 'utf8'))
 
 const payer = Keypair.fromSecretKey(Uint8Array.from(JSON.parse(readFileSync(join(keysDir, 'payer.json'), 'utf8'))))
-if (payer.publicKey.toBase58() !== base.keys.payer) throw new Error('the payer key is not the one devnet/devnet.json names')
+if (payer.publicKey.toBase58() !== record.keys.payer) throw new Error('the payer key is not the one the record names')
 
 const hex = (b: Uint8Array) => Buffer.from(b).toString('hex')
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))

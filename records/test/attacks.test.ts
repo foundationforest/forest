@@ -131,26 +131,24 @@ describe('a stolen writer key', () => {
     assert.throws(() => writerRecord(writer, alice.address, 'hosts', { urls: ['https://evil.example'] }, T0 + DAY), /only the owner/)
   })
 
-  test('once removed, nothing dated from then on counts; left out of the list, nothing it ever signed counts, on any host or none', () => {
+  test('once removed, nothing dated from then on counts, on any host or none', () => {
     const removedAt = T0 + MINUTE
     const removed = permissionsRecord(alice, [allow(writer, ['offer'], removedAt)], removedAt)
     const after = writerRecord(writer, alice.address, 'offer/after', offerBody('1'), removedAt + 1)
     assert.equal(view(removed, after).current.has('offer/after'), false)
-    const backdated = writerRecord(writer, alice.address, 'offer/spam', offerBody('1'), T0 + 1)
-    assert.equal(view(permissions, permissionsRecord(alice, [], removedAt), backdated).current.has('offer/spam'), false)
   })
 
   test('FINDING: once removed, a stolen key can backdate a record before its until, and it counts for readers of a host that skips the check', () => {
     // An honest host refuses it by its own clock (host.test.ts). A reader checks only the record's
-    // own date, so whoever holds a host that takes it can show it. Leaving the key out of the list
-    // ends it, and with it everything the key ever wrote.
+    // own date, so whoever holds a host that takes it can show it. The owner's record wins at that
+    // path, so the owner deletes it there.
     const removedAt = T0 + MINUTE
     const removed = permissionsRecord(alice, [allow(writer, ['offer'], removedAt)], removedAt)
     const backdated = writerRecord(writer, alice.address, 'offer/old', offerBody('1'), removedAt - 1)
     const later = T0 + 365 * DAY
     assert.equal(viewProfile(alice.address, [removed, backdated].map((r) => checkRecord(r)), later).current.has('offer/old'), true)
-    const dropped = permissionsRecord(alice, [], removedAt + 1)
-    assert.equal(viewProfile(alice.address, [removed, backdated, dropped].map((r) => checkRecord(r)), later).current.has('offer/old'), false)
+    const deleted = ownerRecord(alice, 'offer/old', null, removedAt + 1)
+    assert.equal(viewProfile(alice.address, [removed, backdated, deleted].map((r) => checkRecord(r)), later).current.get('offer/old')!.record.body, null)
   })
 })
 

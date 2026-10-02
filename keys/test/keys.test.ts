@@ -142,16 +142,16 @@ test("the reading key, recomputed without the library: HKDF, ML-KEM-768 with X25
   assert.match(seller.reading.recipient, /^age1pq1[0-9a-z]+$/)
 })
 
-test('age seals to the reading key, and only that profile opens it', async () => {
+test('age encrypts to the reading key, and only that profile opens it', async () => {
   const encrypter = new Encrypter()
   encrypter.addRecipient(seller.reading.recipient)
-  const sealed = await encrypter.encrypt('only for the seller profile')
+  const encrypted = await encrypter.encrypt('only for the seller profile')
   const opener = new Decrypter()
   opener.addIdentity(seller.reading.identity)
-  assert.equal(await opener.decrypt(sealed, 'text'), 'only for the seller profile')
+  assert.equal(await opener.decrypt(encrypted, 'text'), 'only for the seller profile')
   const other = new Decrypter()
   other.addIdentity(buyer.reading.identity)
-  await assert.rejects(other.decrypt(sealed, 'text'))
+  await assert.rejects(other.decrypt(encrypted, 'text'))
 })
 
 test('a reading key needs the 32 private bytes of a profile key', async () => {

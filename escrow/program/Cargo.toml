@@ -2,7 +2,7 @@
 name = "forest-escrow-v2"
 version = "0.1.0"
 edition = "2021"
-description = "The Forest escrow, v2: an amount of a token (classic SPL Token or Token-2022) held between two keys, out only when the two sides agree; either side may object once, which stops the timer. Sealed per version."
+description = "The Forest escrow: an amount of a token (classic SPL Token or Token-2022) held between two keys, out only when the two sides agree; either side may object once, which stops the timer. Sealed per version."
 license = "Apache-2.0"
 publish = false
 exclude = ["tests-litesvm"]
