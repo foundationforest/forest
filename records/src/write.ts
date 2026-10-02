@@ -30,8 +30,8 @@ export function hostsRecord(owner: Key, urls: string[] | null, time: number): Si
 
 /**
  * Which writer keys may write, where, and until when. To remove a writer, set its `until` to now:
- * what it wrote before then still counts. A key left out of the list counts for nothing, so what it
- * wrote stops counting too.
+ * what it wrote before then still counts. Apps never delete an entry from the list: a key not on it
+ * counts for nothing, so its past records would stop counting.
  */
 export function permissionsRecord(owner: Key, writers: Writer[] | null, time: number): SignedRecord {
   return ownerRecord(owner, 'permissions', writers && { writers }, time)

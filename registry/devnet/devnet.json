@@ -1,7 +1,11 @@
 {
-  "note": "The devnet deploy of the registry: one row per market stamp. Public keys, addresses and signatures only. The program id is derived from the devnet phrase under the label registry-rows-program; the deploy key and the payer are the ones devnet/devnet.json names. Written by registry/devnet/deploy.sh and registry/client/scripts/devnet.ts; read by registry/client/test/devnet.test.ts.",
+  "note": "The devnet deploy of the registry: one row per market stamp. Public keys, addresses and signatures only. Every key comes from the devnet phrase by the recipe in registry/devnet/deploy.sh, which writes the keypairs outside the repo and checks them against `keys`; the program id's label is registry-rows-program. Written by registry/devnet/deploy.sh and registry/client/scripts/devnet.ts; read by registry/client/test/devnet.test.ts. `earlier` names the closed registries before this one.",
   "cluster": "devnet",
   "rpc": "https://api.devnet.solana.com",
+  "keys": {
+    "deploy": "2mz33wBK7FKRXoAi7LptGGTwVQJDbrSyrVwbYRCqwP3A",
+    "payer": "9CKUm2s7nwT7HrCpjtaffNH3PnUUVyQr2gELjHrWYBUd"
+  },
   "registry": {
     "programId": "5zTPm1bGY8ANLcJd12fPiKSTd71bvnq38LAUDT4ToeoC",
     "programData": "8GcbCkBaeurcprsApALLJYR7eh3Rp4ZJQ4ZULhwSBDsk",
@@ -193,5 +197,59 @@
       "bytes": 221,
       "lamports": 1772920
     }
-  }
+  },
+  "earlier": [
+    {
+      "note": "The first registry: lists, a code tree, a fee. Closed on 2026-09-30 (`registry.closed`). Its full record, with its transactions and registration, is devnet/devnet.json at commit 419837b.",
+      "registry": {
+        "programId": "8sUyd9JXRGEUqf2hYVnLCybi74549VG27dAK6YvbbU3i",
+        "programData": "8o6rWB9iGKc7cMQKeUhinQzT3kxRrpRzXgp6MkScna9c",
+        "upgradeAuthority": "2mz33wBK7FKRXoAi7LptGGTwVQJDbrSyrVwbYRCqwP3A",
+        "lastDeploySlot": 504105793,
+        "soSha256": "47171998b5d12c46e97720721fa7ded05c0d9c1132f7483572622ea76568c64c",
+        "soBytes": 304928,
+        "sbpfVersion": "v3",
+        "deploySignature": "AkfJTcjedMaLWVBM6TwMCG3o9SbU1HT6zHMXHGpXPv4RiYj2hsg14up4WEjnBW3eHuCJFmUsUZTtHrW8wDMRPGF",
+        "deployCost": {
+          "note": "computed before the deploy by devnet/deploy.sh (lamports), and the deploy key's balance before and after it",
+          "bytes": 304928,
+          "programDataRent": 1549913080,
+          "programRent": 833120,
+          "writes": 302,
+          "fees": 1530000,
+          "total": 1552276200,
+          "balanceBefore": 6000000000,
+          "balanceAfter": 4447723800,
+          "spent": 1552276200
+        },
+        "config": "4nxop5nYuJHyRKgLn6yj6vvDB1LZTM7wDykH3N8Qsn2y",
+        "list0": "7PMx9JpaP7ZwewZ78833FomUbHQgDFFERM9WuvyRurjD",
+        "codeTree": "82eKSXYhRAQGL3Y2FtFYc9fFQQnxhPbFHwGAxjvNxGJX",
+        "usdcMint": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+        "closed": {
+          "what": "closed: superseded by the registry in registry/devnet/devnet.json (Hyh5…), its program data's deposit returned to the deploy key. Its config, list, code tree and codes stay as accounts no program owns any more, readable, their rent locked for good; nothing can register here again.",
+          "date": "2026-09-30",
+          "signature": "3Nzwf1R8dhDQfMavjrRhYhNu941o4KAfoicYeerytR7rp5uRoTekVmZmxWPrPg7L3foUWVPcCnShyVe2C8podepG",
+          "slot": 506034586,
+          "programDataLamports": 1549913080,
+          "returnedToDeployKey": 1549908080,
+          "fee": 5000,
+          "strandedAccounts": 7,
+          "strandedLamports": 42113200
+        }
+      }
+    },
+    {
+      "note": "An earlier registry, key label registry-badges-program. Closed on 2026-09-30. Its record is registry/devnet/devnet.json at commit 0abdd13, under `earlier`.",
+      "registry": {
+        "programId": "GWyKGgoRg2g3kpKNgsXBWS1ayHTHHzwbtLJW4XGVP2RW"
+      }
+    },
+    {
+      "note": "The registry before this one. Closed when this one was deployed (commit aa9be9d). Its record is registry/devnet/devnet.json at commit 0abdd13.",
+      "registry": {
+        "programId": "Hyh5Lt1ErzYV3pF9ZkFWTdjhE2wwTuXnPMVgzCKEv9hf"
+      }
+    }
+  ]
 }

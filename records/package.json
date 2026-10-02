@@ -2,7 +2,7 @@
   "name": "@forest/records",
   "version": "0.0.0",
   "private": true,
-  "description": "Forest records: signed records on open hosts. The spec, the core library, a reference host, private records, the record schemas, tests and vectors. Nothing is shipped.",
+  "description": "Forest records: signed records on open hosts. The core library, a reference host, private records, the record schemas, tests and vectors. Nothing is shipped.",
   "license": "Apache-2.0",
   "type": "module",
   "engines": {
@@ -26,8 +26,7 @@
   },
   "files": [
     "dist",
-    "schemas",
-    "SPEC.md"
+    "schemas"
   ],
   "scripts": {
     "prepare": "npm run build",

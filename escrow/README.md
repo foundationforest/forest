@@ -1,7 +1,6 @@
 # escrow
 
-Devnet only: the escrow runs on devnet at `FA6ZodkyhMDj9yjzY27dk8JDCtcHnJx8mr45Mx9TfKg8`
-([record](devnet/devnet.json)). Nothing is on mainnet.
+Devnet only: the program runs on devnet at `FA6ZodkyhMDj9yjzY27dk8JDCtcHnJx8mr45Mx9TfKg8`, still upgradable ([record](devnet/devnet.json)); nothing is on mainnet.
 
 Up: [the repo](../README.md). Down: the [security checklist](security-checklist.md).
 
@@ -17,9 +16,7 @@ that held the money leaves a receipt at its address, for good.
   its own.
 - `devnet/`: the deploy script and the public record of what runs on devnet.
 
-The program writes version 2 into every escrow, and its crate is still named `forest_escrow_v2`.
-Version 1, an earlier program with classic tokens only and no objection, is no longer in this repo
-(see the FAQ).
+The crate is named `forest_escrow_v2`, and every escrow it opens carries version 2 (see the FAQ).
 
 ## How it works
 
@@ -228,14 +225,19 @@ keypair for it exists. Each deploy uses its own.
 
 ### Devnet
 
-The escrow runs at `FA6ZodkyhMDj9yjzY27dk8JDCtcHnJx8mr45Mx9TfKg8`, built as SBPF v3 and not sealed:
-its upgrade authority is the devnet deploy key. `devnet/deploy.sh` builds a copy of the source with
-the devnet id put in, deploys a fresh id or upgrades it in place, checks the deployed bytes against
-the build, and records everything public in [`devnet/devnet.json`](devnet/devnet.json); its keys
-come from [devnet/](../devnet/README.md). `client/scripts/devnet.ts` runs five deals there, listed
-in [docs/devnet.md](../docs/devnet.md).
+On devnet the program is built as SBPF v3 and not sealed: its upgrade authority is the devnet
+deploy key. `devnet/deploy.sh` builds a copy of the source with the devnet id put in, deploys a
+fresh id or upgrades it in place, checks the deployed bytes against the build, and records
+everything public in [`devnet/devnet.json`](devnet/devnet.json); its header holds the recipe for
+every devnet key it needs. `client/scripts/devnet.ts` runs five deals there, recorded in the same
+file: in the classic test dollar, an invoice paid in one tap and an escrow with a timer the buyer
+objected to, then split; the same two in a Token-2022 dollar made with Open USD's extensions, and
+one more invoice in it. The record names the test dollar (`testDollar`), and keeps the escrow's
+earlier programs on devnet under `earlier`: the first deploy of this program, closed, and v1, still
+deployed and to be closed. There is no smoke test: read a receipt with `solana account <address>
+--url devnet`, and decode it with `decodeEscrow`.
 
-## What it promises
+## Promises
 
 - **Money leaves a funded escrow only** by a release from the side giving it up, a split both sign,
   the arbiter named at creation, or the timer set at creation once due and while nobody has
@@ -253,14 +255,11 @@ in [docs/devnet.md](../docs/devnet.md).
   again to the buyer.
 - **Nothing inside charges anything.** No admin, no config account, no pause, no fee.
 
-## What it trusts
-
-- The SPL Token and Token-2022 programs, the associated token program, and Anchor 1.2.
-- **The dollar's maker,** for the powers listed under Limits.
-- **The app,** to show a person every option they did not agree to before they work or pay.
-
 ## Limits
 
+- **It trusts** the SPL Token and Token-2022 programs, the associated token program, and Anchor 1.2;
+  the dollar's maker, for the powers listed below; and the app, to show a person every option they
+  did not agree to before they work or pay.
 - **A deadlock holds the money.** With no arbiter, if neither side gives and they do not agree, the
   money stays in the escrow for good: after an objection, or with no timer at all. Nothing in the
   program can break it. A deal that may need a third view names an arbiter at the start.
@@ -322,6 +321,20 @@ or one of you gives. Nobody else can move it, Forest included.
 **Does a timer guarantee I get paid?** No. It pays the side it names only if the other side does
 not object before it is due.
 
+**Why can the arbiter and the timer only be set at the start?** So both sides can read every way
+out before anyone works or pays, and nothing changes it later.
+
+**Why can an objection only land before the timer is due?** The due time is the one deadline for
+both sides: before it only the objection can land, from it on only the timer. They never race.
+
+**Why can someone open an escrow without the other side signing?** Asking the seller to sign
+`create` would stop anyone paying a seller who is offline, and break paying in one tap. The receipt
+records who created it instead.
+
+**Why is each side paid only at its standard token account?** So no ending can send money anywhere
+else. It is checked by address alone, so a side that hands that account to another key blocks no
+way out.
+
 **Can Forest, an app or a relayer move the money?** No. There is no admin and no fee, and on mainnet
 the program will be sealed the day it deploys. On devnet the deploy key can still upgrade it.
 
@@ -334,11 +347,12 @@ of an escrow that never held the money. The payer gets what the receipt holds ab
 would take part of every payment, while every way out pays the whole balance), and one that cannot
 be transferred (it could never leave).
 
-**What happened to version 1?** It was a separate sealed program: classic tokens only, no
-objection, and the sweep to the creator. It is no longer in this repo; its source, client and
-checklist are in git history. It still runs on devnet at
-`3vAVLwiwFkCUG4AHV3gK3t15HoyRSuKNEuBFvvy9CbeR` ([record](../devnet/devnet.json)), and each escrow
-follows the program it was opened in. New deals use this one.
+**What happened to version 1?** It was a separate program: classic tokens only, no objection, and
+the sweep to the creator. It left this repo so that there is one escrow: one set of rules for an
+app to show and for anyone to check. Its source, client and checklist are in git history. It is
+still deployed on devnet at `3vAVLwiwFkCUG4AHV3gK3t15HoyRSuKNEuBFvvy9CbeR`, to be closed; its
+record is in [`devnet/devnet.json`](devnet/devnet.json) under `earlier`. Each escrow follows the
+program it was opened in.
 
 **Why is the crate still called `forest_escrow_v2`?** The program moved here unchanged: it builds
 to the same bytes it did in its old folder. The name is only a name: there is one escrow here.

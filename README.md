@@ -1,58 +1,94 @@
 # forest
 
-Devnet only: everything here runs on Solana devnet or nowhere. Nothing is on mainnet, and nothing
-is shipped.
+You own a seed: 24 random words, kept in your password manager. From it come your profiles, one
+per label such as `tutoring/seller`, each with its own key that is its name and its wallet. An
+issuer checks once that you are one human and puts your stamp on its list, and the registry pins
+that stamp to one of your profiles in a market, without saying who you are. Your profiles write
+offers and reviews as signed records, kept on open hosts anyone can read. Money between two people
+moves through the escrow, and leaves only when both sides agree, or by an arbiter or a timer both
+saw at the start. An app makes all of this easy; everything else is open code. The registry and the
+escrow run on devnet; nothing is on mainnet.
 
-Forest lets a person own their profile, their offers and their reputation, and deal with strangers
-with no platform in between. A profile is one key the person holds; everything it says is a signed
-record, kept on hosts that apps run. An issuer checks once that someone is one real human and adds
-their stamp to its list, which lets them put one row per label on a free public registry without
-saying who they are. Money between two strangers waits in an escrow and leaves only when both sides
-agree. Any app,
-index or AI can read the records and the chain; none of them holds anyone's keys.
+## Three layers
 
-## What this repo holds
-
-The pieces everyone shares: the records protocol, the keys standard, and two sealed Solana programs,
-the registry and the escrow, each with its client.
-
-What it does not hold:
-
-- **Services:** the index, the issuer and the relayer live in
-  [foundationforest/services](https://github.com/foundationforest/services).
-- **The market directory:** the recommended labels live in
-  [foundationforest/markets](https://github.com/foundationforest/markets).
-- **Apps:** Roots and any other app live in their own repos.
-
-| Folder | What it is | Status |
+| Layer | What it is | Where |
 |---|---|---|
-| [`records/`](records/README.md) | The records protocol: its spec, the library, a reference host, private records, and the three record shapes (profile, offer, review) | Tested; not deployed |
-| [`keys/`](keys/README.md) | The keys standard: a seed of 24 words, and every key a person uses mixed from it | Tested; not deployed |
-| [`registry/`](registry/README.md) | Sealed program and client: one row per person per label per keeper, free | On devnet |
-| [`escrow/`](escrow/README.md) | Sealed program and client: money out when both sides agree, or by an arbiter or timer set at the start; either side can object; classic and Token-2022 tokens | On devnet |
-| [`devnet/`](devnet/README.md) | The devnet key recipe, and the shared devnet record | |
-| [`docs/`](docs/) | [Why things are as they are](docs/decisions.md); [what runs on devnet](docs/devnet.md) | |
-| [`.claude/skills/safe-solana-builder/`](.claude/skills/safe-solana-builder/SKILL.md) | The security checklist every program change goes through | |
+| forest | The standards every app shares: keys, records, the registry and the escrow | this repo |
+| services | What the foundation runs for every app: the index, the issuer (a face check) and the relayer | [foundationforest/services](https://github.com/foundationforest/services) |
+| roots | The first app; every app lives in its own repo | its own repo |
 
-## Run the checks
+The recommended market names are in
+[foundationforest/markets](https://github.com/foundationforest/markets), a directory that gates
+nothing.
 
-What `.github/workflows/checks.yml` runs on every pull request. Node 22.18 or later; Solana CLI
-4.2.2 for the programs.
+## The four folders
 
-```
-# Each package: install, type-check, tests that need no chain. keys first: records and registry/client read it.
-for d in keys records registry/client escrow/client; do
-  (cd "$d" && npm ci && npm run check && npm test)
-done
+| Folder | What it is | Runs |
+|---|---|---|
+| [`keys/`](keys/README.md) | The seed, and every key mixed from it | on the person's device |
+| [`records/`](records/README.md) | Signed records, the hosts that keep them, private records, and the three record shapes | a library and a reference host |
+| [`registry/`](registry/README.md) | A program and its client: one row per market stamp, free | on devnet |
+| [`escrow/`](escrow/README.md) | A program and its client: money out when both sides agree, or by an arbiter or timer set at the start | on devnet |
 
-# Each program: build as SBPF v3, then its LiteSVM tests against that build.
-for p in registry/program escrow/program; do
-  (cd "$p" && cargo build-sbf --arch v3 && cd tests-litesvm && cargo test)
-done
-```
+Each folder's README is its standard: what it is, how it works, its promises, its limits, and an
+FAQ.
 
-A test that cannot find what it needs skips; the workflow fails on any skip. The slower checks (the
-registry client's local-validator test, the registry's property test, the escrow's fuzzer) run
-nightly there; each folder's README says how to run them.
+## On chain, and never on chain
 
-Licensed Apache 2.0. [`CLAUDE.md`](CLAUDE.md) holds the rules for AI sessions working here.
+- **On chain:** registry rows, escrows and their receipts, and money moving.
+- **Never on chain:** seeds, private keys, records, keepers' lists, and the index.
+
+## Promises
+
+- **Your keys stay on your device.** No app stores the seed and no server holds a key. Nothing
+  anywhere has user accounts: there are keys, records and rows.
+- **Nothing ties your profiles together** unless you link them. Reputation is computed per profile,
+  and nothing server-side holds a person next to a profile.
+- **Nothing inside charges anything.** The registry and the escrow take no fee. The only costs are
+  Solana's own, paid by whoever sends the transaction, and anyone may pay for someone else. Fees
+  exist only at the ramp in and out.
+- **Only the deal decides where money goes.** The escrow has no admin and no custodian: only the
+  two sides, and an arbiter or a timer both saw at the start, can move what it holds.
+- **Anyone can take part.** Anyone can run a host, keep a list, name a market or build an app.
+  Everything needed to compete with the foundation is open: here, in services and in markets.
+- **The programs are built to be sealed.** On mainnet, the registry and the escrow are to be sealed
+  the day they deploy, so a change is a new program at a new address. On devnet they are still
+  upgradable.
+
+## Limits
+
+- **Devnet only.** Nothing is on mainnet and nothing is shipped. Both programs can still be
+  upgraded by the devnet deploy key.
+- **Not audited.** Each program keeps a security checklist next to it; no paid review has been done.
+- **No recovery.** Lose the seed, and every profile and stamp it gives is gone. Nobody else has it.
+- **A row is only as good as its keeper.** The registry checks no keeper; each reader decides which
+  issuers it trusts.
+- **A host can withhold.** It cannot forge or change a record, but it can stop serving one. The
+  app's copies and the profile's other hosts cover for it.
+- **Not here:** recovery through an issuer, a zero-knowledge proof across profiles, video hosting,
+  and an arbiter by default.
+
+## FAQ
+
+**Who decides which markets exist?**
+Nobody. A label is free text, and the registry accepts any. The recommended shape is `market/role`,
+and the markets directory recommends spellings so that one trade does not split into ten names. It
+gates nothing: a market adds fields to records and restricts no deal, and nothing in the foundation
+decides who may trade or on what terms.
+
+**Why do the programs not judge evidence?**
+A sealed program cannot learn new kinds of evidence, and an index can. So the programs never
+interpret evidence; indexes weigh it.
+
+**Can Forest take my money or my profile?**
+No. Forest never holds your keys, the escrow has no admin, and Forest arbitrates nothing: an
+arbiter is a key both sides saw at the start.
+
+**Why is all of this open?**
+A piece that only works if everyone shares it is a public good, so the shared pieces are open and
+kept by the foundation. Apps, and the ramps in and out, are products.
+
+**What is it built from?**
+Existing pieces, used unchanged: Ed25519, RFC 8785 canonical JSON, age, Semaphore's circuit and its
+public July 2024 setup files, groth16-solana, Anchor, and the SPL token programs. Forest writes only
+what does not exist yet.

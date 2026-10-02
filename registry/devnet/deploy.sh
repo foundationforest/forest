@@ -1,20 +1,24 @@
 #!/usr/bin/env bash
-# Build the registry (one row per market stamp) for devnet and deploy it at its own address.
-# devnet/devnet.json and escrow/devnet/devnet.json are only read: the ids they name are refused
-# as this one's.
+# Build the registry (one row per market stamp) for devnet and deploy it at its own address. The
+# closed registries before it, named in this record's `earlier`, are never touched: their ids are
+# only read.
 #
 #   FOREST_DEVNET_SEED=<the phrase> registry/devnet/deploy.sh
 #
-# 1. Keys. The program id is the key devnet/keys.sh's recipe derives from the phrase under the
-#    label `registry-rows-program`:
+# 1. Keys. Every devnet key comes from one phrase, so any machine holding it gets the same keys and
+#    the same program id. The recipe, reproducible with any language's standard library:
 #
-#      seed = PBKDF2-HMAC-SHA256(phrase NFKD-trimmed-single-spaced, "forest-devnet:registry-rows-program",
-#                                600,000 iterations, 32 bytes);  key = ed25519 from that seed
+#      phrase = FOREST_DEVNET_SEED, Unicode NFKD, trimmed, runs of whitespace made one space
+#      seed   = PBKDF2-HMAC-SHA256(phrase, salt = "forest-devnet:" + label, 600,000 iterations, 32 bytes)
+#      key    = the ed25519 keypair whose secret seed is `seed` (Solana's Keypair.fromSeed)
 #
-#    It, the deploy key (label `deploy`, which pays and keeps the upgrade authority) and the payer
-#    (label `payer`, which registry/client/scripts/devnet.ts sends from) are written to
-#    FOREST_DEVNET_KEYS (default ~/.forest-devnet/keys), never under the repo. The deploy key and
-#    the payer must be the ones devnet/devnet.json names, and the id must be no program that file or
+#    One label per key: `deploy` (pays for the deploy and keeps the upgrade authority), `payer`
+#    (pays every fee and deposit in registry/client/scripts/devnet.ts, as a relayer would), and
+#    `registry-rows-program`, the program id. The keypair files go to FOREST_DEVNET_KEYS (default
+#    ~/.forest-devnet/keys), never under the repo: the directory mode 700, the files 600, and a file
+#    holding another key is refused, not overwritten. Only public keys are printed, and the phrase
+#    is in no file. The public keys must be the ones registry/devnet/devnet.json names in `keys` (a
+#    missing record is started with them), and the id must be no program this record or
 #    escrow/devnet/devnet.json names.
 # 2. Build. registry/program's Cargo.toml, Cargo.lock and src are copied into
 #    registry/devnet/target/ (ignored), `declare_id!` alone is replaced with the devnet id, checked
@@ -22,11 +26,14 @@
 # 3. Deploy, unless the id already holds a program: the exact cost computed first, the way Solana
 #    CLI 4.2.2 spends it, refused (exit 3) if the deploy key holds less. Writes go over RPC.
 # 4. Check the deployed bytes are the built ones, and record everything public in
-#    registry/devnet/devnet.json.
+#    registry/devnet/devnet.json. The check needs the same toolchain: Solana CLI 4.2.2,
+#    cargo-build-sbf 4.1.0, platform-tools v1.54.
 #
 # FOREST_DEVNET_RPC points the Solana CLI at another devnet RPC; the record always names the
 # public one, so a keyed URL never lands in the repo. Devnet is not sealed: the upgrade authority
-# stays on the deploy key. Sealing is the mainnet step (`--final`, in registry/README.md).
+# stays on the deploy key, and whoever holds the phrase holds it. Sealing is the mainnet step
+# (`--final`, in registry/README.md). A new phrase starts from nothing: its deploy key needs SOL
+# sent by hand.
 
 set -euo pipefail
 
@@ -34,8 +41,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)
 out="$here/target"
 record="$here/devnet.json"
-base="$root/devnet/devnet.json"
-escrow2="$root/escrow/devnet/devnet.json"
+escrow="$root/escrow/devnet/devnet.json"
 keys="${FOREST_DEVNET_KEYS:-$HOME/.forest-devnet/keys}"
 rpc="${FOREST_DEVNET_RPC:-https://api.devnet.solana.com}"
 [ -n "${FOREST_DEVNET_SEED:-}" ] || { echo "FOREST_DEVNET_SEED is missing or empty" >&2; exit 1; }
@@ -46,11 +52,12 @@ mkdir -p "$keys" "$out"
 chmod 700 "$keys"
 
 # 1. Keys.
-node - "$keys" "$base" "$escrow2" <<'JS'
+node - "$keys" "$record" "$escrow" <<'JS'
 const crypto = require('crypto')
 const fs = require('fs')
-const [dir, base, escrow2] = process.argv.slice(2)
+const [dir, own, escrow] = process.argv.slice(2)
 const phrase = process.env.FOREST_DEVNET_SEED.normalize('NFKD').trim().split(/\s+/).join(' ')
+// An ed25519 private key as PKCS#8 DER is this fixed prefix and the 32-byte seed.
 const PKCS8_ED25519 = Buffer.from('302e020100300506032b657004220420', 'hex')
 const ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
 function base58(bytes) {
@@ -60,9 +67,6 @@ function base58(bytes) {
   for (const b of bytes) { if (b) break; s = '1' + s }
   return s
 }
-const record = JSON.parse(fs.readFileSync(base, 'utf8'))
-const taken = [record.registry.programId, record.escrow.programId]
-if (fs.existsSync(escrow2)) taken.push(JSON.parse(fs.readFileSync(escrow2, 'utf8')).escrow.programId)
 const pk = {}
 for (const label of ['deploy', 'payer', 'registry-rows-program']) {
   const seed = crypto.pbkdf2Sync(Buffer.from(phrase, 'utf8'), Buffer.from(`forest-devnet:${label}`, 'utf8'), 600_000, 32, 'sha256')
@@ -75,9 +79,23 @@ for (const label of ['deploy', 'payer', 'registry-rows-program']) {
   fs.chmodSync(file, 0o600)
   pk[label] = base58(pub)
 }
-if (pk.deploy !== record.keys.deploy) throw new Error(`the phrase gives deploy key ${pk.deploy}, not ${record.keys.deploy}: another phrase`)
-if (pk.payer !== record.keys.payer) throw new Error(`the phrase gives payer ${pk.payer}, not ${record.keys.payer}`)
+const keys = { deploy: pk.deploy, payer: pk.payer }
+const record = fs.existsSync(own) ? JSON.parse(fs.readFileSync(own, 'utf8')) : null
+if (record) {
+  for (const [name, key] of Object.entries(keys)) {
+    if (record.keys?.[name] !== key) throw new Error(`the phrase gives ${name} key ${key}, not ${record.keys?.[name]}: another phrase`)
+  }
+} else {
+  fs.writeFileSync(own, JSON.stringify({
+    note: 'The devnet deploy of the registry: one row per market stamp. Public keys, addresses and signatures only. Every key comes from the devnet phrase by the recipe in registry/devnet/deploy.sh, which writes the keypairs outside the repo and checks them against `keys`; the program id\'s label is registry-rows-program. Written by registry/devnet/deploy.sh and registry/client/scripts/devnet.ts; read by registry/client/test/devnet.test.ts.',
+    cluster: 'devnet',
+    rpc: 'https://api.devnet.solana.com',
+    keys,
+  }, null, 2) + '\n')
+}
 const id = pk['registry-rows-program']
+const other = fs.existsSync(escrow) ? JSON.parse(fs.readFileSync(escrow, 'utf8')) : {}
+const taken = [...(record?.earlier ?? []).map((e) => e.registry.programId), other.escrow?.programId, ...(other.earlier ?? []).map((e) => e.escrow.programId)]
 if (taken.includes(id)) throw new Error('the id is one another deploy already names')
 console.log(`registry program id ${id}, deploy key ${pk.deploy}, payer ${pk.payer}`)
 JS
@@ -158,11 +176,7 @@ echo "deployed bytes match the build ($built)"
 node - "$record" "$out" "$id" "$built" "$so" "$deployed_now" <<'JS'
 const fs = require('fs')
 const [recordPath, out, id, sha, so, now] = process.argv.slice(2)
-const record = fs.existsSync(recordPath) ? JSON.parse(fs.readFileSync(recordPath, 'utf8')) : {
-  note: 'The devnet deploy of the registry: one row per market stamp. Public keys, addresses and signatures only. The program id is derived from the devnet phrase under the label registry-rows-program; the deploy key and the payer are the ones devnet/devnet.json names. Written by registry/devnet/deploy.sh and registry/client/scripts/devnet.ts; read by registry/client/test/devnet.test.ts.',
-  cluster: 'devnet',
-  rpc: 'https://api.devnet.solana.com',
-}
+const record = JSON.parse(fs.readFileSync(recordPath, 'utf8'))
 const show = JSON.parse(fs.readFileSync(`${out}/show.json`, 'utf8'))
 const p = (record.registry ??= {})
 p.programId = id

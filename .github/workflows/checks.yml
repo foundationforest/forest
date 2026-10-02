@@ -1,28 +1,8 @@
-# Every package's checks, run together, so a merge that breaks a neighbour shows at once. Four
-# pieces: keys, records, the registry (program and client) and the escrow (program and client).
-# records/ and the registry client take their keys and test vectors from keys/, so keys/ is
-# installed before them.
-#
-# On every pull request and every push to main, nothing running but the tests:
-#   node       each Node package's type-check and its tests that need no chain: keys, records (its
-#              hosts on loopback), the registry client and the escrow client
-#   programs   the registry and the escrow built as SBPF v3 (cargo build-sbf --arch v3), the
-#              format devnet runs them in, and their LiteSVM tests, the registry's property test
-#              among them
-#
-# After every merge, a push to main:
-#   types      every package's type-check at once, on the merged commit (keys, records and the
-#              two clients), so two pull requests that pass alone cannot leave main broken together
-#
-# Nightly, and by hand from the Actions tab, because they are slow or need a validator:
-#   validator  the registry client's tests on a local validator
-#   fuzz       the registry's property test at 1,000 iterations; the escrow's fuzzer at 50,000,
-#              on an SBPF v0 build of the escrow: Trident 0.12's runtime starts with every feature
-#              off, so it runs only v0 programs and refuses a v3 build on its first create. That is
-#              the one old-format build here, and nothing else uses it
-#
-# A test that finds a piece missing skips instead of failing. Here a skip fails the step: the TAP
-# summary must say "# skipped 0", so a missing piece never passes as green.
+# Every pull request and every push to main: each Node package's type-check and tests that need no
+# chain (keys is installed first: records and the registry client read it), and both programs built
+# as SBPF v3 with their LiteSVM tests. After a merge, every package type-checks together. Nightly,
+# and by hand: the registry client on a local validator, the registry's property test, and the
+# escrow's fuzzer. A test that skips fails its step: the summary must say "# skipped 0".
 
 name: checks
 

@@ -1,7 +1,5 @@
 # keys
 
-Devnet only: nothing in this folder is deployed anywhere, and nothing is in production.
-
 Up: [the repo](../README.md).
 
 ## What it is
@@ -34,7 +32,7 @@ Every mix is HKDF-SHA256 (RFC 5869): an empty salt, the info string's UTF-8 byte
 | From | Mixed with (info) | Gives | Used for |
 |---|---|---|---|
 | seed | `forest/v1/profile/<label>` | the profile key (ed25519) | the profile's name, its wallet, its signature on records and transactions |
-| the profile key's 32 private bytes | `forest/v1/read` | the profile's reading key (age's post-quantum hybrid) | opening private records sealed to the profile |
+| the profile key's 32 private bytes | `forest/v1/read` | the profile's reading key (age's post-quantum hybrid) | opening private records encrypted to the profile |
 | seed | `forest/v1/list/<keeper address>` | the person's secret for that list (Semaphore v4) | the person's stamp on that list, and their market stamps |
 
 From the list secret on, Semaphore's own hashes take over (below).
@@ -50,14 +48,14 @@ From the list secret on, Semaphore's own hashes take over (below).
 
 **The reading key.**
 - Mixed from the profile key, not from the seed: whoever holds a profile key can read what is
-  sealed to that profile.
+  encrypted to that profile.
 - The 32 bytes are used unchanged as age's post-quantum hybrid identity, `mlkem768x25519`
   (ML-KEM-768 with X25519): `AGE-SECRET-KEY-PQ-1`, then bech32 of the bytes, in upper case. age
   expands them into the two private keys.
-- Others seal to its recipient, `age1pq1…`, which age computes from the identity. It is long:
-  about 1,960 characters. What is sealed to it opens only if both ML-KEM-768 and X25519 are
-  broken.
-- The address does not give the recipient: whoever seals needs it from the profile.
+- Others encrypt to its recipient, `age1pq1…`, which age computes from the identity. It is long:
+  about 1,960 characters. Anyone else opens what is encrypted to it only if both ML-KEM-768 and
+  X25519 are broken.
+- The address does not give the recipient: whoever encrypts needs it from the profile.
 
 **The list secret and the stamps.**
 - A keeper is anyone who keeps a list of stamps; the issuer keeps the human list. The keeper's
@@ -86,41 +84,9 @@ From the list secret on, Semaphore's own hashes take over (below).
 4. **Keep a copy of every record signed.** Hosts are open and may drop a record; the copy puts it
    back.
 5. **Hand out writer keys, never the profile key.** A helper that writes for a profile gets its
-   own writer key. A writer key can be cut off; a profile key cannot.
+   own writer key. A writer key can be removed; a profile key cannot.
 
-## What it promises
-
-- **The same seed gives the same keys,** in any app, on any device, every time.
-- **Nothing ties two profiles together.** Each label is its own mix: one profile's key, address
-  or reading key says nothing about another's.
-- **Nothing ties two lists together.** Each keeper is its own mix, so the same person's stamps on
-  two lists are unrelated, and two keepers comparing their lists cannot match them.
-- **No key gives the seed back.** Every mix is one way. A profile key gives its reading key, and
-  nothing else.
-- **Nothing leaves the device.** The library talks to no network and stores nothing.
-
-## What it trusts
-
-- The person's password manager, to keep the words and show them to no one else.
-- Web Crypto: HKDF-SHA256, and its random source for new seeds.
-- Libraries, unchanged: `@noble/curves` (ed25519), `@scure/base` (base58, bech32),
-  `@scure/bip39`, `age-encryption` (whose hybrid runs on `@noble/post-quantum`), and
-  `@semaphore-protocol/identity` 4.12.1, the line that matches the registry's setup files.
-
-## Limits
-
-- **No recovery.** Lose the words, and every profile and every stamp is gone. Nobody can reset
-  them, because nobody else has them.
-- **No rotation.** A profile's name is its key, so a leaked profile key loses that profile for
-  good (see the FAQ).
-- **One profile per label per seed.** The same seed and label always give the same key.
-- **Only the reading key is post-quantum.** ed25519 and Semaphore's curves fall to a large quantum
-  computer; the reading key, age's ML-KEM-768 hybrid, does not (see the FAQ).
-- **No wiping of memory.** JavaScript cannot promise that bytes are erased; an app closes the
-  page, the library cannot.
-- **Tests run in Node.** No password manager is tested here.
-
-## Use it
+### Use it
 
 Everything is exported from `src/index.ts`. Everything that mixes is async.
 
@@ -129,7 +95,7 @@ Everything is exported from `src/index.ts`. Everything that mixes is async.
 | `newSeed()` | A new seed: 32 random bytes |
 | `exportWords(seed)`, `importWords(text)` | The 24 words, and the seed back from them |
 | `profileKey(seed, label)` | The profile key: `label`, `privateKey`, `publicKey`, `address` |
-| `readingKey(profile.privateKey)` | The reading key: age's `identity`, and the `recipient` others seal to |
+| `readingKey(profile.privateKey)` | The reading key: age's `identity`, and the `recipient` others encrypt to |
 | `listSecret(seed, keeper)` | The list's `secret`, Semaphore's `identity`, and the `stamp` |
 | `hkdf(ikm, info)`, `INFO` | The mixer and its info strings |
 
@@ -143,13 +109,43 @@ npm run build   # dist/ for other packages
 
 Node 22.18 or later runs the TypeScript directly.
 
-## Test vectors
+### Test vectors
 
 `test/vectors.json` pins, for the seed `00 01 … 1f`: its 24 words; the profile keys for
 `tutoring/seller` and `tutoring/buyer`, each with its reading key; and the list secrets and stamps
 for two keepers. `npm test` checks each value and recomputes it without the library: HKDF from a
 second implementation, ed25519 from `@noble/curves`, the hybrid recipient from
-`@noble/post-quantum`, age's bech32 by hand, a seal and an open through age, and the stamp step by step without Semaphore's wrapper.
+`@noble/post-quantum`, age's bech32 by hand, an encryption and an opening through age, and the
+stamp step by step without Semaphore's wrapper.
+
+## Promises
+
+- **The same seed gives the same keys,** in any app, on any device, every time.
+- **Nothing ties two profiles together.** Each label is its own mix: one profile's key, address
+  or reading key says nothing about another's.
+- **Nothing ties two lists together.** Each keeper is its own mix, so the same person's stamps on
+  two lists are unrelated, and two keepers comparing their lists cannot match them.
+- **No key gives the seed back.** Every mix is one way. A profile key gives its reading key, and
+  nothing else.
+- **Nothing leaves the device.** The library talks to no network and stores nothing.
+
+## Limits
+
+- **It trusts the person's password manager** to keep the words and show them to no one else.
+- **It trusts its pieces, used unchanged:** Web Crypto (HKDF-SHA256, and its random source for new
+  seeds), `@noble/curves` (ed25519), `@scure/base` (base58, bech32), `@scure/bip39`,
+  `age-encryption` (whose hybrid runs on `@noble/post-quantum`), and
+  `@semaphore-protocol/identity` 4.12.1, the version that matches the registry's setup files.
+- **No recovery.** Lose the words, and every profile and every stamp is gone. Nobody can reset
+  them, because nobody else has them.
+- **No rotation.** A profile's name is its key, so a leaked profile key loses that profile for
+  good (see the FAQ).
+- **One profile per label per seed.** The same seed and label always give the same key.
+- **Only the reading key is post-quantum.** ed25519 and Semaphore's curves fall to a large quantum
+  computer; the reading key, age's ML-KEM-768 hybrid, does not (see the FAQ).
+- **No wiping of memory.** JavaScript cannot promise that bytes are erased; an app closes the
+  page, the library cannot.
+- **Tests run in Node.** No password manager is tested here.
 
 ## FAQ
 
@@ -157,8 +153,9 @@ second implementation, ed25519 from `@noble/curves`, the hybrid recipient from
 24 words are 256 random bits: nobody guesses them. A password manager already keeps secrets for a
 person: it syncs them to their devices, backs them up, and locks them behind the person's own
 unlock. So the seed needs no new place to live, works with any app on any device, and can also go
-on paper. A passkey's secret stays with one provider, and not every provider gives one; words go
-anywhere. The cost: whoever gets into the password manager gets every key.
+on paper. A secret one provider keeps for you stays with that provider; words go anywhere. And no
+app stores the seed, so no app can leak it. The cost: whoever gets into the password manager gets
+every key.
 
 **What if I give the words to the wrong app?**
 Then that app has everything the seed opens, and nothing takes it back:
@@ -173,6 +170,22 @@ there is still time. A general wallet app takes the 24 words as an ordinary reco
 shows unrelated accounts: they are not the person's profiles, but the app now holds the seed. Give
 the words only to an app that follows the rules above.
 
+**Why is one key a profile's name, its signature and its wallet?**
+So a registry row names the profile itself, with nothing to cross-check. The name is the key's
+base58 address, not an identifier in some other format: one spelling names the profile in records,
+on the registry and as a wallet, and it needs no directory that could refuse, withhold or misorder
+it.
+
+**Can anyone tell that two profiles are mine?**
+Not from the keys. Each profile key is mixed from the seed and its own label, and each list secret
+from the seed and its keeper's address, so nothing public ties two of a person's profiles together,
+or their stamps on two lists. How an app writes them can still link them
+([records](../records/README.md), Limits).
+
+**Why is the reading key mixed from the profile key, not from the seed?**
+So that whoever holds a profile can read what is encrypted to it, and nothing more: the reading key
+gives no other profile, and no profile key gives the seed.
+
 **Why two mixers, HKDF and Poseidon?**
 They work in different places. HKDF-SHA256 mixes every key from the seed, on the device: it is a
 standard, built into every browser's Web Crypto, and well studied. Poseidon is a hash made to be
@@ -183,7 +196,8 @@ outside the proof, and Semaphore's hashes take it from there. Neither is ours; b
 unchanged.
 
 **What about quantum computers?**
-Only the reading key is post-quantum. A large enough quantum computer could:
+Only the reading key is post-quantum, so that a private record copied today stays private once
+quantum computers come. A large enough quantum computer could:
 - work out from a profile's address what signs for it, then sign as the profile and move its
   money;
 - forge Semaphore proofs, whose curves it breaks too.

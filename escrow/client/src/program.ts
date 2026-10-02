@@ -1,4 +1,4 @@
-// The wire format of the escrow, v2: addresses, discriminators, instruction bytes, the account
+// The wire format of the escrow: addresses, discriminators, instruction bytes, the account
 // layout and the event layouts.
 //
 // Everything here is sealed with the program. These bytes are what clients and indexes read and
