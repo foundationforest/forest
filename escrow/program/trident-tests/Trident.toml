@@ -3,4 +3,4 @@ enabled = true
 
 [[fuzz.programs]]
 address = "FoRE2EscrowV2objectsTimerFundedAtPayer222222"
-program = "../target/deploy/forest_escrow_v2.so"
+program = "../target/deploy/forest_escrow.so"

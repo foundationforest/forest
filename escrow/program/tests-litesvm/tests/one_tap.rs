@@ -16,7 +16,7 @@
 //!
 //! Run with `cargo test --test one_tap -- --nocapture` for the numbers.
 
-use forest_escrow_v2_tests::*;
+use forest_escrow_tests::*;
 use solana_keypair::Keypair;
 use solana_signer::Signer;
 

@@ -8,7 +8,7 @@
 //!
 //! Run with `cargo test --test adversarial -- --nocapture` to see what each attack did.
 
-use forest_escrow_v2_tests::*;
+use forest_escrow_tests::*;
 use solana_account::Account;
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};

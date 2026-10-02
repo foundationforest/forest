@@ -841,7 +841,7 @@ pub struct Harness {
 
 /// The escrow program loaded, and the four keys funded: what both harnesses start from.
 fn bare() -> (LiteSVM, Keypair, Keypair, Keypair, Keypair) {
-    let so = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../target/deploy/forest_escrow_v2.so");
+    let so = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../target/deploy/forest_escrow.so");
     let bytes = std::fs::read(&so).unwrap_or_else(|e| {
         panic!("{}: {e}. Build it first: `cargo build-sbf` in escrow/program.", so.display())
     });
