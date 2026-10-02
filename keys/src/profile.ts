@@ -19,11 +19,14 @@ export type ProfileKey = {
   address: string
 }
 
-/** The key that opens private records sealed to a profile, in age's own X25519 form. */
+/**
+ * The key that opens private records sealed to a profile: age's post-quantum hybrid identity,
+ * ML-KEM-768 with X25519 (mlkem768x25519).
+ */
 export type ReadingKey = {
-  /** age's identity, `AGE-SECRET-KEY-1…`: it opens what is sealed to this profile. */
+  /** age's hybrid identity, `AGE-SECRET-KEY-PQ-1…`: it opens what is sealed to this profile. */
   identity: string
-  /** What others seal to, `age1…`. The profile's address does not give it. */
+  /** What others seal to, `age1pq1…`. The profile's address does not give it. */
   recipient: string
 }
 
@@ -40,12 +43,13 @@ export async function profileKey(seed: Uint8Array, label: string): Promise<Profi
 }
 
 /**
- * The profile's reading key, from its profile key's 32 private bytes. The bytes are used
- * unchanged as age's X25519 identity; age's own library computes the recipient.
+ * The profile's reading key, from its profile key's 32 private bytes. The 32 mixed bytes are used
+ * unchanged as age's hybrid identity (its seed, which age expands into the ML-KEM-768 and X25519
+ * keys); age's own library computes the recipient.
  */
 export async function readingKey(profilePrivateKey: Uint8Array): Promise<ReadingKey> {
   assertBytes('profile private key', profilePrivateKey, 32)
   const bytes = await hkdf(profilePrivateKey, INFO.read)
-  const identity = bech32.encodeFromBytes('AGE-SECRET-KEY-', bytes).toUpperCase()
+  const identity = bech32.encodeFromBytes('AGE-SECRET-KEY-PQ-', bytes).toUpperCase()
   return { identity, recipient: await identityToRecipient(identity) }
 }

@@ -15,6 +15,9 @@ Forest goes here, in the same form.
 - **did:key, not did:plc:** a name needs no directory that can refuse, withhold or misorder it.
 - **A profile's key is mixed from its label, and a list secret from its keeper's address:** nothing
   public ties two of a person's profiles together, or their stamps on two lists.
+- **A reading key is mixed from its profile key, and is age's post-quantum hybrid:** whoever holds a
+  profile can read what is sealed to it, and a record copied today stays sealed once quantum
+  computers come.
 - **A record is signed after the byte `0xff`:** no Solana transaction begins with it, so a record's
   signature can never be a payment's.
 - **Boards hold no keys and no accounts, and always take a newer folder record:** a board can stop

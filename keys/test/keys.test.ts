@@ -5,7 +5,8 @@ import { hkdf as nobleHkdf } from '@noble/hashes/hkdf.js'
 import { sha256 } from '@noble/hashes/sha2.js'
 import { blake512 } from '@noble/hashes/blake1.js'
 import { base58, bech32, hex } from '@scure/base'
-import { ed25519, x25519 } from '@noble/curves/ed25519.js'
+import { ed25519 } from '@noble/curves/ed25519.js'
+import { MLKEM768X25519 } from '@noble/post-quantum/hybrid.js'
 import { Decrypter, Encrypter } from 'age-encryption'
 import { Base8, mulPointEscalar, subOrder } from '@zk-kit/baby-jubjub'
 import { poseidon2 } from 'poseidon-lite/poseidon2'
@@ -129,11 +130,16 @@ test('each profile gives the pinned reading key, from its profile key alone', as
   }
 })
 
-test("the reading key, recomputed without the library: HKDF, X25519, age's bech32", () => {
+test("the reading key, recomputed without the library: HKDF, ML-KEM-768 with X25519, age's bech32", () => {
   const privateKey = mix(hex.decode(seller.privateKey), INFO.read)
   assert.equal(hex.encode(privateKey), seller.reading.privateKey)
-  assert.equal(bech32.encodeFromBytes('AGE-SECRET-KEY-', privateKey).toUpperCase(), seller.reading.identity)
-  assert.equal(bech32.encodeFromBytes('age', x25519.getPublicKey(privateKey)), seller.reading.recipient)
+  assert.equal(bech32.encodeFromBytes('AGE-SECRET-KEY-PQ-', privateKey).toUpperCase(), seller.reading.identity)
+  // The recipient is the hybrid public key the 32 bytes expand to, in bech32 under age1pq, with
+  // no length limit: it is about 1,960 characters.
+  const publicKey = MLKEM768X25519.getPublicKey(privateKey)
+  assert.equal(bech32.encode('age1pq', bech32.toWords(publicKey), false), seller.reading.recipient)
+  assert.match(seller.reading.identity, /^AGE-SECRET-KEY-PQ-1[0-9A-Z]+$/)
+  assert.match(seller.reading.recipient, /^age1pq1[0-9a-z]+$/)
 })
 
 test('age seals to the reading key, and only that profile opens it', async () => {

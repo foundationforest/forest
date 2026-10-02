@@ -34,7 +34,7 @@ Every mix is HKDF-SHA256 (RFC 5869): an empty salt, the info string's UTF-8 byte
 | From | Mixed with (info) | Gives | Used for |
 |---|---|---|---|
 | seed | `forest/v1/profile/<label>` | the profile key (ed25519) | the profile's name, its wallet, its signature on records and transactions |
-| the profile key's 32 private bytes | `forest/v1/read` | the profile's reading key (X25519) | opening private records sealed to the profile |
+| the profile key's 32 private bytes | `forest/v1/read` | the profile's reading key (age's post-quantum hybrid) | opening private records sealed to the profile |
 | seed | `forest/v1/list/<keeper address>` | the person's secret for that list (Semaphore v4) | the person's stamp on that list, and their market stamps |
 
 From the list secret on, Semaphore's own hashes take over (below).
@@ -51,10 +51,13 @@ From the list secret on, Semaphore's own hashes take over (below).
 **The reading key.**
 - Mixed from the profile key, not from the seed: whoever holds a profile key can read what is
   sealed to that profile.
-- The 32 bytes are an X25519 private key (RFC 7748), used unchanged as an age identity:
-  `AGE-SECRET-KEY-1`, then bech32 of the bytes, in upper case.
-- Others seal to its recipient, `age1…`, which age computes from the identity. The address does
-  not give the recipient: whoever seals needs it from the profile.
+- The 32 bytes are used unchanged as age's post-quantum hybrid identity, `mlkem768x25519`
+  (ML-KEM-768 with X25519): `AGE-SECRET-KEY-PQ-1`, then bech32 of the bytes, in upper case. age
+  expands them into the two private keys.
+- Others seal to its recipient, `age1pq1…`, which age computes from the identity. It is long:
+  about 1,960 characters. What is sealed to it opens only if both ML-KEM-768 and X25519 are
+  broken.
+- The address does not give the recipient: whoever seals needs it from the profile.
 
 **The list secret and the stamps.**
 - A keeper is anyone who keeps a list of stamps; the issuer keeps the human list. The keeper's
@@ -101,8 +104,8 @@ From the list secret on, Semaphore's own hashes take over (below).
 - The person's password manager, to keep the words and show them to no one else.
 - Web Crypto: HKDF-SHA256, and its random source for new seeds.
 - Libraries, unchanged: `@noble/curves` (ed25519), `@scure/base` (base58, bech32),
-  `@scure/bip39`, `age-encryption`, and `@semaphore-protocol/identity` 4.12.1, the line that
-  matches the registry's setup files.
+  `@scure/bip39`, `age-encryption` (whose hybrid runs on `@noble/post-quantum`), and
+  `@semaphore-protocol/identity` 4.12.1, the line that matches the registry's setup files.
 
 ## Limits
 
@@ -111,8 +114,8 @@ From the list secret on, Semaphore's own hashes take over (below).
 - **No rotation.** A profile's name is its key, so a leaked profile key loses that profile for
   good (see the FAQ).
 - **One profile per label per seed.** The same seed and label always give the same key.
-- **Not post-quantum.** ed25519, X25519 and Semaphore's curves all fall to a large quantum
-  computer (see the FAQ).
+- **Only the reading key is post-quantum.** ed25519 and Semaphore's curves fall to a large quantum
+  computer; the reading key, age's ML-KEM-768 hybrid, does not (see the FAQ).
 - **No wiping of memory.** JavaScript cannot promise that bytes are erased; an app closes the
   page, the library cannot.
 - **Tests run in Node.** No password manager is tested here.
@@ -148,8 +151,8 @@ Node 22.18 or later runs the TypeScript directly.
 `test/vectors.json` pins, for the seed `00 01 … 1f`: its 24 words; the profile keys for
 `tutoring/seller` and `tutoring/buyer`, each with its reading key; and the list secrets and stamps
 for two keepers. `npm test` checks each value and recomputes it without the library: HKDF from a
-second implementation, ed25519 and X25519 from `@noble/curves`, age's bech32 by hand, a seal and
-an open through age, and the stamp step by step without Semaphore's wrapper.
+second implementation, ed25519 from `@noble/curves`, the hybrid recipient from
+`@noble/post-quantum`, age's bech32 by hand, a seal and an open through age, and the stamp step by step without Semaphore's wrapper.
 
 ## FAQ
 
@@ -183,14 +186,20 @@ outside the proof, and Semaphore's hashes take it from there. Neither is ours; b
 unchanged.
 
 **What about quantum computers?**
-Nothing here is post-quantum. A large enough quantum computer could:
-- work out a profile key from its address, then sign as the profile and move its money;
-- work out a reading key from its recipient, and open private records, including ones sealed and
-  copied today;
+Only the reading key is post-quantum. A large enough quantum computer could:
+- work out from a profile's address what signs for it, then sign as the profile and move its
+  money;
 - forge Semaphore proofs, whose curves it breaks too.
 
-It could not undo the mixes: HKDF-SHA256, and so the seed, holds. Quantum-safe keys would be a new
-version with new info strings, and since a name is a key, every profile would get a new name.
+It could not open private records, even ones copied today to open later:
+- the reading key is age's hybrid, so its recipient gives nothing away unless ML-KEM-768 breaks
+  too;
+- breaking an address gives ed25519's signing number, not the profile key's 32 private bytes the
+  reading key is mixed from: ed25519 hashes those bytes with SHA-512 first, and SHA-512 holds.
+
+Nor could it undo the mixes: HKDF-SHA256, and so the seed, holds. Quantum-safe profile keys would
+be a new version with new info strings, and since a name is a key, every profile would get a new
+name.
 
 **What if a profile key leaks?**
 Whoever has it is that profile: it can sign records as the profile, move its money, and mix its
