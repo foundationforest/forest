@@ -6,7 +6,8 @@ Up: [the repo](../README.md). The record shapes: [schemas/](schemas/).
 
 How a Forest profile says things, and how anyone reads them. A profile is one key. Everything the
 profile says (its card, its offers, its reviews of others) is a record: a small signed JSON value
-at a path in the profile's folder, such as `profile`, `offer/maths` or `review/7`. Hosts keep
+at a path in the profile's folder, such as `profile`, `offer/maths` or `review/7`. A review sits in
+its writer's folder: the one it's about can't erase it; the one who wrote it can. Hosts keep
 records and serve them to anyone. Any app, index or AI can read them, and checks every signature
 itself.
 
@@ -134,7 +135,8 @@ forward secrecy.
 ### Hosts
 
 A host is an HTTPS service with no keys, no accounts and no login: a record's signature is its only
-credential. It is open: it takes signed records for any profile and serves them to anyone.
+credential. It is open: it takes signed records for any profile and serves them to anyone. Every
+host answers the same two requests, the host socket:
 
 | Request | Answer |
 |---|---|

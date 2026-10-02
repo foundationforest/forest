@@ -12,8 +12,8 @@
     "programId": "FA6ZodkyhMDj9yjzY27dk8JDCtcHnJx8mr45Mx9TfKg8",
     "programData": "5eR7zdTkR1RVRzjJjy8ZLnheBShwfUhgwz24JwYz1scH",
     "upgradeAuthority": "2mz33wBK7FKRXoAi7LptGGTwVQJDbrSyrVwbYRCqwP3A",
-    "lastDeploySlot": 506035356,
-    "soSha256": "9826203cb46ea8a327d5e1a726c2b14bd59f16e44f0f3edb3efe23b5f19164ba",
+    "lastDeploySlot": 506722311,
+    "soSha256": "cc40c9cfdef46c2d8d7af397ddae294c807aec7bfe0a4d15231b0df16278233d",
     "soBytes": 315104,
     "sbpfVersion": "v3",
     "deploySignature": "5eNZjWGMBZagsLRtaqiY2RuJPin7p57pq8ACLqVWjU5RaU5r6otgss8u6W8tMexK1ZxUaHA957EQzSfr4hSGeGzj",
@@ -50,6 +50,28 @@
         },
         "note": "Solana CLI 4.2.2 extended the program data by 10,240 bytes for the 768 the build needed, in the upgrade's own transaction; that rent stays in the program data (now 324,576 bytes). The cost was first computed with the 768 alone, and the script's formula corrected after.",
         "what": "the same address, upgraded in place: a Token-2022 mint that cannot be transferred is also refused at create (NonTransferable, 6030)",
+        "programDataBytes": 324576
+      },
+      {
+        "slot": 506722311,
+        "signature": "5RfZLWN3gF1o8FiXDEbCQBiSCtjMc1gxLygiPpm4mLRbcAE7adkWKd2eqL6wMiKYYU8CRnp7n16CbXPKSgXVdyN5",
+        "soSha256": "cc40c9cfdef46c2d8d7af397ddae294c807aec7bfe0a4d15231b0df16278233d",
+        "soBytes": 315104,
+        "cost": {
+          "bytes": 315104,
+          "previousBytes": 324576,
+          "extendBytes": 0,
+          "bufferRent": 1601566520,
+          "extendRent": 0,
+          "writes": 312,
+          "fees": 1575000,
+          "total": 1603141520,
+          "spend": 1575000,
+          "balanceBefore": 4816562160,
+          "balanceAfter": 4814987160,
+          "spent": 1575000
+        },
+        "what": "the same address, upgraded in place, so that devnet runs what the repo builds: no logic change, since the source changed only in comments and the crate's name (forest_escrow, was forest_escrow_v2)",
         "programDataBytes": 324576
       }
     ]
@@ -166,6 +188,11 @@
       "program": "escrow-v2",
       "what": "one tap: the deposit address made first, then the buyer pays 1.00 Open USD-shaped dollar into it and releases it to the seller, in one transaction",
       "signature": "n4VhujBDwBZfBT7RGUah1m6AaE9iXabYAF2WZtz1ekBWa858UFgikPyRE6ATVoetidRTNtusku7cJbASXSEsAC3"
+    },
+    {
+      "program": "escrow-v2",
+      "what": "upgrade in place: the escrow, now 315104 bytes (sha256 cc40c9cfdef46c2d…), same address",
+      "signature": "5RfZLWN3gF1o8FiXDEbCQBiSCtjMc1gxLygiPpm4mLRbcAE7adkWKd2eqL6wMiKYYU8CRnp7n16CbXPKSgXVdyN5"
     }
   ],
   "deals": {

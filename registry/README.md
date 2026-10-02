@@ -251,7 +251,8 @@ keeper's. The program never needs to know who the keepers are, so anyone can be 
 **Can I have two profiles in one market?** Yes, through two keepers. Each list gives you its own
 market stamp, so the issuer's list gives you one row per market. A second row needs a stamp on a
 second keeper's list, and a second keeper that checks faces means a second face check. Nothing on
-chain ties the two rows to each other.
+chain ties the two rows to each other, but moving money between your own profiles links them until
+a privacy pool is used.
 
 **Why are rows not numbered?** A number shared across registrations would link a person's profiles.
 A row's address comes from its market stamp alone: one per keeper, per label, per person.
