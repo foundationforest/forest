@@ -28,7 +28,7 @@ key    = the ed25519 keypair whose secret seed is `seed` (Solana's Keypair.fromS
 `payer` (pays every fee and deposit after a deploy, as a relayer would), `buyer`, `seller`,
 `escrow-program` (escrow v1's id), `test-dollar-mint` and `test-dollar-authority`, and three only the closed first
 registry used: `registry-program`, `treasury` and `issuer`. The per-program scripts derive
-`registry-lines-program` and `escrow-v2-program-2`. The standard library of any language reproduces it.
+`registry-rows-program` and `escrow-v2-program-2`. The standard library of any language reproduces it.
 
 ## What it promises
 

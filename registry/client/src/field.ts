@@ -8,7 +8,7 @@ export const BN254_R = 218882428718392752222464057452572750885483644004160343436
 /** BN254's base field modulus. Only used to work out a point's y sign. */
 export const BN254_P = 21888242871839275222246405745257275088696311157297823662689037894645226208583n
 
-/** The namespaces the program hashes with. Sealed: a change makes every existing code unreachable. */
+/** The namespaces the program hashes with. Sealed: a change makes every existing market stamp unreachable. */
 export const SCOPE_NS = 'forest.foundation/label/v1/'
 export const MESSAGE_NS = 'forest.foundation/profile/v1/'
 
@@ -59,9 +59,8 @@ export function scopeOf(label: string): bigint {
 }
 
 /**
- * The proof's message: what binds a proof to one profile, so it cannot create or extend any other
- * profile's line. The profile is its 32-byte ed25519 key, which is also its did:key name and its
- * Solana wallet.
+ * The proof's message: what binds a proof to one profile, so it cannot create any other profile's
+ * row. The profile is its 32-byte ed25519 key, which is also its name and its Solana wallet.
  */
 export function messageOf(profile: PublicKey | Uint8Array): bigint {
   const key = profile instanceof Uint8Array ? profile : profile.toBytes()

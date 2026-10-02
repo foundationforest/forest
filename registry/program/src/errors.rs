@@ -8,10 +8,10 @@ pub enum RegistryError {
     NotAFieldElement,
     #[msg("the proof's points are not a valid compressed BN254 proof")]
     ProofMalformed,
-    #[msg("the proof does not verify for this root, code, label and profile")]
+    #[msg("the proof does not verify for this root, market stamp, label and profile")]
     ProofRejected,
-    #[msg("the line holds nothing above its rent-exempt minimum")]
+    #[msg("the row holds nothing above its rent-exempt minimum")]
     NothingToRefund,
-    #[msg("a refund goes only to the payer the line records")]
+    #[msg("a refund goes only to the payer the row records")]
     NotThePayer,
 }

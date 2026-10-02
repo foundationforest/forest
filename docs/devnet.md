@@ -9,7 +9,7 @@ Up: [the repo](../README.md). The scripts that put these here: [devnet/](../devn
 
 | Program | Program id | Record |
 |---|---|---|
-| Registry | `Hyh5Lt1ErzYV3pF9ZkFWTdjhE2wwTuXnPMVgzCKEv9hf` | [`registry/devnet/devnet.json`](../registry/devnet/devnet.json) |
+| Registry | `5zTPm1bGY8ANLcJd12fPiKSTd71bvnq38LAUDT4ToeoC` | [`registry/devnet/devnet.json`](../registry/devnet/devnet.json) |
 | Escrow | `FA6ZodkyhMDj9yjzY27dk8JDCtcHnJx8mr45Mx9TfKg8` | [`escrow/devnet/devnet.json`](../escrow/devnet/devnet.json) |
 | Escrow v1, source no longer in this repo | `3vAVLwiwFkCUG4AHV3gK3t15HoyRSuKNEuBFvvy9CbeR` | [`devnet/devnet.json`](../devnet/devnet.json) |
 
@@ -18,10 +18,15 @@ key, `2mz33wBK7FKRXoAi7LptGGTwVQJDbrSyrVwbYRCqwP3A`, which anyone holding the de
 
 What is on them:
 
-- **Registry:** one line, at `469GDtZ4yNERtQJHHAFvQvGUmMWJgtzw1oFGinYuDaKt`: the registry's test
-  profile (`Azh4zBXfQsXLKrrD6YanN7VZhpNyQot7vVdtB2r41UWx`) under `freelance/seller`, proven against
-  a stand-in issuer's list. A membership record for a second stand-in issuer is in the record, and
-  checks against the line.
+- **Registry:** two rows on a stand-in keeper's list (`5tUPxWGKqNbFctBXKS8LgnkM8A1Jfn5qVrUGxKjFXozB`),
+  under `freelance/seller`.
+  - The current one, at `LhQV7M3m63r4WWFYbgVhr9C3fo5ouFyb6PLjpHZAAPF`: keys/'s test person, for
+    their `freelance/seller` profile (`5RWsXwx9Urx8d9sUv1i4viMJZ9pQufyNA76o7sCdLysx`). The record
+    also holds the refusal of their `freelance/buyer` profile's row for the same market stamp, and a
+    refund.
+  - An earlier test person's, at `9UDuRdcKnuYPKeafnW4C29WdpDnFKtYLhqdwvFRKfhkr`, for a stand-in
+    profile, made before keys/ moved to its new test seed. Rows never close, so it stays, at its
+    rent minimum, with nothing left to refund. The record keeps it under `earlierRows`.
 - **Escrow:** five receipts. In the test dollar: an invoice paid in one tap
   (`B4LdqfRmxNwU56vUBk447AQnd34BKZox5HzdPo95CPje`), and an escrow with a timer the buyer objected
   to, then split (`CaQG2mdoHnoPif9LdtVipULdyJAWCXCXViJ4jSHoJE2B`). The same two again in a
@@ -53,7 +58,7 @@ A closed program id can never hold a program again.
 | Was | Program id | Record |
 |---|---|---|
 | The first registry: lists, a code tree, a fee | `8sUyd9JXRGEUqf2hYVnLCybi74549VG27dAK6YvbbU3i` | `devnet/devnet.json`, `registry.closed` |
-| A registry whose lines could grow | `GWyKGgoRg2g3kpKNgsXBWS1ayHTHHzwbtLJW4XGVP2RW` | `registry/devnet/devnet.json`, `earlier` |
+| Two later registries: lines that grew, then lines that never changed | `GWyKGgoRg2g3kpKNgsXBWS1ayHTHHzwbtLJW4XGVP2RW`, `Hyh5Lt1ErzYV3pF9ZkFWTdjhE2wwTuXnPMVgzCKEv9hf` | `registry/devnet/devnet.json` at commit `0abdd13` |
 | The escrow's first deploy, classic tokens only | `B3p13G8xvNvUrAnaXg9AUtwffBAUHcp6XoMwGV2jKPi7` | `escrow/devnet/devnet.json`, `earlier` |
 
 ## How to check
@@ -63,9 +68,9 @@ Read-only; nothing here needs a key.
 ```
 solana program show <program id> --url devnet     # a running one names its authority, the deploy key;
                                                   # a closed one answers "Program <id> has been closed"
-solana account <address> --url devnet             # any receipt or line above
+solana account <address> --url devnet             # any receipt or row above
 
-cd registry/client && npm ci && npm run test:devnet   # the registry and its line, checked against the record
+cd registry/client && npm ci && npm run test:devnet   # the registry and its row, checked against the record
 ```
 
 The escrow has no smoke test: read its receipts with `solana account`, and decode them with

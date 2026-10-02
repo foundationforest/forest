@@ -6,28 +6,26 @@
 // Writes ../program/tests-litesvm/fixtures/proofs.json. The file is committed so `cargo test`
 // needs nothing but Rust; this script is what proves the file was not written by hand.
 //
-// The `wire` section is the client's own bytes for one line's register and refund, and the bytes
-// that line should hold. The Rust harness encodes the same instructions by hand and must get the
-// same bytes, the program must write exactly that line, and the client's tests decode it: the wire
+// The `wire` section is the client's own bytes for one row's register and refund, and the bytes
+// that row should hold. The Rust harness encodes the same instructions by hand and must get the
+// same bytes, the program must write exactly that row, and the client's tests decode it: the wire
 // format written twice, checked against each other.
-//
-// The `membership` section is a record the client's `makeMembership` made for that line against a
-// second issuer's list: the client's tests verify it.
 
 import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { ed25519 } from '@noble/curves/ed25519.js'
 import { sha256 } from '@noble/hashes/sha2.js'
-import { Identity } from '@semaphore-protocol/identity'
 import { Keypair, PublicKey } from '@solana/web3.js'
 
-import { commitmentOf } from '../src/code.ts'
+import { listSecret, profileKey } from '../../../keys/src/index.ts'
 import { MESSAGE_NS, SCOPE_NS, toBytes32 } from '../src/field.ts'
-import { makeMembership } from '../src/membership.ts'
-import { LINE_DISCRIMINATOR, lineAddress, lineSpace, refundIx, registerIx } from '../src/program.ts'
-import { listRoot, proveMembership } from '../src/proof.ts'
+import { rootBytes } from '../src/keeper.ts'
+import { ROW_DISCRIMINATOR, refundIx, registerIx, rowAddress, rowSpace } from '../src/program.ts'
+import { listRoot, proveStamp } from '../src/proof.ts'
+import { stampOf } from '../src/stamp.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const artifactDir = join(here, '../../artifacts')
@@ -39,52 +37,77 @@ const artifacts = {
 
 const hex = (b: Uint8Array) => Buffer.from(b).toString('hex')
 const sha256File = (p: string) => createHash('sha256').update(readFileSync(p)).digest('hex')
-const fixtureKey = (name: string) => Keypair.fromSeed(sha256(new TextEncoder().encode(`forest registry fixture: ${name}`)))
+/** A fixed key for a fixture: its 32-byte private seed is sha256 of a name. Test keys only. */
+const seedOf = (name: string) => sha256(new TextEncoder().encode(`forest registry fixture: ${name}`))
+const fixtureKey = (name: string) => Keypair.fromSeed(seedOf(name))
 
-// Alice is the test person, ../test/person.json: her profile and her identity secret. The others
-// are plain bytes.
-const person = JSON.parse(readFileSync(join(here, '../test/person.json'), 'utf8'))
+// Two keepers, each with its own list.
+const keepers = { A: fixtureKey('keeper A'), B: fixtureKey('keeper B') }
+type List = keyof typeof keepers
+
+// Alice is the test person: keys/'s pinned test seed (keys/test/vectors.json). Her secret for each
+// list comes from it and the keeper's address, and her two profiles are its tutoring/seller and
+// tutoring/buyer profiles, all through `keys/` itself. Bob and Carol are plain bytes, on one list
+// each, with fixed profile keys: the registry does not care how a profile key was made.
+const keysVectors = JSON.parse(readFileSync(join(here, '../../../keys/test/vectors.json'), 'utf8'))
+const seed = Buffer.from(keysVectors.seed, 'hex')
 const secrets = {
-  alice: Buffer.from(person.secret, 'hex'),
-  bob: Buffer.from('forest registry fixture: bob'),
-  carol: Buffer.from('forest registry fixture: carol'),
+  'alice on A': (await listSecret(seed, keepers.A.publicKey.toBase58())).secret,
+  'alice on B': (await listSecret(seed, keepers.B.publicKey.toBase58())).secret,
+  'bob on A': Buffer.from('forest registry fixture: bob on A'),
+  'carol on B': Buffer.from('forest registry fixture: carol on B'),
 }
-if (commitmentOf(secrets.alice).toString() !== person.commitment) throw new Error("Alice's commitment is not test/person.json's")
-const profiles = {
-  alice: new PublicKey(person.profile),
-  bob: fixtureKey('profile bob').publicKey,
-  carol: fixtureKey('profile carol').publicKey,
+type Who = keyof typeof secrets
+
+const profileSeeds = {
+  alice: (await profileKey(seed, 'tutoring/seller')).privateKey,
+  'alice 2': (await profileKey(seed, 'tutoring/buyer')).privateKey,
+  bob: seedOf('profile bob'),
+  carol: seedOf('profile carol'),
+}
+type Profile = keyof typeof profileSeeds
+for (const [i, name] of (['alice', 'alice 2'] as const).entries()) {
+  if (Keypair.fromSeed(profileSeeds[name]).publicKey.toBase58() !== keysVectors.profiles[i].address) throw new Error(`${name} is not keys/'s profile`)
 }
 
 const labels = { tutoring: 'tutoring/seller', cleaning: 'cleaning/seller' }
-// The longest label a line can carry: 128 bytes.
+// The longest label a row can carry: 128 bytes.
 const longest = ['c'.repeat(42), 'm'.repeat(42), 'r'.repeat(42)].join('/')
 if (Buffer.byteLength(longest) !== 128) throw new Error('the longest label is not 128 bytes')
 
-// Two issuers' published lists. A holds Alice and Bob with strangers between them, so nobody is at
-// index 0 or the end; B holds Carol and Alice.
-const filler = (n: number) => commitmentOf(new Identity(Buffer.from(`forest registry fixture: filler ${n}`)))
-const listA = [filler(1), commitmentOf(secrets.alice), filler(2), filler(3), commitmentOf(secrets.bob)]
-const listB = [filler(4), commitmentOf(secrets.carol), filler(5), commitmentOf(secrets.alice)]
-const listOf = (list: 'A' | 'B') => (list === 'A' ? listA : listB)
+// Each keeper's published list. A holds Alice and Bob with strangers between them, so nobody is
+// at index 0 or the end; B holds Carol and Alice.
+const filler = (n: number) => stampOf(Buffer.from(`forest registry fixture: filler ${n}`))
+const lists: Record<List, bigint[]> = {
+  A: [filler(1), stampOf(secrets['alice on A']), filler(2), filler(3), stampOf(secrets['bob on A'])],
+  B: [filler(4), stampOf(secrets['carol on B']), filler(5), stampOf(secrets['alice on B'])],
+}
+const signatures = Object.fromEntries(
+  (Object.keys(keepers) as List[]).map((l) => [l, ed25519.sign(rootBytes(listRoot(lists[l])), seedOf(`keeper ${l}`))]),
+) as Record<List, Uint8Array>
 
-type Who = keyof typeof secrets
-const cases: { name: string; who: Who; label: string; list: 'A' | 'B' }[] = [
-  { name: 'alice-tutoring-A', who: 'alice', label: labels.tutoring, list: 'A' },
-  { name: 'alice-tutoring-B', who: 'alice', label: labels.tutoring, list: 'B' },
-  { name: 'alice-cleaning-A', who: 'alice', label: labels.cleaning, list: 'A' },
-  { name: 'bob-tutoring-A', who: 'bob', label: labels.tutoring, list: 'A' },
-  { name: 'carol-tutoring-B', who: 'carol', label: labels.tutoring, list: 'B' },
-  { name: 'alice-longest-A', who: 'alice', label: longest, list: 'A' },
+const cases: { name: string; who: Who; profile: Profile; label: string; list: List }[] = [
+  { name: 'alice-tutoring-A', who: 'alice on A', profile: 'alice', label: labels.tutoring, list: 'A' },
+  // The same person, list and label for a second profile: the same market stamp, so one row only.
+  { name: 'alice-tutoring-A-second-profile', who: 'alice on A', profile: 'alice 2', label: labels.tutoring, list: 'A' },
+  // The second profile under the same label through another keeper: another market stamp.
+  { name: 'alice-tutoring-B', who: 'alice on B', profile: 'alice 2', label: labels.tutoring, list: 'B' },
+  { name: 'alice-cleaning-A', who: 'alice on A', profile: 'alice', label: labels.cleaning, list: 'A' },
+  { name: 'bob-tutoring-A', who: 'bob on A', profile: 'bob', label: labels.tutoring, list: 'A' },
+  { name: 'carol-tutoring-B', who: 'carol on B', profile: 'carol', label: labels.tutoring, list: 'B' },
+  { name: 'alice-longest-A', who: 'alice on A', profile: 'alice', label: longest, list: 'A' },
 ]
 
 type FixtureProof = {
   name: string
-  list: 'A' | 'B'
+  list: List
+  keeper: string
   label: string
   profile: string
+  profileSeed: string
   root: string
-  code: string
+  keeperSignature: string
+  marketStamp: string
   scope: string
   message: string
   a: string
@@ -95,17 +118,21 @@ type FixtureProof = {
 const proofs: FixtureProof[] = []
 for (const c of cases) {
   const t0 = performance.now()
-  const commitments = listOf(c.list)
-  const p = await proveMembership({ secret: secrets[c.who], label: c.label, profile: profiles[c.who], commitments, artifacts })
-  if (p.root !== listRoot(commitments)) throw new Error(`${c.name}: the proof's root is not the list's`)
-  console.log(`${c.name}: ${Math.round(performance.now() - t0)} ms, code ${p.code}`)
+  const stamps = lists[c.list]
+  const profile = Keypair.fromSeed(profileSeeds[c.profile])
+  const p = await proveStamp({ secret: secrets[c.who], label: c.label, profile: profile.publicKey, stamps, artifacts })
+  if (p.root !== listRoot(stamps)) throw new Error(`${c.name}: the proof's root is not the list's`)
+  console.log(`${c.name}: ${Math.round(performance.now() - t0)} ms, market stamp ${p.marketStamp}`)
   proofs.push({
     name: c.name,
     list: c.list,
+    keeper: keepers[c.list].publicKey.toBase58(),
     label: c.label,
-    profile: profiles[c.who].toBase58(),
+    profile: profile.publicKey.toBase58(),
+    profileSeed: hex(profileSeeds[c.profile]),
     root: hex(toBytes32(p.root)),
-    code: hex(toBytes32(p.code)),
+    keeperSignature: hex(signatures[c.list]),
+    marketStamp: hex(toBytes32(p.marketStamp)),
     scope: hex(toBytes32(p.scope)),
     message: hex(toBytes32(p.message)),
     a: hex(p.proof.a),
@@ -127,53 +154,45 @@ for (const c of cases) {
     },
   })
 }
-
-// The wire vectors: Alice's `tutoring/seller` line, registered against A, paid by a fixed key at a
-// fixed time, as the client writes it.
 const byName = (name: string) => proofs.find((p) => p.name === name)!
-const onWire = (p: FixtureProof) => ({
-  root: Buffer.from(p.root, 'hex'),
-  proof: { a: Buffer.from(p.a, 'hex'), b: Buffer.from(p.b, 'hex'), c: Buffer.from(p.c, 'hex') },
-})
+if (byName('alice-tutoring-A').marketStamp !== byName('alice-tutoring-A-second-profile').marketStamp) throw new Error('one list, one label: one market stamp')
+if (byName('alice-tutoring-A').marketStamp === byName('alice-tutoring-B').marketStamp) throw new Error('two lists: two market stamps')
+
+// The wire vectors: Alice's `tutoring/seller` row against list A, paid by a fixed key, as the
+// client writes it.
 const first = byName('alice-tutoring-A')
-const code = Buffer.from(first.code, 'hex')
+const marketStamp = Buffer.from(first.marketStamp, 'hex')
 const payer = fixtureKey('payer')
-const time = 1_790_000_000n
-const register = registerIx({ profile: profiles.alice, label: first.label, code, proof: onWire(first), payer: payer.publicKey })
-const refund = refundIx({ code, payer: payer.publicKey })
+const profile = new PublicKey(first.profile)
+const register = registerIx({
+  profile,
+  label: first.label,
+  marketStamp,
+  keeper: keepers.A.publicKey,
+  root: Buffer.from(first.root, 'hex'),
+  keeperSignature: Buffer.from(first.keeperSignature, 'hex'),
+  proof: { a: Buffer.from(first.a, 'hex'), b: Buffer.from(first.b, 'hex'), c: Buffer.from(first.c, 'hex') },
+  payer: payer.publicKey,
+})
+const row = rowAddress(marketStamp)
+const refund = refundIx({ row, payer: payer.publicKey })
 const label = Buffer.from(first.label, 'utf8')
-const timeBytes = Buffer.alloc(8)
-timeBytes.writeBigInt64LE(time)
-const bump = PublicKey.findProgramAddressSync([Buffer.from('code'), code], register.programId)[1]
-const lineBytes = Buffer.concat([
-  LINE_DISCRIMINATOR,
-  profiles.alice.toBytes(),
-  code,
-  payer.publicKey.toBytes(),
-  timeBytes,
-  Buffer.from([bump]),
+const bump = PublicKey.findProgramAddressSync([Buffer.from('row'), marketStamp], register.programId)[1]
+const rowBytes = Buffer.concat([
+  ROW_DISCRIMINATOR,
+  profile.toBytes(),
+  keepers.A.publicKey.toBytes(),
   Buffer.from(first.root, 'hex'),
+  Buffer.from(first.keeperSignature, 'hex'),
+  payer.publicKey.toBytes(),
+  Buffer.from([bump]),
   Buffer.from(Uint32Array.of(label.length).buffer),
   label,
 ])
-if (lineBytes.length !== lineSpace(label.length)) throw new Error('the expected line is not its own size')
-
-// A membership for that line: Alice on issuer B's list, for the same label and profile, as the
-// client's own `makeMembership` makes it. Issuer B is named by the did:key of
-// fixtureKey('issuer B'), pinned as text.
-const membership = await makeMembership({
-  secret: secrets.alice,
-  label: first.label,
-  profile: profiles.alice,
-  commitments: listB,
-  issuer: 'did:key:z6Mkw7c3aLgqXfdMZn3dMqruyzrvGHfWCUk537Ci9HoMJb63',
-  artifacts,
-  createdAt: '2026-09-30T12:00:00.000Z',
-})
-if (membership.membership.code !== first.code) throw new Error("the membership's code is not the line's")
+if (rowBytes.length !== rowSpace(label.length)) throw new Error('the expected row is not its own size')
 
 const out = {
-  note: 'Generated by registry/client/scripts/fixtures.ts. Real proofs, real ceremony artifacts.',
+  note: 'Generated by registry/client/scripts/fixtures.ts. Real proofs, real ceremony artifacts. Every key here is a test key. Alice is keys/\'s test person: her list secrets and her two profiles (tutoring/seller, tutoring/buyer) come from keys/test/vectors.json\'s seed through keys/. Every other key\'s private seed is sha256 of "forest registry fixture: <name>".',
   artifacts: {
     ceremony: 'Semaphore 4.0.0, the public July 2024 ceremony',
     depth: 32,
@@ -183,26 +202,18 @@ const out = {
   scopeNamespace: SCOPE_NS,
   messageNamespace: MESSAGE_NS,
   messageLayout: 'keccak256(messageNamespace || profile key (32 bytes)) >> 8',
-  lists: {
-    A: listA.map(String),
-    B: listB.map(String),
-  },
+  keepers: Object.fromEntries((Object.keys(keepers) as List[]).map((l) => [l, keepers[l].publicKey.toBase58()])),
+  lists: { A: lists.A.map(String), B: lists.B.map(String) },
   proofs,
   wire: {
-    what: "Alice's tutoring/seller line: register against list A, paid by payerSeed's key at time",
+    what: "Alice's tutoring/seller row: register against list A, paid by payerSeed's key",
     programId: register.programId.toBase58(),
     payer: payer.publicKey.toBase58(),
-    payerSeed: hex(sha256(new TextEncoder().encode('forest registry fixture: payer'))),
-    time: Number(time),
-    lineAddress: lineAddress(code).toBase58(),
+    payerSeed: hex(seedOf('payer')),
+    rowAddress: row.toBase58(),
     register: hex(register.data),
     refund: hex(refund.data),
-    line: hex(lineBytes),
-  },
-  membership: {
-    what: "Alice on issuer B's list, for the wire line's label and profile: a proof/<id> record of the membership kind, made by makeMembership",
-    issuerSeed: hex(sha256(new TextEncoder().encode('forest registry fixture: issuer B'))),
-    body: membership,
+    row: hex(rowBytes),
   },
 }
 
