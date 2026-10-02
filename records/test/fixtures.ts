@@ -1,4 +1,4 @@
-// Shared test fixtures: the keys/ recipe's pinned test seed, and a few ready-made records.
+// Shared test fixtures: the pinned test seed (test/keys.json), and a few ready-made records.
 
 import { readFileSync } from 'node:fs'
 import { ed25519 } from '@noble/curves/ed25519.js'
@@ -7,13 +7,13 @@ import { canonical } from '../src/canonical.ts'
 import { type Body, type Entry, type Unsigned, signingInput } from '../src/entry.ts'
 import { type ProfileKey, keyFromSecret, profileKey, seedFromPrf } from '../src/keys.ts'
 
-export const VECTORS = JSON.parse(readFileSync(new URL('../../keys/test/vectors.json', import.meta.url), 'utf8')) as {
+export const VECTORS = JSON.parse(readFileSync(new URL('./keys.json', import.meta.url), 'utf8')) as {
   prf: string
   seed: string
   profiles: Array<{ index: number; did: string; wallet: string; box: { identity: string; recipient: string } }>
 }
 
-/** The keys recipe's fixed test seed: a stand-in for a passkey, in Node. */
+/** The fixed test seed: a stand-in for a passkey, in Node. */
 export const SEED = seedFromPrf(hex.decode(VECTORS.prf))
 /** A second person, from a different PRF output. */
 export const OTHER_SEED = seedFromPrf(new Uint8Array(32).fill(7))

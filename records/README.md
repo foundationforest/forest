@@ -3,7 +3,8 @@
 Devnet only: nothing in this folder is deployed anywhere, and nothing is on mainnet.
 
 Up: [the repo](../README.md). The protocol: [SPEC.md](SPEC.md). The record shapes:
-[schemas/](schemas/). The keys it signs with: [keys/](../keys/README.md).
+[schemas/](schemas/). The keys it signs with come from SPEC.md §1, its own recipe;
+[keys/](../keys/README.md) now mixes keys another way.
 
 A profile is one key. Everything the profile says is a record: a small signed JSON value at a path
 such as `profile`, `offer/<id>` or `review/<id>`. Boards keep records and serve them in the order
@@ -67,7 +68,7 @@ Publish a profile with one offer, and read it back:
 ```ts
 import { folderEntry, ownerEntry, profileKey, publish, readAll, viewProfile } from '@forest/records'
 
-const me = profileKey(seed, 0) // seed from keys/; me.did is the profile's name
+const me = profileKey(seed, 0) // seed: 32 bytes (SPEC.md §1); me.did is the profile's name
 const now = Date.now()
 await publish([board], [
   folderEntry(me, { hosts: [board] }, now),

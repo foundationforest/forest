@@ -1,45 +1,53 @@
 {
-  "about": "Fixed test vectors for the keys recipe, version v1. Generated once by this implementation and pinned; the identity was checked against @semaphore-protocol/identity and a by-hand recomputation, and records/ recomputes each profile's key and box key with a second implementation. Each profile has one key: its did:key is its name and its address is its wallet. On 30 September 2026 the did:plc keys, names and parameters were removed and each profile gained its did:key and its box key; every other value is unchanged. Bytes are hex; field elements are decimal. Changing any value here is a recipe change.",
-  "prf": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
-  "seed": "3d9afcf6df255ce134686fc4f26d6cca0a57f82480f7b34d37e682546aaa72b0",
+  "about": "Fixed test vectors for Forest keys, v1. The seed is the 32 bytes 00 01 ... 1f: public by construction, so every key here is public; for tests only. Two profiles (labels tutoring/seller and tutoring/buyer), each with its reading key; two lists, kept by the keepers whose ed25519 private keys are 32 bytes of 0x01 and 32 bytes of 0x02. Generated once by this library and pinned; test/keys.test.ts recomputes every value without it. Bytes are hex; field elements are decimal. Changing any value here changes the standard.",
+  "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "words": "abandon amount liar amount expire adjust cage candy arch gather drum bullet absurd math era live bid rhythm alien crouch range attend journey unaware",
   "profiles": [
     {
-      "index": 0,
-      "did": "did:key:z6MkpSx7aRn6kR1oSMgun7YdDD3ZXPepph8UcWYp1Jp4vhJL",
-      "wallet": "Azh4zBXfQsXLKrrD6YanN7VZhpNyQot7vVdtB2r41UWx",
-      "box": {
-        "identity": "AGE-SECRET-KEY-PQ-17HYVUHUD2D4T484CQ46J0WLK85RRLL8WSWXDXH4MSGJ05P2Q4F2S2VCLGX",
-        "recipient": "age1pq1ue3q0yg3dqt7ce4mry6y4anhug24an9gn9lpp0suhv84yrqc69mewgavyv9mfzzadxrnpducaymt0k9r2w9nj8yrl2sw8ry2p79vrh3ehukke9ddd2elu0zs6cecy0zr8zvnwawxnvf4r3zsrtft9v5rp72a9fry4xvuv5qemwnupfff9t8arxjtm3sm7a4p2yuq4u65y4ztvepknprhm2260usr4g62dmn24tyndycyj59sp3fsy3gxha6cn0qcq364wqu70dkyn6uq03z0v6fewpmtyft9v76hd992q7rgwe8p6z3qjqr5a99m2y2pfawlh3qtzaskwxfaugnkh2m9z3yj3vj8s34z8wu2523gv0pgeqer2nr9zgahegdjkpne4vy93st7j23pqs5x9u22v3ce2h6z9mltyq42jerhx5ts83tvkvxmt27ywyk8kw8a2sgp4ks8nwdyx0tyq39qzgthjwkgmzyhhutzs49zyn32aygzwaey9u29k0552vntgnr7fd88xsar5us68xefkwzcca476ep24cs9uugh93c8eecx3pn03yppjk26cfcxcw99s64lwvm86a25dhy24r2c3ms33zxp0jeuywshk325h8f8gz45e04a0q5aa3rm5kq5x2k27xrnnlpuclqkh9v9vqjx9egevuwkv77r8yqntgv7ju5cav2gqhsp0fk78duudwvdkwq77lem5lvmdkrz20nstyv3awn0mvs4tw9krd058xyr8wnf23stjt6htn0pgdkjcgndrpjl5vmhaayrrdw8r39u2haxvktslzf9zjmh0029tcf3f2pqwdec3d4h70rrfedmxcjtcm0tsxtxuk2yv2ch3rx2v4k227wklwzxwa595c5s0eypwvkxt3jc0pamvp562q664uftcsprwnq9xeudqk3zd8zx0g4p82tvfgfcjv3c9uwr73crf8mk8zpurtnf25ry50qdrgqurlfmretkw7mm56hsacgejrz2d8hf3l8pqwfak9q4n6al7ptswe2kk8l6vfn2tg6x5s2qjcpgtaarcmprjs9xz7swq498evuh3s2s9epnvg6w30qygjfejlzn5964n3q9cq78nxw75f2ge4atkvpkzzy5psxefvd737qw8zs3rqu2gchceyarwfkr4e5gx2aklpw55c4lypcr6zeqyecwmu9ue38shf4q98mmn3e4au9ywvtsuks6sl8xjzan5xvy0kge93qmwe3n54h9s0649zvavn9f0n5ehvqqx5uajts5jf6jyy44hpwgpqznkspk22d4wvfeyxwwmv2pcde5w93dr83h29dy849u0h655f9qfndnqzfz4pn4gqg0nk23zv0j50gds440pz6whzudxag66fnztcva8sprwxuljxjnm7dpljpppfmegadngwn6ces49z4csedz8z8sj37acwe0y52sgkt9vxx6n5e5k0nz536hsxzs2y2zhuff32qav9vpy3wwze4lw4up05ensgd7d0w6uaygd69s5mpnlwy98s66trqv7yfyjs94t8k2ng4eppcq3rlh8z2e26raugyfxy9j5p43jq56224c79arft539p2phhhdgt5yzugq95vl673f3hkh8ggp03nmkhz2n299yf5mehl64cu6q7kqxk5ujqexuymzhmfp5jd0ve8spzxkzaglzgj6avveel4gtx9fwegp7e28fxfpqnq5sqtgp8j5sda7454dykdk0pkyth3cyf6nez00s3efv225u4vyh0j49vvh7dq50p9t3r9n8cret4djv39cqv5zgsrce76pthyehhza9qnculrlf3e3vxwcuknyr07eg6wl22fd996cjehg0qq3deh5gpquanj2rmsq86azk0y2hns8ycu6r9lv9nac6fra5h4f32u3ty0zk7k9eat68vsxwf29"
+      "label": "tutoring/seller",
+      "info": "forest/v1/profile/tutoring/seller",
+      "privateKey": "056e386ff09889836b4b645b5f1974dc395933724f3a8e26f1661027446de168",
+      "address": "EofQN9U3MiKVmAo3Pyvuw19WjyYbpddfN52E1Q1uBwhu",
+      "reading": {
+        "privateKey": "439814806025c771c93530c7c13833215237f8fc1e5af052a9c47a891575941a",
+        "identity": "AGE-SECRET-KEY-PQ-1GWVPFQRQYHRHRJF4XRRUZWPNY9FR078URED0Q54FC3AGJ9T4JSDQRQYLQN",
+        "recipient": "age1pq16knh6anq4f95juxlvsca2lpzmxm8dehg9z4hrvr6tycm0fap2yq93qqfhzqvw67yw6xxhennafwtgftfw8he5tv0fs9pppmexhp5m2mzk4vqgxmpp2usueeaf4f3ahp689swv5gz56as9dxp4hz980erjnv5yntmj98ahqkt6mee0cs8j808gr3c3g5nrjdhxcnuyjfs2gqpy9r89ycx25nggza32vphs7hxv7hn7txvhcjspyuggqgny24pwgvhy2kmejedu7cykcuf3v30pqtfcwv6l5uev55sdr93weaxr9y68q7uxxyfuz7g3aph4kag90n0mvw8w6vdlagp4rxzkpnqgzysevgv2s7t7hrqcqfhkgyvhfhd4w7gaj6p6d43nva986j392fydfch6k2z57dk3k0szk0vkzu39d25veu298e6rs75jc8ayrm2ng9lva9qwac587t5qkf3wc9msy4tkxgkmht9fxzm3thsxa0d9dzkpqvd45xpzh3xh4x5nff7u5tn44svs2tp04tv85ml8xre22z4yvr7q639e3dxq2hdtzdwvzhp2ucqfqs8ag4ftthcpzh8yuhnv8z5mafyea96n4jl53gpc3frhkd802rqfp2rytmvjd7glw0j2z955ummgt63d7cgz8auju8gc2m0p0zpudgv399en0tu7rz0r8pxddggh3rcqae3yswt2pl6w8zw3vnfqrlrfgsewqs65ydfr4slk7c2wnwc04v45yau79906uqwq0cxfc625s3fk07egu3nlvmrvay25x9x50e6swtmu3fr56nvy67fcz9tzxrcy56n8wl7asgsul64hq8uh3xrq8zpvcekzpux03a8wa6t90x8y3jhx6n56wqa76d8cl3z4rwnj2u8uf8627fq0xtu20v3jvsj5feruwepmpvr5um8ee23tel0ppw73zfg0nyeqd68g69y9anzv3r4k6hmqfc2flwf6g2zg733wfmfzzx0vkq9utp6ztlvvqx6jezu4s59m9qk59rj2ucjz02j2fe69jq2gw5fk89nnt4p3shm2asxgzda3pc7kgtuv3nzzsc7qz0eeg9eya785mu4jwr5s7uqvgxqryakdducd3qky6egjwzs022d9gc2h9r77sxfpxku0f33w4zs25xljcaawceyneft4n0k2czrvsmdxjvnnnvxtz4errrwqauyxecw2caa66x99vf55qchhrmd8y3ghjex06s3wfxsvc4wjyspf200van7hssy00uynz9z0n4kq6ee44vq7sd8ete8ryn5d8sn7cpdzrzujfgcrs6xcznmxnjwqvu5h6xgxgcm72rrffudczclr3du7s99vgfgsl9rrcw6qryqlqmm0uf8zf5n6kxxv5rj59t8txey95ddwr98atlpcn6sxrsfgw7rgwpvtxxx2srj9f0rqkkpq50q44gwjr4xmxck9e7uxpk7d2tdfkrs2y2mtpvkcg0frqzhhd9at3quftascuuvxr4j2xavyuqkqyyh8ynksmkffzmv033wyw0u8xnqeagfm48mrdv4rrfj4j6dfavmt8kgu34erv8ey2g6kuwae52lf0rtyn5r2velg9g6vdp22y3n9zacl3ucvxu38wu0rpdz7spp8vs6mt633r6l5dznyjcd69sqaj3vw7l5e0vg9jf5ym9a27zht2wp3m3zxyaz0gwhs7dwv6ecyke8pgmqf99kvglew7n443n4pdx9kpxrrvhn5htxu3uzrwaz4zqcjuuen9342uerl9a3a3683gpnlxk2y8ma2n5ylxdl0tyz77ccajrzgnmndnpxfgm6xkmtx73g6c5f2m89upw4p5gtp6aa0m8cxdf888jrxugvyj68p5yat9w0jl6jpl4flfs4mwp964jfxfeg4xz9fhd7wl0flywvu6apqszdlufq"
       }
     },
     {
-      "index": 1,
-      "did": "did:key:z6MkkbbkHFyWiFoJfspoXRwdoJ3v7t4AahTD2Me735t9VEb7",
-      "wallet": "79Lhh1j5NiJqZNz6qrynxCVvJJnKApCrLLjBCov8a1oj",
-      "box": {
-        "identity": "AGE-SECRET-KEY-PQ-1QVDY7SR47C4TTZ52998LGY8AX42DLAPX4U0PMGWCCLUTMDYFT06S36YJRH",
-        "recipient": "age1pq1x2g8ln8h3c55f8rn574fjlyzd4rcmqdmdr35kn4e2ymf7gskyrtzr5w60rlgn9cpxjs7lcgwz5cswjuc0j5n2y920j7y5juwmcchqru3fysg5uxnj4yd2lqggfy8gm8nhx6t2pfptv28y7uzz2egqhkh00ldq8jw9q5vvkn7umjvfhjpquh8zl0e42znyf5fn9dz58vggdg2wxydh8ycxfyeykmptvh8flxpdsr2zqzz0k97ngd3twj2sxaz5xkccvpq4egkycfm6jfj3v5zs0wcux7dw5203sdjarag46uypq842z6lezfeqqn58ey5fz93quuw0899zj72puvpdtjuremttsqn5a2j2vgvskykwtfgqal5k5mkkkvfay58famphrspv27pr0c9t8peu3kxqgmeuxwu8r6r5hhgk6x4dv79a5uctyp2yjmqttsfzfd0l6meg0n5dxcgqqyqyghsjumpz52dyvgt0q3usxzssmajukrkzath64agqa39vneqgthcwdfl47gkwac265czjufkkrpqtsqqjqyse8pkarguk96hezck9y8xau5ez6r962usszz5c2vrtqxnfcud9zy8h8fttuqc3scvgsph2wc5qsvjphf54un6v5ah32a8xz65z3tzkpwg9ehay6657y4x2vww5jrvgsfpdd4t5u3456xnltz8ntsnzexv2m3skqqw7qsslkavtjd35vngdk2as8r4wagh3vpd6hj2qexsrna35r6heyeyl95x8p4nwyj3sxks4ryz70ygm79xc2k8md8undpe5dazsrpvtdslf52qnxqqk33ug9tflyj8fw3l8j3k3cj2swq2q5k8u6zmkmyz85mtgl0srawe242f989s9wk25q3cuax42ghmwztt220nfpzdnz4tuj5g2rgar84pv99sjkuey03zu46n596yz2w2ges4l7vd7j34hlj2vlrwfgq4zvfsjgt6t43gnr46hdlayfh7wzh7mnxvq62p34a99wee26kd6rzqh7mgp8tfmlg62fr6vhumzy6qakrkeyrc0p2z0my82fdh2znhw0xxzntnh6gk8jjzqr6enz7zrcv5t7tce7xg459tj9uaqcflgxpyeeg50vgc808zvcjy6yezwadzqlt2u9drc55wws7mkd7evaje6m527sy45dqhy4nhyvyms7plvxdgnpsrhjtnrvfeud5eaj5ynhvs62zrkyu9080g4ztp5k5p64z6wkd4vjh9guukvs5eq4vy20j9grpk4y3pccxazlq59sagcsp30p2pewkszyl4nsl7ca5e4m65e37gn7qvssfku2gkaf6e7j6yva320cqjnd0dxup0w4ag393ktlepcv7cfyzcy6cwz6rkne4ftr4fvd8ck24kfqcm3d3vkngf0059khvht2vgwgtq73rnc8mty0svfl35qgt8y6mhvyyspr7rfh353zsxkmzfajmnw7sxnuvy4axf3pvyyzlu2w88da3trjtutve6vkp3gg6qmd6kc9sdpnmhcd5mj7y0504fwl9fdjj82dgxkwknd7nwgfqllyrnhkc7g0p9t4avrzk8d8ms0z3n8948zt2n4s7vnycfetrfc2vv3lyj3269uzvsc9nfxe8nq39q5atzn6cz3zk94fp4ymysvmqz00y5vhaklpqmnqnpja9ev76spqj2l5n69av8kw6awr5ft3h7xz3a7lznjtsrzzyxjy38y9tfply593e45j2jgmh8qm9z5sfelfs8vwne242497e3wyj8gn93t4czj64qt8c68a94sjchcqmlm53m4gp8j4mnh2mqk0976u693ef3jzs06nt8u97u4ka7ms6apw2jtjk5y9qap7xprg25c2x4rw3tu3v0eja442rf7pypq4dhtcgupv8dck99rnzka5t05pftktlgzq72w8xy"
+      "label": "tutoring/buyer",
+      "info": "forest/v1/profile/tutoring/buyer",
+      "privateKey": "e97c86154d61b4a633633cca01971aefc878686f562ec06242faa02650e2e18b",
+      "address": "N1NFJwhwe7hY6wonMxtbBSPEvuxfVTLVFG9y9E7ByW7",
+      "reading": {
+        "privateKey": "ca773c854a590e134ce12fbe1f55bf344f151fc8a20ed57e3ac9bdd02b42af31",
+        "identity": "AGE-SECRET-KEY-PQ-1EFMNEP22TY8PXN8P97LP74DLX383287G5G8D2L36EX7AQ26Z4UCSNY5TJ4",
+        "recipient": "age1pq1e4z547qffz5g2znxjze5d6dctpzj8y96fntn56p72cs4f2g4mnxxaag4pnnwntz0k5vl2a5m9tc9qgz9zc29x0c24zjs9qxv3rmf4k33ktyqyedcx22srkfctlyu5cupejk3qsqregd84jkv7ygxz9qcyslrdwqmxy676q4m7nx8d9fvck5zr2krh3w74myhk2n92h4m8wrpw8sx0ssj3pugeqpjmtzvygxzzx2qe88qmd4t4peuf75f4hr2ywew92wj7jvht09nm4kzs4d5edq9vs2l4jd2f9vz2p0rnc8fp9afpss0kxqhfe9pt2fcz9gj8t65zc6h54f36re9jr58er20g844y92wuj96wawfnsar9j49wlcv5ca89zsq44thzn92pa83tw7jsyrrkkt5x0c2g9sh8yy5dxm2tpcuxdt643mq4g0gw70jqku4kdhmy6328maee8c5fmzufy3xsaz4466l3puqr07nkpjgy5dxs8rfk2n32y5rewt4dhq5tt4364fjqqvzsmymp4l3s0w33f3cjd2hsdyzjhdk377qhpugc59kuwnpr4jlged9wqc4k3pmdyxcsakpa9m44h6xuza39vlge865tjxv89tfqrc2anpmcmrtyvmjwdfl5vv4n8fkpy990nkgnq87mx7vulryj0mu9qj63rftx7djckx3yzsxmvgsfk7y225sqmh6zynrm99pz3jkftm2260e392x5fz0m3ehdzzxx7nzxn3l0nsnewxmvg3hwrpzh6rhykqcnjmegqvmavruh9ktcuay02qxqwvlqg9etyqr3ksnue5rvdsmqf3w2xh4yuclyrpngczusxw3q3klr9emdz9f4htz350q9ektfgahe9k7d32r349u2ylnxqygx3t3jcpa2wtamfcpdvwrv4qdkuu30wtugvspw02fyrl80nnmyj3fpse2q6qqn6zg0ed5vtgrjs00w9xe8k4kanse9f7skqgpyj7p6sje6zsxpgam8srm50av8zwyqm87ndtk5ucuv4xpe8ef4z8tlvf6t6e8ehpsz72yscu9kkex4d063kz7cey54lvt96gfqzax70xq275axqd8sy9mcm9nvqhnufgj0ft32qate9865mvgk5p3evyjugykhytnn34h87e4gq2wcqx0xqzdga9zjmp6xpnudq7x2f83shyvggm668949025jp6nx4jlmpkqjv65fwggcdlq3rmsu46ps6n5mgs2c7j8fsj90xddzckwcecj3wnjq5gxymmjwyt36ezrz5yk6pqgsmc6v89x3xushqxpvdm03fjcjup3n2j2vu3dvwsw9axxmuptp0uzhjspkgj5a0yvn97qtn4uhe7u9neqxkj4ewh843m338n99nhjpqkljs9fdpa7reaf5lej46v32pnydxm9ndqxmu575en5c7epwmqrkmlcf3txly4hk2ushdsr88gd5aqsy57wskm98ng94sm3qj43chseckx2dqtcw37xerzpz8az42hquuq5xk6ykq620lqenhsgsgxj5a50axagwtxrplxzv2uh5ag05jmesymt9q5pssk2k6hr3pslk52mscuf6aatwwmvs0vwq5qdnsv7r3y7lxdv4fnk2khhsxfe5umcazzk86nmt3hj9gkvedq999rep5t7c522953zj9rkprwgs25uxu5r5r4gcmp4jc3vr0y64j6zvczqa66k5u79sr9cy7vcdqp7k5aqu96cpaekqapgsljvqyecccc3a0rxjzqjfu6hrz32cz9dxj4xayz3qtu3zqve2a8r30pznfjd6uzkrq6k923f3yur267xarv52l47m2vz3yxjw6hnnmglda9cddfjxjmskp3myrhp4lkvky4e7zk56ypa766fkf8wjyrf93ujg02jt0n3st63g7wnkdhcgk34f5emcatz"
       }
     }
   ],
-  "identity": {
-    "note": "One per seed, not per profile. The secret is HKDF from the seed with info forest.foundation/identity/v1; the rest is Semaphore's own derivation from those bytes.",
-    "secret": "54684ed3bd15671b1a07bd8ed840a049c60ce847afd7d8da73b4f71cc6884d85",
-    "secretScalar": "2637071886574317557357748745269659878450060864322449153662462920291629818323",
-    "publicKey": [
-      "12833172845353551264950838312363281669817922016952954163704025052554025680832",
-      "10200531290526369356393060646766724663488770654401564689854272195253183371685"
-    ],
-    "commitment": "14568690134484466610252976219100933485694269593799802854234702390895629808185"
-  },
-  "central": {
-    "note": "One per seed, not per profile. HKDF from the seed with info forest.foundation/central/v1, used as an ed25519 seed; the address is its public key in base58. Added in session 12; every value above it is unchanged.",
-    "wallet": "zYJoj63ZWmXRMaPWPLmNgToTcj3zPckW6E53KXFCXCV"
-  },
-  "words": "diesel subject diet salad fiction identify spider assume shaft nature forest neglect pistol winter must bus rebuild have whale again effort festival skull bicycle",
-  "seedFile": {
-    "prf": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
-    "label": "is5KJzsnEvZhq1udS4XEVUro3G7LkXun9agAQ_3RoxI",
-    "ciphertext": "OF75iwQ_amjVoQJ6yRXzMjMeXZOp9Ps4QP1M0_6A-BTx713358B_oJ48Ll4Upk7MF_ignn1laCz9Jk-1"
-  }
+  "lists": [
+    {
+      "keeper": "AKnL4NNf3DGWZJS6cPknBuEGnVsV4A4m5tgebLHaRSZ9",
+      "info": "forest/v1/list/AKnL4NNf3DGWZJS6cPknBuEGnVsV4A4m5tgebLHaRSZ9",
+      "secret": "ea54aedb4a8991d00fc1bbe8d7a5099c14d071451ffbc246e72281cea4e55af1",
+      "secretScalar": "665561349255238347937277730398417124790405150900355599684173241001574904436",
+      "publicKey": [
+        "13058596147137095242077878084159022781958411464829898438672541817592278401082",
+        "20922325712332872882943751798286938005653709225628179739167392380155746425243"
+      ],
+      "stamp": "6914132349450691776510716074922594152964091687921981308373825731646020123218"
+    },
+    {
+      "keeper": "9hSR6S7WPtxmTojgo6GG3k4yDPecgJY292j7xrsUGWBu",
+      "info": "forest/v1/list/9hSR6S7WPtxmTojgo6GG3k4yDPecgJY292j7xrsUGWBu",
+      "secret": "27f833e3141de62cb409e62cb59bda43a641ede5b679f5a85e247c8ff4a5f448",
+      "secretScalar": "2492331428137633524285403892679743852619728568594135134196580301273452183184",
+      "publicKey": [
+        "19117259042680092088377989981509061176255708166103010035664338460014704761633",
+        "631273282437174649833387575513641669757567780789284049107050095046544037815"
+      ],
+      "stamp": "20772401070522686362617789819676029016219375112108663629720135165047952968619"
+    }
+  ]
 }

@@ -18,8 +18,8 @@ key, `2mz33wBK7FKRXoAi7LptGGTwVQJDbrSyrVwbYRCqwP3A`, which anyone holding the de
 
 What is on them:
 
-- **Registry:** one line, at `469GDtZ4yNERtQJHHAFvQvGUmMWJgtzw1oFGinYuDaKt`: the keys recipe's test
-  profile 0 (`Azh4zBXfQsXLKrrD6YanN7VZhpNyQot7vVdtB2r41UWx`) under `freelance/seller`, proven against
+- **Registry:** one line, at `469GDtZ4yNERtQJHHAFvQvGUmMWJgtzw1oFGinYuDaKt`: the registry's test
+  profile (`Azh4zBXfQsXLKrrD6YanN7VZhpNyQot7vVdtB2r41UWx`) under `freelance/seller`, proven against
   a stand-in issuer's list. A membership record for a second stand-in issuer is in the record, and
   checks against the line.
 - **Escrow:** five receipts. In the test dollar: an invoice paid in one tap

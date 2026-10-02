@@ -1,4 +1,4 @@
-// The spec's test vectors, from the keys recipe's fixed test seed. Ed25519 is deterministic, so
+// The spec's test vectors, from the fixed test seed (test/keys.json). Ed25519 is deterministic, so
 // these never change unless the protocol does. `node test/vectors.ts` prints them;
 // vectors.test.ts checks them against test/vectors.json.
 
@@ -31,7 +31,7 @@ export async function vectors() {
   const delegated = delegateEntry(signer, alice.did, grantId, 'offer/physics', { direction: 'offer', description: 'Physics, one hour.', createdAt: '2026-09-21T13:34:20Z' }, TIME + 60_000)
   const deleted = ownerEntry(alice, 'offer/maths', null, TIME + 120_000)
   return {
-    about: 'Forest data protocol vectors. Seed: keys/test/vectors.json prf -> seed; profile 0; the delegate key is 32 bytes of 0x2a.',
+    about: 'Forest data protocol vectors. Seed: test/keys.json prf -> seed; profile 0; the delegate key is 32 bytes of 0x2a.',
     profile: { index: 0, did: alice.did, address: alice.address, publicKeyHex: hex.encode(alice.publicKey) },
     boxRecipientSha256: createHash('sha256').update(box.recipient).digest('hex'),
     delegate: { did: signer.did },

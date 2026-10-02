@@ -1,8 +1,9 @@
 // Keys from the seed, and the one way a profile key is written down.
 //
-// The passkey-to-seed recipe is keys/SPEC.md's, unchanged. A profile's key is the ed25519 key
-// keys/ already derives as the profile's wallet: one key is the profile's name, signs its
-// entries, and holds its money. The box key (for sealed entries) is one new label; it is made
+// The recipe is SPEC.md §1's: a passkey's PRF output becomes the seed, and each numbered
+// profile's key comes from the seed. keys/ followed it until 2 October 2026 and now mixes keys
+// another way; test/keys.json pins what this one gives. One key is the profile's name, signs its
+// entries, and holds its money. The box key (for sealed entries) is one more label; it is made
 // in sealed.ts, so code that never opens a sealed entry carries no encryption library.
 
 import { ed25519 } from '@noble/curves/ed25519.js'
@@ -21,7 +22,7 @@ export function derive(ikm: Uint8Array, info: string, length = 32): Uint8Array {
   return hkdf(sha256, ikm, undefined, utf8(info), length)
 }
 
-/** keys/SPEC.md step 2: the passkey's PRF output becomes the 32-byte seed. */
+/** SPEC.md §1: the passkey's PRF output becomes the 32-byte seed. */
 export function seedFromPrf(prf: Uint8Array): Uint8Array {
   if (prf.length !== 32) throw new Error('a PRF output is 32 bytes')
   return derive(prf, LABELS.seed)

@@ -15,9 +15,9 @@ whoever sends the transaction.
 
 ## How it works
 
-- **Keys.** A profile is one ed25519 key: its did:key name and its Solana wallet
-  ([keys](../keys/README.md)). A person also holds one identity secret, the same for all their
-  profiles; only its commitment ever leaves the device, once to each issuer that vouches for them.
+- **Keys.** A profile is one ed25519 key: its did:key name and its Solana wallet. A person also
+  holds one identity secret, the same for all their profiles; only its commitment ever leaves the
+  device, once to each issuer that vouches for them (but see Limits: keys/ now mixes one per list).
 - **Issuers.** An issuer checks that someone is one real human, adds their commitment to its list,
   and publishes the list (every commitment, in order) and its root outside the registry. Anyone may
   be an issuer. The program never sees a list and checks no root.
@@ -132,8 +132,8 @@ recent blockhash and a connection.
 import { buildRegistration } from '@forest/registry-client'
 
 const r = await buildRegistration({
-  secret: await identitySecret(seed),                 // keys/
-  profile: (await profileKey(seed, 0)).publicKey,     // keys/
+  secret: (await listSecret(seed, issuer)).secret,                  // keys/, for this issuer's list
+  profile: (await profileKey(seed, 'tutoring/seller')).publicKey,   // keys/
   label: 'tutoring/seller',
   commitments,                                        // the issuer's published list, in its order
   artifacts: { wasm: 'artifacts/semaphore-32.wasm', zkey: 'artifacts/semaphore-32.zkey' },
@@ -147,7 +147,7 @@ cd registry/artifacts && npm ci && npm run fetch         # the proving files, ha
 cd registry/program   && cargo build-sbf --arch v3       # Solana CLI 4.2.2 or later
 cd registry/program/tests-litesvm && cargo test          # the rules, the attacks, the property test
 cd registry/program/tests-litesvm && FOREST_FUZZ_ITERATIONS=1000 cargo test --release --test invariants -- --nocapture
-cd registry/client    && npm ci && npm test              # no chain needed (install keys/ first)
+cd registry/client    && npm ci && npm test              # no chain needed
 cd registry/client    && npm run test:validator          # starts solana-test-validator itself
 cd registry/client    && npm run test:devnet             # read-only, against devnet/devnet.json
 cd registry/client    && npm run fixtures                # remake the real proofs the Rust tests use
@@ -194,7 +194,7 @@ None of this can change after deploy; a change breaks every existing proof, code
 - **The rules.** One proof per `register`; one line per code; a label of at most 128 bytes; no
   signature but the payer's; a line never written again; a refund of exactly the excess, to the
   recorded payer only.
-- **The identity on the device.** Semaphore's own, from the 32 bytes `identitySecret(seed)` returns.
+- **The identity on the device.** Semaphore's own, from the person's 32-byte identity secret.
   Not in the program, but a change makes every commitment unreachable.
 
 On mainnet the program is sealed the day it deploys, and a later version is a new program at a new
@@ -215,6 +215,10 @@ solana program show <program id>          # Authority: none
   else's included.
 - **One line per identity secret, not per face.** A person with two seeds on two issuers' lists can
   hold two lines under one label; a reader counting both issuers sees both.
+- **[keys/](../keys/README.md) now mixes one secret per list, not one per person.** This client
+  and its tests still assume one identity secret per person, the same on every issuer's list. With
+  keys/'s `listSecret`, a person has another code under each issuer: a second issuer's membership
+  no longer matches their line, and two issuers' lists give two lines under one label.
 - **Roots can link lines.** Lines or memberships that carry the same root, or the same rare set of
   roots, can be matched by anyone reading.
 - **Where issuers publish their lists and roots, and in what signed form, is not defined here.**

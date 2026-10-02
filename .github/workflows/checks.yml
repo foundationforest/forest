@@ -56,7 +56,7 @@ jobs:
           - package: records
             install: records
           - package: registry/client
-            install: keys registry/client
+            install: registry/client
           - package: escrow/client
             install: escrow/client
     env:
@@ -166,7 +166,7 @@ jobs:
           name: programs
       - name: Install, and the registry's proving files
         run: |
-          for dir in keys registry/artifacts registry/client; do (cd "$dir" && npm ci --no-audit --no-fund); done
+          for dir in registry/artifacts registry/client; do (cd "$dir" && npm ci --no-audit --no-fund); done
           (cd registry/artifacts && npm run fetch)
       - name: Registry client
         working-directory: registry/client

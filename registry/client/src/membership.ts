@@ -49,7 +49,7 @@ function fromHex32(text: unknown): bigint | null {
  * the profile's folder like any other; the profile key signs it there, not here.
  */
 export async function makeMembership(input: {
-  /** The 32 bytes `keys/`'s `identitySecret(seed)` returns, or the identity itself. */
+  /** The person's 32-byte identity secret, or the identity itself. */
   secret: Uint8Array | Identity
   /** The line's label. */
   label: string

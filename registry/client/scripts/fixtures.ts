@@ -23,7 +23,6 @@ import { sha256 } from '@noble/hashes/sha2.js'
 import { Identity } from '@semaphore-protocol/identity'
 import { Keypair, PublicKey } from '@solana/web3.js'
 
-import { didKey, profileKey } from '../../../keys/src/index.ts'
 import { commitmentOf } from '../src/code.ts'
 import { MESSAGE_NS, SCOPE_NS, toBytes32 } from '../src/field.ts'
 import { makeMembership } from '../src/membership.ts'
@@ -42,21 +41,17 @@ const hex = (b: Uint8Array) => Buffer.from(b).toString('hex')
 const sha256File = (p: string) => createHash('sha256').update(readFileSync(p)).digest('hex')
 const fixtureKey = (name: string) => Keypair.fromSeed(sha256(new TextEncoder().encode(`forest registry fixture: ${name}`)))
 
-// Alice is the keys recipe's pinned test seed: her identity secret and her profile 0 key, both
-// derived through `keys/` itself, so the fixtures run from the seed to a verified proof. The others
+// Alice is the test person, ../test/person.json: her profile and her identity secret. The others
 // are plain bytes.
-const keysVectors = JSON.parse(readFileSync(join(here, '../../../keys/test/vectors.json'), 'utf8'))
-const seed = Buffer.from(keysVectors.seed, 'hex')
-const aliceProfile = await profileKey(seed, 0)
-if (aliceProfile.address !== keysVectors.profiles[0].wallet) throw new Error("Alice's profile key is not the keys recipe's profile 0")
+const person = JSON.parse(readFileSync(join(here, '../test/person.json'), 'utf8'))
 const secrets = {
-  alice: Buffer.from(keysVectors.identity.secret, 'hex'),
+  alice: Buffer.from(person.secret, 'hex'),
   bob: Buffer.from('forest registry fixture: bob'),
   carol: Buffer.from('forest registry fixture: carol'),
 }
-if (commitmentOf(secrets.alice).toString() !== keysVectors.identity.commitment) throw new Error("Alice's commitment is not the keys recipe's")
+if (commitmentOf(secrets.alice).toString() !== person.commitment) throw new Error("Alice's commitment is not test/person.json's")
 const profiles = {
-  alice: new PublicKey(aliceProfile.publicKey),
+  alice: new PublicKey(person.profile),
   bob: fixtureKey('profile bob').publicKey,
   carol: fixtureKey('profile carol').publicKey,
 }
@@ -164,14 +159,14 @@ const lineBytes = Buffer.concat([
 if (lineBytes.length !== lineSpace(label.length)) throw new Error('the expected line is not its own size')
 
 // A membership for that line: Alice on issuer B's list, for the same label and profile, as the
-// client's own `makeMembership` makes it. Issuer B's key is a fixed key, named by its did:key.
-const issuerB = fixtureKey('issuer B')
+// client's own `makeMembership` makes it. Issuer B is named by the did:key of
+// fixtureKey('issuer B'), pinned as text.
 const membership = await makeMembership({
   secret: secrets.alice,
   label: first.label,
   profile: profiles.alice,
   commitments: listB,
-  issuer: didKey(issuerB.publicKey.toBytes()),
+  issuer: 'did:key:z6Mkw7c3aLgqXfdMZn3dMqruyzrvGHfWCUk537Ci9HoMJb63',
   artifacts,
   createdAt: '2026-09-30T12:00:00.000Z',
 })

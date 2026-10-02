@@ -1,48 +1,55 @@
-import { ed25519 } from '@noble/curves/ed25519.js'
-import { base58 } from '@scure/base'
-import { INFO, SEED_LENGTH, assertBytes, assertProfileIndex, hkdf } from './hkdf.ts'
+// A profile's two keys: the profile key, one per label, mixed from the seed; and its reading
+// key, mixed from the profile key. See README.md, "The mixing table".
 
-/** A Solana wallet: an ed25519 key. `privateKey` is the 32-byte seed Solana tooling accepts. */
-export type Wallet = {
+import { ed25519 } from '@noble/curves/ed25519.js'
+import { base58, bech32 } from '@scure/base'
+import { identityToRecipient } from 'age-encryption'
+import { INFO, SEED_LENGTH, assertBytes, assertText, hkdf } from './hkdf.ts'
+
+/**
+ * A profile's one key. Its address is the profile's name and its Solana wallet: the same 32
+ * bytes. It signs the profile's records and its transactions. Held in memory only.
+ */
+export type ProfileKey = {
+  label: string
+  /** The 32-byte ed25519 private seed, the form Solana tooling accepts as a keypair seed. */
   privateKey: Uint8Array
   publicKey: Uint8Array
-  /** The public key in base58: the wallet's address. */
+  /** The public key in base58: the profile's name and its wallet address. */
   address: string
 }
 
 /**
- * A profile's one key. It is the profile's name (`did`), it signs the profile's entries
- * (records/SPEC.md), and it is the profile's Solana wallet (`address`): the same 32 bytes.
- * Held in memory only.
+ * The key that opens private records sealed to a profile: age's post-quantum hybrid identity,
+ * ML-KEM-768 with X25519 (mlkem768x25519).
  */
-export type ProfileKey = Wallet & {
-  index: number
-  /** The profile's name: the did:key of its public key. */
-  did: string
+export type ReadingKey = {
+  /** age's hybrid identity, `AGE-SECRET-KEY-PQ-1…`: it opens what is sealed to this profile. */
+  identity: string
+  /** What others seal to, `age1pq1…`. The profile's address does not give it. */
+  recipient: string
 }
 
 /**
- * Profile `n`'s key from the seed: one HKDF output with its own info string, so the keys of
- * different profiles are unrelated: none can be computed from another.
+ * The profile key for `label`, from the seed. One HKDF output per label, so two labels give
+ * unrelated keys, and the same seed and label always give the same key.
  */
-export async function profileKey(seed: Uint8Array, n: number): Promise<ProfileKey> {
+export async function profileKey(seed: Uint8Array, label: string): Promise<ProfileKey> {
   assertBytes('seed', seed, SEED_LENGTH)
-  assertProfileIndex(n)
-  const wallet = ed25519Wallet(await hkdf(seed, INFO.profile(n)))
-  return { index: n, ...wallet, did: didKey(wallet.publicKey) }
-}
-
-/** An ed25519 wallet from a 32-byte HKDF output: the profile keys and the central wallet alike. */
-export function ed25519Wallet(privateKey: Uint8Array): Wallet {
+  assertText('label', label)
+  const privateKey = await hkdf(seed, INFO.profile(label))
   const publicKey = ed25519.getPublicKey(privateKey)
-  return { privateKey, publicKey, address: base58.encode(publicKey) }
+  return { label, privateKey, publicKey, address: base58.encode(publicKey) }
 }
 
-/** The did:key of an ed25519 public key (W3C CCG did:key): `did:key:z` + base58btc(0xed 0x01 || key). */
-export function didKey(publicKey: Uint8Array): string {
-  assertBytes('an ed25519 public key', publicKey, 32)
-  const bytes = new Uint8Array(34)
-  bytes.set([0xed, 0x01])
-  bytes.set(publicKey, 2)
-  return `did:key:z${base58.encode(bytes)}`
+/**
+ * The profile's reading key, from its profile key's 32 private bytes. The 32 mixed bytes are used
+ * unchanged as age's hybrid identity (its seed, which age expands into the ML-KEM-768 and X25519
+ * keys); age's own library computes the recipient.
+ */
+export async function readingKey(profilePrivateKey: Uint8Array): Promise<ReadingKey> {
+  assertBytes('profile private key', profilePrivateKey, 32)
+  const bytes = await hkdf(profilePrivateKey, INFO.read)
+  const identity = bech32.encodeFromBytes('AGE-SECRET-KEY-PQ-', bytes).toUpperCase()
+  return { identity, recipient: await identityToRecipient(identity) }
 }

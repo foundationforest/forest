@@ -1,5 +1,5 @@
-// The registry on devnet, used for real: a relayer writes one line for profile 0 of the keys
-// recipe's test seed against one issuer's list, shows what the program refuses and what a refund
+// The registry on devnet, used for real: a relayer writes one line for the test person's profile
+// (test/person.json) against one issuer's list, shows what the program refuses and what a refund
 // does, then makes a second issuer's membership for that line and checks it against the chain.
 //
 //   FOREST_DEVNET_KEYS=<dir> node scripts/devnet.ts        (after registry/devnet/deploy.sh)
@@ -10,21 +10,18 @@
 // (FOREST_DEVNET_RECORD overrides the path; FOREST_DEVNET_RPC the endpoint). Each step checks the
 // chain first and is skipped if it is done, so the script can be run again after a failure.
 //
-// The person is the keys recipe's pinned test seed (`keys/test/vectors.json`): profile 0's key and
-// the identity secret, both derived here through `keys/` itself. The profile key signs nothing. The
-// two issuers' lists, and issuer B's key, are stand-ins this script makes (strangers' commitments
-// around the person's), because issuers publish their lists outside the registry and no issuer
-// publishes one yet; they are recorded as such.
+// The person is test/person.json: a profile and an identity secret, pinned as plain values. The
+// profile key signs nothing. The two issuers' lists, and issuer B's key, are stand-ins this script
+// makes (strangers' commitments around the person's), because issuers publish their lists outside
+// the registry and no issuer publishes one yet; they are recorded as such.
 
 import { readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { sha256 } from '@noble/hashes/sha2.js'
 import { Identity } from '@semaphore-protocol/identity'
 import { Connection, Keypair, PublicKey, SystemProgram, Transaction, VersionedTransaction } from '@solana/web3.js'
 
-import { didKey, humanIdentity, identitySecret, profileKey } from '../../../keys/src/index.ts'
 import {
   buildRegistration,
   codeFor,
@@ -120,25 +117,22 @@ const blockhash = async () => (await connection.getLatestBlockhash('confirmed'))
 
 console.log(`registry ${programId.toBase58()} on ${rpc}`)
 
-// The person: profile 0 of the keys recipe's pinned test seed.
-const vectors = JSON.parse(readFileSync(join(here, '../../../keys/test/vectors.json'), 'utf8'))
-const seed = Buffer.from(vectors.seed, 'hex')
-const profile = new PublicKey((await profileKey(seed, 0)).publicKey)
-const secret = await identitySecret(seed)
-const human = await humanIdentity(seed)
-if (profile.toBase58() !== vectors.profiles[0].wallet || human.commitment.toString() !== vectors.identity.commitment) {
-  throw new Error('the keys library no longer gives the pinned vectors')
-}
+// The person: test/person.json's profile and identity secret.
+const person = JSON.parse(readFileSync(join(here, '../test/person.json'), 'utf8'))
+const profile = new PublicKey(person.profile)
+const secret = Buffer.from(person.secret, 'hex')
 const mine = commitmentOf(secret)
+if (mine.toString() !== person.commitment) throw new Error("the commitment is not test/person.json's")
 
 // Two issuers' lists, stand-ins: strangers' commitments around the person's. Issuer B's key, a
-// stand-in too, is named by its did:key in the membership.
+// stand-in too, is named in the membership by the did:key of the ed25519 key whose seed is
+// SHA-256('forest devnet stand-in issuer B: key'), pinned as text.
 const stranger = (issuer: string, n: number) => commitmentOf(new Identity(Buffer.from(`forest devnet stand-in issuer ${issuer}: member ${n}`)))
 const lists = {
   A: [stranger('A', 1), stranger('A', 2), mine, stranger('A', 3), stranger('A', 4)],
   B: [stranger('B', 1), mine, stranger('B', 2)],
 }
-const issuerB = didKey(Keypair.fromSeed(sha256(new TextEncoder().encode('forest devnet stand-in issuer B: key'))).publicKey.toBytes())
+const issuerB = 'did:key:z6MkvwV2QLMkm9ipRS5dRpCQMKqtNozhevvnrFgz6KoE6xqW'
 const code = codeFor(secret, LABEL)
 const address = lineAddress(code, programId)
 const artifacts = {
@@ -147,7 +141,7 @@ const artifacts = {
 }
 record.line = {
   ...(record.line ?? {}),
-  what: "profile 0 of the keys recipe's test seed, one verified human under freelance/seller, proven against a stand-in issuer's list (A); a second stand-in issuer (B) vouches off chain, in a membership record; a relayer (the payer) sends everything, the profile key signs nothing",
+  what: "the test person's profile (registry/client/test/person.json), one verified human under freelance/seller, proven against a stand-in issuer's list (A); a second stand-in issuer (B) vouches off chain, in a membership record; a relayer (the payer) sends everything, the profile key signs nothing",
   label: LABEL,
   profile: profile.toBase58(),
   code: hex(toBytes32(code)),
