@@ -14,7 +14,7 @@ import type { AddressInfo } from 'node:net'
 import { DatabaseSync } from 'node:sqlite'
 import { MAX_PAGE_BYTES, READ_TIMEOUT_MS } from './client.ts'
 import { type Checked, MAX_FUTURE_MS, MAX_RECORD_BYTES, RecordError, type SignedRecord, decodeRecord, encodeRecord, isControlPath } from './record.ts'
-import { type View, allows, viewProfile } from './view.ts'
+import { type View, allowsArrival, viewProfile } from './view.ts'
 
 export const DAY = 86_400_000
 /** Records per request. */
@@ -114,7 +114,9 @@ export class Host {
       if (reason === 'not-allowed') return { ok: false, error: 'permission', message: 'the permissions record does not allow this writer key here' }
       return { ok: false, error: 'older', message: 'a newer version is already here' }
     }
-    if (record.by !== undefined && !allows(view.writers, record, now)) return { ok: false, error: 'permission', message: 'this writer key is past its until' }
+    // A writer record also needs the writer listed for its path now, and its until not passed by
+    // this host's clock: a reader checks only the record's own date.
+    if (record.by !== undefined && !allowsArrival(view.writers, record, now)) return { ok: false, error: 'permission', message: 'this writer key is past its until' }
     if (this.policy && !isControlPath(record.path)) {
       const stored = this.db.prepare('SELECT COUNT(*) AS records, COALESCE(SUM(bytes), 0) AS bytes FROM records WHERE profile = ?').get(record.profile) as { records: number; bytes: number }
       const refused = await this.policy(record, stored)

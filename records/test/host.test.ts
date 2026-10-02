@@ -150,12 +150,32 @@ describe('writer keys, checked as they arrive', () => {
       // Past until by the host's clock: refused, however the record is dated.
       clock.advance(DAY + 1)
       assert.deepEqual(await errors(h, [offer(writer, 'offer/late', T0 + MINUTE)]), ['permission'])
+
+      // Listed with no until: taken whenever it arrives.
+      await publish([h.url], [permissionsRecord(alice, [allow(writer, ['offer'])], clock.t)])
+      assert.deepEqual(await errors(h, [offer(writer, 'offer/open', clock.t)]), ['ok'])
     } finally {
       await h.close()
     }
   })
 
-  test('removing a writer key: its records stop counting at once, and go after keep days', async () => {
+  test('removing a writer key (its until set to now): the host keeps what it wrote, and refuses what it sends from then on, however it is dated', async () => {
+    const clock = new Clock(T0)
+    const h = await startHost({ now: clock.now })
+    try {
+      await publish([h.url], [permissionsRecord(alice, [allow(writer, ['offer'], T0 + DAY)], T0), writerRecord(writer, alice.address, 'offer/w', offerBody('9'), T0)])
+      clock.advance(MINUTE)
+      await publish([h.url], [permissionsRecord(alice, [allow(writer, ['offer'], clock.t)], clock.t)])
+      assert.equal((await readProfile([h.url], alice.address, clock.t + 30 * DAY)).current.get('offer/w')!.record.by, writer.address, 'what it wrote stays')
+      assert.deepEqual(await errors(h, [writerRecord(writer, alice.address, 'offer/again', offerBody('1'), T0 + 1)]), ['permission'], 'nor anything backdated')
+      h.prune(clock.t + 31 * DAY)
+      assert.deepEqual((await readAll(h.url)).records.map((c) => c.record.path).sort(), ['offer/w', 'permissions'])
+    } finally {
+      await h.close()
+    }
+  })
+
+  test('a key left out of the permissions record: its records stop counting at once, and go after keep days', async () => {
     const clock = new Clock(T0)
     const h = await startHost({ now: clock.now })
     try {

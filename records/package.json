@@ -44,7 +44,6 @@
     "canonicalize": "5.1.0"
   },
   "devDependencies": {
-    "@scure/bip39": "2.4.0",
     "@solana/transaction-messages": "8.4.0",
     "@types/node": "22.20.2",
     "ajv": "8.20.0",

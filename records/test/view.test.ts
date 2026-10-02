@@ -114,12 +114,30 @@ describe('writer keys and permissions', () => {
     assert.equal(v.current.get('offer/physics')!.id, idOf(fix))
   })
 
-  test('removing a writer key: everything it signed stops counting, however it is dated', () => {
-    const removed = permissionsRecord(alice, [], T0 + 10 * MINUTE)
-    const v = view([permissions, written, removed], T0 + 30 * DAY)
+  test('removing a writer key is setting its until to now: what it already wrote still counts, nothing dated from then on does', () => {
+    const removedAt = T0 + 10 * MINUTE
+    const removed = permissionsRecord(alice, [allow(writer, ['offer'], removedAt)], removedAt)
+    const atRemoval = writerRecord(writer, alice.address, 'offer/at', offerBody('1'), removedAt)
+    const later = writerRecord(writer, alice.address, 'offer/later', offerBody('1'), removedAt + DAY)
+    const v = view([permissions, written, removed, atRemoval, later], T0 + 30 * DAY)
+    assert.equal(v.current.get('offer/physics')!.id, idOf(written), 'written before removal: still counts a month later')
+    assert.equal(v.ignored.get(idOf(atRemoval)), 'not-allowed', 'dated at until is not before it')
+    assert.equal(v.ignored.get(idOf(later)), 'not-allowed')
+  })
+
+  test('a writer with no until has no end', () => {
+    const open = permissionsRecord(alice, [allow(writer, ['offer'])], T0)
+    const years = writerRecord(writer, alice.address, 'offer/years', offerBody('1'), T0 + 3 * 365 * DAY)
+    const v = view([open, written, years], T0 + 3 * 365 * DAY)
+    assert.equal(v.current.get('offer/physics')!.id, idOf(written))
+    assert.equal(v.current.get('offer/years')!.id, idOf(years))
+  })
+
+  test('a key left out of the permissions record, or a deleted permissions record, counts for nothing: what it wrote stops counting', () => {
+    const dropped = permissionsRecord(alice, [], T0 + 10 * MINUTE)
+    const v = view([permissions, written, dropped], T0 + 30 * DAY)
     assert.equal(v.current.has('offer/physics'), false)
     assert.equal(v.ignored.get(idOf(written)), 'not-allowed')
-    // Deleting the permissions record removes every writer the same way.
     assert.equal(view([permissions, written, permissionsRecord(alice, null, T0 + 10 * MINUTE)], T0 + DAY).current.has('offer/physics'), false)
   })
 
@@ -135,16 +153,16 @@ describe('writer keys and permissions', () => {
   })
 
   test('a writer key back in the permissions record brings its records back: the view is only what is current', () => {
-    const removed = permissionsRecord(alice, [], T0 + 10 * MINUTE)
+    const dropped = permissionsRecord(alice, [], T0 + 10 * MINUTE)
     const back = permissionsRecord(alice, [allow(writer, ['offer'], until)], T0 + 20 * MINUTE)
-    assert.equal(view([permissions, written, removed, back], T0 + DAY).current.get('offer/physics')!.id, idOf(written))
+    assert.equal(view([permissions, written, dropped, back], T0 + DAY).current.get('offer/physics')!.id, idOf(written))
   })
 
   test('until is checked against the record’s own time: no reader’s clock ends anything', () => {
-    const late = writerRecord(writer, alice.address, 'offer/late', offerBody('1'), until + 1)
+    const late = writerRecord(writer, alice.address, 'offer/late', offerBody('1'), until)
     const v = view([permissions, written, late], until + 365 * DAY)
     assert.equal(v.current.get('offer/physics')!.id, idOf(written), 'dated before until: still counts a year later')
-    assert.equal(v.ignored.get(idOf(late)), 'not-allowed', 'dated after until: never counts')
+    assert.equal(v.ignored.get(idOf(late)), 'not-allowed', 'dated at until or after: never counts')
   })
 
   test('only the owner’s permissions count: a writer cannot list itself, or use one profile’s permissions in another', () => {

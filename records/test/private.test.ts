@@ -5,26 +5,33 @@ import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 import { publish, readAll, readProfile } from '../src/client.ts'
 import { DAY } from '../src/host.ts'
-import { isPrivate, makePrivate, openPrivate, readerCount, readingKey } from '../src/private.ts'
+import { readingKey } from '../../keys/src/index.ts'
+import { isPrivate, makePrivate, openPrivate, readerCount } from '../src/private.ts'
 import { hostsRecord, ownerRecord, permissionsRecord, writerRecord } from '../src/write.ts'
-import { MINUTE, T0, alice, aliceBuyer, allow, bob, profileBody, writer } from './fixtures.ts'
+import { canonical } from '../src/canonical.ts'
+import { MAX_RECORD_BYTES } from '../src/record.ts'
+import { KEYS, MINUTE, T0, alice, aliceBuyer, allow, bob, profileBody, writer } from './fixtures.ts'
 import { Clock, startHost } from './helpers.ts'
 
-const [aliceRead, aliceBuyerRead, bobRead] = await Promise.all([readingKey(alice.secretKey), readingKey(aliceBuyer.secretKey), readingKey(bob.secretKey)])
+const [aliceRead, aliceBuyerRead, bobRead] = await Promise.all([readingKey(alice.privateKey), readingKey(aliceBuyer.privateKey), readingKey(bob.privateKey)])
 const strangerRead = await readingKey(new Uint8Array(32).fill(3))
 
 describe('reading keys', () => {
-  test('one per profile, from its private key: the same every time, an age X25519 key', async () => {
-    assert.deepEqual(await readingKey(alice.secretKey), aliceRead)
+  test("keys/'s reading key, one per profile: age's post-quantum hybrid, the pinned one", async () => {
+    assert.equal(aliceRead.identity, KEYS.profiles[0].reading.identity)
+    assert.equal(aliceRead.recipient, KEYS.profiles[0].reading.recipient)
     assert.notEqual(aliceRead.recipient, aliceBuyerRead.recipient)
-    assert.match(aliceRead.recipient, /^age1[02-9ac-hj-np-z]{58}$/)
-    assert.match(aliceRead.identity, /^AGE-SECRET-KEY-1[02-9AC-HJ-NP-Z]{58}$/)
+    assert.match(aliceRead.recipient, /^age1pq1[02-9ac-hj-np-z]{1952}$/)
+    assert.match(aliceRead.identity, /^AGE-SECRET-KEY-PQ-1[02-9AC-HJ-NP-Z]+$/)
   })
 
-  test('an envelope is made only for reading keys', async () => {
+  test('an envelope is made only for hybrid reading keys', async () => {
+    const x25519 = 'age1stfaf43jlmcuwa5z5e69td3djjluwqvv9afe0nydnv2myuczqgmq9vd6u4' // a valid age X25519 recipient
     await assert.rejects(makePrivate({ text: 'x' }, []), /at least one/)
-    await assert.rejects(makePrivate({ text: 'x' }, ['age1pq1' + 'q'.repeat(60)]), /X25519/)
-    await assert.rejects(makePrivate({ text: 'x' }, [alice.address]), /X25519/)
+    await assert.rejects(makePrivate({ text: 'x' }, [x25519]), /hybrid recipient/)
+    await assert.rejects(makePrivate({ text: 'x' }, [aliceRead.recipient, x25519]), /hybrid recipient/)
+    await assert.rejects(makePrivate({ text: 'x' }, [alice.address]), /hybrid recipient/)
+    await assert.rejects(makePrivate({ text: 'x' }, ['age1pq1' + 'q'.repeat(60)]), /checksum/)
   })
 })
 
@@ -105,9 +112,18 @@ describe('private records', () => {
     }
   })
 
-  test('an envelope’s stanzas say X25519, to anyone', async () => {
+  test('an envelope’s stanzas say mlkem768x25519, to anyone', async () => {
     const body = await makePrivate({ text: 'x' }, [aliceRead.recipient])
     const header = Buffer.from(body.private, 'base64url').toString('latin1').split('\n---')[0]!
-    assert.match(header, /^age-encryption\.org\/v1\n-> X25519 /)
+    assert.match(header, /^age-encryption\.org\/v1\n-> mlkem768x25519 /)
+  })
+
+  test('each reading key adds about 2 KB, so a private record is made for about 30 at most', async () => {
+    const readers = await Promise.all(Array.from({ length: 32 }, (_, i) => readingKey(new Uint8Array(32).fill(i + 1))))
+    const size = async (n: number) => canonical({ ...ownerRecord(alice, 'note/many', null, T0), body: await makePrivate({ text: 'x' }, readers.slice(0, n).map((r) => r.recipient)) }).length
+    const [one, two] = [await size(1), await size(2)]
+    assert.ok(two - one > 2000 && two - one < 2200, `${two - one} bytes a reader`)
+    assert.ok((await size(30)) <= MAX_RECORD_BYTES)
+    await assert.rejects(async () => ownerRecord(alice, 'note/many', await makePrivate({ text: 'x' }, readers.map((r) => r.recipient)), T0), /at most/)
   })
 })

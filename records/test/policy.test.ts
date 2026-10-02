@@ -7,12 +7,12 @@ import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 import { publish } from '../src/client.ts'
 import type { Policy } from '../src/host.ts'
-import { keyFromSecret } from '../src/keys.ts'
+import { keyFromPrivate } from '../src/keys.ts'
 import { hostsRecord, ownerRecord, permissionsRecord, writerRecord } from '../src/write.ts'
 import { DAY, T0, alice, allow, offerBody, profileBody, writer } from './fixtures.ts'
 import { startHost } from './helpers.ts'
 
-const freshKey = (i: number) => keyFromSecret(new Uint8Array(32).map((_, j) => (i * 31 + j * 7 + 1) & 255))
+const freshKey = (i: number) => keyFromPrivate(new Uint8Array(32).map((_, j) => (i * 31 + j * 7 + 1) & 255))
 
 /** One host's choice: at most three content records a profile. */
 const threeEach: Policy = (_record, stored) => (stored.records < 3 ? null : 'three records a profile here')

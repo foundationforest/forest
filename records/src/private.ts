@@ -1,42 +1,29 @@
 // Private records: a body only chosen reading keys open. The body on a host is
 // `{ private: <age file, base64url> }`. The age file is the envelope: it wraps one random file key
-// to each reading key (X25519) and names none of them. The record around it is signed as usual, so
-// no reader can forge content for the others.
+// to each reading key and names none of them. A reading key is age's post-quantum hybrid
+// (mlkem768x25519: ML-KEM-768 with X25519), which keys/ mixes from the profile key; its recipient,
+// `age1pq1…`, is what the profile record's `read` field publishes. The record around the envelope
+// is signed as usual, so no reader can forge content for the others.
 //
 // What this does not hide: that a private record exists, its path, time and size, and how many
 // reading keys it was made for (one stanza each). Removing a reader means a new version made for
 // the rest; a reader keeps whatever it already opened. No forward secrecy: a reading key that
 // leaks later opens every envelope ever made for it.
 
-import { bech32 } from '@scure/base'
-import { Decrypter, Encrypter, identityToRecipient } from 'age-encryption'
+import { Decrypter, Encrypter } from 'age-encryption'
 import { b64u } from './bytes.ts'
 import { canonical, parseCanonical } from './canonical.ts'
-import { INFO, derive } from './keys.ts'
 import { type Body, isPrivate } from './record.ts'
 
 export { isPrivate }
-
-export type ReadingKey = {
-  /** age's X25519 identity: what opens envelopes. Kept on the device, like the profile key. */
-  identity: string
-  /** Its age recipient, `age1…`: what the profile record's `read` field publishes. */
-  recipient: string
-}
-
-/** A profile's reading key: HKDF of the profile's private key, used as an age X25519 identity. */
-export async function readingKey(profileSecret: Uint8Array): Promise<ReadingKey> {
-  if (profileSecret.length !== 32) throw new Error('a profile private key is 32 bytes')
-  const identity = bech32.encodeFromBytes('AGE-SECRET-KEY-', derive(profileSecret, INFO.read)).toUpperCase()
-  return { identity, recipient: await identityToRecipient(identity) }
-}
 
 /** A private body: `body` in an envelope only these reading keys (age recipients) open. */
 export async function makePrivate(body: Body, readers: string[]): Promise<{ private: string }> {
   if (!readers.length) throw new Error('make it for at least one reading key')
   const encrypter = new Encrypter()
   for (const reader of readers) {
-    if (!/^age1[02-9ac-hj-np-z]{58}$/.test(reader)) throw new Error('a reading key is an age X25519 recipient, age1…')
+    // age checks the rest of the recipient when it is added.
+    if (typeof reader !== 'string' || !reader.startsWith('age1pq1')) throw new Error('a reading key is an age post-quantum hybrid recipient, age1pq1…')
     encrypter.addRecipient(reader)
   }
   return { private: b64u.encode(await encrypter.encrypt(canonical(body))) }

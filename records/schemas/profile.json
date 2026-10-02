@@ -35,8 +35,8 @@
     },
     "read": {
       "type": "string",
-      "description": "Optional. The profile's reading key, as an age X25519 recipient: what others make private records for. Without it, nobody can make a private record for this profile.",
-      "pattern": "^age1[02-9ac-hj-np-z]{58}$"
+      "description": "Optional. The profile's reading key, as an age post-quantum hybrid recipient (mlkem768x25519, 1,959 characters): what others make private records for. Without it, nobody can make a private record for this profile.",
+      "pattern": "^age1pq1[02-9ac-hj-np-z]{1952}$"
     },
     "createdAt": {
       "type": "string",

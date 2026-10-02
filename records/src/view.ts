@@ -8,10 +8,10 @@
 //      The newest is current.
 //   3. At a content path, if the owner ever wrote there, the owner's newest version is current and
 //      no writer record counts. Otherwise the newest writer record the current permissions record
-//      allows: its key is listed, one of its paths covers the record's path, and the record is
-//      dated no later than `until`. Nothing else about a writer record matters: not when it
-//      arrived, not which permissions version was current then. So removing a writer from
-//      permissions makes every record it signed stop counting at once.
+//      allows: its key is listed, one of its paths covers the record's path, and, if the writer
+//      has an `until`, the record is dated before it. The record's own date is all a reader
+//      checks: not when it arrived, and no reader's clock. When it arrived is the host's check.
+//      So removing a writer, by setting its `until` to now, erases nothing it already wrote.
 //   4. Newest: the later time, then the larger id. A null body is a delete.
 
 import { type Checked, type HostsBody, MAX_FUTURE_MS, type PermissionsBody, type SignedRecord, type Writer, isControlPath, pathCovers } from './record.ts'
@@ -35,11 +35,19 @@ export function isNewer(a: Checked, b: Checked): boolean {
 }
 
 /**
- * Whether the writers listed allow a writer record: its key, a path that covers it, and a time no
- * later than `until`. A host also passes its own clock, so nothing arriving after `until` is taken.
+ * Whether the writers listed allow a writer record, as a reader checks it: its key, a path that
+ * covers it, and, if that writer has an `until`, a record dated before it.
  */
-export function allows(writers: readonly Writer[], record: SignedRecord, now = 0): boolean {
-  return writers.some((w) => w.key === record.by && w.paths.some((p) => pathCovers(p, record.path)) && Math.max(record.time, now) <= w.until)
+export function allows(writers: readonly Writer[], record: SignedRecord): boolean {
+  return writers.some((w) => w.key === record.by && w.paths.some((p) => pathCovers(p, record.path)) && (w.until === undefined || record.time < w.until))
+}
+
+/**
+ * Whether a host takes a writer record arriving at `now`: the writer is listed for its path, and
+ * its `until`, if it has one, has not passed by the host's clock.
+ */
+export function allowsArrival(writers: readonly Writer[], record: SignedRecord, now: number): boolean {
+  return writers.some((w) => w.key === record.by && w.paths.some((p) => pathCovers(p, record.path)) && (w.until === undefined || now < w.until))
 }
 
 export function viewProfile(profile: string, records: Iterable<Checked>, now: number): View {

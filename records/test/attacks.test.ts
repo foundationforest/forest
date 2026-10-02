@@ -11,7 +11,7 @@ import { getCompiledTransactionMessageDecoder } from '@solana/transaction-messag
 import { b64u, base58, concat, hex, utf8 } from '../src/bytes.ts'
 import { publish, readAll, readProfile } from '../src/client.ts'
 import type { Host } from '../src/host.ts'
-import { readingKey } from '../src/private.ts'
+import { readingKey } from '../../keys/src/index.ts'
 import { checkRecord, encodeRecord, signingInput, unsignedOf, verifySignature } from '../src/record.ts'
 import { viewProfile } from '../src/view.ts'
 import { hostsRecord, ownerRecord, permissionsRecord, writerRecord } from '../src/write.ts'
@@ -77,7 +77,7 @@ describe('nobody forges; a signature means one thing everywhere', () => {
     let disagreements = 0
     for (let i = 0; i < 16; i++) {
       const m = utf8(`message ${i}`)
-      const s = signWithKey(alice.secretKey, mixed, m)
+      const s = signWithKey(alice.privateKey, mixed, m)
       assert.equal(verifySignature(s, m, mixed), false)
       // A cofactored verifier accepts every one; a cofactorless one about 1 in 8.
       const R = ed25519.Point.fromBytes(s.subarray(0, 32))
@@ -105,7 +105,7 @@ describe('nobody forges; a signature means one thing everywhere', () => {
     t.diagnostic(`the same bytes without 0xff, fed to Solana's decoder: ${outcome}`)
     // A Solana-style message signed by the profile's wallet key is not a record signature.
     const payment = concat(Uint8Array.of(1, 0, 1, 2), alice.publicKey, new Uint8Array(32), new Uint8Array(32), Uint8Array.of(1, 1, 1, 0, 0))
-    assert.throws(() => checkRecord({ ...record, sig: b64u.encode(ed25519.sign(payment, alice.secretKey)) }), /signature/)
+    assert.throws(() => checkRecord({ ...record, sig: b64u.encode(ed25519.sign(payment, alice.privateKey)) }), /signature/)
   })
 
   test('replaying a record into another profile, path or time fails; the same record twice is one record', () => {
@@ -131,18 +131,26 @@ describe('a stolen writer key', () => {
     assert.throws(() => writerRecord(writer, alice.address, 'hosts', { urls: ['https://evil.example'] }, T0 + DAY), /only the owner/)
   })
 
-  test('once removed, nothing it signs counts, however it is dated, on any host or none', () => {
-    const removed = permissionsRecord(alice, [], T0 + MINUTE)
+  test('once removed, nothing dated from then on counts; left out of the list, nothing it ever signed counts, on any host or none', () => {
+    const removedAt = T0 + MINUTE
+    const removed = permissionsRecord(alice, [allow(writer, ['offer'], removedAt)], removedAt)
+    const after = writerRecord(writer, alice.address, 'offer/after', offerBody('1'), removedAt + 1)
+    assert.equal(view(removed, after).current.has('offer/after'), false)
     const backdated = writerRecord(writer, alice.address, 'offer/spam', offerBody('1'), T0 + 1)
-    const v = view(permissions, removed, backdated)
-    assert.equal(v.current.has('offer/spam'), false)
+    assert.equal(view(permissions, permissionsRecord(alice, [], removedAt), backdated).current.has('offer/spam'), false)
   })
 
-  test('FINDING: past until but still listed, a backdated record counts for readers of a host that skips the check', () => {
-    // An honest host refuses it by its own clock (host.test.ts). A reader has no clock of its own
-    // in the rule, so whoever holds a host that takes it can show it. Removing the key ends it.
-    const backdated = writerRecord(writer, alice.address, 'offer/old', offerBody('1'), until - 1)
-    assert.equal(viewProfile(alice.address, [permissions, backdated].map((r) => checkRecord(r)), until + 365 * DAY).current.has('offer/old'), true)
+  test('FINDING: once removed, a stolen key can backdate a record before its until, and it counts for readers of a host that skips the check', () => {
+    // An honest host refuses it by its own clock (host.test.ts). A reader checks only the record's
+    // own date, so whoever holds a host that takes it can show it. Leaving the key out of the list
+    // ends it, and with it everything the key ever wrote.
+    const removedAt = T0 + MINUTE
+    const removed = permissionsRecord(alice, [allow(writer, ['offer'], removedAt)], removedAt)
+    const backdated = writerRecord(writer, alice.address, 'offer/old', offerBody('1'), removedAt - 1)
+    const later = T0 + 365 * DAY
+    assert.equal(viewProfile(alice.address, [removed, backdated].map((r) => checkRecord(r)), later).current.has('offer/old'), true)
+    const dropped = permissionsRecord(alice, [], removedAt + 1)
+    assert.equal(viewProfile(alice.address, [removed, backdated, dropped].map((r) => checkRecord(r)), later).current.has('offer/old'), false)
   })
 })
 
@@ -167,9 +175,9 @@ describe('over real hosts', () => {
   })
 
   test('a host holds no key: its whole database holds no secret of the person', async () => {
-    const reading = await readingKey(alice.secretKey)
+    const reading = await readingKey(alice.privateKey)
     const disk = [...h1.dump(), ...h2.dump()].join('\n')
-    for (const secret of [alice.secretKey, SEED]) {
+    for (const secret of [alice.privateKey, SEED]) {
       for (const form of [hex.encode(secret), b64u.encode(secret), Buffer.from(secret).toString('base64'), base58.encode(secret)]) assert.ok(!disk.includes(form))
     }
     assert.ok(!disk.includes(reading.identity))
@@ -192,7 +200,7 @@ describe('over real hosts', () => {
 
 describe('linking two profiles of one person', () => {
   test('addresses, reading keys and writer keys: nothing public repeats across the two profiles', async () => {
-    const [read0, read1] = await Promise.all([readingKey(alice.secretKey), readingKey(aliceBuyer.secretKey)])
+    const [read0, read1] = await Promise.all([readingKey(alice.privateKey), readingKey(aliceBuyer.privateKey)])
     const writerFor = (n: number) => ({ key: base58.encode(ed25519.getPublicKey(sha512(utf8(`writer ${n}`)).subarray(0, 32))), paths: ['offer'], until: T0 + 1 })
     const one = [
       hostsRecord(alice, ['https://big-host.example'], T0),

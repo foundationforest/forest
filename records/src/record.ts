@@ -125,11 +125,11 @@ export function recordId(unsigned: UnsignedRecord): string {
   return hex.encode(sha256(signingInput(unsigned)))
 }
 
-export function signRecord(unsigned: UnsignedRecord, secretKey: Uint8Array): SignedRecord {
+export function signRecord(unsigned: UnsignedRecord, privateKey: Uint8Array): SignedRecord {
   checkShape(unsigned, false)
   const signer = publicKeyFromAddress(unsigned.by ?? unsigned.profile)!
-  if (!equalBytes(ed25519.getPublicKey(secretKey), signer)) fail('key', 'the secret key is not the signer the record names')
-  const record: SignedRecord = { ...unsigned, sig: b64u.encode(ed25519.sign(signingInput(unsigned), secretKey)) }
+  if (!equalBytes(ed25519.getPublicKey(privateKey), signer)) fail('key', 'the private key is not the signer the record names')
+  const record: SignedRecord = { ...unsigned, sig: b64u.encode(ed25519.sign(signingInput(unsigned), privateKey)) }
   checkSize(canonical(record))
   return record
 }
@@ -193,9 +193,12 @@ export type Writer = {
   key: string
   /** Path prefixes it may write under, segment by segment. Never a control path. */
   paths: string[]
-  /** Milliseconds since 1970. A record it signs counts only if dated no later; hosts also refuse
-   * one that arrives after it, by their own clock. */
-  until: number
+  /**
+   * Optional. Milliseconds since 1970. A record it signs counts only if dated before it; a host
+   * also refuses one that arrives once it has passed, by the host's own clock. Removing a writer
+   * is setting it to now.
+   */
+  until?: number
 }
 export type PermissionsBody = { writers: Writer[] }
 
@@ -226,7 +229,7 @@ export function checkControlBody(path: string, body: Body): void {
     if (!publicKeyFromAddress(key)) fail('permissions', 'a writer key is a usable ed25519 address')
     if (!Array.isArray(paths) || paths.length > MAX_WRITER_PATHS) fail('permissions', `paths is at most ${MAX_WRITER_PATHS} prefixes`)
     for (const p of paths as unknown[]) if (typeof p !== 'string' || !PATH.test(p) || isControlPath(p)) fail('permissions', 'a writer path is a content path prefix')
-    if (!Number.isSafeInteger(until) || (until as number) < 0) fail('permissions', 'until is whole milliseconds since 1970')
+    if ('until' in (w as object) && (!Number.isSafeInteger(until) || (until as number) < 0)) fail('permissions', 'until is whole milliseconds since 1970')
   }
 }
 

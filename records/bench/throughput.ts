@@ -7,7 +7,7 @@ import { cpus } from 'node:os'
 import { b64u } from '../src/bytes.ts'
 import { canonical } from '../src/canonical.ts'
 import { Host } from '../src/host.ts'
-import { keyFromSecret } from '../src/keys.ts'
+import { keyFromPrivate } from '../src/keys.ts'
 import { checkRecord, decodeRecord, encodeRecord, signingInput, unsignedOf, verifySignature } from '../src/record.ts'
 import { viewProfile } from '../src/view.ts'
 import { ownerRecord } from '../src/write.ts'
@@ -29,7 +29,7 @@ function rate(label: string, n: number, run: (i: number) => void): number {
   return perSecond
 }
 
-const key = keyFromSecret(new Uint8Array(32).fill(5))
+const key = keyFromPrivate(new Uint8Array(32).fill(5))
 const record = ownerRecord(key, 'offer/maths', offer, 1_790_000_000_000)
 const wire = encodeRecord(record)
 const message = signingInput(unsignedOf(record))
@@ -50,7 +50,7 @@ rate('read one record off the wire (parse, canonical, strict verify)', 1_000, ()
 const host = new Host({ now: () => 1_790_000_000_000 })
 const lines: string[] = []
 for (let p = 0; p < 500; p++) {
-  const k = keyFromSecret(new Uint8Array(32).map((_, j) => (p * 13 + j * 7 + 1) & 255))
+  const k = keyFromPrivate(new Uint8Array(32).map((_, j) => (p * 13 + j * 7 + 1) & 255))
   lines.push(encodeRecord(ownerRecord(k, 'profile', { name: `p${p}` }, 1_790_000_000_000)))
   for (let o = 0; o < 4; o++) lines.push(encodeRecord(ownerRecord(k, `offer/${o}`, offer, 1_790_000_000_000 + o)))
 }

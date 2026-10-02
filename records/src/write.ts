@@ -15,12 +15,12 @@ export function nextTime(now: number, view: View | undefined, path: string): num
 
 /** A record signed by the profile key itself. */
 export function ownerRecord(owner: Key, path: string, body: Body | null, time: number): SignedRecord {
-  return signRecord({ v: 1, profile: owner.address, path, time, body }, owner.secretKey)
+  return signRecord({ v: 1, profile: owner.address, path, time, body }, owner.privateKey)
 }
 
 /** A record signed by a writer key, into a profile whose permissions record lists it. */
 export function writerRecord(writer: Key, profile: string, path: string, body: Body | null, time: number): SignedRecord {
-  return signRecord({ v: 1, profile, path, time, body, by: writer.address }, writer.secretKey)
+  return signRecord({ v: 1, profile, path, time, body, by: writer.address }, writer.privateKey)
 }
 
 /** Where the profile's records live. */
@@ -28,7 +28,11 @@ export function hostsRecord(owner: Key, urls: string[] | null, time: number): Si
   return ownerRecord(owner, 'hosts', urls && { urls }, time)
 }
 
-/** Which writer keys may write, where, and until when. A key left out is removed: everything it signed stops counting. */
+/**
+ * Which writer keys may write, where, and until when. To remove a writer, set its `until` to now:
+ * what it wrote before then still counts. A key left out of the list counts for nothing, so what it
+ * wrote stops counting too.
+ */
 export function permissionsRecord(owner: Key, writers: Writer[] | null, time: number): SignedRecord {
   return ownerRecord(owner, 'permissions', writers && { writers }, time)
 }

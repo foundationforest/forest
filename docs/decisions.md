@@ -34,6 +34,9 @@ Forest goes here, in the same form.
   `until`; the owner wins at any path it wrote:** readers agree whatever their clocks say, removing
   a writer (its `until` set to now) never erases what it already wrote, and a lost writer key can
   only add where the owner never wrote.
+- **A key left out of the permissions record allows nothing, even for what it wrote before:** a
+  stolen writer key can backdate records under its `until`, and leaving it out is the one way to
+  end them.
 - **A host keeps the newest record at each path, and what it replaced for days of its own
   choosing:** a field for it in the hosts record would be one more rule for every app.
 - **Not AT Protocol, Nostr or Pubky as the base:** one server per profile and a central directory;

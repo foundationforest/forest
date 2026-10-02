@@ -9,13 +9,13 @@ counts, and the profile key's own record wins over any writer key's.
 
 ## 1. Keys
 
-HKDF here is HKDF-SHA256 with an empty salt and a 32-byte output.
+The profile key and the reading key are [keys/](../keys/README.md)'s, from the person's seed. This
+spec mixes no key.
 
 | Key | Made from | Used for |
 |---|---|---|
-| seed | the 32 bytes the person's 24 words encode (BIP39 entropy, English list) | everything below |
-| profile key | ed25519 private key = HKDF(seed, `forest/v1/profile/<label>`), the label's UTF-8 as given, such as `tutoring/seller` | signing the profile's records; one profile per label |
-| reading key | X25519 private key = HKDF(profile private key, `forest/v1/read`), as an age X25519 identity | opening private records (§7) |
+| profile key | keys/: ed25519, mixed from the seed and the label, such as `tutoring/seller` | signing the profile's records; one profile per label |
+| reading key | keys/: age's post-quantum hybrid identity (`mlkem768x25519`), mixed from the profile key | opening private records (§7) |
 | writer key | any other ed25519 key, made by an app | writing where the permissions record allows (§5) |
 
 - **Names.** A profile's name is its public key in base58: its address, which is also its Solana
@@ -67,8 +67,9 @@ received.
 
 - **hosts:** `{ "urls": [origin, …] }`: 1 to 8 distinct origins, `https://host[:port]`, lower case,
   no path (`http` only on loopback, for tests). Where the profile's records live.
-- **permissions:** `{ "writers": [{ "key": <address>, "paths": [prefix, …], "until": <ms> }, …] }`:
-  at most 16 writers, each with at most 16 content-path prefixes.
+- **permissions:** `{ "writers": [{ "key": <address>, "paths": [prefix, …], "until"?: <ms> }, …] }`:
+  at most 16 writers, each with at most 16 content-path prefixes. `until` is optional: whole
+  milliseconds, 0 to 2^53 − 1. A writer without it has no end.
 - A field not named here, at any level, makes the record invalid, so a later limit is never ignored.
 
 ## 6. Which record counts
@@ -80,18 +81,26 @@ A reader's view of a profile is a pure function of the records it holds and its 
 3. At `hosts` and at `permissions`, the newest record is current.
 4. At a content path, if the owner has any record there, the owner's newest is current. Otherwise
    the newest writer record the current permissions record allows: a writer whose `key` is `by`,
-   one of its `paths` covers the record's path, and the record's `time` ≤ `until`.
+   one of its `paths` covers the record's path, and, if it has an `until`, the record's
+   `time` < `until`.
 5. A current record with a `null` body means the path is deleted.
 
-So the owner wins at any path it wrote. Removing a writer from permissions, or deleting the
-permissions record, makes every record that writer signed stop counting. Readers check `until`
-against the record's own time and no clock.
+So the owner wins at any path it wrote. Readers check `until` against the record's own time and no
+clock; when a writer record arrived is the host's check (§8).
+
+**Removing a writer** is setting its `until` to now, in a new permissions record. Nothing it already
+wrote disappears: its records dated before `until` still count, and none dated after do. A key left
+out of the permissions record, or a deleted permissions record, allows nothing, so every record that
+key signed stops counting: an app does that only for a stolen key.
 
 ## 7. Private records
 
 A private record's body is `{ "private": <base64url of an age file> }` and nothing else. The age
 file is the envelope; it holds the canonical text of an object, for one or more reading keys: the
-readers' `read` fields from their profile records, and usually the profile's own. A host checks a
+readers' `read` fields from their profile records, and usually the profile's own. Each reading key
+is an age post-quantum hybrid recipient (`age1pq1…`, stanza `mlkem768x25519`); an app MUST NOT
+make an envelope for any other kind. Each one adds about 2 KB, so the 65,536-byte cap allows about
+30. A host checks a
 private record like any other and cannot open it. Anyone can see that it exists, its path, time and
 size, and how many reading keys it was made for. To remove a reader, write a new version for the
 rest; a reader keeps what it already opened. There is no forward secrecy.
@@ -116,7 +125,9 @@ that. Readers MAY refuse a larger page.
 2. Within a request, hosts and permissions records first, then the rest in the order sent.
 3. It MUST become the current record at its path by §6, over what the host stores plus it
    [`older`, `permission`].
-4. A writer record: the host's clock MUST NOT be past the `until` that allows it [`permission`].
+4. A writer record: when it arrives, its key MUST be listed for its path in the current permissions
+   record, and that writer's `until`, if it has one, MUST be later than the host's clock
+   [`permission`].
 5. A host MAY refuse a content record by its own policy [`policy`]. It MUST NOT refuse a hosts or
    permissions record by policy, so a person can always move and always remove a writer key.
 
@@ -139,9 +150,10 @@ defaults accept a small-order signature this protocol refuses.
 
 ## 10. Test vectors
 
-`test/vectors.json`, from the seed `00 01 … 1f` and the label `tutoring/seller`: the seed's 24
-words, the profile key and address, the reading key, a writer key, and a hosts, profile, offer,
-permissions, writer's offer and delete record, each with its wire text, signing input and id.
-`test/vectors.test.ts` recomputes them, and checks each step with node:crypto (HKDF, Ed25519,
-X25519, SHA-256). The profile is `EofQN9U3MiKVmAo3Pyvuw19WjyYbpddfN52E1Q1uBwhu`; every signing input
-begins `ff 66 6f 72 65 73 74 2f` (`0xff`, then `forest/`).
+`test/vectors.json`: a hosts, profile, offer, permissions, writer's offer and delete record, each
+with its wire text, signing input and id, for keys/'s `tutoring/seller` profile from its test seed
+`00 01 … 1f`; the profile record's `read` is that profile's reading key. The seed, the profile key
+and the reading key are pinned in `keys/test/vectors.json`, and checked there. The writer key's
+private key is 32 bytes of `0x2a`. `test/vectors.test.ts` recomputes the records, and checks each
+with node:crypto (Ed25519, SHA-256). The profile is `EofQN9U3MiKVmAo3Pyvuw19WjyYbpddfN52E1Q1uBwhu`;
+every signing input begins `ff 66 6f 72 65 73 74 2f` (`0xff`, then `forest/`).

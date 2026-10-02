@@ -1,22 +1,26 @@
-// Shared test fixtures: a fixed test seed, a few keys, and ready-made bodies.
+// Shared test fixtures: keys/'s test seed, a few keys, and ready-made bodies. Records mixes no
+// key: the profile keys come from keys/, as an app gets them.
 
+import { readFileSync } from 'node:fs'
 import { ed25519 } from '@noble/curves/ed25519.js'
-import { b64u } from '../src/bytes.ts'
+import { profileKey } from '../../keys/src/index.ts'
+import { b64u, hex } from '../src/bytes.ts'
 import { canonical } from '../src/canonical.ts'
-import { keyFromSecret, profileKey, type Key } from '../src/keys.ts'
-import { type Body, type SignedRecord, type UnsignedRecord, signingInput } from '../src/record.ts'
+import { keyFromPrivate, type Key } from '../src/keys.ts'
+import { type Body, type SignedRecord, type UnsignedRecord, type Writer, signingInput } from '../src/record.ts'
 
-/** The test seed: bytes 00 01 … 1f, as the vectors use. */
-export const SEED = Uint8Array.from({ length: 32 }, (_, i) => i)
+/** keys/'s pinned vectors: its test seed (bytes 00 01 … 1f), its profiles and their reading keys. */
+export const KEYS = JSON.parse(readFileSync(new URL('../../keys/test/vectors.json', import.meta.url), 'utf8'))
+export const SEED = hex.decode(KEYS.seed)
 /** A second person. */
 export const OTHER_SEED = new Uint8Array(32).fill(7)
 
-export const alice = profileKey(SEED, 'tutoring/seller')
-export const aliceBuyer = profileKey(SEED, 'tutoring/buyer') // the same person, another label
-export const bob = profileKey(OTHER_SEED, 'tutoring/buyer') // someone else
+export const alice = await profileKey(SEED, 'tutoring/seller')
+export const aliceBuyer = await profileKey(SEED, 'tutoring/buyer') // the same person, another label
+export const bob = await profileKey(OTHER_SEED, 'tutoring/buyer') // someone else
 /** A writer key an app made: never the profile key. */
-export const writer = keyFromSecret(new Uint8Array(32).fill(42))
-export const stranger = keyFromSecret(new Uint8Array(32).fill(99))
+export const writer = keyFromPrivate(new Uint8Array(32).fill(42))
+export const stranger = keyFromPrivate(new Uint8Array(32).fill(99))
 
 export const T0 = Date.UTC(2026, 9, 2, 12, 0, 0)
 export const MINUTE = 60_000
@@ -46,8 +50,8 @@ export const reviewBody = (subject: string): Body => ({
   createdAt: '2026-10-02T12:00:00Z',
 })
 
-/** One writer in a permissions record: this key, these paths, until then. */
-export const allow = (key: Key, paths: string[], until: number) => ({ key: key.address, paths, until })
+/** One writer in a permissions record: this key, these paths, and until then if given. */
+export const allow = (key: Key, paths: string[], until?: number): Writer => (until === undefined ? { key: key.address, paths } : { key: key.address, paths, until })
 
 /**
  * A signed owner record whose canonical text is exactly `bytes` long, `wide` of its characters
@@ -57,5 +61,5 @@ export function sizedRecord(key: Key, path: string, bytes: number, wide = 0): Si
   const unsigned = (about: string): UnsignedRecord => ({ v: 1, profile: key.address, path, time: T0, body: { about } })
   const rest = bytes - canonical({ ...unsigned(''), sig: 'x'.repeat(86) }).length - 2 * wide
   const u = unsigned('é'.repeat(wide) + 'x'.repeat(rest))
-  return { ...u, sig: b64u.encode(ed25519.sign(signingInput(u), key.secretKey)) }
+  return { ...u, sig: b64u.encode(ed25519.sign(signingInput(u), key.privateKey)) }
 }

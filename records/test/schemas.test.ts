@@ -8,7 +8,7 @@ import { describe, test } from 'node:test'
 import { Ajv2020 } from 'ajv/dist/2020.js'
 import formats from 'ajv-formats'
 import { checkValue } from '../src/canonical.ts'
-import { readingKey } from '../src/private.ts'
+import { readingKey } from '../../keys/src/index.ts'
 import { decodeRecord, encodeRecord } from '../src/record.ts'
 import { ownerRecord } from '../src/write.ts'
 import { T0, alice, offerBody, profileBody, reviewBody } from './fixtures.ts'
@@ -132,7 +132,7 @@ describe('schemas', () => {
   })
 
   test('a profile’s read is its reading key, an age X25519 recipient', async () => {
-    assert.ok(fits('profile', edit('profile', ['read'], (await readingKey(alice.secretKey)).recipient)))
+    assert.ok(fits('profile', edit('profile', ['read'], (await readingKey(alice.privateKey)).recipient)))
     assert.ok(fits('profile', edit('profile', ['read'], undefined)), 'optional')
     for (const bad of ['age1pq1' + 'q'.repeat(60), alice.address, 'AGE1' + 'Q'.repeat(58), 'age1' + 'b'.repeat(58)]) assert.ok(!fits('profile', edit('profile', ['read'], bad)), bad)
   })
