@@ -5,23 +5,27 @@ Devnet only: nothing here is shipped, and nothing is on mainnet.
 Up: [the repo](../README.md).
 
 Why Forest is shaped the way it is: one line per decision, with its reason. Each holds for the code
-today. Smaller choices live in the code's comments and in git history. A new decision that shapes
+today; smaller choices live in the code's comments and in git history. A new decision that shapes
 Forest goes here, in the same form.
 
-## Profiles and records
+## Keys
 
+- **A person owns one seed, 24 words in their password manager, and no app stores it:** a password
+  manager already guards and syncs secrets on every device, a passkey's secret stays with one
+  provider, and an app that never stores the seed cannot leak it.
 - **One ed25519 key per profile is its name, its signature and its wallet:** a registry row then
   names the profile itself, with nothing to cross-check.
 - **A profile's name is its base58 address, not a DID:** one spelling names it in records, on the
   registry and as a wallet, and needs no directory that can refuse, withhold or misorder it.
-- **A profile's key is mixed from its label, and a list secret from its keeper's address:** nothing
-  public ties two of a person's profiles together, or their stamps on two lists.
+- **Each profile's key is mixed from the seed and its label, and each list secret from the seed and
+  its keeper's address:** nothing public ties two of a person's profiles together, or their stamps
+  on two lists.
 - **A reading key is mixed from its profile key, and is age's post-quantum hybrid:** whoever holds a
-  profile can read what is sealed to it, and a record copied today stays sealed once quantum
-  computers come.
-- **The seed is 24 words in the person's password manager, and no app stores it:** a password
-  manager already guards and syncs secrets on every device, a passkey's secret stays with one
-  provider, and an app that never stores the seed cannot leak it.
+  profile can read what is sealed to it, and a private record copied today stays sealed once
+  quantum computers come.
+
+## Records
+
 - **A record is signed after the byte `0xff`:** no Solana transaction begins with it, so a record's
   signature can never be a payment's.
 - **Hosts hold no keys and no accounts, take signed records for any profile, and never refuse a newer
@@ -30,22 +34,25 @@ Forest goes here, in the same form.
 - **No relay, no directory and no Pkarr; a profile's hosts record says where its records live:**
   nothing grows with the network but each reader's own work.
 - **Hosts never log network addresses:** one phone writing for two profiles would link them.
-- **Hosts check a writer key when its record arrives; readers check the record's own date against
-  `until`; the owner wins at any path it wrote:** readers agree whatever their clocks say, removing
-  a writer (its `until` set to now) never erases what it already wrote, and a lost writer key can
-  only add where the owner never wrote.
+- **A host keeps the newest record at each path, and what it replaced for days of its own
+  choosing:** a field for it in the hosts record would be one more rule for every app.
+- **The owner wins at any path it wrote:** a lost writer key can only add where the owner never
+  wrote.
+- **Hosts check a writer key when its record arrives; readers check only the record's own date
+  against `until`:** readers agree whatever their clocks say, and removing a writer, by setting its
+  `until` to now, never erases what it already wrote.
 - **A key left out of the permissions record allows nothing, even for what it wrote before:** a
   stolen writer key can backdate records under its `until`, and leaving it out is the one way to
   end them.
-- **A host keeps the newest record at each path, and what it replaced for days of its own
-  choosing:** a field for it in the hosts record would be one more rule for every app.
+- **Private records are sealed only to post-quantum reading keys:** one classic key among the
+  readers would let a quantum computer open the envelope for all of them.
 - **Not AT Protocol, Nostr or Pubky as the base:** one server per profile and a central directory;
   keys that cannot be Solana keys and no revocable delegation; servers that can forge records.
 
 ## Markets and evidence
 
-- **A profile names one market and role; offers and reviews name none:** a stamp counts under its
-  profile's own label.
+- **A profile names one market and role; offers and reviews name none:** a registry row counts for
+  the profile under its own label.
 - **The `markets` repo recommends spellings and gates nothing; a market adds fields and restricts no
   deal:** one trade should not split into ten names, and nothing in the foundation decides who may
   trade or on what terms.
@@ -70,25 +77,29 @@ Forest goes here, in the same form.
 - **A row stores the keeper's signature on its root:** a reader can check the snapshot forever
   without asking the keeper.
 - **A row never changes and never closes:** closing it would free its market stamp.
-- **Registration is free, and nothing in it pays for anyone:** Forest builds for people who pay;
-  paying for someone else is a layer outside.
+- **A refund pays the row's payer what the row holds above its rent minimum, and anyone may send
+  it:** when Solana's rate falls, or someone sends the row money, it goes back to whoever paid, and
+  the amount and the destination come from the chain, never from the caller.
+- **Registration is free, and the program pays for no one:** whoever signs as payer (the person, an
+  app or a relayer) pays Solana's own costs, and the program cannot tell which, so paying for
+  someone else needs nothing in it.
 
 ## Escrow
 
-- **No clock but an optional timer; money out only when both sides agree:** that is what a person
-  expects of money held for them.
+- **One escrow program; v1 left the repo:** new deals were already meant to use v2, and one program
+  is one set of rules for an app to show and for anyone to check.
+- **A deal's money leaves when both sides agree, or by an arbiter or a timer set at the start:**
+  both sides can read every way out before anyone works or pays, and nothing changes it later.
+- **Either party may object once, until the timer is due, and the timer is then off:** one deadline
+  for both means they never race.
 - **Each party is paid only at its standard token account, checked by address alone:** no ending can
   send money elsewhere, and handing the account away blocks no way out.
 - **Receipts never close:** a review points at a receipt forever.
 - **No seller signature at `create`:** it would stop anyone paying an offline seller, and break paying
   in one tap. The receipt records who created it instead.
-- **One escrow program; v1 left the repo:** new deals were already meant to use v2, and one program
-  is one set of rules for an app to show and for anyone to check.
 - **The escrow takes classic and Token-2022 tokens, but refuses a transfer fee or a token that cannot
   be transferred:** a fee takes part of every payment while every way out pays the whole balance,
   and an untransferable token could never leave.
-- **Either party may object once, until the timer is due, and the timer is then off:** one deadline
-  for both means they never race.
 
 ## Repo
 

@@ -1,10 +1,14 @@
-# Every package's checks, run together, so a merge that breaks a neighbour shows at once.
+# Every package's checks, run together, so a merge that breaks a neighbour shows at once. Four
+# pieces: keys, records, the registry (program and client) and the escrow (program and client).
+# records/ and the registry client take their keys and test vectors from keys/, so keys/ is
+# installed before them.
 #
 # On every pull request and every push to main, nothing running but the tests:
-#   node       each Node package's type-check and its tests that need no chain. records/ runs its
-#              hosts on loopback
+#   node       each Node package's type-check and its tests that need no chain: keys, records (its
+#              hosts on loopback), the registry client and the escrow client
 #   programs   the registry and the escrow built as SBPF v3 (cargo build-sbf --arch v3), the
-#              format devnet runs them in, and their LiteSVM tests
+#              format devnet runs them in, and their LiteSVM tests, the registry's property test
+#              among them
 #
 # After every merge, a push to main:
 #   types      every package's type-check at once, on the merged commit (keys, records and the
