@@ -89,9 +89,8 @@ of one profile with one filter at offset 8 (`fetchLines`).
 
 ## Memberships
 
-A membership is the body of a `proof/<id>` record, its membership kind
-([`records/schemas/proof.json`](../records/schemas/proof.json)), signed by the profile like any
-other record:
+A membership is the body of a record at `proof/<id>`, signed by the profile like any other record.
+[records/](../records/README.md) defines no shape for it:
 
 ```
 { "issuer": "did:key:z6Mk…",                 the issuer's key, which signs the roots it publishes

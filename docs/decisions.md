@@ -10,42 +10,46 @@ Forest goes here, in the same form.
 
 ## Profiles and records
 
-- **One ed25519 key per profile is its name, its signature and its wallet:** a badge then names the
-  profile itself, with nothing to cross-check.
-- **did:key, not did:plc:** a name needs no directory that can refuse, withhold or misorder it.
+- **One ed25519 key per profile is its name, its signature and its wallet:** a registry row then
+  names the profile itself, with nothing to cross-check.
+- **A profile's name is its base58 address, not a DID:** one spelling names it in records, on the
+  registry and as a wallet, and needs no directory that can refuse, withhold or misorder it.
 - **A profile's key is mixed from its label, and a list secret from its keeper's address:** nothing
   public ties two of a person's profiles together, or their stamps on two lists.
 - **A reading key is mixed from its profile key, and is age's post-quantum hybrid:** whoever holds a
   profile can read what is sealed to it, and a record copied today stays sealed once quantum
   computers come.
-- **A record is signed after the byte `0xff`:** no Solana transaction begins with it, so a record's
-  signature can never be a payment's.
-- **Boards hold no keys and no accounts, and always take a newer folder record:** a board can stop
-  serving, but never lock anyone in.
-- **No relay and no directory; readers find boards through folder records and crawling:** nothing
-  grows with the network but each reader's own work.
-- **Boards never log network addresses:** one phone writing for two profiles would link them.
-- **Draft and approve by default; permissions off; the owner outranks every delegate:** an assistant
-  that reads a hostile review can only draft, and what a person writes always wins.
-- **The approval page is the one place the seed opens:** whoever serves a page that opens the seed
-  could take the keys, so there is one, small and checkable.
 - **The seed is 24 words in the person's password manager, and no app stores it:** a password
   manager already guards and syncs secrets on every device, a passkey's secret stays with one
   provider, and an app that never stores the seed cannot leak it.
+- **A record is signed after the byte `0xff`:** no Solana transaction begins with it, so a record's
+  signature can never be a payment's.
+- **Hosts hold no keys and no accounts, take signed records for any profile, and never refuse a newer
+  hosts or permissions record by policy:** a host can stop serving, but never lock anyone in or keep
+  a writer key from being removed.
+- **No relay, no directory and no Pkarr; a profile's hosts record says where its records live:**
+  nothing grows with the network but each reader's own work.
+- **Hosts never log network addresses:** one phone writing for two profiles would link them.
+- **Hosts check a writer key when its record arrives; readers check the record's own date against
+  `until`; the owner wins at any path it wrote:** readers agree whatever their clocks say, removing
+  a writer (its `until` set to now) never erases what it already wrote, and a lost writer key can
+  only add where the owner never wrote.
+- **A host keeps the newest record at each path, and what it replaced for days of its own
+  choosing:** a field for it in the hosts record would be one more rule for every app.
 - **Not AT Protocol, Nostr or Pubky as the base:** one server per profile and a central directory;
   keys that cannot be Solana keys and no revocable delegation; servers that can forge records.
 
 ## Markets and evidence
 
-- **A profile names one market and role; offers and reviews name none:** a badge counts under its
+- **A profile names one market and role; offers and reviews name none:** a stamp counts under its
   profile's own label.
 - **The `markets` repo recommends spellings and gates nothing; a market adds fields and restricts no
   deal:** one trade should not split into ten names, and nothing in the foundation decides who may
   trade or on what terms.
 - **A review needs only its subject; evidence weighs, it never rejects:** what is missing weighs less,
   and nothing is refused.
-- **A deal id is the escrow's address, or 32 random bytes:** two reviews across one id are both sides'
-  receipts, so no receipt shape is needed.
+- **A deal id is the escrow receipt's address, or 32 random bytes:** two reviews across one id show
+  both sides took part, so no shape for it is needed.
 - **Programs never interpret evidence; indexes weigh it:** a sealed program cannot learn new kinds of
   evidence, and an index can.
 

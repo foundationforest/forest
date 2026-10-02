@@ -54,7 +54,7 @@
         },
         "mint": {
           "type": "string",
-          "description": "The token, named by its mint's address on Solana, base58. Any classic token; which tokens an index weighs is the index's call.",
+          "description": "The token, named by its mint's address on Solana, base58. Any token the escrow takes; which tokens an index weighs is the index's call.",
           "minLength": 32,
           "maxLength": 44
         },
@@ -98,7 +98,7 @@
     },
     "location": {
       "type": "object",
-      "description": "Optional. Where: a point the app rounds to precisionKm before writing, and the place in words. Degrees are decimal text, since an entry holds no fractional numbers.",
+      "description": "Optional. Where: a point the app rounds to precisionKm before writing, and the place in words. Degrees are decimal text, since a record holds no fractional numbers.",
       "required": ["lat", "lon", "precisionKm", "area"],
       "properties": {
         "lat": {

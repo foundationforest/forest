@@ -1,20 +1,21 @@
-// Keys from the seed, and the one way a profile key is written down.
+// Keys, and the one way a key is written down.
 //
-// The recipe is SPEC.md §1's: a passkey's PRF output becomes the seed, and each numbered
-// profile's key comes from the seed. keys/ followed it until 2 October 2026 and now mixes keys
-// another way; test/keys.json pins what this one gives. One key is the profile's name, signs its
-// entries, and holds its money. The box key (for sealed entries) is one more label; it is made
-// in sealed.ts, so code that never opens a sealed entry carries no encryption library.
+// A person's seed is 32 bytes: the entropy its 24 words encode. Every key comes from it by one
+// mixer, HKDF-SHA256 with an empty salt:
+//   seed + "forest/v1/profile/<label>"   -> that profile's ed25519 key
+//   profile private key + "forest/v1/read" -> its X25519 reading key (made in private.ts, so code
+//                                             that never opens a private record carries no
+//                                             encryption library)
+// A profile's base58 address is its name, the key that signs its records, and its wallet.
 
 import { ed25519 } from '@noble/curves/ed25519.js'
 import { hkdf } from '@noble/hashes/hkdf.js'
 import { sha256 } from '@noble/hashes/sha2.js'
-import { base58, concat, equalBytes, utf8 } from './bytes.ts'
+import { base58, utf8 } from './bytes.ts'
 
-export const LABELS = {
-  seed: 'forest.foundation/seed/v1',
-  profile: (n: number) => `forest.foundation/profile/${n}/wallet/v1`,
-  box: (n: number) => `forest.foundation/profile/${n}/box/v1`,
+export const INFO = {
+  profile: (label: string) => `forest/v1/profile/${label}`,
+  read: 'forest/v1/read',
 } as const
 
 /** HKDF-SHA256 with an empty salt (RFC 5869: 32 zero bytes), all separation in `info`. */
@@ -22,59 +23,44 @@ export function derive(ikm: Uint8Array, info: string, length = 32): Uint8Array {
   return hkdf(sha256, ikm, undefined, utf8(info), length)
 }
 
-/** SPEC.md §1: the passkey's PRF output becomes the 32-byte seed. */
-export function seedFromPrf(prf: Uint8Array): Uint8Array {
-  if (prf.length !== 32) throw new Error('a PRF output is 32 bytes')
-  return derive(prf, LABELS.seed)
-}
-
-export type ProfileKey = {
-  index: number
+export type Key = {
   secretKey: Uint8Array
   publicKey: Uint8Array
-  /** The profile's name: did:key of its ed25519 key. */
-  did: string
-  /** The same 32 bytes as a Solana address. */
+  /** The public key in base58: a profile's name and wallet, or a writer key as permissions lists it. */
   address: string
 }
 
-export function profileKey(seed: Uint8Array, n: number): ProfileKey {
+/**
+ * The profile key for one label, such as "tutoring/seller". The label's UTF-8 bytes go into HKDF
+ * as given, so an app spells it the way the markets directory does: another spelling is another
+ * profile.
+ */
+export function profileKey(seed: Uint8Array, label: string): Key & { label: string } {
   if (seed.length !== 32) throw new Error('the seed is 32 bytes')
-  if (!Number.isSafeInteger(n) || n < 0) throw new Error('a profile index is a whole number, 0 or more')
-  return keyFromSecret(derive(seed, LABELS.profile(n)), n)
+  if (typeof label !== 'string' || !label || !label.isWellFormed()) throw new Error('a label is text')
+  return { ...keyFromSecret(derive(seed, INFO.profile(label))), label }
 }
 
-/** Any ed25519 secret (a delegate's own key, a door's agent key) in the same shape. */
-export function keyFromSecret(secretKey: Uint8Array, index = -1): ProfileKey {
+/** Any ed25519 secret, such as a writer key an app makes at random, in the same shape. */
+export function keyFromSecret(secretKey: Uint8Array): Key {
   const publicKey = ed25519.getPublicKey(secretKey)
-  return { index, secretKey, publicKey, did: didFromPublicKey(publicKey), address: base58.encode(publicKey) }
-}
-
-// did:key for ed25519 (W3C CCG): "did:key:z" + base58btc(0xed 0x01 || key).
-const DID_PREFIX = 'did:key:z'
-const ED25519_PUB = Uint8Array.of(0xed, 0x01)
-
-export function didFromPublicKey(publicKey: Uint8Array): string {
-  if (publicKey.length !== 32) throw new Error('an ed25519 public key is 32 bytes')
-  return DID_PREFIX + base58.encode(concat(ED25519_PUB, publicKey))
+  return { secretKey, publicKey, address: base58.encode(publicKey) }
 }
 
 /**
- * The key a did:key names, or null. Strict: one spelling per key (the decoded bytes must
- * re-encode to the same text), the ed25519 prefix, 32 bytes, a canonical point in the
- * prime-order group and not of small order.
+ * The key an address names, or null. Strict: one spelling per key (the decoded bytes must
+ * re-encode to the same text), 32 bytes, a canonical point in the prime-order group and not of
+ * small order.
  */
-export function publicKeyFromDid(did: unknown): Uint8Array | null {
-  if (typeof did !== 'string' || !did.startsWith(DID_PREFIX) || did.length > 64) return null
-  let bytes: Uint8Array
+export function publicKeyFromAddress(address: unknown): Uint8Array | null {
+  if (typeof address !== 'string' || address.length < 32 || address.length > 44) return null
+  let key: Uint8Array
   try {
-    bytes = base58.decode(did.slice(DID_PREFIX.length))
+    key = base58.decode(address)
   } catch {
     return null
   }
-  if (bytes.length !== 34 || !equalBytes(bytes.subarray(0, 2), ED25519_PUB)) return null
-  const key = bytes.slice(2)
-  if (didFromPublicKey(key) !== did) return null
+  if (key.length !== 32 || base58.encode(key) !== address) return null
   return isUsableKey(key) ? key : null
 }
 
@@ -86,10 +72,4 @@ export function isUsableKey(publicKey: Uint8Array): boolean {
   } catch {
     return false
   }
-}
-
-export function addressFromDid(did: string): string {
-  const key = publicKeyFromDid(did)
-  if (!key) throw new Error('not a Forest profile name')
-  return base58.encode(key)
 }

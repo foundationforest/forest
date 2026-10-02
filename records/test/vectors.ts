@@ -1,45 +1,39 @@
-// The spec's test vectors, from the fixed test seed (test/keys.json). Ed25519 is deterministic, so
-// these never change unless the protocol does. `node test/vectors.ts` prints them;
-// vectors.test.ts checks them against test/vectors.json.
+// The spec's test vectors, from a fixed seed. Ed25519 and HKDF are deterministic, so these never
+// change unless the protocol does. `node test/vectors.ts` prints them; vectors.test.ts checks them
+// against test/vectors.json, each with a second implementation.
 
-import { createHash } from 'node:crypto'
+import { entropyToMnemonic } from '@scure/bip39'
+import { wordlist } from '@scure/bip39/wordlists/english.js'
 import { hex } from '../src/bytes.ts'
 import { canonical } from '../src/canonical.ts'
-import { type Entry, entryId, signingInput, unsignedOf } from '../src/entry.ts'
-import { boxKey } from '../src/sealed.ts'
-import { delegateEntry, folderEntry, grantEntry, ownerEntry } from '../src/write.ts'
-import { SEED, alice, signer } from './fixtures.ts'
+import { readingKey } from '../src/private.ts'
+import { type SignedRecord, recordId, signingInput, unsignedOf } from '../src/record.ts'
+import { hostsRecord, ownerRecord, permissionsRecord, writerRecord } from '../src/write.ts'
+import { SEED, alice, writer } from './fixtures.ts'
 
 const TIME = 1_790_000_000_000 // 2026-09-21T13:33:20Z
 
-const describe = (entry: Entry) => ({
-  wire: canonical(entry),
-  signingInputHex: hex.encode(signingInput(unsignedOf(entry))),
-  id: entryId(unsignedOf(entry)),
+const describe = (record: SignedRecord) => ({
+  wire: canonical(record),
+  signingInputHex: hex.encode(signingInput(unsignedOf(record))),
+  id: recordId(unsignedOf(record)),
 })
 
 export async function vectors() {
-  const box = await boxKey(SEED, 0)
-  const folder = folderEntry(alice, { hosts: ['https://host-a.example', 'https://host-b.example'], box: box.recipient, keep: 30 }, TIME)
-  const offer = ownerEntry(
-    alice,
-    'offer/maths',
-    { direction: 'offer', description: 'One hour of maths tutoring, online.', price: { amount: '30', mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', per: 'hour' }, createdAt: '2026-09-21T13:33:20Z' },
-    TIME,
-  )
-  const { entry: grant, grantId } = grantEntry(alice, 'signer1', { to: signer.did, paths: ['offer'], until: TIME + 7 * 86_400_000, label: 'My signer, offers only' }, TIME)
-  const delegated = delegateEntry(signer, alice.did, grantId, 'offer/physics', { direction: 'offer', description: 'Physics, one hour.', createdAt: '2026-09-21T13:34:20Z' }, TIME + 60_000)
-  const deleted = ownerEntry(alice, 'offer/maths', null, TIME + 120_000)
+  const reading = await readingKey(alice.secretKey)
+  const offer = { direction: 'offer', description: 'One hour of maths tutoring, online.', price: { amount: '30', mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', per: 'hour' }, createdAt: '2026-09-21T13:33:20Z' }
   return {
-    about: 'Forest data protocol vectors. Seed: test/keys.json prf -> seed; profile 0; the delegate key is 32 bytes of 0x2a.',
-    profile: { index: 0, did: alice.did, address: alice.address, publicKeyHex: hex.encode(alice.publicKey) },
-    boxRecipientSha256: createHash('sha256').update(box.recipient).digest('hex'),
-    delegate: { did: signer.did },
-    folder: describe(folder),
-    offer: describe(offer),
-    grant: describe(grant),
-    delegated: describe(delegated),
-    deleted: describe(deleted),
+    about: 'Forest records vectors. The seed is bytes 00 01 … 1f; the profile is its tutoring/seller profile; the writer key is the ed25519 key whose secret is 32 bytes of 0x2a.',
+    seed: { hex: hex.encode(SEED), words: entropyToMnemonic(SEED, wordlist) },
+    profile: { label: alice.label, secretKeyHex: hex.encode(alice.secretKey), publicKeyHex: hex.encode(alice.publicKey), address: alice.address },
+    reading: { identity: reading.identity, recipient: reading.recipient },
+    writer: { address: writer.address },
+    hosts: describe(hostsRecord(alice, ['https://host-a.example', 'https://host-b.example'], TIME)),
+    profileCard: describe(ownerRecord(alice, 'profile', { market: 'tutoring', role: 'seller', name: 'Ana', read: reading.recipient, createdAt: '2026-09-21T13:33:20Z' }, TIME)),
+    offer: describe(ownerRecord(alice, 'offer/maths', offer, TIME)),
+    permissions: describe(permissionsRecord(alice, [{ key: writer.address, paths: ['offer'], until: TIME + 7 * 86_400_000 }], TIME)),
+    written: describe(writerRecord(writer, alice.address, 'offer/physics', { direction: 'offer', description: 'Physics, one hour.', createdAt: '2026-09-21T13:34:20Z' }, TIME + 60_000)),
+    deleted: describe(ownerRecord(alice, 'offer/maths', null, TIME + 120_000)),
   }
 }
 

@@ -1,5 +1,0 @@
-{
-  "issuer": "did:web:issuer.example",
-  "credential": "{\"@context\":[\"https://www.w3.org/ns/credentials/v2\"],\"type\":[\"VerifiableCredential\",\"ExampleTeachingCertificate\"],\"issuer\":\"did:web:issuer.example\",\"validFrom\":\"2026-09-01T00:00:00Z\",\"credentialSubject\":{\"id\":\"did:key:z6MkpSx7aRn6kR1oSMgun7YdDD3ZXPepph8UcWYp1Jp4vhJL\",\"certificate\":\"Example only. Nobody issues credentials yet.\"}}",
-  "createdAt": "2026-09-14T10:10:00Z"
-}
