@@ -1,11 +1,11 @@
 [workspace]
 
 [package]
-name = "forest-escrow-v2-tests"
+name = "forest-escrow-tests"
 version = "0.1.0"
 edition = "2021"
 publish = false
-description = "LiteSVM tests for the Forest escrow program, v2, with the clock moved by hand."
+description = "LiteSVM tests for the Forest escrow program, with the clock moved by hand."
 
 [dependencies]
 bincode = "1.3"

@@ -7,7 +7,7 @@
 //!
 //! Run with `cargo test --test objection -- --nocapture` to see what each case did.
 
-use forest_escrow_v2_tests::*;
+use forest_escrow_tests::*;
 use solana_address::Address;
 use solana_keypair::Keypair;
 use solana_signer::Signer;

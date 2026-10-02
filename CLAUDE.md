@@ -23,6 +23,8 @@ checklist next to the program (`registry/security-checklist.md`, `escrow/securit
 ## How to work in this repo
 
 - Work in plan mode. One task per session. Open a pull request; never push to main.
+- The promises in each README change only when Carlos says so in a chat; never change one as a side
+  effect of a task.
 - The repo is `keys/`, `records/`, `registry/`, `escrow/`, `README.md`, `CLAUDE.md` and `LICENSE`,
   with `.github/` and `.claude/`. Each folder has one README: what it is, how it works, promises,
   limits, FAQ last. The README is the standard.

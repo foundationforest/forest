@@ -1,5 +1,5 @@
 [package]
-name = "forest-escrow-v2"
+name = "forest-escrow"
 version = "0.1.0"
 edition = "2021"
 description = "The Forest escrow: an amount of a token (classic SPL Token or Token-2022) held between two keys, out only when the two sides agree; either side may object once, which stops the timer. Sealed per version."
@@ -9,7 +9,7 @@ exclude = ["tests-litesvm"]
 
 [lib]
 crate-type = ["cdylib", "lib"]
-name = "forest_escrow_v2"
+name = "forest_escrow"
 
 [features]
 default = []

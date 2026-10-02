@@ -190,7 +190,7 @@ jobs:
         working-directory: escrow/program
         run: |
           cargo build-sbf --arch v0
-          [ "$(od -An -t u4 -j 48 -N 4 target/deploy/forest_escrow_v2.so | tr -d ' ')" = 0 ]
+          [ "$(od -An -t u4 -j 48 -N 4 target/deploy/forest_escrow.so | tr -d ' ')" = 0 ]
       - name: Escrow, fuzzer, 50,000 iterations (exit 99 if an invariant broke)
         working-directory: escrow/program/trident-tests
         run: TRIDENT_WITH_EXIT_CODE=1 FOREST_FUZZ_ITERATIONS=50000 cargo run --release --bin fuzz_escrow

@@ -3,7 +3,7 @@
 //! USD has it) and naming one; the issuer's powers, used as an issuer would; and the refusals: a
 //! mint with a transfer fee, and a token program or an account that is not the mint's.
 
-use forest_escrow_v2_tests::*;
+use forest_escrow_tests::*;
 use solana_address::Address;
 use solana_instruction::AccountMeta;
 use solana_keypair::Keypair;

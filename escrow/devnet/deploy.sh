@@ -126,8 +126,8 @@ diff -u "$root/escrow/program/src/lib.rs" "$out/program/src/lib.rs" | grep -E '^
 others=$(diff -rq "$root/escrow/program/src" "$out/program/src" | grep -v '/lib.rs and ' || true)
 [ -z "$others" ] || { echo "more than lib.rs differs: $others" >&2; exit 1; }
 (cd "$out/program" && cargo build-sbf --arch v3 >"$out/build.log" 2>&1) || { tail -40 "$out/build.log"; exit 1; }
-so="$out/forest_escrow_v2.so"
-cp "$out/program/target/deploy/forest_escrow_v2.so" "$so"
+so="$out/forest_escrow.so"
+cp "$out/program/target/deploy/forest_escrow.so" "$so"
 rm -f "$out/program/target/deploy/"*-keypair.json
 built=$(sha256sum <"$so" | cut -d' ' -f1)
 echo "built $(wc -c <"$so") bytes, SBPF v$(node -e "process.stdout.write(String(require('fs').readFileSync(process.argv[1]).readUInt32LE(0x30)))" "$so"), sha256 $built"

@@ -3,7 +3,7 @@
 //! Every way out with exact balances, every rejection, and what each one costs. Run with
 //! `cargo test -- --nocapture --test-threads=1` to see the numbers, the summary last.
 
-use forest_escrow_v2_tests::*;
+use forest_escrow_tests::*;
 use solana_address::Address;
 use solana_instruction::Instruction;
 use solana_keypair::Keypair;

@@ -16,7 +16,7 @@ that held the money leaves a receipt at its address, for good.
   its own.
 - `devnet/`: the deploy script and the public record of what runs on devnet.
 
-The crate is named `forest_escrow_v2`, and every escrow it opens carries version 2 (see the FAQ).
+Every escrow it opens carries version 2 (see the FAQ).
 
 ## How it works
 
@@ -165,7 +165,7 @@ against a second copy written in `program/tests-litesvm/src/lib.rs`.
 The fuzzer sends random flows against a model of every escrow and checks fifteen invariants after
 every step (`program/trident-tests/fuzz_escrow/test_fuzz.rs` lists them); `FOREST_FUZZ_ITERATIONS`
 sets its size. It needs the old program format, so it runs a v0 build. Before the LiteSVM tests
-again, delete `program/target/deploy/forest_escrow_v2.so` and build v3: `cargo build-sbf` does not
+again, delete `program/target/deploy/forest_escrow.so` and build v3: `cargo build-sbf` does not
 copy a build it already holds over the v0 one.
 
 ### What one escrow costs
@@ -215,7 +215,7 @@ None of this can change after deploy; a change is a new program at a new address
 On mainnet the program is sealed the day it deploys:
 
 ```
-solana program deploy --program-id <program-keypair.json> target/deploy/forest_escrow_v2.so
+solana program deploy --program-id <program-keypair.json> target/deploy/forest_escrow.so
 solana program set-upgrade-authority <PROGRAM_ID> --final
 solana program show <PROGRAM_ID>        # Authority: none
 ```
@@ -354,5 +354,6 @@ still deployed on devnet at `3vAVLwiwFkCUG4AHV3gK3t15HoyRSuKNEuBFvvy9CbeR`, to b
 record is in [`devnet/devnet.json`](devnet/devnet.json) under `earlier`. Each escrow follows the
 program it was opened in.
 
-**Why is the crate still called `forest_escrow_v2`?** The program moved here unchanged: it builds
-to the same bytes it did in its old folder. The name is only a name: there is one escrow here.
+**Why does every escrow say version 2?** The version says which program's rules an escrow
+followed: version 1 was the earlier program above. There is one escrow program here, and a later
+one would be a new program at a new address.
