@@ -2,7 +2,7 @@
   "name": "@forest/keys",
   "version": "0.0.0",
   "private": true,
-  "description": "Forest keys recipe: passkey secret to seed, seed to each profile's key (its name, signature and wallet) and box key, one identity and one central wallet per person, the seed file for extra passkeys, and the backup words.",
+  "description": "Forest keys: a seed of 24 words, and the keys mixed from it: one profile key per label (its name, signature and wallet), each profile's reading key, and the person's secret and stamp for each keeper's list.",
   "license": "Apache-2.0",
   "type": "module",
   "main": "./dist/index.js",
@@ -10,8 +10,7 @@
   "scripts": {
     "test": "node --test test/*.test.ts",
     "check": "tsc --noEmit",
-    "build": "tsc -p tsconfig.build.json",
-    "build:page": "esbuild src/index.ts --bundle --format=esm --platform=browser --outfile=test-page/dist/forest-keys.js"
+    "build": "tsc -p tsconfig.build.json"
   },
   "dependencies": {
     "@noble/curves": "2.4.0",
@@ -24,7 +23,6 @@
     "@noble/hashes": "2.4.0",
     "@types/node": "22.20.2",
     "@zk-kit/baby-jubjub": "1.0.3",
-    "esbuild": "0.28.2",
     "poseidon-lite": "0.3.0",
     "typescript": "5.9.3"
   }

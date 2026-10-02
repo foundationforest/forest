@@ -12,7 +12,7 @@ import { poseidon2 } from 'poseidon-lite/poseidon2'
 
 import { scopeOf, toBytes32 } from './field.ts'
 
-/** The Semaphore identity for a human, from the 32 bytes `keys/` derives as the identity secret. */
+/** The Semaphore identity for a human, from its 32-byte identity secret. */
 export function identityFrom(secret: Uint8Array | Identity): Identity {
   return secret instanceof Identity ? secret : new Identity(secret)
 }

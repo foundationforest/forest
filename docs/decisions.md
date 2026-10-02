@@ -13,9 +13,8 @@ Forest goes here, in the same form.
 - **One ed25519 key per profile is its name, its signature and its wallet:** a badge then names the
   profile itself, with nothing to cross-check.
 - **did:key, not did:plc:** a name needs no directory that can refuse, withhold or misorder it.
-- **Each profile's keys come from their own labels, and the person's identity secret from one of its
-  own:** nothing public ties two profiles together, while the registry still holds one entry per
-  human.
+- **A profile's key is mixed from its label, and a list secret from its keeper's address:** nothing
+  public ties two of a person's profiles together, or their stamps on two lists.
 - **A record is signed after the byte `0xff`:** no Solana transaction begins with it, so a record's
   signature can never be a payment's.
 - **Boards hold no keys and no accounts, and always take a newer folder record:** a board can stop
@@ -27,10 +26,9 @@ Forest goes here, in the same form.
   that reads a hostile review can only draft, and what a person writes always wins.
 - **The approval page is the one place the seed opens:** whoever serves a page that opens the seed
   could take the keys, so there is one, small and checkable.
-- **One way in, a passkey; the 24 words are a backup:** a second way in is one more path to secure,
-  and nothing a person needs.
-- **One central wallet per person; deals touch only profile wallets:** receipts bind to profiles, and
-  money meets a ramp in one place.
+- **The seed is 24 words in the person's password manager, and no app stores it:** a password
+  manager already guards and syncs secrets on every device, a passkey's secret stays with one
+  provider, and an app that never stores the seed cannot leak it.
 - **Not AT Protocol, Nostr or Pubky as the base:** one server per profile and a central directory;
   keys that cannot be Solana keys and no revocable delegation; servers that can forge records.
 

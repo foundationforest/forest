@@ -15,7 +15,7 @@ import { encodeEntry } from '../src/entry.ts'
 import { seedFromPrf } from '../src/keys.ts'
 import { type ApprovalRequest, approve, describe, requestFromLink } from '../src/request.ts'
 
-// keys/SPEC.md: the PRF input every Forest product uses.
+// SPEC.md §1: the PRF input the passkey is asked with.
 const PRF_INPUT = new TextEncoder().encode('forest.foundation/prf/v1')
 
 const note = document.getElementById('note')!

@@ -12,7 +12,7 @@ index or AI can read the records and the chain; none of them holds anyone's keys
 
 ## What this repo holds
 
-The pieces everyone shares: the records protocol, the keys recipe, and two sealed Solana programs,
+The pieces everyone shares: the records protocol, the keys standard, and two sealed Solana programs,
 the registry and the escrow, each with its client.
 
 What it does not hold:
@@ -26,7 +26,7 @@ What it does not hold:
 | Folder | What it is | Status |
 |---|---|---|
 | [`records/`](records/README.md) | The records protocol: its spec, the library, a reference board, the approval page, and the four record shapes (profile, offer, review, proof) | Tested; not deployed |
-| [`keys/`](keys/README.md) | The keys recipe: a passkey's secret becomes a seed, and the seed every key a person uses | Tested; not deployed |
+| [`keys/`](keys/README.md) | The keys standard: a seed of 24 words, and every key a person uses mixed from it | Tested; not deployed |
 | [`registry/`](registry/README.md) | Sealed program and client: one badge per human per label, free | On devnet |
 | [`escrow/`](escrow/README.md) | Sealed program and client, v1: money out only when both sides agree; classic tokens | On devnet |
 | [`escrow/v2/`](escrow/v2/README.md) | v1 plus an objection, the funding time on every receipt, and both token programs | On devnet |
@@ -40,7 +40,7 @@ What `.github/workflows/checks.yml` runs on every pull request. Node 22.18 or la
 4.2.2 for the programs.
 
 ```
-# Each package: install, type-check, tests that need no chain. keys first: registry/client reads it.
+# Each package: install, type-check, tests that need no chain.
 for d in keys records registry/client escrow/client escrow/v2/client; do
   (cd "$d" && npm ci && npm run check && npm test)
 done

@@ -1,7 +1,7 @@
 // Connections for assistants over MCP (SDK v2, protocol 2026-07-28, over HTTP, no login): the
 // assistant reads public notes and drafts; the person approves on their own device. The approval
-// page is played in Node with the keys recipe's fixed test seed; browser.test.ts does the same
-// with a real passkey.
+// page is played in Node with the fixed test seed; browser.test.ts does the same with a real
+// passkey.
 
 import assert from 'node:assert/strict'
 import { after, before, describe, test } from 'node:test'

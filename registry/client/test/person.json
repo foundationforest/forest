@@ -1,0 +1,6 @@
+{
+  "about": "The person every registry test and script uses, and the one behind devnet's registry line: profile 0's key and the identity secret that keys/ derived from its test seed until 2 October 2026, pinned here as plain values. keys/ now mixes other keys from another test seed; these stay, because the proofs in program/tests-litesvm/fixtures/proofs.json and the devnet line were made from them. Public by construction: for tests and devnet only.",
+  "profile": "Azh4zBXfQsXLKrrD6YanN7VZhpNyQot7vVdtB2r41UWx",
+  "secret": "54684ed3bd15671b1a07bd8ed840a049c60ce847afd7d8da73b4f71cc6884d85",
+  "commitment": "14568690134484466610252976219100933485694269593799802854234702390895629808185"
+}

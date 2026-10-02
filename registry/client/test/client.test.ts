@@ -45,7 +45,7 @@ import {
 const here = dirname(fileURLToPath(import.meta.url))
 const fixtures = JSON.parse(readFileSync(join(here, '../../program/tests-litesvm/fixtures/proofs.json'), 'utf8'))
 const lib = readFileSync(join(here, '../../program/src/lib.rs'), 'utf8')
-const keysVectors = JSON.parse(readFileSync(join(here, '../../../keys/test/vectors.json'), 'utf8'))
+const person = JSON.parse(readFileSync(join(here, 'person.json'), 'utf8'))
 const verificationKey = JSON.parse(readFileSync(join(here, '../../artifacts/semaphore-32.json'), 'utf8'))
 const hex = (b: Uint8Array) => Buffer.from(b).toString('hex')
 const bytes = (h: string) => new Uint8Array(Buffer.from(h, 'hex'))
@@ -81,8 +81,8 @@ test('the message names the profile key and nothing else', () => {
   assert.notEqual(messageOf(key), messageOf(Keypair.generate().publicKey), 'another key, another message')
   assert.throws(() => messageOf(new Uint8Array(31)), /32 bytes/)
   assert.throws(() => messageOf(new Uint8Array(33)), /32 bytes/)
-  // Alice's profile is the keys recipe's profile 0: its did:key name and its wallet are one key.
-  assert.equal(key.toBase58(), keysVectors.profiles[0].wallet)
+  // Alice is the test person: test/person.json's profile.
+  assert.equal(key.toBase58(), person.profile)
 })
 
 test('a label of any text gives a scope, every scope is a field element, and namespaces never collide', () => {
@@ -95,7 +95,7 @@ test('a label of any text gives a scope, every scope is a field element, and nam
 })
 
 test('the code is the nullifier the proof carries', () => {
-  const secret = Buffer.from(keysVectors.identity.secret, 'hex')
+  const secret = Buffer.from(person.secret, 'hex')
   for (const name of ['alice-tutoring-A', 'alice-tutoring-B', 'alice-cleaning-A', 'alice-longest-A']) {
     const p = proofNamed(name)
     assert.equal(hex(codeBytesFor(secret, p.label)), p.code, name)

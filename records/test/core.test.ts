@@ -11,7 +11,7 @@ import { ownerEntry } from '../src/write.ts'
 import { SEED, T0, VECTORS, alice, aliceBuyer, offerBody, profileBody, sizedEntry } from './fixtures.ts'
 
 describe('keys', () => {
-  test('the seed and every profile key are exactly what keys/ pins: the profile id is its wallet', async () => {
+  test('the seed and every profile key are exactly what test/keys.json pins: the profile id is its wallet', async () => {
     assert.equal(hex.encode(SEED), VECTORS.seed)
     for (const [key, pinned] of [alice, aliceBuyer].map((k, i) => [k, VECTORS.profiles[i]!] as const)) {
       assert.equal(key.index, pinned.index)

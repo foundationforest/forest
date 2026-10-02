@@ -10,8 +10,9 @@ path the newest version counts, and what the owner wrote outranks what any deleg
 
 ## 1. Keys
 
-**Seed.** The seed is keys/SPEC.md's: HKDF-SHA256 of the passkey's PRF output, with info
-`forest.foundation/seed/v1`. All HKDF below is HKDF-SHA256 with an empty salt and a 32-byte output.
+**Seed.** HKDF-SHA256 of the passkey's PRF output, with info `forest.foundation/seed/v1`. The PRF
+input is the UTF-8 of `forest.foundation/prf/v1`. All HKDF below is HKDF-SHA256 with an empty
+salt and a 32-byte output.
 
 | Key | Derivation | Use |
 |---|---|---|
@@ -362,11 +363,11 @@ links without it.
 
 ## 13. Test vectors
 
-`test/vectors.json`, from keys/SPEC.md's test seed (PRF `00 01 … 1f`), profile 0.
+`test/vectors.json`, from the test seed `test/keys.json` pins (PRF `00 01 … 1f`), profile 0.
 `test/vectors.test.ts` recomputes them and checks each with OpenSSL and a second SHA-256.
 
 - profile 0: `did:key:z6MkpSx7aRn6kR1oSMgun7YdDD3ZXPepph8UcWYp1Jp4vhJL`, address
-  `Azh4zBXfQsXLKrrD6YanN7VZhpNyQot7vVdtB2r41UWx` (the wallet `keys/test/vectors.json` pins)
+  `Azh4zBXfQsXLKrrD6YanN7VZhpNyQot7vVdtB2r41UWx` (the wallet `test/keys.json` pins)
 - a delegate key, 32 bytes of `0x2a`: `did:key:z6MkgAnvkP45uNxwCKeNdt6wrYkEjpYX4f7Nrd8MQqFL8Fbn`
 - an offer, id `6329b8bbb840aad79762742f0edd2dde2d63e4d22ef0093ac4ecff160e668222`:
 

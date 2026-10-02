@@ -1,5 +1,5 @@
 {
-  "about": "Forest data protocol vectors. Seed: keys/test/vectors.json prf -> seed; profile 0; the delegate key is 32 bytes of 0x2a.",
+  "about": "Forest data protocol vectors. Seed: test/keys.json prf -> seed; profile 0; the delegate key is 32 bytes of 0x2a.",
   "profile": {
     "index": 0,
     "did": "did:key:z6MkpSx7aRn6kR1oSMgun7YdDD3ZXPepph8UcWYp1Jp4vhJL",

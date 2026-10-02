@@ -1,5 +1,5 @@
 // The client against a real validator: start one, load the program, and make a line end to end,
-// from the keys recipe's seed to a line on the chain, then a second issuer's membership checked
+// from the test person (test/person.json) to a line on the chain, then a second issuer's membership checked
 // against it off chain.
 //
 //   npm run test:validator
@@ -31,7 +31,6 @@ import {
   VersionedTransaction,
 } from '@solana/web3.js'
 
-import { didKey, identitySecret, profileKey } from '../../../keys/src/index.ts'
 import {
   PROGRAM_ID,
   buildRegistration,
@@ -132,11 +131,10 @@ test('a line goes through a real validator, the profile key signing nothing, and
   if (why) return t.skip(why)
   if (!validator) return t.skip('solana-test-validator did not start (is it on the PATH?)')
 
-  // The person: the keys recipe's pinned test seed, its profile 0 and its identity secret.
-  const vectors = JSON.parse(readFileSync(join(here, '../../../keys/test/vectors.json'), 'utf8'))
-  const seed = Buffer.from(vectors.seed, 'hex')
-  const profile = new PublicKey((await profileKey(seed, 0)).publicKey)
-  const secret = await identitySecret(seed)
+  // The person: test/person.json's profile and identity secret.
+  const person = JSON.parse(readFileSync(join(here, 'person.json'), 'utf8'))
+  const profile = new PublicKey(person.profile)
+  const secret = Buffer.from(person.secret, 'hex')
   const mine = commitmentOf(secret)
 
   // Two issuers' published lists, the person in both.
@@ -205,7 +203,7 @@ test('a line goes through a real validator, the profile key signing nothing, and
 
   // A second issuer, off chain: the person proves they are on list B for the same label and
   // profile, and a reader checks the record against the line on chain and B's published root.
-  const issuerB = didKey(Keypair.generate().publicKey.toBytes())
+  const issuerB = 'did:key:z6Mkw7c3aLgqXfdMZn3dMqruyzrvGHfWCUk537Ci9HoMJb63' // the fixtures' issuer B, by name
   const record = await makeMembership({ secret, label: LABEL, profile, commitments: listB, issuer: issuerB, artifacts })
   const verificationKey = JSON.parse(readFileSync(join(here, '../../artifacts/semaphore-32.json'), 'utf8'))
   const onChain = (await fetchLine(connection, Buffer.from(record.membership.code, 'hex')))!

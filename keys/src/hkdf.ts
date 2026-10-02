@@ -1,35 +1,17 @@
-// HKDF-SHA256 over Web Crypto, and the fixed strings the recipe hangs on.
-// None of these strings is secret. They separate one derivation from another,
-// so no key can be turned into any other key. Changing any of them is a new
-// recipe version, never an edit to this one.
+// HKDF-SHA256 over Web Crypto, and the fixed strings every key hangs on.
+// None of these strings is secret. They keep one mix apart from another, so no
+// key can be turned into any other key. Changing any of them gives other keys:
+// it is a new version, never an edit to this one.
 
-/** Version tag inside every fixed string. */
-export const VERSION = 'v1'
-
-/** The WebAuthn PRF input (the extension calls it a salt), as text. */
-export const PRF_INPUT_TEXT = `forest.foundation/prf/${VERSION}`
-
-/** The same input as the bytes handed to `navigator.credentials` in `extensions.prf.eval.first`. */
-export const PRF_INPUT: Uint8Array = utf8(PRF_INPUT_TEXT)
-
-/** HKDF info strings. `n` is the profile index, written in decimal. */
+/** HKDF info strings: what the seed (or a profile key) is mixed with. */
 export const INFO = {
-  seed: `forest.foundation/seed/${VERSION}`,
-  // The profile key: the profile's name, its signatures and its wallet. The label keeps the word
-  // `wallet` it was first made with, so every seed gives the same profile keys it always gave.
-  profile: (n: number) => `forest.foundation/profile/${n}/wallet/${VERSION}`,
-  // The profile's box key, for sealed entries.
-  box: (n: number) => `forest.foundation/profile/${n}/box/${VERSION}`,
-  seedFileKey: `forest.foundation/seed-file/key/${VERSION}`,
-  seedFileLabel: `forest.foundation/seed-file/label/${VERSION}`,
-  // No profile index: the registry's identity is per human, not per profile.
-  identity: `forest.foundation/identity/${VERSION}`,
-  // No profile index either: one central wallet per person, where money meets a ramp.
-  central: `forest.foundation/central/${VERSION}`,
+  /** The profile key for a label, mixed from the seed. The label is used exactly as given. */
+  profile: (label: string) => `forest/v1/profile/${label}`,
+  /** The profile's reading key, mixed from the profile key's 32 private bytes. */
+  read: 'forest/v1/read',
+  /** The person's secret for one keeper's list, mixed from the seed. */
+  list: (keeper: string) => `forest/v1/list/${keeper}`,
 } as const
-
-/** A passkey's PRF output is 32 bytes. */
-export const PRF_LENGTH = 32
 
 /** The seed is 32 bytes. */
 export const SEED_LENGTH = 32
@@ -48,10 +30,6 @@ export async function hkdf(ikm: Uint8Array, info: string, length = 32): Promise<
   return new Uint8Array(bits)
 }
 
-export async function sha256(bytes: Uint8Array): Promise<Uint8Array> {
-  return new Uint8Array(await crypto.subtle.digest('SHA-256', copy(bytes)))
-}
-
 export function utf8(text: string): Uint8Array<ArrayBuffer> {
   return new TextEncoder().encode(text)
 }
@@ -67,6 +45,12 @@ export function assertBytes(name: string, value: unknown, length: number): asser
   }
 }
 
-export function assertProfileIndex(n: number): void {
-  if (!Number.isInteger(n) || n < 0) throw new Error('profile index must be a whole number, 0 or more')
+/**
+ * Text that has one UTF-8 spelling. A string with a lone surrogate has none: the encoder would
+ * swap it for U+FFFD, and two different strings would give one key.
+ */
+export function assertText(name: string, value: unknown): asserts value is string {
+  if (typeof value !== 'string' || new TextDecoder().decode(utf8(value)) !== value) {
+    throw new Error(`${name} must be text`)
+  }
 }

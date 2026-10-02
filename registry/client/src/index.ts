@@ -64,10 +64,10 @@ export type Registration = MembershipProof & {
  * commitments, in its order, the person's own among them. Prove against the issuer's newest list.
  */
 export async function buildRegistration(input: {
-  /** The 32 bytes `keys/`'s `identitySecret(seed)` returns, or the identity itself. */
+  /** The person's 32-byte identity secret, or the identity itself. */
   secret: Uint8Array | Identity
   label: string
-  /** The profile's key (`keys/`'s `profileKey(seed, n).publicKey`). It signs nothing here. */
+  /** The profile's key (`keys/`'s `profileKey(seed, label).publicKey`). It signs nothing here. */
   profile: PublicKey | Uint8Array
   commitments: bigint[]
   artifacts: Artifacts
