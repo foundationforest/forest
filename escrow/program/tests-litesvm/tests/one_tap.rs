@@ -3,10 +3,12 @@
 //!
 //! A product may make every payment an escrow released in the same second, so every payment
 //! leaves a receipt at an address a review can point at. This file sends exactly that, measures
-//! it, and checks what it leaves behind: a permanent receipt, which keeps its own rent, and the
-//! deposit account's rent back to the buyer, its creator, in the same transaction. The key that
-//! fronted both rents (a fee payer, in production, which charges the person for them) gets
-//! nothing back. The rent is measured at today's rate and at the rate the cuts end at.
+//! it, and checks what it leaves behind: a permanent receipt, which keeps its own rent and records
+//! when the money was there though nobody marked it, and the deposit account's rent back to the
+//! buyer, its creator, in the same transaction. The key that fronted both rents (a fee payer, in
+//! production, which charges the person for them) gets nothing back at the ending; only a later
+//! sweep of what the rent cuts free goes to it. The rent is measured at today's rate and at the
+//! rate the cuts end at.
 //!
 //! The deposit address is made by the associated token program at the top of the transaction,
 //! before `create`, so a fee payer that checks every transfer's destination before signing (Kora)
@@ -14,7 +16,7 @@
 //!
 //! Run with `cargo test --test one_tap -- --nocapture` for the numbers.
 
-use forest_escrow_tests::*;
+use forest_escrow_v2_tests::*;
 use solana_keypair::Keypair;
 use solana_signer::Signer;
 
@@ -55,7 +57,12 @@ fn create_fund_and_release_to_seller_ride_in_one_transaction() {
     h.assert_closed(&vault, "the deposit account");
     let e = h.escrow(&escrow);
     assert_eq!((e.status, e.outcome, e.to_seller, e.creator), (Status::Ended, Some(Outcome::ReleasedToSeller), AMOUNT, Side::Buyer));
-    assert_eq!(e.rent_recipient, buyer.pubkey());
+    assert_eq!((e.rent_recipient, e.payer), (buyer.pubkey(), h.payer.pubkey()));
+    // Nobody marked it, and the receipt still says when the money was there: the ending's time,
+    // which in one tap is also the creation's.
+    assert_eq!((e.created_at, e.funded_at, e.ended_at), (T0, T0, T0));
+    let Some(Event::Ended { funded_at, ended_at, .. }) = ev.iter().find(|e| e.name() == "Ended") else { panic!() };
+    assert_eq!((*funded_at, *ended_at), (T0, T0), "the Ended event carries the same funding time");
     assert_eq!(h.balance(&h.seller_tokens), AMOUNT);
     assert_eq!(h.balance(&h.buyer_tokens), BUYER_START - AMOUNT);
     let fee = 2 * 5_000; // two signatures; the compute-budget instruction sets a limit, not a price
@@ -97,13 +104,20 @@ fn create_fund_and_release_to_seller_ride_in_one_transaction() {
     h.measure("one tap, an arbiter and a timer", &ixs, &[&buyer]);
 
     // An invoice paid in one tap: the seller opened it earlier (its deposit address exists since);
-    // the buyer's app reads it, then pays and releases in one transaction. The receipt says the
-    // seller created it, and the deposit account's rent goes to the seller.
+    // the buyer's app reads it, then, two hours later, pays and releases in one transaction. The
+    // receipt says the seller created it, and the deposit account's rent goes to the seller; it
+    // says the money was there when the payment landed, not when the invoice was opened.
     let (invoice, _) = h.invoice(&h.terms(4)).expect("invoice");
+    let opened = h.now();
+    h.advance(2 * 3_600);
     let s4 = h.accounts(&invoice);
     let ixs = [spl_transfer_ix(h.buyer_tokens, s4.vault, buyer.pubkey(), AMOUNT), release_to_seller_ix(&s4, buyer.pubkey())];
-    h.measure("an invoice paid in one tap", &ixs, &[&buyer]);
-    assert_eq!((h.escrow(&invoice).creator, h.escrow(&invoice).outcome), (Side::Seller, Some(Outcome::ReleasedToSeller)));
+    let (_, _, ev) = h.measure("an invoice paid in one tap", &ixs, &[&buyer]);
+    let e = h.escrow(&invoice);
+    assert_eq!((e.creator, e.outcome), (Side::Seller, Some(Outcome::ReleasedToSeller)));
+    assert_eq!((e.created_at, e.funded_at, e.ended_at), (opened, opened + 2 * 3_600, opened + 2 * 3_600), "funded when paid, not when opened");
+    let Some(Event::Ended { funded_at, .. }) = ev.iter().find(|e| e.name() == "Ended") else { panic!() };
+    assert_eq!(*funded_at, opened + 2 * 3_600);
 
     // The rents, measured: the same one tap with the Rent sysvar at today's rate and at the rate
     // the cuts end at. The payer fronts the receipt's rent and the deposit account's; the buyer
@@ -178,4 +192,25 @@ fn a_second_payment_to_a_one_tap_link_goes_back_to_the_buyer() {
     h.assert_closed(&s.vault, "the deposit account, again");
     assert_eq!(h.account(&escrow).data, receipt.data, "the receipt still says one payment");
     println!("a second payment to a one-tap link: sent back to the buyer's standard account by a stranger; the receipt unchanged");
+}
+
+#[test]
+fn a_marked_invoice_keeps_the_marks_time_as_its_funding_time() {
+    // The invoice flow the slow way: the buyer pays by a plain transfer, someone marks it an hour
+    // later, and the buyer releases a day after that. The receipt keeps the mark's time; the ending
+    // never moves it.
+    let mut h = Harness::new();
+    let (invoice, _) = h.invoice(&h.terms(1)).expect("invoice");
+    h.advance(600);
+    h.fund(&invoice, AMOUNT);
+    h.advance(3_600);
+    h.mark_funded(&invoice).expect("mark");
+    let marked = h.now();
+    h.advance(DAY);
+    let meta = h.release_to_seller(&invoice).expect("release");
+    let e = h.escrow(&invoice);
+    assert_eq!((e.funded_at, e.ended_at), (marked, marked + DAY));
+    let Some(Event::Ended { funded_at, .. }) = events(&meta.logs).into_iter().find(|e| e.name() == "Ended") else { panic!() };
+    assert_eq!(funded_at, marked);
+    println!("a marked invoice: the receipt keeps the mark's time as the funding time, the ending its own");
 }

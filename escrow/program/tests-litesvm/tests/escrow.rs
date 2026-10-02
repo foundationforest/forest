@@ -3,7 +3,7 @@
 //! Every way out with exact balances, every rejection, and what each one costs. Run with
 //! `cargo test -- --nocapture --test-threads=1` to see the numbers, the summary last.
 
-use forest_escrow_tests::*;
+use forest_escrow_v2_tests::*;
 use solana_address::Address;
 use solana_instruction::Instruction;
 use solana_keypair::Keypair;
@@ -67,6 +67,9 @@ fn create_writes_the_terms_and_makes_the_deposit_account() {
             outcome: None,
             to_seller: 0,
             to_buyer: 0,
+            payer: h.payer.pubkey(),
+            objection: None,
+            objected_at: 0,
         }
     );
     assert_eq!(escrow, Address::create_program_address(&[b"escrow", h.buyer.pubkey().as_ref(), &7u64.to_le_bytes(), &[e.bump]], &PROGRAM_ID).unwrap());
@@ -95,6 +98,7 @@ fn create_writes_the_terms_and_makes_the_deposit_account() {
             timer_days: 14,
             timer_to: Side::Seller,
             created_at: T0,
+            payer: h.payer.pubkey(),
         }]
     );
 
@@ -104,10 +108,10 @@ fn create_writes_the_terms_and_makes_the_deposit_account() {
     assert_eq!(invoice, escrow_address(&h.seller.pubkey(), 8));
     assert_ne!(invoice, escrow_address(&h.buyer.pubkey(), 8));
     let e = h.escrow(&invoice);
-    assert_eq!((e.creator, e.buyer, e.rent_recipient), (Side::Seller, h.buyer.pubkey(), h.seller.pubkey()));
-    let Event::Created { creator, rent_recipient, .. } = &events(&meta.logs)[0] else { panic!() };
-    assert_eq!((*creator, *rent_recipient), (Side::Seller, h.seller.pubkey()));
-    println!("created: every option off by default; both on; an invoice at the seller's address, the seller its rent recipient");
+    assert_eq!((e.creator, e.buyer, e.rent_recipient, e.payer), (Side::Seller, h.buyer.pubkey(), h.seller.pubkey(), h.payer.pubkey()));
+    let Event::Created { creator, rent_recipient, payer, .. } = &events(&meta.logs)[0] else { panic!() };
+    assert_eq!((*creator, *rent_recipient, *payer), (Side::Seller, h.seller.pubkey(), h.payer.pubkey()));
+    println!("created: every option off by default; both on; an invoice at the seller's address, the seller its rent recipient, the payer recorded");
 }
 
 #[test]
@@ -178,13 +182,14 @@ fn release_to_seller_the_buyer_gives_the_whole_balance() {
             ended_at: T0,
             rent_recipient: h.buyer.pubkey(),
             rent_lamports: vault_rent,
+            funded_at: T0,
         }]
     );
     assert_eq!(h.balance(&h.seller_tokens), AMOUNT + 250_000);
     assert_eq!(h.balance(&h.buyer_tokens), BUYER_START - AMOUNT - 250_000);
     assert!(!h.exists(&h.refund()));
     assert_receipt(&h, &escrow, Outcome::ReleasedToSeller, AMOUNT + 250_000, 0);
-    assert_eq!(h.escrow(&escrow).funded_at, 0, "nobody marked it: no way out needs the mark");
+    assert_eq!(h.escrow(&escrow).funded_at, T0, "nobody marked it: the ending records its own time as the funding time");
     assert_eq!(h.lamports(&escrow), escrow_rent, "the receipt keeps its own rent");
     assert_eq!(h.lamports(&h.payer.pubkey()), payer_before - 2 * 5_000, "the key that fronted the rent pays the fee and gets nothing back");
     assert_eq!(h.lamports(&h.buyer.pubkey()), buyer_sol + vault_rent, "the deposit account's rent goes to the creator");
@@ -430,44 +435,53 @@ fn the_escrow_address_is_the_creators_and_nobody_can_open_someone_elses() {
 }
 
 #[test]
-fn rent_goes_back_to_the_creator_never_to_whoever_fronted_it() {
-    // Carlos's third change. A fee payer fronts the rent in SOL and charges the person for it in
-    // dollars, so every refund must reach the person, or the person pays twice: the deposit
-    // account's rent at every ending, both rents at close_unfunded, and every sweep. The escrow
-    // records its creator as the rent recipient.
+fn rent_goes_back_to_the_creator_and_a_sweep_to_the_payer() {
+    // v1 sent every rent refund to the creator. v2 keeps that for the deposit account's rent at
+    // every ending and both rents at close_unfunded, and records the key that fronted the rent:
+    // rent above the receipt's minimum (what Solana's rent cuts free) goes back to that payer.
     let mut h = Harness::new();
     let buyer = h.buyer.insecure_clone();
     let seller = h.seller.insecure_clone();
     let payer = h.payer.pubkey();
 
-    // The buyer's escrow, fronted by the payer: recorded, refunded and swept to the buyer.
+    // The buyer's escrow, fronted by the payer: the deposit account's rent to the buyer, the sweep
+    // to the payer.
     let escrow = h.funded(&h.terms(1));
-    assert_eq!(h.escrow(&escrow).rent_recipient, buyer.pubkey());
+    let e = h.escrow(&escrow);
+    assert_eq!((e.rent_recipient, e.payer), (buyer.pubkey(), payer));
     let s = h.accounts(&escrow);
     let wrong = Accounts { rent_recipient: payer, ..s };
-    let err = h.send(&[release_to_seller_ix(&wrong, buyer.pubkey())], &[&buyer]).expect_err("the payer as recipient");
+    let err = h.send(&[release_to_seller_ix(&wrong, buyer.pubkey())], &[&buyer]).expect_err("the payer as the deposit rent's recipient");
     assert!(err.contains("ConstraintHasOne"), "{err}");
     let vault_rent = h.lamports(&s.vault);
     let buyer_sol = h.lamports(&buyer.pubkey());
     h.release_to_seller(&escrow).expect("release");
     assert_eq!(h.lamports(&buyer.pubkey()), buyer_sol + vault_rent, "the deposit account's rent to the buyer");
     h.send(&[sol_transfer_ix(seller.pubkey(), escrow, 1_000_000)], &[&seller]).expect("SOL to the receipt");
-    let err = h.send(&[sweep_rent_ix(escrow, payer)], &[]).expect_err("swept to the payer");
+    let err = h.send(&[sweep_rent_ix(escrow, buyer.pubkey())], &[]).expect_err("swept to the creator");
     assert!(err.contains("ConstraintHasOne"), "{err}");
-    let buyer_sol = h.lamports(&buyer.pubkey());
-    h.sweep(&escrow).expect("swept to the creator");
-    assert_eq!(h.lamports(&buyer.pubkey()), buyer_sol + 1_000_000);
+    let (buyer_sol, payer_sol) = (h.lamports(&buyer.pubkey()), h.lamports(&payer));
+    h.sweep(&escrow).expect("swept to the payer");
+    assert_eq!(h.lamports(&payer), payer_sol + 1_000_000 - 5_000, "the excess to the payer, which also paid the fee");
+    assert_eq!(h.lamports(&buyer.pubkey()), buyer_sol, "nothing to the creator");
 
-    // An invoice, fronted by the payer: the seller created it, so the seller gets the rent back.
+    // An invoice, fronted by the payer: the seller created it, so the seller gets the deposit
+    // account's rent back; the payer gets nothing at the ending.
     let (invoice, _) = h.invoice(&h.terms(2)).expect("invoice");
-    assert_eq!(h.escrow(&invoice).rent_recipient, seller.pubkey());
+    assert_eq!((h.escrow(&invoice).rent_recipient, h.escrow(&invoice).payer), (seller.pubkey(), payer));
     h.fund(&invoice, AMOUNT);
     let vault_rent = h.lamports(&vault_address(&invoice, &h.mint));
     let (seller_sol, payer_sol) = (h.lamports(&seller.pubkey()), h.lamports(&payer));
     h.release_to_seller(&invoice).expect("the buyer releases the invoice");
     assert_eq!(h.lamports(&seller.pubkey()), seller_sol + vault_rent, "the deposit account's rent to the seller, the creator");
     assert_eq!(h.lamports(&payer), payer_sol - 2 * 5_000, "and nothing to the payer but its fee spent");
-    println!("rent: fronted by a payer, refunded and swept to the creator every time, never to the payer");
+
+    // A party that fronts its own rent is both: the seller invoices and pays for it itself.
+    let a = CreateAccounts { payer: seller.pubkey(), ..h.create_accounts() };
+    h.send(&[invoice_ix(&h.terms(3), &a)], &[&seller]).expect("the seller pays its own invoice's rent");
+    let own = escrow_address(&seller.pubkey(), 3);
+    assert_eq!((h.escrow(&own).rent_recipient, h.escrow(&own).payer), (seller.pubkey(), seller.pubkey()));
+    println!("rent: the deposit account's to the creator at every ending; the sweep to the payer, never to the creator");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -531,6 +545,10 @@ fn the_wrong_signer_is_refused_for_every_instruction() {
         ("close_unfunded by the arbiter", close_unfunded_ix(&s, arbiter.pubkey()), vec![&arbiter], "NotACloser"),
         ("recover_late by a stranger, live", recover_late_ix(escrow, s.vault, b, h.mint, stranger.pubkey()), vec![&stranger], "NotEnded"),
         ("sweep_rent to a stranger", sweep_rent_ix(escrow, stranger.pubkey()), vec![], "ConstraintHasOne"),
+        ("sweep_rent to the creator", sweep_rent_ix(escrow, b), vec![], "ConstraintHasOne"),
+        ("object by a stranger", object_ix(escrow, stranger.pubkey()), vec![&stranger], "NotAnObjector"),
+        ("object by the arbiter", object_ix(escrow, arbiter.pubkey()), vec![&arbiter], "NotAnObjector"),
+        ("object, the buyer not signing", unsigned(object_ix(escrow, b), &b), vec![], "AccountNotSigner"),
     ];
     for (what, ix, signers, want) in cases {
         let err = h.send(&[ix], &signers).err().unwrap_or_else(|| panic!("{what}: must be refused"));
@@ -548,7 +566,8 @@ fn the_wrong_signer_is_refused_for_every_instruction() {
     assert!(err.contains("ConstraintHasOne"), "{err}");
 
     assert_eq!(h.vault_balance(&escrow), AMOUNT, "nothing above moved anything");
-    assert_eq!(h.escrow(&escrow).status, Status::Open);
+    let e = h.escrow(&escrow);
+    assert_eq!((e.status, e.objection), (Status::Open, None));
     println!("every instruction refused its wrong signer; payouts and rent cannot be redirected");
 }
 
@@ -588,7 +607,7 @@ fn timer_release_needs_a_timer_the_funding_marked_and_its_day() {
     // Marked and released in one breath: the mark is now, so the timer is not due.
     let vault = vault_address(&escrow, &h.mint);
     let err = h
-        .send(&[mark_funded_ix(escrow, vault), timer_release_ix(escrow, vault, h.seller_tokens, h.buyer.pubkey())], &[])
+        .send(&[mark_funded_ix(escrow, vault), timer_release_ix(escrow, vault, h.mint, h.seller_tokens, h.buyer.pubkey())], &[])
         .expect_err("mark and release together");
     assert!(err.contains("TimerNotDue"), "{err}");
     assert_eq!(h.escrow(&escrow).status, Status::Open, "the failed transaction marked nothing");
@@ -667,7 +686,7 @@ fn a_payout_lands_only_at_the_receiving_partys_standard_account() {
             "release_to_seller" => release_to_seller_ix(s, b),
             "split" => split_ix(s, b, sl, 5_000),
             "arbitrate" => arbitrate_ix(s, ar, 5_000),
-            "timer_release" => timer_release_ix(s.escrow, s.vault, if timer_to == Side::Buyer { s.buyer_tokens } else { s.seller_tokens }, s.rent_recipient),
+            "timer_release" => timer_release_ix(s.escrow, s.vault, s.mint, if timer_to == Side::Buyer { s.buyer_tokens } else { s.seller_tokens }, s.rent_recipient),
             _ => close_unfunded_ix(s, sl),
         };
         let signers: Vec<&Keypair> = match name {
@@ -707,7 +726,7 @@ fn a_payout_lands_only_at_the_receiving_partys_standard_account() {
         ("the deposit account itself", vault),
         ("the seller's wallet, not a token account", sl),
     ] {
-        let err = h.send(&[timer_release_ix(escrow, vault, to, b)], &[]).expect_err(what);
+        let err = h.send(&[timer_release_ix(escrow, vault, h.mint, to, b)], &[]).expect_err(what);
         assert!(err.contains("NotTheSellersAccount"), "{what}: {err}");
     }
     h.timer_release(&escrow, Side::Seller).expect("to the seller's standard account");
@@ -715,22 +734,22 @@ fn a_payout_lands_only_at_the_receiving_partys_standard_account() {
 }
 
 #[test]
-fn a_token_2022_mint_and_wrapped_sol_are_refused() {
+fn wrapped_sol_of_either_token_program_is_refused() {
+    // A Token-2022 mint is accepted (`token_2022.rs`); wrapped SOL is not, under either program.
     let mut h = Harness::new();
     let buyer = h.buyer.insecure_clone();
-    let mint22 = Address::new_unique();
-    h.svm.set_account(mint22, spl_mint_account(6, TOKEN_2022_PROGRAM)).unwrap();
-    let a = CreateAccounts { buyer: buyer.pubkey(), payer: h.payer.pubkey(), mint: mint22 };
-    let err = h.send(&[create_ix(&h.terms(1), &a)], &[&buyer]).expect_err("Token-2022");
-    assert!(err.contains("AccountOwnedByWrongProgram"), "{err}");
-    assert!(!h.exists(&escrow_address(&buyer.pubkey(), 1)));
-
     h.svm.set_account(NATIVE_MINT, spl_mint_account(9, TOKEN_PROGRAM)).unwrap();
     let a = CreateAccounts { buyer: buyer.pubkey(), payer: h.payer.pubkey(), mint: NATIVE_MINT };
     let err = h.send(&[create_ix(&h.terms(1), &a)], &[&buyer]).expect_err("wrapped SOL");
     assert!(err.contains("NativeMint"), "{err}");
     assert!(!h.exists(&escrow_address(&buyer.pubkey(), 1)));
-    println!("a Token-2022 mint and wrapped SOL: refused at create, nothing written");
+
+    h.svm.set_account(NATIVE_MINT_2022, spl_mint_account(9, TOKEN_2022_PROGRAM)).unwrap();
+    let a = CreateAccounts { buyer: buyer.pubkey(), payer: h.payer.pubkey(), mint: NATIVE_MINT_2022 };
+    let err = h.send(&[create_ix_under(&h.terms(1), &a, buyer.pubkey(), TOKEN_2022_PROGRAM)], &[&buyer]).expect_err("Token-2022's wrapped SOL");
+    assert!(err.contains("NativeMint"), "{err}");
+    assert!(!h.exists(&escrow_address(&buyer.pubkey(), 1)));
+    println!("wrapped SOL, classic and Token-2022: refused at create, nothing written");
 }
 
 #[test]
@@ -871,8 +890,9 @@ fn an_escrow_ends_once() {
         ("release_to_buyer", release_to_buyer_ix(&s, sl), vec![&seller]),
         ("split", split_ix(&s, b, sl, 5_000), vec![&buyer, &seller]),
         ("arbitrate", arbitrate_ix(&s, arbiter.pubkey(), 5_000), vec![&arbiter]),
-        ("timer_release", timer_release_ix(escrow, vault, h.seller_tokens, b), vec![]),
+        ("timer_release", timer_release_ix(escrow, vault, h.mint, h.seller_tokens, b), vec![]),
         ("close_unfunded", close_unfunded_ix(&s, b), vec![&buyer]),
+        ("object", object_ix(escrow, sl), vec![&seller]),
     ];
     for (what, ix, signers) in cases {
         let err = h.send(&[ix], &signers).err().unwrap_or_else(|| panic!("{what}: an ended escrow must refuse it"));
@@ -882,7 +902,7 @@ fn an_escrow_ends_once() {
     assert!(err.contains("already in use"), "{err}");
     assert_eq!(h.account(&escrow).data, receipt.data, "the receipt is unchanged");
     assert_eq!(h.balance(&h.seller_tokens), AMOUNT, "the seller was paid once");
-    println!("one ending: two in a transaction revert together; after it, everything but recover_late and sweep_rent is refused");
+    println!("one ending: two in a transaction revert together; after it, everything but recover_late and sweep_rent is refused, object included");
 }
 
 #[test]
@@ -928,10 +948,18 @@ fn money_after_the_end_goes_back_to_the_buyer_whoever_sends_it() {
 }
 
 #[test]
-fn a_sweep_returns_rent_above_the_minimum_and_never_goes_below_it() {
+fn a_sweep_returns_rent_above_the_minimum_to_the_payer_and_never_goes_below_it() {
+    // The refund to the payer: a sponsor, neither party and not the transaction's fee payer,
+    // fronts both rents. The deposit account's rent goes to the creator at the ending; what the
+    // rent cuts free above the receipt's minimum goes to the sponsor, sent by anyone.
     let mut h = Harness::new();
     let buyer = h.buyer.insecure_clone();
-    let escrow = h.funded(&h.terms(1));
+    let sponsor = h.someone();
+    let a = CreateAccounts { payer: sponsor.pubkey(), ..h.create_accounts() };
+    h.send(&[create_ix(&h.terms(1), &a)], &[&buyer, &sponsor]).expect("create, the sponsor fronting the rent");
+    let escrow = escrow_address(&buyer.pubkey(), 1);
+    assert_eq!(h.escrow(&escrow).payer, sponsor.pubkey());
+    h.fund(&escrow, AMOUNT);
     h.release_to_seller(&escrow).expect("release");
     let live = h.funded(&h.terms(2));
     let receipt = h.account(&escrow);
@@ -940,25 +968,28 @@ fn a_sweep_returns_rent_above_the_minimum_and_never_goes_below_it() {
     let err = h.sweep(&escrow).expect_err("nothing above the minimum");
     assert!(err.contains("NothingToSweep"), "{err}");
 
-    // The cuts land: the same bytes need far less. The excess goes to the rent recipient (the
-    // buyer, its creator), the account keeps exactly the new minimum, and its bytes do not change.
+    // The cuts land: the same bytes need far less. The excess goes to the payer recorded at
+    // creation, the account keeps exactly the new minimum, and its bytes do not change.
     h.svm.set_sysvar(&rent_at(RENT_FINAL));
     let minimum = (128 + ESCROW_LEN as u64) * RENT_FINAL;
     let excess = receipt.lamports - minimum;
-    let (payer, buyer_sol) = (h.lamports(&h.payer.pubkey()), h.lamports(&buyer.pubkey()));
+    let (fee_payer, buyer_sol, sponsor_sol) = (h.lamports(&h.payer.pubkey()), h.lamports(&buyer.pubkey()), h.lamports(&sponsor.pubkey()));
+    let err = h.send(&[sweep_rent_ix(escrow, buyer.pubkey())], &[]).expect_err("to the creator");
+    assert!(err.contains("ConstraintHasOne"), "{err}");
     let meta = h.sweep(&escrow).expect("sweep");
-    assert_eq!(events(&meta.logs), [Event::RentSwept { escrow, lamports: excess, left: minimum }]);
+    assert_eq!(events(&meta.logs), [Event::RentSwept { escrow, payer: sponsor.pubkey(), lamports: excess, left: minimum }]);
     assert_eq!(h.lamports(&escrow), minimum);
-    assert_eq!(h.lamports(&buyer.pubkey()), buyer_sol + excess, "the creator gets the excess");
-    assert_eq!(h.lamports(&h.payer.pubkey()), payer - 5_000, "the payer, which sent it, pays only the fee");
+    assert_eq!(h.lamports(&sponsor.pubkey()), sponsor_sol + excess, "the payer gets the excess");
+    assert_eq!(h.lamports(&buyer.pubkey()), buyer_sol, "the creator gets none of it");
+    assert_eq!(h.lamports(&h.payer.pubkey()), fee_payer - 2 * 5_000, "whoever sends it pays only the fee (two sends)");
     assert_eq!(h.account(&escrow).data, receipt.data, "the receipt's bytes do not change");
     let err = h.sweep(&escrow).expect_err("twice");
     assert!(err.contains("NothingToSweep"), "{err}");
 
-    // SOL sent to the escrow's address leaves the same way: to the rent recipient.
+    // SOL sent to the escrow's address leaves the same way: to the payer.
     h.send(&[sol_transfer_ix(buyer.pubkey(), escrow, 1_000_000)], &[&buyer]).expect("SOL to a receipt");
     let meta = h.sweep(&escrow).expect("sweep the stray SOL");
-    assert_eq!(events(&meta.logs), [Event::RentSwept { escrow, lamports: 1_000_000, left: minimum }]);
+    assert_eq!(events(&meta.logs), [Event::RentSwept { escrow, payer: sponsor.pubkey(), lamports: 1_000_000, left: minimum }]);
 
     // A live escrow can be swept too, and still ends as usual, keeping the minimum.
     h.sweep(&live).expect("sweep a live escrow");
@@ -971,7 +1002,7 @@ fn a_sweep_returns_rent_above_the_minimum_and_never_goes_below_it() {
     let err = h.sweep(&escrow).expect_err("below the new minimum");
     assert!(err.contains("NothingToSweep"), "{err}");
     assert_eq!(h.lamports(&escrow), minimum);
-    println!("rent sweep at {RENT_FINAL} lamports a byte: {excess} lamports back to the creator, {minimum} kept, bytes unchanged");
+    println!("rent sweep at {RENT_FINAL} lamports a byte: {excess} lamports back to the payer, none to the creator, {minimum} kept, bytes unchanged");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1018,13 +1049,13 @@ fn what_each_way_out_costs() {
     let e = h.marked(&timed);
     h.advance(DAY);
     let v = vault_address(&e, &h.mint);
-    h.measure("timer_release, to the seller", &[timer_release_ix(e, v, h.seller_tokens, buyer.pubkey())], &[]);
+    h.measure("timer_release, to the seller", &[timer_release_ix(e, v, h.mint, h.seller_tokens, buyer.pubkey())], &[]);
     let mut timed = h.terms(6);
     timed.timer = Some(Timer { days: 1, to: Side::Buyer });
     let e = h.marked(&timed);
     h.advance(DAY);
     let v = vault_address(&e, &h.mint);
-    h.measure("timer_release, to the buyer", &[timer_release_ix(e, v, h.refund(), buyer.pubkey())], &[]);
+    h.measure("timer_release, to the buyer", &[timer_release_ix(e, v, h.mint, h.refund(), buyer.pubkey())], &[]);
 
     let (e, _) = h.create(&h.terms(7)).expect("create");
     let s = h.accounts(&e);
@@ -1044,6 +1075,13 @@ fn what_each_way_out_costs() {
         &[&stranger],
     );
     h.svm.set_sysvar(&rent_at(RENT_FINAL));
-    h.measure("sweep_rent", &[sweep_rent_ix(e1, buyer.pubkey())], &[]);
+    let payer = h.payer.pubkey();
+    h.measure("sweep_rent", &[sweep_rent_ix(e1, payer)], &[]);
+
+    // object, by the seller, on a live escrow with a timer.
+    let mut objected = h.terms(8);
+    objected.timer = Some(Timer { days: 7, to: Side::Buyer });
+    let e = h.marked(&objected);
+    h.measure("object", &[object_ix(e, seller.pubkey())], &[&seller]);
     print_cu_summary();
 }

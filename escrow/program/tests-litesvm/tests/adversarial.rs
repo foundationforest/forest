@@ -8,7 +8,7 @@
 //!
 //! Run with `cargo test --test adversarial -- --nocapture` to see what each attack did.
 
-use forest_escrow_tests::*;
+use forest_escrow_v2_tests::*;
 use solana_account::Account;
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
@@ -146,15 +146,27 @@ fn substitution_payout_accounts_of_the_wrong_mint_owner_or_program_are_refused()
     let err = h.send(&[release_to_seller_ix(&Accounts { seller_tokens: t22, ..base }, buyer.pubkey())], &[&buyer]).expect_err("Token-2022 account");
     assert!(err.contains("NotTheSellersAccount"), "{err}");
 
-    // Token-2022 passed as the token program, at a way out and at create.
+    // Token-2022 passed as the token program for a classic mint, at a way out and at create: the
+    // token program must be the one that owns the mint.
     let mut ix = release_to_seller_ix(&base, buyer.pubkey());
-    ix.accounts[4].pubkey = TOKEN_2022_PROGRAM;
+    assert_eq!(ix.accounts[5].pubkey, TOKEN_PROGRAM);
+    ix.accounts[5].pubkey = TOKEN_2022_PROGRAM;
     let err = h.send(&[ix], &[&buyer]).expect_err("Token-2022 program");
-    assert!(err.contains("InvalidProgramId"), "{err}");
+    assert!(err.contains("ConstraintMintTokenProgram"), "{err}");
     let mut ix = create_ix(&h.terms(2), &h.create_accounts());
     ix.accounts[5].pubkey = TOKEN_2022_PROGRAM;
     let err = h.send(&[ix], &[&buyer]).expect_err("Token-2022 program at create");
-    assert!(err.contains("InvalidProgramId") || err.contains("ConstraintAssociated") || err.contains("AccountOwnedByWrongProgram"), "{err}");
+    // The deposit address is derived under the token program named, so the associated token
+    // program is asked for an address this transaction does not carry.
+    assert!(err.contains("MissingAccount"), "{err}");
+    // Named with its address under Token-2022 too, the mint is still the classic program's.
+    let mut ix = create_ix(&h.terms(2), &h.create_accounts());
+    let escrow2 = escrow_address(&buyer.pubkey(), 2);
+    ix.accounts[1].pubkey = ata_address_under(&escrow2, &h.mint, &TOKEN_2022_PROGRAM);
+    ix.accounts[5].pubkey = TOKEN_2022_PROGRAM;
+    let err = h.send(&[ix], &[&buyer]).expect_err("Token-2022 program and its address at create");
+    assert!(err.contains("IncorrectProgramId") || err.contains("ConstraintMintTokenProgram"), "{err}");
+    assert!(!h.exists(&escrow2));
 
     assert_eq!(h.vault_balance(&escrow), AMOUNT, "nothing moved");
     println!("rejected as expected: wrong mint, the other party's account in either slot, a Token-2022 account, Token-2022 as the program");
@@ -325,14 +337,14 @@ fn arithmetic_splits_at_the_edges_add_up_and_never_overflow() {
         let vault = vault_address(&escrow, &h.mint);
         h.send(&[create_ix(&t, &a), spl_transfer_ix(big_tokens, vault, big.pubkey(), u64::MAX), mark_funded_ix(escrow, vault)], &[&big])
             .expect("create, fund and mark");
-        let s = Accounts { escrow, vault, buyer_tokens: big_tokens, seller_tokens: h.seller_tokens, rent_recipient: big.pubkey() };
+        let s = Accounts { escrow, vault, buyer_tokens: big_tokens, seller_tokens: h.seller_tokens, rent_recipient: big.pubkey(), ..h.accounts(&escrow) };
         let (ix, signers): (Instruction, Vec<&Keypair>) = match how {
             "split" => (split_ix(&s, big.pubkey(), seller.pubkey(), 7_777), vec![&big, &seller]),
             "arbitrate" => (arbitrate_ix(&s, arbiter.pubkey(), 1), vec![&arbiter]),
             "release_to_seller" => (release_to_seller_ix(&s, big.pubkey()), vec![&big]),
             _ => {
                 h.advance(DAY);
-                (timer_release_ix(escrow, vault, h.seller_tokens, big.pubkey()), vec![])
+                (timer_release_ix(escrow, vault, h.mint, h.seller_tokens, big.pubkey()), vec![])
             }
         };
         let meta = h.send(&[ix], &signers).unwrap_or_else(|e| panic!("{how}: {e}"));
@@ -416,7 +428,7 @@ fn timer_whoever_sends_the_sellers_timer_can_pay_only_its_standard_account() {
     let stranger = h.someone();
     let vault = vault_address(&escrow, &h.mint);
     let send_as_stranger = |h: &mut Harness, to: Address| {
-        let ix = timer_release_ix(escrow, vault, to, h.buyer.pubkey());
+        let ix = timer_release_ix(escrow, vault, h.mint, to, h.buyer.pubkey());
         h.svm.expire_blockhash();
         let tx = Transaction::new(&[&stranger], Message::new(&[ix], Some(&stranger.pubkey())), h.svm.latest_blockhash());
         h.send_tx(tx)
@@ -559,7 +571,7 @@ fn finding_a_self_minted_token_makes_a_receipt_that_looks_like_real_money() {
     let a = CreateAccounts { buyer: buyer.pubkey(), payer: h.payer.pubkey(), mint: fake };
     let escrow = escrow_address(&buyer.pubkey(), 1);
     let vault = vault_address(&escrow, &fake);
-    let s = Accounts { escrow, vault, buyer_tokens: fake_tokens, seller_tokens: seller_fake, rent_recipient: buyer.pubkey() };
+    let s = Accounts { escrow, vault, mint: fake, buyer_tokens: fake_tokens, seller_tokens: seller_fake, rent_recipient: buyer.pubkey(), token_program: TOKEN_PROGRAM };
     let meta = h
         .send(&[create_ix(&t, &a), spl_transfer_ix(fake_tokens, vault, buyer.pubkey(), t.amount), release_to_seller_ix(&s, buyer.pubkey())], &[&buyer])
         .expect("accepted");
@@ -598,7 +610,7 @@ fn tokens_wrapped_sol_is_refused_at_create() {
 // ---------------------------------------------------------------------------------------------
 
 #[test]
-fn rent_stray_sol_goes_to_the_rent_recipient() {
+fn rent_stray_sol_goes_to_the_creator_at_a_close_and_to_the_payer_by_a_sweep() {
     // Someone pays the escrow's address in SOL instead of the token. It never counts as funding.
     let mut h = Harness::new();
     let buyer = h.buyer.insecure_clone();
@@ -616,16 +628,17 @@ fn rent_stray_sol_goes_to_the_rent_recipient() {
     assert_eq!(h.lamports(&buyer.pubkey()), buyer_sol + rent_lamports);
 
     // Ended: the receipt is never closed; `sweep_rent` moves what is above the minimum, the stray
-    // SOL included, to the rent recipient. The program cannot tell stray SOL from rent.
+    // SOL included, to the payer recorded at creation. The program cannot tell stray SOL from rent.
     let escrow2 = h.funded(&h.terms(2));
     h.release_to_seller(&escrow2).expect("release");
     let before = h.lamports(&escrow2);
     h.send(&[sol_transfer_ix(seller.pubkey(), escrow2, 30_000_000)], &[&seller]).expect("SOL to a receipt");
-    let buyer_sol = h.lamports(&buyer.pubkey());
+    let (buyer_sol, payer_sol) = (h.lamports(&buyer.pubkey()), h.lamports(&h.payer.pubkey()));
     h.sweep(&escrow2).expect("sweep");
     assert_eq!(h.lamports(&escrow2), before, "back to its minimum");
-    assert_eq!(h.lamports(&buyer.pubkey()), buyer_sol + 30_000_000, "the stray SOL went to the creator");
-    println!("accepted, note: stray SOL goes to the creator, from a never-funded escrow at close ({rent_lamports} lamports) and from a receipt by sweep_rent");
+    assert_eq!(h.lamports(&h.payer.pubkey()), payer_sol + 30_000_000 - 5_000, "the stray SOL went to the payer");
+    assert_eq!(h.lamports(&buyer.pubkey()), buyer_sol, "none to the creator");
+    println!("accepted, note: stray SOL goes to the creator from a never-funded escrow at close ({rent_lamports} lamports), and to the payer from a receipt by sweep_rent");
 }
 
 /// Released, then paid again at the old address: the state `recover_late` is for.
@@ -742,7 +755,7 @@ fn a_missing_buyer_account_is_made_in_the_same_transaction_by_whoever_sends_the_
 }
 
 #[test]
-fn sweep_pays_only_the_recorded_rent_recipient_and_only_from_an_escrow() {
+fn sweep_pays_only_the_recorded_payer_and_only_from_an_escrow() {
     let mut h = Harness::new();
     let thief = Keypair::new();
     let escrow = h.funded(&h.terms(1));
@@ -752,8 +765,10 @@ fn sweep_pays_only_the_recorded_rent_recipient_and_only_from_an_escrow() {
 
     let err = h.send(&[sweep_rent_ix(escrow, thief.pubkey())], &[]).expect_err("to a thief");
     assert!(err.contains("ConstraintHasOne"), "{err}");
-    let err = h.send(&[sweep_rent_ix(escrow, h.payer.pubkey())], &[]).expect_err("to the key that fronted the rent");
-    assert!(err.contains("ConstraintHasOne"), "{err}");
+    for (who, key) in [("the creator", h.buyer.pubkey()), ("the seller", h.seller.pubkey())] {
+        let err = h.send(&[sweep_rent_ix(escrow, key)], &[]).expect_err(who);
+        assert!(err.contains("ConstraintHasOne"), "{who}: {err}");
+    }
     // Something that is not an escrow: its deposit account, and an escrow-shaped account another
     // program owns.
     let err = h.send(&[sweep_rent_ix(s.vault, h.payer.pubkey())], &[]).expect_err("a token account");
@@ -766,9 +781,9 @@ fn sweep_pays_only_the_recorded_rent_recipient_and_only_from_an_escrow() {
     let err = h.send(&[sweep_rent_ix(forged, h.payer.pubkey())], &[]).expect_err("forged");
     assert!(err.contains("AccountOwnedByWrongProgram"), "{err}");
     assert_eq!(h.account(&escrow).lamports, before.lamports, "nothing moved");
-    h.sweep(&escrow).expect("to the rent recipient");
+    h.sweep(&escrow).expect("to the payer");
     assert_eq!(h.lamports(&escrow), (128 + ESCROW_LEN as u64) * RENT_FINAL);
-    println!("rejected as expected: the sweep pays only the recorded rent recipient (the creator), and only from an escrow");
+    println!("rejected as expected: the sweep pays only the recorded payer, and only from an escrow");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -813,6 +828,7 @@ fn finding_a_reused_deposit_address_adopts_a_stranger_buyers_money() {
         buyer_tokens: refund_address(&buyer_b.pubkey(), &h.mint),
         seller_tokens: h.seller_tokens,
         rent_recipient: seller.pubkey(),
+        ..h.accounts(&escrow)
     };
     h.send(&[release_to_seller_ix(&s, buyer_b.pubkey())], &[&buyer_b]).expect("buyer B releases to the seller");
     assert_eq!(h.balance(&h.seller_tokens), AMOUNT, "the seller has buyer A's money");
@@ -869,25 +885,33 @@ fn finding_a_frozen_seller_account_blocks_only_the_ways_out_that_pay_the_seller(
 }
 
 #[test]
-fn close_unfunded_after_a_sweep_returns_what_is_left_to_the_creator() {
+fn close_unfunded_after_a_sweep_returns_the_excess_to_the_payer_and_the_rest_to_the_creator() {
     // A never-funded escrow can be swept as its rent minimum falls, and then closed. The two must
-    // compose: the sweep leaves the escrow account at exactly the current minimum, and the close
-    // returns that (and the deposit account's rent) to the creator, with no underflow and nothing
-    // stranded.
+    // compose: the sweep sends the excess to the payer and leaves the escrow account at exactly the
+    // current minimum; the close returns that (and the deposit account's rent) to the creator, with
+    // no underflow and nothing stranded.
     let mut h = Harness::new();
     h.svm.set_sysvar(&rent_at(6_960)); // the older, higher rate, so the cut leaves an excess
     let buyer = h.buyer.insecure_clone();
-    let (escrow, _) = h.create(&h.terms(1)).expect("create at the old rate");
+    let sponsor = h.someone();
+    let a = CreateAccounts { payer: sponsor.pubkey(), ..h.create_accounts() };
+    h.send(&[create_ix(&h.terms(1), &a)], &[&buyer, &sponsor]).expect("create at the old rate, the sponsor paying");
+    let escrow = escrow_address(&buyer.pubkey(), 1);
     let vault = vault_address(&escrow, &h.mint);
     h.svm.set_sysvar(&rent_at(RENT_FINAL)); // the cut lands
-    let creator_before = h.lamports(&buyer.pubkey());
+    let minimum = (128 + ESCROW_LEN as u64) * RENT_FINAL;
+    let excess = h.lamports(&escrow) - minimum;
+    let (creator_before, sponsor_before) = (h.lamports(&buyer.pubkey()), h.lamports(&sponsor.pubkey()));
 
-    h.sweep(&escrow).expect("sweep the escrow's excess to the creator");
-    assert_eq!(h.lamports(&escrow), (128 + ESCROW_LEN as u64) * RENT_FINAL, "left at exactly the new minimum");
+    h.sweep(&escrow).expect("sweep the escrow's excess to the payer");
+    assert_eq!(h.lamports(&escrow), minimum, "left at exactly the new minimum");
+    assert_eq!(h.lamports(&sponsor.pubkey()), sponsor_before + excess);
 
+    let vault_rent = h.lamports(&vault);
     h.close_unfunded(&escrow, &buyer).expect("close after the sweep");
     h.assert_closed(&escrow, "escrow");
     h.assert_closed(&vault, "vault");
-    assert!(h.lamports(&buyer.pubkey()) > creator_before, "the creator got the excess and then the remaining rent");
-    println!("a sweep then a close compose: the creator gets the excess and the remaining rent, nothing stranded");
+    assert_eq!(h.lamports(&buyer.pubkey()), creator_before + minimum + vault_rent, "the creator gets what is left of both rents");
+    assert_eq!(h.lamports(&sponsor.pubkey()), sponsor_before + excess, "and the payer only the excess");
+    println!("a sweep then a close compose: the payer gets the excess, the creator the remaining rent, nothing stranded");
 }

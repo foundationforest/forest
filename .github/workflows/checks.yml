@@ -1,18 +1,18 @@
 # Every package's checks, run together, so a merge that breaks a neighbour shows at once.
 #
 # On every pull request and every push to main, nothing running but the tests:
-#   node       each Node package's type-check and its tests that need no chain, the escrow's v2
-#              client included. records/ runs its hosts, its connections service and its approval
-#              page on loopback, the page in the runner's Chrome
-#   programs   the registry, the escrow and the escrow's v2 built as SBPF v3 (cargo build-sbf
-#              --arch v3), the format devnet runs them in, and their LiteSVM tests
+#   node       each Node package's type-check and its tests that need no chain. records/ runs its
+#              hosts, its connections service and its approval page on loopback, the page in the
+#              runner's Chrome
+#   programs   the registry and the escrow built as SBPF v3 (cargo build-sbf --arch v3), the
+#              format devnet runs them in, and their LiteSVM tests
 #
 # After every merge, a push to main:
 #   types      every package's type-check at once, on the merged commit (keys, records and the
-#              three clients), so two pull requests that pass alone cannot leave main broken together
+#              two clients), so two pull requests that pass alone cannot leave main broken together
 #
 # Nightly, and by hand from the Actions tab, because they are slow or need a validator:
-#   validator  the registry client's and the escrow client's tests on a local validator
+#   validator  the registry client's tests on a local validator
 #   fuzz       the registry's property test at 1,000 iterations; the escrow's fuzzer at 50,000,
 #              on an SBPF v0 build of the escrow: Trident 0.12's runtime starts with every feature
 #              off, so it runs only v0 programs and refuses a v3 build on its first create. That is
@@ -59,8 +59,6 @@ jobs:
             install: registry/client
           - package: escrow/client
             install: escrow/client
-          - package: escrow/v2/client
-            install: escrow/v2/client
     env:
       CHROME_PATH: /usr/bin/google-chrome
     steps:
@@ -89,9 +87,9 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
       - name: Install
-        run: for dir in keys records registry/client escrow/client escrow/v2/client; do (cd "$dir" && npm ci --no-audit --no-fund); done
+        run: for dir in keys records registry/client escrow/client; do (cd "$dir" && npm ci --no-audit --no-fund); done
       - name: Type-check every package
-        run: for dir in keys records registry/client escrow/client escrow/v2/client; do echo "== $dir"; (cd "$dir" && npm run check); done
+        run: for dir in keys records registry/client escrow/client; do echo "== $dir"; (cd "$dir" && npm run check); done
 
   programs:
     runs-on: ubuntu-latest
@@ -117,16 +115,13 @@ jobs:
             registry/program/tests-litesvm
             escrow/program
             escrow/program/tests-litesvm
-            escrow/v2/program
-            escrow/v2/program/tests-litesvm
       - name: Build the programs, SBPF v3
         run: |
           (cd registry/program && cargo build-sbf --arch v3)
           (cd escrow/program && cargo build-sbf --arch v3)
-          (cd escrow/v2/program && cargo build-sbf --arch v3)
-          sha256sum registry/program/target/deploy/*.so escrow/program/target/deploy/*.so escrow/v2/program/target/deploy/*.so
+          sha256sum registry/program/target/deploy/*.so escrow/program/target/deploy/*.so
           # The ELF header's e_flags is the SBPF version: refuse anything but v3.
-          for so in registry/program/target/deploy/*.so escrow/program/target/deploy/*.so escrow/v2/program/target/deploy/*.so; do
+          for so in registry/program/target/deploy/*.so escrow/program/target/deploy/*.so; do
             v=$(od -An -t u4 -j 48 -N 4 "$so" | tr -d ' ')
             echo "$so: SBPF v$v"
             [ "$v" = 3 ]
@@ -137,16 +132,12 @@ jobs:
       - name: Escrow, LiteSVM
         working-directory: escrow/program/tests-litesvm
         run: cargo test
-      - name: Escrow v2, LiteSVM
-        working-directory: escrow/v2/program/tests-litesvm
-        run: cargo test
       - uses: actions/upload-artifact@v7
         with:
           name: programs
           path: |
             registry/program/target/deploy/*.so
             escrow/program/target/deploy/*.so
-            escrow/v2/program/target/deploy/*.so
 
   validator:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -175,15 +166,10 @@ jobs:
           name: programs
       - name: Install, and the registry's proving files
         run: |
-          for dir in registry/artifacts registry/client escrow/client; do (cd "$dir" && npm ci --no-audit --no-fund); done
+          for dir in registry/artifacts registry/client; do (cd "$dir" && npm ci --no-audit --no-fund); done
           (cd registry/artifacts && npm run fetch)
       - name: Registry client
         working-directory: registry/client
-        run: |
-          npm run test:validator | tee "$RUNNER_TEMP/tap"
-          grep -qx '# skipped 0' "$RUNNER_TEMP/tap"
-      - name: Escrow client
-        working-directory: escrow/client
         run: |
           npm run test:validator | tee "$RUNNER_TEMP/tap"
           grep -qx '# skipped 0' "$RUNNER_TEMP/tap"
@@ -223,7 +209,7 @@ jobs:
         working-directory: escrow/program
         run: |
           cargo build-sbf --arch v0
-          [ "$(od -An -t u4 -j 48 -N 4 target/deploy/forest_escrow.so | tr -d ' ')" = 0 ]
+          [ "$(od -An -t u4 -j 48 -N 4 target/deploy/forest_escrow_v2.so | tr -d ' ')" = 0 ]
       - name: Escrow, fuzzer, 50,000 iterations (exit 99 if an invariant broke)
         working-directory: escrow/program/trident-tests
         run: TRIDENT_WITH_EXIT_CODE=1 FOREST_FUZZ_ITERATIONS=50000 cargo run --release --bin fuzz_escrow

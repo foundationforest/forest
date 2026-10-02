@@ -16,12 +16,12 @@
 #    (label `payer`, which registry/client/scripts/devnet.ts sends from) are written to
 #    FOREST_DEVNET_KEYS (default ~/.forest-devnet/keys), never under the repo. The deploy key and
 #    the payer must be the ones devnet/devnet.json names, and the id must be no program that file,
-#    escrow/v2/devnet/devnet.json or this folder's devnet.json (its `earlier`) names.
+#    escrow/devnet/devnet.json or this folder's devnet.json (its `earlier`) names.
 # 2. Build. registry/program's Cargo.toml, Cargo.lock and src are copied into
 #    registry/devnet/target/ (ignored), `declare_id!` alone is replaced with the devnet id, checked
 #    to appear exactly once, and the copy is built for SBPF v3.
-# 3. Deploy, unless the id already holds a program: the exact cost computed first as
-#    devnet/deploy.sh computes it, refused (exit 3) if the deploy key holds less. Writes go over RPC.
+# 3. Deploy, unless the id already holds a program: the exact cost computed first, the way Solana
+#    CLI 4.2.2 spends it, refused (exit 3) if the deploy key holds less. Writes go over RPC.
 # 4. Check the deployed bytes are the built ones, and record everything public in
 #    registry/devnet/devnet.json.
 #
@@ -36,7 +36,7 @@ root=$(cd "$here/../.." && pwd)
 out="$here/target"
 record="$here/devnet.json"
 base="$root/devnet/devnet.json"
-escrow2="$root/escrow/v2/devnet/devnet.json"
+escrow2="$root/escrow/devnet/devnet.json"
 keys="${FOREST_DEVNET_KEYS:-$HOME/.forest-devnet/keys}"
 rpc="${FOREST_DEVNET_RPC:-https://api.devnet.solana.com}"
 [ -n "${FOREST_DEVNET_SEED:-}" ] || { echo "FOREST_DEVNET_SEED is missing or empty" >&2; exit 1; }

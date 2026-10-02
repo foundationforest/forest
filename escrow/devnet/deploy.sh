@@ -1,37 +1,38 @@
 #!/usr/bin/env bash
-# Build the escrow, v2, for devnet and deploy it at its own address, beside v1 and the earlier v2
-# deploy, which it never touches: their program ids, keypairs and records are only read.
+# Build the escrow for devnet and deploy it at its own address, beside v1 (an earlier program, no
+# longer in this repo) and the earlier deploy of this one, which it never touches: their program
+# ids, keypairs and records are only read.
 #
-#   FOREST_DEVNET_SEED=<the phrase> escrow/v2/devnet/deploy.sh
+#   FOREST_DEVNET_SEED=<the phrase> escrow/devnet/deploy.sh
 #
-# 1. Keys. The v2 program id is the key devnet/keys.sh's recipe derives from the phrase under the
-#    label `escrow-v2-program-2` (the first v2 deploy, classic tokens only, used
-#    `escrow-v2-program`; it stays where it is, never upgraded, recorded under `earlier`):
+# 1. Keys. The program id is the key devnet/keys.sh's recipe derives from the phrase under the
+#    label `escrow-v2-program-2` (the first deploy, classic tokens only, used `escrow-v2-program`;
+#    it is closed, and recorded under `earlier`):
 #
 #      seed = PBKDF2-HMAC-SHA256(phrase NFKD-trimmed-single-spaced, "forest-devnet:escrow-v2-program-2",
 #                                600,000 iterations, 32 bytes);  key = ed25519 from that seed
 #
-#    It and the deploy key (label `deploy`, which pays and keeps the upgrade authority, as for v1)
+#    It and the deploy key (label `deploy`, which pays and keeps the upgrade authority)
 #    are written to FOREST_DEVNET_KEYS (default ~/.forest-devnet/keys), never under the repo. The
-#    deploy key must be the one devnet/devnet.json names, and the v2 id must be none of the
+#    deploy key must be the one devnet/devnet.json names, and the id must be none of the
 #    programs that file and this record's `earlier` name.
-# 2. Build. escrow/v2/program's Cargo.toml, Cargo.lock and src are copied into
-#    escrow/v2/devnet/target/ (ignored), `declare_id!` alone is replaced with the v2 id, checked to
+# 2. Build. escrow/program's Cargo.toml, Cargo.lock and src are copied into
+#    escrow/devnet/target/ (ignored), `declare_id!` alone is replaced with the devnet id, checked to
 #    appear exactly once, and the copy is built for SBPF v3.
 # 3. Deploy a fresh id, or upgrade it in place when it holds other bytes (the same bytes are left
-#    as they are): the exact cost computed first as devnet/deploy.sh computes it, refused (exit 3)
-#    if the deploy key holds less. Writes go over RPC.
+#    as they are): the exact cost computed first, the way Solana CLI 4.2.2 spends it, refused
+#    (exit 3) if the deploy key holds less. Writes go over RPC.
 # 4. Check the deployed bytes are the built ones, and record everything public in
-#    escrow/v2/devnet/devnet.json.
+#    escrow/devnet/devnet.json.
 #
 # FOREST_DEVNET_RPC points the Solana CLI at another devnet RPC; the record always names the
 # public one, so a keyed URL never lands in the repo. Devnet is not sealed: the upgrade authority
-# stays on the deploy key. Sealing is the mainnet step (`--final`, in escrow/v2/README.md).
+# stays on the deploy key. Sealing is the mainnet step (`--final`, in escrow/README.md).
 
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
-root=$(cd "$here/../../.." && pwd)
+root=$(cd "$here/../.." && pwd)
 out="$here/target"
 record="$here/devnet.json"
 base="$root/devnet/devnet.json"
@@ -86,8 +87,8 @@ deployer=$(solana-keygen pubkey "$keys/deploy.json")
 # 2. Build.
 rm -rf "$out/program"
 mkdir -p "$out/program"
-cp "$root/escrow/v2/program/Cargo.toml" "$root/escrow/v2/program/Cargo.lock" "$out/program/"
-cp -r "$root/escrow/v2/program/src" "$out/program/src"
+cp "$root/escrow/program/Cargo.toml" "$root/escrow/program/Cargo.lock" "$out/program/"
+cp -r "$root/escrow/program/src" "$out/program/src"
 node - "$out/program/src/lib.rs" "$id" <<'JS'
 const fs = require('fs')
 const [file, id] = process.argv.slice(2)
@@ -98,8 +99,8 @@ if (text.split(from).length !== 2) throw new Error(`${file}: expected exactly on
 fs.writeFileSync(file, text.replace(from, to))
 JS
 echo "the substitution, against the committed source:"
-diff -u "$root/escrow/v2/program/src/lib.rs" "$out/program/src/lib.rs" | grep -E '^[-+][^-+]' || true
-others=$(diff -rq "$root/escrow/v2/program/src" "$out/program/src" | grep -v '/lib.rs and ' || true)
+diff -u "$root/escrow/program/src/lib.rs" "$out/program/src/lib.rs" | grep -E '^[-+][^-+]' || true
+others=$(diff -rq "$root/escrow/program/src" "$out/program/src" | grep -v '/lib.rs and ' || true)
 [ -z "$others" ] || { echo "more than lib.rs differs: $others" >&2; exit 1; }
 (cd "$out/program" && cargo build-sbf --arch v3 >"$out/build.log" 2>&1) || { tail -40 "$out/build.log"; exit 1; }
 so="$out/forest_escrow_v2.so"
@@ -187,7 +188,7 @@ node - "$record" "$out" "$id" "$built" "$so" "$mode" <<'JS'
 const fs = require('fs')
 const [recordPath, out, id, sha, so, mode] = process.argv.slice(2)
 const record = fs.existsSync(recordPath) ? JSON.parse(fs.readFileSync(recordPath, 'utf8')) : {
-  note: 'The devnet deploy of the escrow, v2, beside v1 (devnet/devnet.json), which it does not touch. Public keys, addresses and signatures only. The program id is derived from the devnet phrase under the label escrow-v2-program-2; the other keys are the ones devnet/devnet.json names. Written by escrow/v2/devnet/deploy.sh and escrow/v2/client/scripts/devnet.ts.',
+  note: 'The devnet deploy of the escrow (version 2), beside v1 (devnet/devnet.json), which it does not touch. Public keys, addresses and signatures only. The program id is derived from the devnet phrase under the label escrow-v2-program-2; the other keys are the ones devnet/devnet.json names. Written by escrow/devnet/deploy.sh and escrow/client/scripts/devnet.ts.',
   cluster: 'devnet',
   rpc: 'https://api.devnet.solana.com',
 }
