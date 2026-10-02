@@ -1,5 +1,6 @@
 // From an offer's terms to the terms an escrow is created with, and back: what a person checks
-// before they work or pay, when the timer is due, and what a split pays.
+// before they work or pay, when the timer is due, until when a party may object, and what a split
+// pays.
 //
 // An offer's `terms` block is optional and holds only the escrow's two options, each off unless set
 // (`records/schemas/offer.json`, `terms`): `arbiter`, a key that may decide any split, and `timer`,
@@ -145,18 +146,32 @@ export function assertOptionsAgreed(args: Parameters<typeof optionsNotAgreed>[0]
 }
 
 /**
- * When the timer is due, in unix seconds: `timer_release` succeeds from this second on. Null with
- * no timer, before the funding is marked, or once the escrow has ended.
+ * When the timer is due, in unix seconds: `timer_release` succeeds from this second on, and an
+ * objection only before it. Null with no timer, before the funding is marked, once a party
+ * objected, or once the escrow has ended.
  */
-export function timerDueAt(e: Pick<EscrowAccount, 'timer' | 'fundedAt' | 'status'>): bigint | null {
-  if (!e.timer || e.status !== 'funded' || e.fundedAt === null) return null
+export function timerDueAt(e: Pick<EscrowAccount, 'timer' | 'fundedAt' | 'status' | 'objection'>): bigint | null {
+  if (!e.timer || e.objection || e.status !== 'funded' || e.fundedAt === null) return null
   return e.fundedAt + BigInt(e.timer.days) * SECONDS_PER_DAY
 }
 
+const nowSeconds = () => BigInt(Math.floor(Date.now() / 1000))
+
 /** Whether `timer_release` succeeds at `now` (unix seconds; default: now), the balance aside. */
-export function timerDue(e: Pick<EscrowAccount, 'timer' | 'fundedAt' | 'status'>, now: bigint = BigInt(Math.floor(Date.now() / 1000))): boolean {
+export function timerDue(e: Pick<EscrowAccount, 'timer' | 'fundedAt' | 'status' | 'objection'>, now: bigint = nowSeconds()): boolean {
   const due = timerDueAt(e)
   return due !== null && now >= due
+}
+
+/**
+ * Whether an objection lands at `now` (unix seconds; default: now), from either party: the escrow
+ * is live, nobody objected yet, and its timer, if one runs, is not yet due. The chain's clock
+ * decides; an objection sent in the last seconds may land after them.
+ */
+export function canObject(e: Pick<EscrowAccount, 'timer' | 'fundedAt' | 'status' | 'objection'>, now: bigint = nowSeconds()): boolean {
+  if (e.status === 'ended' || e.objection) return false
+  const due = timerDueAt(e)
+  return due === null || now < due
 }
 
 /**

@@ -1,5 +1,5 @@
 {
-  "note": "The devnet deploy of the escrow, v2, beside v1 (devnet/devnet.json), which it does not touch. Public keys, addresses and signatures only. The program id is derived from the devnet phrase under the label escrow-v2-program-2; the other keys are the ones devnet/devnet.json names. Written by escrow/v2/devnet/deploy.sh and escrow/v2/client/scripts/devnet.ts. `earlier` keeps the first v2 deploy's record, as it was.",
+  "note": "The devnet deploy of the escrow (version 2), beside v1 (devnet/devnet.json), which it does not touch. Public keys, addresses and signatures only. The program id is derived from the devnet phrase under the label escrow-v2-program-2; the other keys are the ones devnet/devnet.json names. Written by escrow/devnet/deploy.sh and escrow/client/scripts/devnet.ts. `earlier` keeps the first v2 deploy's record, as it was.",
   "cluster": "devnet",
   "rpc": "https://api.devnet.solana.com",
   "escrow": {

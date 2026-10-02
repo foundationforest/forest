@@ -1,7 +1,8 @@
 //! The one account, and the size it keeps forever.
 //!
 //! The layout is sealed with the program: clients and indexes read these bytes for as long as
-//! the program lives. Nothing may grow, shrink or be reordered in v1.
+//! the program lives. Nothing may grow, shrink or be reordered in v2. The first 256 bytes are
+//! v1's, field for field; v2 appends the payer and the objection after them.
 
 use anchor_lang::prelude::*;
 
@@ -19,7 +20,7 @@ pub enum Side {
 }
 
 /// The optional timer, as `create` takes it: this many whole days after the funding is marked,
-/// anyone may send everything to `to`.
+/// anyone may send everything to `to`, unless a party objected first.
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Timer {
     pub days: u16,
@@ -34,8 +35,9 @@ pub enum Status {
     Open,
     /// `mark_funded` saw the deposit account holding the amount, at `funded_at`.
     Funded,
-    /// Paid out. `outcome`, `ended_at`, `to_seller` and `to_buyer` say how. Nothing more happens
-    /// to it but late money going back to the buyer and rent above the minimum to the creator.
+    /// Paid out. `outcome`, `funded_at`, `ended_at`, `to_seller` and `to_buyer` say how. Nothing
+    /// more happens to it but late money going back to the buyer and rent above the minimum to
+    /// the payer.
     Ended,
 }
 
@@ -54,13 +56,22 @@ pub enum Outcome {
     TimerReleased,
 }
 
+/// Whether a party objected, and which. Stored as one byte: none 0, the buyer 1, the seller 2.
+/// Its own byte, never read from a time: a zero clock must not read as "nobody objected".
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Objection {
+    None,
+    Buyer,
+    Seller,
+}
+
 /// One escrow. Address: `["escrow", creator, id]`, where the creator is the party who opened it
 /// and signed `create`: nobody can open an escrow at an address another key will use. Never
 /// closed once it has ended: its deposit account closes and its rent goes back, and this account
 /// stays as the receipt. Only an escrow that never held the amount is closed (`close_unfunded`).
 #[account]
 pub struct Escrow {
-    /// `crate::VERSION`. A v2 is a new program; this says which program's rules a record followed.
+    /// `crate::VERSION`. A v3 is a new program; this says which program's rules a record followed.
     pub version: u8,
     /// Chosen at creation, so one creator can open many escrows. The app picks it at random.
     pub id: u64,
@@ -68,14 +79,15 @@ pub struct Escrow {
     pub seller: Pubkey,
     /// The zero key when no arbiter was named.
     pub arbiter: Pubkey,
+    /// A mint of the classic SPL Token program or of Token-2022; whichever owns it is the token
+    /// program every instruction here names. Not stored: a mint's owner never changes.
     pub mint: Pubkey,
-    /// The deposit account: this escrow's associated token account for `mint`. Derivable from
-    /// the escrow address alone, and recorded so a reader need not derive it.
+    /// The deposit account: this escrow's associated token account for `mint`, under the mint's
+    /// token program. Derivable from the escrow address and the mint, and recorded so a reader
+    /// need not derive it.
     pub vault: Pubkey,
-    /// Where every rent refund goes: the creator's key, always, whoever fronted the rent. The
-    /// deposit account's rent comes back here at the end; the escrow account's stays in the
-    /// receipt, unless the escrow never held the amount; rent above the minimum is swept here. A
-    /// fee payer that fronts the rent charges the person for it, so the refund goes to the person.
+    /// Where the deposit account's rent goes at every ending, and both rents at `close_unfunded`:
+    /// the creator's key, always, whoever fronted the rent.
     pub rent_recipient: Pubkey,
     /// The agreed amount, in the mint's base units. The escrow is funded once the deposit account
     /// holds at least this much; every way out then pays out the whole balance, whatever it is.
@@ -87,8 +99,9 @@ pub struct Escrow {
     /// The side the timer pays. Meaningless when `timer_days` is 0, and then stored as `Buyer`.
     pub timer_to: Side,
     pub created_at: i64,
-    /// When `mark_funded` saw the deposit account holding the amount, or 0. The timer counts from
-    /// here and from nothing else.
+    /// When the program first saw the deposit account holding the amount: `mark_funded`'s time,
+    /// or, if nobody marked it, the ending's. 0 until one of them runs. The timer counts from the
+    /// mark and from nothing else.
     pub funded_at: i64,
     pub status: Status,
     pub bump: u8,
@@ -100,14 +113,23 @@ pub struct Escrow {
     /// deposit account held. Zero before the end.
     pub to_seller: u64,
     pub to_buyer: u64,
+    // ---- v2 from here on; everything above is v1's layout, byte for byte. ----
+    /// The key that signed `create` as payer and fronted both rents. Rent above the escrow
+    /// account's minimum, which Solana's rent cuts free, goes back here (`sweep_rent`).
+    pub payer: Pubkey,
+    /// Which party objected, if one did. Once one has, the timer never runs.
+    pub objection: Objection,
+    /// When the objection was made, or 0. Read only for the record: `objection` says whether.
+    pub objected_at: i64,
 }
 
 impl Escrow {
     /// version 0, id 1..9, buyer 9..41, seller 41..73, arbiter 73..105, mint 105..137,
     /// vault 137..169, rent_recipient 169..201, amount 201..209, creator 209, timer_days 210..212,
     /// timer_to 212, created_at 213..221, funded_at 221..229, status 229, bump 230,
-    /// ended_at 231..239, outcome 239, to_seller 240..248, to_buyer 248..256.
-    pub const LEN: usize = 1 + 8 + 32 * 6 + 8 + 1 + 2 + 1 + 8 + 8 + 1 + 1 + 8 + 1 + 8 + 8;
+    /// ended_at 231..239, outcome 239, to_seller 240..248, to_buyer 248..256, payer 256..288,
+    /// objection 288, objected_at 289..297.
+    pub const LEN: usize = 1 + 8 + 32 * 6 + 8 + 1 + 2 + 1 + 8 + 8 + 1 + 1 + 8 + 1 + 8 + 8 + 32 + 1 + 8;
 
     pub fn has_arbiter(&self) -> bool {
         self.arbiter != Pubkey::default()
@@ -117,8 +139,12 @@ impl Escrow {
         self.timer_days != 0
     }
 
-    /// Open or funded: the only states any way out, `mark_funded` or `close_unfunded` runs from.
-    /// An allowlist, so a state added later is refused by default.
+    pub fn objected(&self) -> bool {
+        self.objection != Objection::None
+    }
+
+    /// Open or funded: the only states any way out, `mark_funded`, `object` or `close_unfunded`
+    /// runs from. An allowlist, so a state added later is refused by default.
     pub fn live(&self) -> bool {
         matches!(self.status, Status::Open | Status::Funded)
     }
@@ -131,22 +157,26 @@ impl Escrow {
         }
     }
 
-    /// The buyer's refund address: the buyer's associated token account for the mint, the one
-    /// account any payout to the buyer lands in. Computed from two keys fixed at creation, so
-    /// nothing more is stored, and nobody who sends an instruction can name another.
-    pub fn refund_address(&self) -> Pubkey {
-        anchor_spl::associated_token::get_associated_token_address(&self.buyer, &self.mint)
+    /// The buyer's refund address: the buyer's associated token account for the mint, under the
+    /// mint's token program, the one account any payout to the buyer lands in. Computed from two
+    /// keys fixed at creation and the program that owns the mint (every caller has checked
+    /// `token_program` is it), so nothing more is stored, and nobody who sends an instruction
+    /// can name another.
+    pub fn refund_address(&self, token_program: &Pubkey) -> Pubkey {
+        anchor_spl::associated_token::get_associated_token_address_with_program_id(&self.buyer, &self.mint, token_program)
     }
 
     /// The seller's payout address: the seller's associated token account for the mint, the one
     /// account any payout to the seller lands in. The same rule as the buyer's.
-    pub fn payout_address(&self) -> Pubkey {
-        anchor_spl::associated_token::get_associated_token_address(&self.seller, &self.mint)
+    pub fn payout_address(&self, token_program: &Pubkey) -> Pubkey {
+        anchor_spl::associated_token::get_associated_token_address_with_program_id(&self.seller, &self.mint, token_program)
     }
 
     /// When the timer is due: `timer_days` whole days after the funding was marked. `None` with no
-    /// timer or unless the status is `Funded`. The one time gate in the program. It reads the
-    /// status, never a zero `funded_at`, to tell whether the funding was marked.
+    /// timer or unless the status is `Funded`. The one time gate in the program: `timer_release`
+    /// runs from this second on, and `object` only before it. It reads the status, never a zero
+    /// `funded_at`, to tell whether the funding was marked. It does not read the objection: each
+    /// caller checks that itself, with its own error.
     pub fn timer_due(&self) -> Result<Option<i64>> {
         if !self.has_timer() || self.status != Status::Funded {
             return Ok(None);

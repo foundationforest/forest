@@ -71,11 +71,13 @@ Forest goes here, in the same form.
 - **Receipts never close:** a review points at a receipt forever.
 - **No seller signature at `create`:** it would stop anyone paying an offline seller, and break paying
   in one tap. The receipt records who created it instead.
-- **v1 takes classic tokens only; v2 also takes Token-2022, but refuses a transfer fee or a token that
-  cannot be transferred:** a fee takes part of every payment while every way out pays the whole
-  balance, and an untransferable token could never leave.
-- **v2: either party may object once, until the timer is due, and the timer is then off:** one
-  deadline for both means they never race.
+- **One escrow program; v1 left the repo:** new deals were already meant to use v2, and one program
+  is one set of rules for an app to show and for anyone to check.
+- **The escrow takes classic and Token-2022 tokens, but refuses a transfer fee or a token that cannot
+  be transferred:** a fee takes part of every payment while every way out pays the whole balance,
+  and an untransferable token could never leave.
+- **Either party may object once, until the timer is due, and the timer is then off:** one deadline
+  for both means they never race.
 
 ## Repo
 

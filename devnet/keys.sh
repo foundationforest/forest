@@ -76,7 +76,7 @@ const keys = {
   testDollarAuthority: pk['test-dollar-authority'],
 }
 const fresh = {
-  note: 'The devnet deploy of both programs. Public keys, addresses and signatures only. Every key is derived from one phrase (devnet/keys.sh), which is kept in no file and nowhere in this repo. Written by devnet/keys.sh, devnet/deploy.sh and the devnet scripts in registry/client and escrow/client; read by their devnet smoke tests. See docs/devnet.md.',
+  note: 'The devnet deploy of both programs. Public keys, addresses and signatures only. Every key is derived from one phrase (devnet/keys.sh), which is kept in no file and nowhere in this repo. Written by devnet/keys.sh and the devnet scripts in registry/ and escrow/, which read it. See docs/devnet.md.',
   cluster: 'devnet',
   rpc: 'https://api.devnet.solana.com',
   keys,

@@ -141,6 +141,3 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
-
-# devnet: the builds devnet/build.sh makes from a copy of the source
-devnet/target/
