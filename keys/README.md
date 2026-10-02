@@ -119,8 +119,6 @@ From the list secret on, Semaphore's own hashes take over (below).
 - **No wiping of memory.** JavaScript cannot promise that bytes are erased; an app closes the
   page, the library cannot.
 - **Tests run in Node.** No password manager is tested here.
-- **Not used yet by the registry.** `records/` takes its keys and test vectors from here; the
-  registry's tests still use fixed values from an older recipe (a passkey, numbered profiles).
 
 ## Use it
 

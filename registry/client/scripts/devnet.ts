@@ -1,6 +1,7 @@
 // The registry on devnet, used for real: a relayer pays for one row, which the profile signs, for a
 // person on a stand-in keeper's list; then the refusal of a second row for the same market stamp,
-// and a refund.
+// and a refund. A row an earlier test person left is moved to `earlierRows` in the record, with
+// whatever it holds above its minimum refunded: rows never close, so it stays on chain.
 //
 //   FOREST_DEVNET_KEYS=<dir> node scripts/devnet.ts        (after registry/devnet/deploy.sh)
 //
@@ -10,10 +11,11 @@
 // (FOREST_DEVNET_RECORD overrides the path; FOREST_DEVNET_RPC the endpoint). Each step checks the
 // chain first and is skipped if it is done, so the script can be run again after a failure.
 //
-// The person is the keys recipe's pinned test seed (`keys/test/vectors.json`): their secret for
-// the keeper's list comes from it through `keys/` itself. The keeper, its list and the profiles are
-// stand-ins this script makes, each key from a fixed text, and are recorded as such: no keeper
-// publishes a list yet, and the registry does not care how a profile key was made.
+// The person is keys/'s pinned test seed (`keys/test/vectors.json`): their secret for the keeper's
+// list and their two profiles (freelance/seller, which the row names, and freelance/buyer, which
+// tries for the same market stamp) come from it through `keys/` itself. The keeper and its list
+// are stand-ins this script makes, the keeper's key from a fixed text, and are recorded as such: no
+// keeper publishes a list yet.
 
 import { readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
@@ -23,7 +25,7 @@ import { ed25519 } from '@noble/curves/ed25519.js'
 import { sha256 } from '@noble/hashes/sha2.js'
 import { Connection, Keypair, PublicKey, SystemProgram, Transaction, VersionedTransaction } from '@solana/web3.js'
 
-import { listIdentity, listSecret } from '../../../keys/src/index.ts'
+import { listSecret, profileKey } from '../../../keys/src/index.ts'
 import {
   buildRegistration,
   fetchRow,
@@ -122,12 +124,11 @@ const blockhash = async () => (await connection.getLatestBlockhash('confirmed'))
 
 console.log(`registry ${programId.toBase58()} on ${rpc}`)
 
-// The person: the keys recipe's pinned test seed, and their secret for the stand-in keeper's list.
+// The person: keys/'s pinned test seed, and their secret for the stand-in keeper's list.
 const vectors = JSON.parse(readFileSync(join(here, '../../../keys/test/vectors.json'), 'utf8'))
 const seed = Buffer.from(vectors.seed, 'hex')
 const keeper = standIn('keeper')
-const secret = await listSecret(seed, keeper.publicKey.toBase58())
-const { stamp } = await listIdentity(seed, keeper.publicKey.toBase58())
+const { secret, stamp } = await listSecret(seed, keeper.publicKey.toBase58())
 if (stampOf(secret) !== stamp) throw new Error('keys/ and the client disagree on the stamp')
 
 // The keeper's list: strangers' stamps around the person's, and the keeper's signature on its root.
@@ -136,25 +137,51 @@ const stamps = [stranger(1), stranger(2), stamp, stranger(3), stranger(4)]
 const root = listRoot(stamps)
 const keeperSignature = ed25519.sign(rootBytes(root), standInSeed('keeper'))
 
-// Two profiles the person holds: the row's, and a second one the registry refuses on this list.
-const profile = standIn(`profile ${LABEL}`)
-const second = standIn(`second profile ${LABEL}`)
+// Two profiles the person holds, both from keys/: the row's, and a second one the registry refuses
+// on this list.
+const profile = Keypair.fromSeed((await profileKey(seed, LABEL)).privateKey)
+const second = Keypair.fromSeed((await profileKey(seed, 'freelance/buyer')).privateKey)
 const marketStamp = marketStampOf(secret, LABEL)
 const address = rowAddress(marketStamp, programId)
 const artifacts = {
   wasm: join(here, '../../artifacts/semaphore-32.wasm'),
   zkey: join(here, '../../artifacts/semaphore-32.zkey'),
 }
+
+// A row an earlier test person left: moved to earlierRows, and refunded whatever it holds above
+// its minimum. Rows never close, so the row itself stays on chain for good.
+if (record.row && record.row.marketStamp !== hex(toBytes32(marketStamp))) {
+  const old = new PublicKey(record.row.address)
+  const info = await connection.getAccountInfo(old, 'confirmed')
+  if (!info) throw new Error(`the earlier row ${old.toBase58()} is not on chain`)
+  const minimum = await connection.getMinimumBalanceForRentExemption(info.data.length, 'confirmed')
+  let refunded: { signature: string; lamports: number } | null = null
+  if (info.lamports > minimum) {
+    const r = await sendLegacy(new Transaction().add(refundIx({ row: old, payer: payer.publicKey, programId })))
+    if (r.err) throw new Error(`refund of the earlier row failed: ${JSON.stringify(r.err)}`)
+    refunded = { signature: r.signature, lamports: info.lamports - minimum }
+    note('refund: the earlier row, down to its minimum', r.signature)
+  }
+  record.earlierRows ??= []
+  record.earlierRows.push({
+    ...record.row,
+    left: 'the test person before keys/ moved to its 00 01 … 1f test seed. A row never closes, so it stays, at its rent minimum.',
+    lastRefund: refunded ?? { lamports: 0, why: `it held ${info.lamports} lamports, exactly its minimum: nothing above it to refund` },
+  })
+  delete record.row
+  save()
+}
+
 record.row = {
   ...(record.row ?? {}),
-  what: "one row: the keys recipe's test seed, on a stand-in keeper's list, under freelance/seller, for a stand-in profile; the profile signs, a relayer (the payer) pays",
+  what: "one row: keys/'s test person (its test seed), on a stand-in keeper's list, under freelance/seller, for their freelance/seller profile; the profile signs, a relayer (the payer) pays",
   label: LABEL,
   profile: profile.publicKey.toBase58(),
   keeper: keeper.publicKey.toBase58(),
   list: { standIn: true, stamps: stamps.map(String), root: hex(toBytes32(root)), keeperSignature: hex(keeperSignature) },
   marketStamp: hex(toBytes32(marketStamp)),
   address: address.toBase58(),
-  standInKeys: "each stand-in key's private seed is sha256 of `forest devnet stand-in: <name>`, the names `keeper`, `profile freelance/seller` and `second profile freelance/seller`",
+  keys: "the profiles are keys/'s profileKey(test seed, 'freelance/seller') and (test seed, 'freelance/buyer'); the keeper's private seed is sha256 of `forest devnet stand-in: keeper`",
 }
 save()
 

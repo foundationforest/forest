@@ -70,12 +70,26 @@ test('the profile has one row and the keeper one, read the way any reader reads'
   const byProfile = await retry(() => fetchRows(connection, { profile: new PublicKey(record.row.profile), programId }))
   assert.equal(byProfile.length, 1)
   assert.equal(byProfile[0].address.toBase58(), record.row.address)
+  // The stand-in keeper's rows: this one, and any earlier test person's on the same keeper's list.
   const byKeeper = await retry(() => fetchRows(connection, { keeper: new PublicKey(record.row.keeper), programId }))
-  assert.deepEqual(byKeeper.map((r) => r.address.toBase58()), [record.row.address])
+  const earlier = (record.earlierRows ?? []).filter((r: { keeper: string }) => r.keeper === record.row.keeper).map((r: { address: string }) => r.address)
+  assert.deepEqual(byKeeper.map((r) => r.address.toBase58()).sort(), [record.row.address, ...earlier].sort())
+})
+
+test("an earlier test person's row is still on chain, unchanged, at its minimum: rows never close", { skip }, async () => {
+  for (const r of record.earlierRows ?? []) {
+    const row = await retry(() => fetchRow(connection, Buffer.from(r.marketStamp, 'hex'), { programId }))
+    assert.ok(row, `${r.address}: the row exists`)
+    assert.equal(row.profile.toBase58(), r.profile)
+    assert.equal(hex(row.root), r.list.root)
+    assert.equal(keeperSigned(row), true)
+    const info = await retry(() => connection.getAccountInfo(new PublicKey(r.address)))
+    assert.equal(info?.lamports, await retry(() => connection.getMinimumBalanceForRentExemption(info!.data.length)))
+  }
 })
 
 test('every recorded transaction landed, and only the refusal failed', { skip, timeout: 300_000 }, async () => {
-  const refused = new Set([record.row.refused.signature])
+  const refused = new Set([record.row.refused.signature, ...(record.earlierRows ?? []).map((r: { refused?: { signature: string } }) => r.refused?.signature)])
   for (const { what, signature } of record.transactions.filter((t: { signature?: string }) => t.signature)) {
     const { value } = await retry(() => connection.getSignatureStatuses([signature], { searchTransactionHistory: true }))
     assert.ok(value[0], `${what}: not found`)

@@ -40,7 +40,7 @@ What `.github/workflows/checks.yml` runs on every pull request. Node 22.18 or la
 4.2.2 for the programs.
 
 ```
-# Each package: install, type-check, tests that need no chain.
+# Each package: install, type-check, tests that need no chain. keys first: records and registry/client read it.
 for d in keys records registry/client escrow/client; do
   (cd "$d" && npm ci && npm run check && npm test)
 done

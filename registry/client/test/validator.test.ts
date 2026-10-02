@@ -30,7 +30,7 @@ import {
   VersionedTransaction,
 } from '@solana/web3.js'
 
-import { listSecret } from '../../../keys/src/index.ts'
+import { listSecret, profileKey } from '../../../keys/src/index.ts'
 import {
   PROGRAM_ID,
   buildRegistration,
@@ -130,18 +130,18 @@ test('rows go through a real validator: the profile signs, a relayer pays, one r
   if (why) return t.skip(why)
   if (!validator) return t.skip('solana-test-validator did not start (is it on the PATH?)')
 
-  // The person: the keys recipe's pinned test seed, and two profiles they hold.
+  // The person: keys/'s pinned test seed, and two of their profiles, mixed from it by keys/.
   const vectors = JSON.parse(readFileSync(join(here, '../../../keys/test/vectors.json'), 'utf8'))
   const seed = Buffer.from(vectors.seed, 'hex')
-  const profile = Keypair.generate()
-  const second = Keypair.generate()
+  const profile = Keypair.fromSeed((await profileKey(seed, LABEL)).privateKey)
+  const second = Keypair.fromSeed((await profileKey(seed, 'tutoring/buyer')).privateKey)
 
   // Two keepers. Each publishes its list, the person's stamp for that keeper among strangers', and
   // signs the list's root.
   const keepers = [Keypair.generate(), Keypair.generate()]
   const lists = await Promise.all(
     keepers.map(async (k, i) => {
-      const secret = await listSecret(seed, k.publicKey.toBase58())
+      const { secret } = await listSecret(seed, k.publicKey.toBase58())
       const stamps = [stampOf(Buffer.from(`stranger ${i} 1`)), stampOf(secret), stampOf(Buffer.from(`stranger ${i} 2`))]
       return { keeper: k, secret, stamps, signature: ed25519.sign(rootBytes(listRoot(stamps)), k.secretKey.subarray(0, 32)) }
     }),

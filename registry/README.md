@@ -91,7 +91,7 @@ import { listSecret } from '@forest/keys'
 import { buildRegistration } from '@forest/registry-client'
 
 const r = await buildRegistration({
-  secret: await listSecret(seed, keeper.toBase58()),
+  secret: (await listSecret(seed, keeper.toBase58())).secret,
   label: 'tutoring/seller',
   profile,                      // the profile's key; it signs
   keeper,                       // the keeper's key
@@ -115,14 +115,17 @@ cd registry/client    && npm run fixtures                # remake the real proof
 ```
 
 The LiteSVM tests run against real proofs committed in
-`program/tests-litesvm/fixtures/proofs.json`, which `npm run fixtures` makes. They check the wire
+`program/tests-litesvm/fixtures/proofs.json`, which `npm run fixtures` makes. Their test person is
+keys/'s: list secrets and two profiles from its test seed, through `keys/`. They check the wire
 format against a second copy written by hand in `program/tests-litesvm/src/lib.rs`.
 
 Devnet: `FOREST_DEVNET_SEED=<phrase> registry/devnet/deploy.sh` builds a copy with the devnet
 program id, deploys it (its exact cost checked first) and records it. Then
 `FOREST_DEVNET_KEYS=<dir> node scripts/devnet.ts` in `client/` writes one row, shows the refusal of
-a second profile's row for the same market stamp, and a refund. The person is the keys recipe's test
-seed; the keeper and the profiles are stand-ins. The keys come from [devnet/](../devnet/README.md).
+a second profile's row for the same market stamp, and a refund. The person is keys/'s test person:
+its test seed, and two of its profiles, all through `keys/`. The keeper is a stand-in. A row an
+earlier test person left stays on chain (rows never close), and the record keeps it under
+`earlierRows`. The devnet keys come from [devnet/](../devnet/README.md).
 
 ## What one row costs
 
@@ -131,7 +134,7 @@ instruction.
 
 | | Bytes of 1,232 | Compute units of 200,000 |
 |---|---|---|
-| `register`, a 16-byte label | 652 | 124,158 |
+| `register`, a 16-byte label | 652 | 121,158 |
 | `refund` | | 3,194 |
 
 One proof is about 120,000 compute units to verify, and a second or two to make in Node. The

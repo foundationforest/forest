@@ -18,10 +18,15 @@ key, `2mz33wBK7FKRXoAi7LptGGTwVQJDbrSyrVwbYRCqwP3A`, which anyone holding the de
 
 What is on them:
 
-- **Registry:** one row, at `9UDuRdcKnuYPKeafnW4C29WdpDnFKtYLhqdwvFRKfhkr`: the keys recipe's test
-  seed, on a stand-in keeper's list (`5tUPxWGKqNbFctBXKS8LgnkM8A1Jfn5qVrUGxKjFXozB`), under
-  `freelance/seller`, for a stand-in profile (`c6Nd6Y3NX1yyt6gWdPa23V9TNvkGXVtq4gtLmjBjxLs`). The
-  record also holds the refusal of a second profile's row for the same market stamp, and a refund.
+- **Registry:** two rows on a stand-in keeper's list (`5tUPxWGKqNbFctBXKS8LgnkM8A1Jfn5qVrUGxKjFXozB`),
+  under `freelance/seller`.
+  - The current one, at `LhQV7M3m63r4WWFYbgVhr9C3fo5ouFyb6PLjpHZAAPF`: keys/'s test person, for
+    their `freelance/seller` profile (`5RWsXwx9Urx8d9sUv1i4viMJZ9pQufyNA76o7sCdLysx`). The record
+    also holds the refusal of their `freelance/buyer` profile's row for the same market stamp, and a
+    refund.
+  - An earlier test person's, at `9UDuRdcKnuYPKeafnW4C29WdpDnFKtYLhqdwvFRKfhkr`, for a stand-in
+    profile, made before keys/ moved to its new test seed. Rows never close, so it stays, at its
+    rent minimum, with nothing left to refund. The record keeps it under `earlierRows`.
 - **Escrow:** five receipts. In the test dollar: an invoice paid in one tap
   (`B4LdqfRmxNwU56vUBk447AQnd34BKZox5HzdPo95CPje`), and an escrow with a timer the buyer objected
   to, then split (`CaQG2mdoHnoPif9LdtVipULdyJAWCXCXViJ4jSHoJE2B`). The same two again in a

@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url'
 
 import { Keypair, PublicKey, SystemProgram } from '@solana/web3.js'
 
-import { listIdentity, listSecret } from '../../../keys/src/index.ts'
+import { listSecret } from '../../../keys/src/index.ts'
 import {
   BN254_R,
   MAX_LABEL,
@@ -102,22 +102,24 @@ test('a label of any text gives a scope, every scope is a field element, and nam
   assert.notEqual(scopeOf(new TextDecoder().decode(key)), messageOf(key))
 })
 
-test("Alice's stamps come from keys/: her seed and each keeper's address", async () => {
+test("Alice is keys/'s test person: her stamps from her seed and each keeper's address, her profiles its pinned ones", async () => {
+  assert.equal(proofNamed('alice-tutoring-A').profile, keysVectors.profiles[0].address, 'her tutoring/seller profile')
+  assert.equal(proofNamed('alice-tutoring-A-second-profile').profile, keysVectors.profiles[1].address, 'her tutoring/buyer profile')
   for (const list of ['A', 'B'] as const) {
     const keeper = fixtures.keepers[list]
-    const { stamp } = await listIdentity(seed, keeper)
-    assert.equal(stampOf(await listSecret(seed, keeper)), stamp)
+    const { secret, stamp } = await listSecret(seed, keeper)
+    assert.equal(stampOf(secret), stamp)
     assert.ok(fixtures.lists[list].includes(stamp.toString()), `her stamp is on list ${list}`)
     assert.equal(hex(toBytes32(listRoot(fixtures.lists[list].map(BigInt)))), fixtures.proofs.find((p: { list: string }) => p.list === list).root)
   }
-  const a = await listIdentity(seed, fixtures.keepers.A)
-  const b = await listIdentity(seed, fixtures.keepers.B)
+  const a = await listSecret(seed, fixtures.keepers.A)
+  const b = await listSecret(seed, fixtures.keepers.B)
   assert.notEqual(a.stamp, b.stamp, 'two lists, two stamps nobody can match')
 })
 
 test('the market stamp is the nullifier the proof carries: one per keeper per label per person', async () => {
-  const onA = await listSecret(seed, fixtures.keepers.A)
-  const onB = await listSecret(seed, fixtures.keepers.B)
+  const onA = (await listSecret(seed, fixtures.keepers.A)).secret
+  const onB = (await listSecret(seed, fixtures.keepers.B)).secret
   for (const [name, secret] of [
     ['alice-tutoring-A', onA],
     ['alice-tutoring-A-second-profile', onA],
@@ -251,7 +253,7 @@ test('the builders refuse what the program or a reader would refuse, before any 
 
   const stamps = fixtures.lists.A.map(BigInt)
   const base = {
-    secret: await listSecret(seed, fixtures.keepers.A),
+    secret: (await listSecret(seed, fixtures.keepers.A)).secret,
     label: 'tutoring/seller',
     profile: payer,
     keeper: new PublicKey(fixtures.keepers.A),
@@ -264,7 +266,7 @@ test('the builders refuse what the program or a reader would refuse, before any 
   await assert.rejects(buildRegistration({ ...base, label: 'x'.repeat(129) }), /at most 128 bytes/)
   await assert.rejects(buildRegistration({ ...base, keeper: new PublicKey(fixtures.keepers.B) }), /keeper's signature is not on this list's root/)
   await assert.rejects(buildRegistration({ ...base, stamps: [...stamps, 1n] }), /keeper's signature is not on this list's root/, 'another snapshot')
-  await assert.rejects(buildRegistration({ ...base, secret: await listSecret(seed, fixtures.keepers.B) }), /not on the list/)
+  await assert.rejects(buildRegistration({ ...base, secret: (await listSecret(seed, fixtures.keepers.B)).secret }), /not on the list/)
 })
 
 test('rows read back through any connection, filtered at fixed offsets', async () => {
