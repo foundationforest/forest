@@ -1,9 +1,9 @@
-// One Semaphore proof, made on the device, against an issuer's list.
+// One Semaphore proof, made on the device, against a keeper's list.
 //
-// An issuer publishes its list outside the registry: every identity commitment it vouches for, in
-// the order it took them, and the list's root. The device finds its own commitment in the list,
-// builds the Merkle path, and proves membership for one label and one profile. The registry takes
-// the root as given; readers decide which issuers' roots they trust.
+// A keeper publishes its list its own way: every stamp in it, in the order it took them, and its
+// signature on each snapshot's root. The device finds its own stamp in the list, builds the Merkle
+// path, and proves "my stamp is on this list" for one label (the scope) and one profile (the
+// message). The registry takes the root as given; readers decide which keepers they trust.
 //
 // Semaphore's own `generateProof` hashes the scope and the message for you, as a 32-byte
 // big-endian number, which caps a label at 32 bytes. The registry hashes a namespaced string
@@ -15,10 +15,10 @@ import type { Identity } from '@semaphore-protocol/identity'
 import type { PublicKey } from '@solana/web3.js'
 import { groth16 } from 'snarkjs'
 
-import { codeFor, commitmentOf, identityFrom } from './code.ts'
 import { compressProof, type CompressedProof, type SnarkjsProof } from './compress.ts'
 import { messageOf, scopeOf } from './field.ts'
 import { MAX_DEPTH } from './program.ts'
+import { identityFrom, marketStampOf, stampOf } from './stamp.ts'
 
 /** The pinned artifacts. Paths on Node, or the bytes themselves in a browser. */
 export type Artifacts = {
@@ -26,40 +26,40 @@ export type Artifacts = {
   zkey: string | Uint8Array
 }
 
-export type MembershipProof = {
+export type StampProof = {
   /** The root of the list the proof was made against. */
   root: bigint
-  /** The nullifier: the line's code. */
-  code: bigint
+  /** The nullifier: the person's market stamp on this list under this label. */
+  marketStamp: bigint
   scope: bigint
   message: bigint
   /** The proof, points compressed the way the program reads them. */
   proof: CompressedProof
-  /** The proof as snarkjs wrote it, kept so a caller can verify it with the verification key. */
+  /** The proof as snarkjs wrote it. */
   raw: SnarkjsProof
   publicSignals: string[]
 }
 
 /** The root the circuit computes for a list, in order (Semaphore's LeanIMT). Zero when empty. */
-export function listRoot(commitments: bigint[]): bigint {
-  return commitments.length === 0 ? 0n : new Group(commitments).root
+export function listRoot(stamps: bigint[]): bigint {
+  return stamps.length === 0 ? 0n : new Group(stamps).root
 }
 
-export async function proveMembership(input: {
+export async function proveStamp(input: {
+  /** The 32 bytes `keys/`'s `listSecret(seed, keeper)` returns, or the identity itself. */
   secret: Uint8Array | Identity
   label: string
-  /** The profile's 32-byte key. The proof names it; only its line can be made or extended with it. */
+  /** The profile's 32-byte key. The proof names it: it counts for this profile's row only. */
   profile: PublicKey | Uint8Array
-  /** The issuer's list: every commitment in it, in the order the issuer published them. */
-  commitments: bigint[]
+  /** The keeper's list: every stamp in it, in the order the keeper published them. */
+  stamps: bigint[]
   artifacts: Artifacts
-}): Promise<MembershipProof> {
+}): Promise<StampProof> {
   const identity = identityFrom(input.secret)
-  const commitment = commitmentOf(identity)
 
-  const group = new Group(input.commitments)
-  const index = group.indexOf(commitment)
-  if (index === -1) throw new Error('this identity is not in the list')
+  const group = new Group(input.stamps)
+  const index = group.indexOf(stampOf(identity))
+  if (index === -1) throw new Error('this stamp is not on the list')
   const merkleProof = group.generateMerkleProof(index)
 
   const scope = scopeOf(input.label)
@@ -92,15 +92,15 @@ export async function proveMembership(input: {
   // Semaphore's order: root, nullifier, message, scope. Checked here so a change in the library
   // or the artifacts shows up as an error and not as a proof the program silently rejects.
   const [rootSignal, nullifier, messageSignal, scopeSignal] = publicSignals
-  const code = codeFor(identity, input.label)
+  const marketStamp = marketStampOf(identity, input.label)
   if (BigInt(rootSignal) !== merkleProof.root) throw new Error('the proof is against another root')
-  if (BigInt(nullifier) !== code) throw new Error('the proof carries another code')
+  if (BigInt(nullifier) !== marketStamp) throw new Error('the proof carries another market stamp')
   if (BigInt(messageSignal) !== message) throw new Error('the proof carries another message')
   if (BigInt(scopeSignal) !== scope) throw new Error('the proof carries another scope')
 
   return {
     root: merkleProof.root,
-    code,
+    marketStamp,
     scope,
     message,
     proof: compressProof(proof),

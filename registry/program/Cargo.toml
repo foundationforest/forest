@@ -2,7 +2,7 @@
 name = "forest-registry"
 version = "0.1.0"
 edition = "2021"
-description = "The Forest registry: a free public list of badges, one line per verified human per label, on Solana. Sealed per version."
+description = "The Forest registry: one row per market stamp, on Solana. Sealed per version on mainnet."
 license = "Apache-2.0"
 publish = false
 exclude = ["tests-litesvm"]
@@ -29,7 +29,7 @@ groth16-solana = "0.2.0"
 solana-keccak-hasher = "3.1.0"
 
 # Arithmetic that overflows panics instead of wrapping. The program does little arithmetic (a
-# line's size, and the refund's excess, which saturates); this makes any overflow abort, never wrap.
+# row's size, and the refund's excess, which saturates); this makes any overflow abort, never wrap.
 [profile.release]
 overflow-checks = true
 

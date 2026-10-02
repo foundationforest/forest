@@ -6,6 +6,5 @@ declare module 'snarkjs' {
       wasm: string | Uint8Array,
       zkey: string | Uint8Array,
     ): Promise<{ proof: unknown; publicSignals: string[] }>
-    verify(vkey: unknown, publicSignals: string[], proof: unknown): Promise<boolean>
   }
 }

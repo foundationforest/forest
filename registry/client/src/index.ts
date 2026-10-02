@@ -1,13 +1,11 @@
-// The Forest registry client: everything a device needs to turn an identity secret into a line,
-// to read lines back, and to make and check the proofs of other issuers' lists that a profile
-// keeps off chain. It talks to no network of its own. The caller passes in an issuer's published
-// list of commitments and a recent blockhash; the caller has the payer sign and sends.
+// The Forest registry client: everything a device needs to turn a stamp on a keeper's list into a
+// row, and to read rows back. It talks to no network of its own. The caller passes in the keeper's
+// published list and its signature on the list's root, and a recent blockhash; the profile and the
+// payer sign, and anyone sends.
 //
-// One line, one proof, one transaction: `register`. Only the payer signs. The profile key signs
-// nothing: the proof names it. A line never changes after it; more issuers are membership records
-// (`membership.ts`).
+// One row, one proof, one transaction: `register`. A row never changes after it.
 //
-// Nothing here is shipped.
+// Nothing here is in production.
 
 import type { Identity } from '@semaphore-protocol/identity'
 import {
@@ -19,59 +17,47 @@ import {
 } from '@solana/web3.js'
 
 import { toBytes32 } from './field.ts'
-import { proveMembership, type Artifacts, type MembershipProof } from './proof.ts'
-import { MAX_LABEL, PROGRAM_ID, lineAddress, registerIx } from './program.ts'
+import { keeperSigned } from './keeper.ts'
+import { listRoot, proveStamp, type Artifacts, type StampProof } from './proof.ts'
+import { MAX_LABEL, PROGRAM_ID, registerIx, rowAddress } from './program.ts'
 
 export * from './field.ts'
 export * from './compress.ts'
-export * from './code.ts'
+export * from './stamp.ts'
+export * from './keeper.ts'
 export * from './program.ts'
 export * from './proof.ts'
-export * from './lines.ts'
-export * from './membership.ts'
+export * from './rows.ts'
 
-/** Unsigned, with the payer as fee payer. No compute-budget instruction unless one is asked for. */
-function transaction(input: {
+export type Registration = StampProof & {
+  marketStampBytes: Uint8Array
+  /** The row's address. */
+  row: PublicKey
   instruction: TransactionInstruction
-  payer: PublicKey
-  recentBlockhash: string
-  computeUnitLimit?: number
-}): VersionedTransaction {
-  const instructions =
-    input.computeUnitLimit === undefined
-      ? [input.instruction]
-      : [ComputeBudgetProgram.setComputeUnitLimit({ units: input.computeUnitLimit }), input.instruction]
-  return new VersionedTransaction(
-    new TransactionMessage({
-      payerKey: input.payer,
-      recentBlockhash: input.recentBlockhash,
-      instructions,
-    }).compileToV0Message(),
-  )
-}
-
-export type Registration = MembershipProof & {
-  codeBytes: Uint8Array
-  /** The line's address. */
-  line: PublicKey
-  instruction: TransactionInstruction
-  /** Unsigned: `register`, needing only the payer's signature. */
+  /** Unsigned: `register`, needing the profile's signature and the payer's. */
   transaction: VersionedTransaction
 }
 
 /**
- * A line for one profile under one label, proven against one issuer's list: the issuer's published
- * commitments, in its order, the person's own among them. Prove against the issuer's newest list.
+ * A row for one profile under one label, proven against one keeper's list: the keeper's published
+ * stamps, in its order, the person's own among them, and the keeper's signature on that list's
+ * root. The signature is checked before anything is proven: a row never changes, so a row with a
+ * signature no reader accepts would hold this market stamp for good.
  */
 export async function buildRegistration(input: {
-  /** The person's 32-byte identity secret, or the identity itself. */
+  /** The 32 bytes `keys/`'s `listSecret(seed, keeper)` returns, or the identity itself. */
   secret: Uint8Array | Identity
   label: string
-  /** The profile's key (`keys/`'s `profileKey(seed, label).publicKey`). It signs nothing here. */
-  profile: PublicKey | Uint8Array
-  commitments: bigint[]
+  /** The profile's key. It signs the transaction. */
+  profile: PublicKey
+  /** The keeper's key: its address, and what its signature on the root is checked against. */
+  keeper: PublicKey
+  /** The keeper's list: every stamp in it, in the order the keeper published them. */
+  stamps: bigint[]
+  /** The keeper's ed25519 signature over this list's root, as 32 big-endian bytes. */
+  keeperSignature: Uint8Array
   artifacts: Artifacts
-  /** Pays the line's deposit and the transaction's fee, and signs it. */
+  /** Pays the row's deposit and the transaction's fee, and signs it. May be the profile. */
   payer: PublicKey
   recentBlockhash: string
   /** Leave unset for no compute-budget instruction. */
@@ -80,13 +66,25 @@ export async function buildRegistration(input: {
 }): Promise<Registration> {
   const programId = input.programId ?? PROGRAM_ID
   if (new TextEncoder().encode(input.label).length > MAX_LABEL) throw new RangeError(`a label is at most ${MAX_LABEL} bytes`)
-  const p = await proveMembership(input)
-  const instruction = registerIx({ profile: input.profile, label: input.label, code: p.code, proof: p, payer: input.payer, programId })
-  return {
-    ...p,
-    codeBytes: toBytes32(p.code),
-    line: lineAddress(p.code, programId),
-    instruction,
-    transaction: transaction({ instruction, payer: input.payer, recentBlockhash: input.recentBlockhash, computeUnitLimit: input.computeUnitLimit }),
+  if (!keeperSigned({ keeper: input.keeper, root: listRoot(input.stamps), keeperSignature: input.keeperSignature })) {
+    throw new Error("the keeper's signature is not on this list's root")
   }
+  const p = await proveStamp(input)
+  const instruction = registerIx({
+    profile: input.profile,
+    label: input.label,
+    marketStamp: p.marketStamp,
+    keeper: input.keeper,
+    root: p.root,
+    keeperSignature: input.keeperSignature,
+    proof: p.proof,
+    payer: input.payer,
+    programId,
+  })
+  const instructions =
+    input.computeUnitLimit === undefined ? [instruction] : [ComputeBudgetProgram.setComputeUnitLimit({ units: input.computeUnitLimit }), instruction]
+  const transaction = new VersionedTransaction(
+    new TransactionMessage({ payerKey: input.payer, recentBlockhash: input.recentBlockhash, instructions }).compileToV0Message(),
+  )
+  return { ...p, marketStampBytes: toBytes32(p.marketStamp), row: rowAddress(p.marketStamp, programId), instruction, transaction }
 }

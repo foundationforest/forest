@@ -1,6 +1,6 @@
 //! The harness, and the registry's wire format written out a second time.
 //!
-//! Nothing here imports the program crate. The instruction bytes, the line's layout and the
+//! Nothing here imports the program crate. The instruction bytes, the row's layout and the
 //! discriminators are written by hand, the way an outside client has to write them, and checked
 //! against the client's own bytes in `fixtures/proofs.json` (`wire`). So a test passing means the
 //! sealed format really is what `src/` and `registry/client` both say it is.
@@ -13,7 +13,6 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use solana_account::Account;
 use solana_address::Address;
-use solana_clock::Clock;
 use solana_instruction::{AccountMeta, Instruction};
 use solana_keypair::Keypair;
 use solana_message::Message;
@@ -22,7 +21,7 @@ use solana_rent::Rent;
 use solana_signer::Signer;
 use solana_transaction::Transaction;
 
-pub const PROGRAM_ID: Address = solana_address::address!("FoRBadgeLineFreeNoFeeNoAdmin1111111111111111");
+pub const PROGRAM_ID: Address = solana_address::address!("FoRRegistryRowsFreeNoFeeNoAdmin1111111111111");
 pub const SYSTEM_PROGRAM: Address = solana_system_interface::program::ID;
 
 pub const MAX_LABEL: usize = 128;
@@ -35,8 +34,10 @@ pub mod err {
     pub const PROOF_REJECTED: u32 = 6003;
     pub const NOTHING_TO_REFUND: u32 = 6004;
     pub const NOT_THE_PAYER: u32 = 6005;
-    /// Anchor's own: no instruction has this discriminator.
-    pub const INSTRUCTION_FALLBACK_NOT_FOUND: u32 = 101;
+    /// Anchor's own: an account that should have signed did not.
+    pub const ACCOUNT_NOT_SIGNER: u32 = 3010;
+    /// Anchor's own: an account of this program that is not a `Row`.
+    pub const ACCOUNT_DISCRIMINATOR_MISMATCH: u32 = 3002;
 }
 
 /// `Err` holds the runtime's error and the log, so a test can look for the exact code.
@@ -52,9 +53,18 @@ pub fn custom_error(result: &Result<litesvm::types::TransactionMetadata, String>
 
 #[derive(Deserialize)]
 pub struct Fixtures {
+    pub keepers: Keepers,
     pub lists: Lists,
     pub proofs: Vec<FixtureProof>,
     pub wire: Wire,
+}
+
+#[derive(Deserialize)]
+pub struct Keepers {
+    #[serde(rename = "A")]
+    pub a: String,
+    #[serde(rename = "B")]
+    pub b: String,
 }
 
 #[derive(Deserialize)]
@@ -69,11 +79,18 @@ pub struct Lists {
 pub struct FixtureProof {
     pub name: String,
     pub list: String,
+    /// The keeper's key, base58.
+    pub keeper: String,
     pub label: String,
-    /// The profile's key, base58.
+    /// The profile's key, base58, and its private seed: a test key, so the harness can sign as it.
     pub profile: String,
+    #[serde(rename = "profileSeed")]
+    pub profile_seed: String,
     pub root: String,
-    pub code: String,
+    #[serde(rename = "keeperSignature")]
+    pub keeper_signature: String,
+    #[serde(rename = "marketStamp")]
+    pub market_stamp: String,
     pub scope: String,
     pub message: String,
     pub a: String,
@@ -89,7 +106,7 @@ pub struct Uncompressed {
     pub c: String,
 }
 
-/// The client's bytes for one line (`scripts/fixtures.ts`, `wire`).
+/// The client's bytes for one row (`scripts/fixtures.ts`, `wire`).
 #[derive(Deserialize)]
 pub struct Wire {
     #[serde(rename = "programId")]
@@ -97,12 +114,11 @@ pub struct Wire {
     pub payer: String,
     #[serde(rename = "payerSeed")]
     pub payer_seed: String,
-    pub time: i64,
-    #[serde(rename = "lineAddress")]
-    pub line_address: String,
+    #[serde(rename = "rowAddress")]
+    pub row_address: String,
     pub register: String,
     pub refund: String,
-    pub line: String,
+    pub row: String,
 }
 
 impl Fixtures {
@@ -117,8 +133,8 @@ impl Fixtures {
         self.proofs.iter().find(|p| p.name == name).unwrap_or_else(|| panic!("no fixture {name}"))
     }
 
-    /// The commitments a proof was made against: list A or list B.
-    pub fn commitments_of(&self, p: &FixtureProof) -> Vec<[u8; 32]> {
+    /// The stamps a proof was made against: list A or list B.
+    pub fn stamps_of(&self, p: &FixtureProof) -> Vec<[u8; 32]> {
         let list = if p.list == "A" { &self.lists.a } else { &self.lists.b };
         list.iter().map(|s| dec_to_be32(s)).collect()
     }
@@ -128,15 +144,30 @@ impl FixtureProof {
     pub fn profile_address(&self) -> Address {
         self.profile.parse().unwrap()
     }
-    pub fn code_bytes(&self) -> [u8; 32] {
-        from_hex32(&self.code)
+    /// The profile's key, to sign with.
+    pub fn profile_key(&self) -> Keypair {
+        let key = Keypair::new_from_array(from_hex32(&self.profile_seed));
+        assert_eq!(key.pubkey(), self.profile_address(), "{}: the profile seed is the profile's", self.name);
+        key
+    }
+    pub fn market_stamp(&self) -> [u8; 32] {
+        from_hex32(&self.market_stamp)
+    }
+    pub fn row_address(&self) -> Address {
+        row_address(&self.market_stamp())
     }
     pub fn proof(&self) -> Proof {
-        Proof {
+        Proof { a: from_hex32(&self.a), b: hex(&self.b).try_into().unwrap(), c: from_hex32(&self.c) }
+    }
+    /// Everything `register` carries, as this fixture's person would send it.
+    pub fn args(&self) -> Args {
+        Args {
+            market_stamp: self.market_stamp(),
+            keeper: self.keeper.parse().unwrap(),
             root: from_hex32(&self.root),
-            a: from_hex32(&self.a),
-            b: hex(&self.b).try_into().unwrap(),
-            c: from_hex32(&self.c),
+            keeper_signature: hex(&self.keeper_signature).try_into().unwrap(),
+            proof: self.proof(),
+            label: self.label.clone(),
         }
     }
 }
@@ -208,114 +239,104 @@ pub fn message_of(profile: &Address) -> [u8; 32] {
     field_hash(b"forest.foundation/profile/v1/", &[profile.as_ref()])
 }
 
-pub fn line_address(code: &[u8; 32]) -> Address {
-    Address::find_program_address(&[b"code", code], &PROGRAM_ID).0
+pub fn row_address(market_stamp: &[u8; 32]) -> Address {
+    Address::find_program_address(&[b"row", market_stamp], &PROGRAM_ID).0
 }
 
-/// A line's size, discriminator included. It never changes.
-pub fn line_space(label_len: usize) -> usize {
-    8 + 32 + 32 + 32 + 8 + 1 + 32 + 4 + label_len
+/// A row's size, discriminator included. It never changes.
+pub fn row_space(label_len: usize) -> usize {
+    8 + 32 + 32 + 32 + 64 + 32 + 1 + 4 + label_len
 }
 
-/// One proof on the wire: the root, then the compressed points. 160 bytes.
+/// One proof's compressed points. 128 bytes.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Proof {
-    pub root: [u8; 32],
     pub a: [u8; 32],
     pub b: [u8; 64],
     pub c: [u8; 32],
 }
 
-impl Proof {
-    pub fn bytes(&self) -> Vec<u8> {
-        [&self.root[..], &self.a[..], &self.b[..], &self.c[..]].concat()
-    }
+/// What `register` carries, field by field.
+#[derive(Clone, Debug)]
+pub struct Args {
+    pub market_stamp: [u8; 32],
+    pub keeper: Address,
+    pub root: [u8; 32],
+    pub keeper_signature: [u8; 64],
+    pub proof: Proof,
+    pub label: String,
 }
 
-pub fn register_data(profile: &Address, label: &str, code: &[u8; 32], proof: &Proof) -> Vec<u8> {
+pub fn register_data(args: &Args) -> Vec<u8> {
     let mut data = discriminator("global", "register").to_vec();
-    data.extend_from_slice(profile.as_ref());
-    data.extend_from_slice(&(label.len() as u32).to_le_bytes());
-    data.extend_from_slice(label.as_bytes());
-    data.extend_from_slice(code);
-    data.extend_from_slice(&proof.bytes());
+    data.extend_from_slice(&args.market_stamp);
+    data.extend_from_slice(args.keeper.as_ref());
+    data.extend_from_slice(&args.root);
+    data.extend_from_slice(&args.keeper_signature);
+    data.extend_from_slice(&args.proof.a);
+    data.extend_from_slice(&args.proof.b);
+    data.extend_from_slice(&args.proof.c);
+    data.extend_from_slice(&(args.label.len() as u32).to_le_bytes());
+    data.extend_from_slice(args.label.as_bytes());
     data
 }
 
-pub fn register_ix(payer: Address, profile: &Address, label: &str, code: &[u8; 32], proof: &Proof) -> Instruction {
+/// Where the label's bytes start in `register`'s data: after the discriminator, every fixed field
+/// and the label's four-byte length.
+pub const REGISTER_LABEL_AT: usize = 8 + 32 + 32 + 32 + 64 + 128 + 4;
+
+/// `register`: the row, the profile (a signer), the payer (a signer, writable), the system program.
+pub fn register_ix(payer: Address, profile: Address, args: &Args) -> Instruction {
     Instruction {
         program_id: PROGRAM_ID,
         accounts: vec![
-            AccountMeta::new(line_address(code), false),
+            AccountMeta::new(row_address(&args.market_stamp), false),
+            AccountMeta::new_readonly(profile, true),
             AccountMeta::new(payer, true),
             AccountMeta::new_readonly(SYSTEM_PROGRAM, false),
         ],
-        data: register_data(profile, label, code, proof),
+        data: register_data(args),
     }
 }
 
-/// `register` from a fixture, as its human would send it.
-pub fn register_fixture_ix(payer: Address, p: &FixtureProof) -> Instruction {
-    register_ix(payer, &p.profile_address(), &p.label, &p.code_bytes(), &p.proof())
+pub fn refund_data() -> Vec<u8> {
+    discriminator("global", "refund").to_vec()
 }
 
-/// The instruction the earlier version had for appending a root, as its bytes were: discriminator,
-/// code, proof. This program has no such instruction; the tests send it to show that nothing
-/// answers it.
-pub fn old_add_proof_ix(payer: Address, code: &[u8; 32], proof: &Proof) -> Instruction {
-    let mut data = discriminator("global", "add_proof").to_vec();
-    data.extend_from_slice(code);
-    data.extend_from_slice(&proof.bytes());
+/// `refund`: the row, the payer it records. Nobody signs.
+pub fn refund_ix(payer: Address, row: Address) -> Instruction {
     Instruction {
         program_id: PROGRAM_ID,
-        accounts: vec![
-            AccountMeta::new(line_address(code), false),
-            AccountMeta::new(payer, true),
-            AccountMeta::new_readonly(SYSTEM_PROGRAM, false),
-        ],
-        data,
-    }
-}
-
-pub fn refund_data(code: &[u8; 32]) -> Vec<u8> {
-    let mut data = discriminator("global", "refund").to_vec();
-    data.extend_from_slice(code);
-    data
-}
-
-pub fn refund_ix(payer: Address, code: &[u8; 32]) -> Instruction {
-    Instruction {
-        program_id: PROGRAM_ID,
-        accounts: vec![AccountMeta::new(line_address(code), false), AccountMeta::new(payer, false)],
-        data: refund_data(code),
+        accounts: vec![AccountMeta::new(row, false), AccountMeta::new(payer, false)],
+        data: refund_data(),
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LineView {
+pub struct RowView {
     pub profile: Address,
-    pub code: [u8; 32],
-    pub payer: Address,
-    pub time: i64,
-    pub bump: u8,
+    pub keeper: Address,
     pub root: [u8; 32],
+    pub keeper_signature: [u8; 64],
+    pub payer: Address,
+    pub bump: u8,
     pub label: String,
 }
 
-/// A line's bytes, read strictly: the discriminator, the fixed fields at their offsets, then the
+/// A row's bytes, read strictly: the discriminator, the fixed fields at their offsets, then the
 /// label, and nothing after it.
-pub fn read_line(data: &[u8]) -> LineView {
-    assert_eq!(&data[..8], &discriminator("account", "Line"), "not a line");
-    let label_len = u32::from_le_bytes(data[145..149].try_into().unwrap()) as usize;
-    assert_eq!(data.len(), line_space(label_len), "a line is exactly its size");
-    LineView {
+pub fn read_row(data: &[u8]) -> RowView {
+    assert_eq!(&data[..8], &discriminator("account", "Row"), "not a row");
+    let label_len = u32::from_le_bytes(data[201..205].try_into().unwrap()) as usize;
+    assert_eq!(data.len(), row_space(label_len), "a row is exactly its size");
+    RowView {
         profile: Address::try_from(&data[8..40]).unwrap(),
-        code: data[40..72].try_into().unwrap(),
-        payer: Address::try_from(&data[72..104]).unwrap(),
-        time: i64::from_le_bytes(data[104..112].try_into().unwrap()),
-        bump: data[112],
-        root: data[113..145].try_into().unwrap(),
-        label: String::from_utf8(data[149..].to_vec()).unwrap(),
+        keeper: Address::try_from(&data[40..72]).unwrap(),
+        root: data[72..104].try_into().unwrap(),
+        keeper_signature: data[104..168].try_into().unwrap(),
+        payer: Address::try_from(&data[168..200]).unwrap(),
+        bump: data[200],
+        label: String::from_utf8(data[205..].to_vec()).unwrap(),
     }
 }
 
@@ -347,7 +368,7 @@ pub fn rent_at(lamports_per_byte: u64) -> Rent {
 
 pub struct Harness {
     pub svm: LiteSVM,
-    /// Pays every transaction's fee, and a line's deposit unless a test names another payer.
+    /// Pays every transaction's fee, and a row's deposit unless a test names another payer.
     pub payer: Keypair,
 }
 
@@ -374,19 +395,22 @@ impl Harness {
 
     /// Send, the harness's payer paying the fee and signing, plus any other signers.
     pub fn send(&mut self, ixs: &[Instruction], extra: &[&Keypair]) -> Result<litesvm::types::TransactionMetadata, String> {
-        self.svm.expire_blockhash();
-        let mut keys: Vec<&Keypair> = vec![&self.payer];
+        let payer = self.payer.insecure_clone();
+        let mut keys: Vec<&Keypair> = vec![&payer];
         keys.extend_from_slice(extra);
-        let msg = Message::new(ixs, Some(&self.payer.pubkey()));
-        let tx = Transaction::new(&keys, msg, self.svm.latest_blockhash());
-        self.send_tx(tx)
+        self.send_signed(&payer.pubkey(), &keys, ixs)
     }
 
     /// Send with `payer` as the fee payer and only signer.
     pub fn send_as(&mut self, payer: &Keypair, ixs: &[Instruction]) -> Result<litesvm::types::TransactionMetadata, String> {
+        self.send_signed(&payer.pubkey(), &[payer], ixs)
+    }
+
+    /// Send with this fee payer and exactly these signers.
+    pub fn send_signed(&mut self, fee_payer: &Address, signers: &[&Keypair], ixs: &[Instruction]) -> Result<litesvm::types::TransactionMetadata, String> {
         self.svm.expire_blockhash();
-        let msg = Message::new(ixs, Some(&payer.pubkey()));
-        let tx = Transaction::new(&[payer], msg, self.svm.latest_blockhash());
+        let msg = Message::new(ixs, Some(fee_payer));
+        let tx = Transaction::new(signers, msg, self.svm.latest_blockhash());
         self.send_tx(tx)
     }
 
@@ -397,16 +421,17 @@ impl Harness {
         }
     }
 
-    /// The fixture's line, registered by the harness's payer.
+    /// The fixture's row: its profile signs, the harness's payer pays.
     pub fn register(&mut self, p: &FixtureProof) -> Result<litesvm::types::TransactionMetadata, String> {
-        let ix = register_fixture_ix(self.payer.pubkey(), p);
-        self.send(&[ix], &[])
+        let payer = self.payer.insecure_clone();
+        self.register_paid_by(&payer, p)
     }
 
-    pub fn set_time(&mut self, unix_timestamp: i64) {
-        let mut clock: Clock = self.svm.get_sysvar();
-        clock.unix_timestamp = unix_timestamp;
-        self.svm.set_sysvar(&clock);
+    /// The fixture's row: its profile signs, `payer` pays.
+    pub fn register_paid_by(&mut self, payer: &Keypair, p: &FixtureProof) -> Result<litesvm::types::TransactionMetadata, String> {
+        let profile = p.profile_key();
+        let ix = register_ix(payer.pubkey(), profile.pubkey(), &p.args());
+        self.send_signed(&payer.pubkey(), &[payer, &profile], &[ix])
     }
 
     pub fn set_rent(&mut self, lamports_per_byte: u64) {
@@ -421,8 +446,8 @@ impl Harness {
         self.svm.get_account(address).map(|a| a.lamports > 0).unwrap_or(false)
     }
 
-    pub fn line(&self, code: &[u8; 32]) -> LineView {
-        read_line(&self.account(&line_address(code)).data)
+    pub fn row(&self, market_stamp: &[u8; 32]) -> RowView {
+        read_row(&self.account(&row_address(market_stamp)).data)
     }
 
     pub fn lamports_of(&self, address: &Address) -> u64 {

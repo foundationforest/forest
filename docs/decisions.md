@@ -60,13 +60,16 @@ Forest goes here, in the same form.
 
 - **Semaphore 4.0.0, from the public July 2024 ceremony:** the later setup's second phase has no
   published transcript, and a sealed program bakes one key in forever.
-- **The proof is the consent; its message is the profile's key, and only the payer signs:** only the
-  secret's holder can make a proof, and whoever sees one cannot land it under another profile.
-- **One code per human per label, never numbered:** a code shared across registrations would link a
-  human's profiles.
-- **Issuers are an open slot: lists stay off chain, the program checks no root, and more issuers are
-  membership records:** anyone must be able to vouch, and readers weigh who did.
-- **A line never changes and never closes:** closing it would reopen its code.
+- **The profile signs `register`, and the proof's message is the profile's key:** nobody can put a
+  row on a profile they do not hold, and a proof seen in flight cannot land under another profile.
+- **One row per market stamp: per keeper, per label, per person, never numbered:** a number shared
+  across registrations would link a person's profiles, and a second profile in a market costs a
+  second keeper's check.
+- **Keepers are an open slot: lists stay off chain, and the program checks no root and no keeper
+  signature:** anyone must be able to keep a list, and readers weigh whose they trust.
+- **A row stores the keeper's signature on its root:** a reader can check the snapshot forever
+  without asking the keeper.
+- **A row never changes and never closes:** closing it would free its market stamp.
 - **Registration is free, and nothing in it pays for anyone:** Forest builds for people who pay;
   paying for someone else is a layer outside.
 

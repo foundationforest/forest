@@ -4,7 +4,7 @@
 //! from `semaphore-32.json`, the depth-32 verification key of the public July 2024 Semaphore
 //! ceremony. It is baked in forever; see `registry/artifacts/README.md`.
 //!
-//! Two wire-format steps, both from session 3's feasibility check:
+//! Two wire-format steps:
 //!
 //! 1. the points arrive compressed (32, 64, 32 bytes instead of 64, 128, 64), so they are
 //!    decompressed with the `alt_bn128` syscalls before verification;
@@ -66,8 +66,8 @@ fn negate_g1(g1: &[u8; 64]) -> [u8; 64] {
 ///
 /// `public_inputs` are in the order snarkjs and the Semaphore library use them:
 /// `[merkleTreeRoot, nullifier, message, scope]`. The caller supplies the root and the nullifier
-/// (the code); the program derives the message and the scope itself, so a proof made for another
-/// label or another profile simply does not verify.
+/// (the market stamp); the program derives the message and the scope itself, so a proof made for
+/// another label or another profile simply does not verify.
 pub fn verify(
     proof_a: &[u8; 32],
     proof_b: &[u8; 64],

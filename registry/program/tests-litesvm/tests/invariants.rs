@@ -1,19 +1,19 @@
 //! The registry's rules as a property test under LiteSVM, with real proofs and a seeded random
 //! generator.
 //!
-//! Random flows by four keys, any of them sending anything: register (the real proofs, sometimes
-//! bent: another profile, another label, another code, a root nobody has, one flipped bit), the
-//! earlier version's add_proof bytes (any proof, at any code), refund (to the recorded payer or
-//! anyone else), lamports sent to a line's address before or after it exists, the rent rate moving
-//! between the three rates refund exists for, and the clock moving. A model says whether each must
-//! land; after each, the invariants:
+//! Random flows by four payers, any of them sending anything: register (the real proofs, sometimes
+//! bent: another profile signing, the profile not signing, another label, another market stamp, a
+//! root nobody has, one flipped bit), refund (of any row or any address, to the recorded payer or
+//! anyone else), lamports sent to a row's address before or after it exists, and the rent rate
+//! moving between the three rates refund exists for. A model says whether each must land; after
+//! each, the invariants:
 //!   I1 the program accepts exactly what the rules allow and refuses everything else;
-//!   I2 at most one line per code, and a line never changes: its bytes and its size are exactly
-//!      what register wrote, whatever lands after;
-//!   I3 every code without a line has no account of the program's at its address;
+//!   I2 at most one row per market stamp, and a row never changes: its bytes and its size are
+//!      exactly what register wrote, whatever lands after;
+//!   I3 every market stamp without a row has no account of the program's at its address;
 //!   I4 a refund pays exactly the excess over the current minimum, to the recorded payer only, and
-//!      leaves the line holding exactly the minimum;
-//!   I5 no key loses a lamport in a transaction it did not sign.
+//!      leaves the row holding exactly the minimum;
+//!   I5 no payer loses a lamport in a transaction it did not sign.
 //!
 //! `cargo test --release --test invariants -- --nocapture`; `FOREST_FUZZ_ITERATIONS` and
 //! `FOREST_FUZZ_SEED` size and replay a run.
@@ -68,122 +68,117 @@ fn transition_allowed(rate: u64, size: usize, before: u64, after: u64) -> bool {
 #[test]
 fn registry_invariants_hold_under_random_flows() {
     let iterations = env("FOREST_FUZZ_ITERATIONS", 150);
-    let seed = env("FOREST_FUZZ_SEED", 0x5eed_f0e5_7000_0001);
+    let seed = env("FOREST_FUZZ_SEED", 0x5eed_f0e5_7000_0002);
     let mut rng = Rng(seed | 1);
     let f = Fixtures::load();
     let mut h = Harness::new();
-    let keys: Vec<Keypair> = (0..4).map(|_| h.funded(1_000_000_000_000)).collect();
-    let codes: Vec<[u8; 32]> = {
-        let mut c: Vec<[u8; 32]> = f.proofs.iter().map(|p| p.code_bytes()).collect();
-        c.sort();
-        c.dedup();
-        c
+    let payers: Vec<Keypair> = (0..4).map(|_| h.funded(1_000_000_000_000)).collect();
+    let stamps: Vec<[u8; 32]> = {
+        let mut s: Vec<[u8; 32]> = f.proofs.iter().map(|p| p.market_stamp()).collect();
+        s.sort();
+        s.dedup();
+        s
     };
-    // The model: each line as register wrote it, and its bytes then.
-    let mut lines: HashMap<[u8; 32], (LineView, Vec<u8>)> = HashMap::new();
+    // The model: each row as register wrote it, and its bytes then.
+    let mut rows: HashMap<[u8; 32], (RowView, Vec<u8>)> = HashMap::new();
     // LiteSVM's starting rate, read rather than assumed.
     let mut rate = h.svm.get_sysvar::<solana_rent::Rent>().lamports_per_byte;
-    let mut time: i64 = 1_790_000_000;
-    h.set_time(time);
     let mut landed: HashMap<&str, u64> = HashMap::new();
     let mut refused_count: HashMap<&str, u64> = HashMap::new();
 
     for step in 0..iterations {
-        let sender = rng.below(keys.len());
-        let balances: Vec<u64> = keys.iter().map(|k| h.lamports_of(&k.pubkey())).collect();
+        let sender = rng.below(payers.len());
+        let balances: Vec<u64> = payers.iter().map(|k| h.lamports_of(&k.pubkey())).collect();
         let what: &str;
         let expected: bool;
         let result;
 
-        match rng.below(10) {
+        match rng.below(9) {
             // register, sometimes bent
             0..=3 => {
                 what = "register";
                 let p = &f.proofs[rng.below(f.proofs.len())];
-                let (mut profile, mut label, mut code, mut proof) = (p.profile_address(), p.label.clone(), p.code_bytes(), p.proof());
+                let mut profile = p.profile_key();
+                let mut args = p.args();
+                let mut profile_signs = true;
                 let bent = rng.chance(40);
                 if bent {
-                    match rng.below(5) {
-                        0 => profile = Keypair::new().pubkey(),
-                        1 => label.push('x'),
-                        2 => code = codes[(codes.iter().position(|c| *c == code).unwrap() + 1 + rng.below(codes.len() - 1)) % codes.len()],
-                        3 => proof.root = [7u8; 32],
-                        _ => flip(&mut proof, &mut rng),
+                    match rng.below(6) {
+                        0 => profile = Keypair::new(),
+                        1 => profile_signs = false,
+                        2 => args.label.push('x'),
+                        3 => {
+                            let at = stamps.iter().position(|s| *s == args.market_stamp).unwrap();
+                            args.market_stamp = stamps[(at + 1 + rng.below(stamps.len() - 1)) % stamps.len()];
+                        }
+                        4 => args.root = [7u8; 32],
+                        _ => flip(&mut args.proof, &mut rng),
                     }
                 }
-                expected = !bent && !lines.contains_key(&code);
-                let k = &keys[sender];
-                result = h.send_as(k, &[register_ix(k.pubkey(), &profile, &label, &code, &proof)]);
+                expected = !bent && !rows.contains_key(&args.market_stamp);
+                let k = &payers[sender];
+                let mut ix = register_ix(k.pubkey(), profile.pubkey(), &args);
+                result = if profile_signs {
+                    h.send_signed(&k.pubkey(), &[k, &profile], &[ix])
+                } else {
+                    ix.accounts[1].is_signer = false;
+                    h.send_as(k, &[ix])
+                };
                 if result.is_ok() {
-                    let view = LineView {
-                        profile,
-                        code,
+                    let view = RowView {
+                        profile: profile.pubkey(),
+                        keeper: args.keeper,
+                        root: args.root,
+                        keeper_signature: args.keeper_signature,
                         payer: k.pubkey(),
-                        time,
-                        bump: Address::find_program_address(&[b"code", &code], &PROGRAM_ID).1,
-                        root: proof.root,
-                        label,
+                        bump: Address::find_program_address(&[b"row", &args.market_stamp], &PROGRAM_ID).1,
+                        label: args.label.clone(),
                     };
-                    let bytes = h.account(&line_address(&code)).data;
-                    assert_eq!(bytes.len(), line_space(view.label.len()));
-                    lines.insert(code, (view, bytes));
+                    let bytes = h.account(&row_address(&args.market_stamp)).data;
+                    assert_eq!(bytes.len(), row_space(view.label.len()));
+                    rows.insert(args.market_stamp, (view, bytes));
                 }
             }
-            // the earlier version's add_proof, by anyone, with any public proof: nothing answers it
-            4 => {
-                what = "add_proof";
-                let p = &f.proofs[rng.below(f.proofs.len())];
-                let code = if rng.chance(75) { p.code_bytes() } else { codes[rng.below(codes.len())] };
-                expected = false;
-                let k = &keys[sender];
-                result = h.send_as(k, &[old_add_proof_ix(k.pubkey(), &code, &p.proof())]);
-            }
-            // refund, to the recorded payer or to anyone
-            5..=6 => {
+            // refund, of any market stamp's address, to the recorded payer or to anyone
+            4..=5 => {
                 what = "refund";
-                let code = codes[rng.below(codes.len())];
-                let to = match lines.get(&code) {
-                    Some((l, _)) if rng.chance(70) => l.payer,
-                    _ => keys[rng.below(keys.len())].pubkey(),
+                let stamp = stamps[rng.below(stamps.len())];
+                let to = match rows.get(&stamp) {
+                    Some((r, _)) if rng.chance(70) => r.payer,
+                    _ => payers[rng.below(payers.len())].pubkey(),
                 };
-                let address = line_address(&code);
+                let address = row_address(&stamp);
                 let before = h.lamports_of(&address);
-                let excess = lines
-                    .get(&code)
-                    .map(|(l, _)| before.saturating_sub(rent_minimum(rate, line_space(l.label.len()))))
+                let excess = rows
+                    .get(&stamp)
+                    .map(|(r, _)| before.saturating_sub(rent_minimum(rate, row_space(r.label.len()))))
                     .unwrap_or(0);
-                expected = lines.get(&code).is_some_and(|(l, _)| l.payer == to) && excess > 0;
-                let k = &keys[sender];
+                expected = rows.get(&stamp).is_some_and(|(r, _)| r.payer == to) && excess > 0;
+                let k = &payers[sender];
                 let to_before = h.lamports_of(&to);
-                result = h.send_as(k, &[refund_ix(to, &code)]);
+                result = h.send_as(k, &[refund_ix(to, address)]);
                 if result.is_ok() {
                     let paid = if to == k.pubkey() { FEE } else { 0 };
                     assert_eq!(h.lamports_of(&to) + paid - to_before, excess, "I4: exactly the excess, to the payer");
-                    assert_eq!(h.lamports_of(&address), before - excess, "I4: the line keeps exactly the minimum");
+                    assert_eq!(h.lamports_of(&address), before - excess, "I4: the row keeps exactly the minimum");
                 }
             }
-            // lamports sent to a line's address, whether or not the line exists
-            7..=8 => {
+            // lamports sent to a row's address, whether or not the row exists
+            6..=7 => {
                 what = "gift";
-                let code = codes[rng.below(codes.len())];
-                let address = line_address(&code);
+                let address = row_address(&stamps[rng.below(stamps.len())]);
                 let amount = 1_000_000 + rng.below(2_000_000) as u64;
                 let before = h.lamports_of(&address);
                 let size = h.svm.get_account(&address).map(|a| a.data.len()).unwrap_or(0);
                 expected = transition_allowed(rate, size, before, before + amount);
-                let k = &keys[sender];
+                let k = &payers[sender];
                 result = h.send_as(k, &[solana_system_interface::instruction::transfer(&k.pubkey(), &address, amount)]);
             }
-            // the rent rate or the clock moves
+            // the rent rate moves
             _ => {
-                what = "rate or clock";
-                if rng.chance(50) {
-                    rate = [RENT_HIGH, RENT_TODAY, RENT_FINAL][rng.below(3)];
-                    h.set_rent(rate);
-                } else {
-                    time += 1 + rng.below(100_000) as i64;
-                    h.set_time(time);
-                }
+                what = "rate";
+                rate = [RENT_HIGH, RENT_TODAY, RENT_FINAL][rng.below(3)];
+                h.set_rent(rate);
                 expected = true;
                 result = Ok(Default::default());
             }
@@ -194,30 +189,30 @@ fn registry_invariants_hold_under_random_flows() {
         *(if result.is_ok() { landed.entry(what) } else { refused_count.entry(what) }).or_default() += 1;
 
         // I2, I3
-        for code in &codes {
-            let address = line_address(code);
-            match lines.get(code) {
+        for stamp in &stamps {
+            let address = row_address(stamp);
+            match rows.get(stamp) {
                 Some((model, bytes)) => {
                     let account = h.account(&address);
                     assert_eq!(account.owner, PROGRAM_ID);
-                    assert_eq!(&account.data, bytes, "I2: step {step}, the line is byte for byte what register wrote");
-                    assert_eq!(&read_line(&account.data), model, "I2: step {step}, the line is what the model says");
+                    assert_eq!(&account.data, bytes, "I2: step {step}, the row is byte for byte what register wrote");
+                    assert_eq!(&read_row(&account.data), model, "I2: step {step}, the row is what the model says");
                 }
                 None => {
                     let owner = h.svm.get_account(&address).map(|a: Account| a.owner);
-                    assert_ne!(owner, Some(PROGRAM_ID), "I3: step {step}, no line where none was registered");
+                    assert_ne!(owner, Some(PROGRAM_ID), "I3: step {step}, no row where none was registered");
                 }
             }
         }
 
         // I5
-        for (i, k) in keys.iter().enumerate() {
+        for (i, k) in payers.iter().enumerate() {
             if i != sender {
-                assert!(h.lamports_of(&k.pubkey()) >= balances[i], "I5: step {step}, a key that did not sign lost lamports");
+                assert!(h.lamports_of(&k.pubkey()) >= balances[i], "I5: step {step}, a payer that did not sign lost lamports");
             }
         }
     }
 
-    println!("{iterations} steps (seed {seed:#x}): landed {landed:?}, refused {refused_count:?}; {} lines", lines.len());
+    println!("{iterations} steps (seed {seed:#x}): landed {landed:?}, refused {refused_count:?}; {} rows", rows.len());
     assert!(landed.get("register").copied().unwrap_or(0) > 0, "the run registered something");
 }

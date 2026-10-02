@@ -1,4 +1,4 @@
-// The wire format: the address, the discriminators, the instruction bytes and the line's bytes.
+// The wire format: the address, the discriminators, the instruction bytes and the row's bytes.
 //
 // Everything here is sealed with the program. These bytes are what clients and indexes read and
 // write forever, so this file is written out by hand rather than generated: a reader can check it
@@ -15,21 +15,24 @@ import type { CompressedProof } from './compress.ts'
  * The program id in the source: a placeholder nobody holds a key for. A deploy substitutes its own
  * (devnet: `registry/devnet/devnet.json`); every builder takes `programId`.
  */
-export const PROGRAM_ID = new PublicKey('FoRBadgeLineFreeNoFeeNoAdmin1111111111111111')
+export const PROGRAM_ID = new PublicKey('FoRRegistryRowsFreeNoFeeNoAdmin1111111111111')
 
 /** The circuit's depth, sealed with the verification key. */
 export const MAX_DEPTH = 32
 /** The longest label, in bytes. */
 export const MAX_LABEL = 128
 
-export const CODE_SEED = new TextEncoder().encode('code')
+export const ROW_SEED = new TextEncoder().encode('row')
 
 /** Anchor's discriminator: the first eight bytes of `sha256("<namespace>:<name>")`. */
 export function discriminator(namespace: string, name: string): Uint8Array {
   return sha256(new TextEncoder().encode(`${namespace}:${name}`)).slice(0, 8)
 }
 
-export const LINE_DISCRIMINATOR = discriminator('account', 'Line')
+export const ROW_DISCRIMINATOR = discriminator('account', 'Row')
+
+/** Where each field of a row starts, discriminator included. The label is last. */
+export const ROW_OFFSET = { profile: 8, keeper: 40, root: 72, keeperSignature: 104, payer: 168, bump: 200, label: 201 } as const
 
 function u32le(n: number): Uint8Array {
   const b = new Uint8Array(4)
@@ -39,10 +42,6 @@ function u32le(n: number): Uint8Array {
 
 function readU32le(b: Uint8Array, at: number): number {
   return new DataView(b.buffer, b.byteOffset, b.byteLength).getUint32(at, true)
-}
-
-function readI64le(b: Uint8Array, at: number): bigint {
-  return new DataView(b.buffer, b.byteOffset, b.byteLength).getBigInt64(at, true)
 }
 
 function concat(parts: Uint8Array[]): Buffer {
@@ -63,111 +62,111 @@ const bytes32 = (v: bigint | Uint8Array): Uint8Array => {
   return b
 }
 
-const keyBytes = (k: PublicKey | Uint8Array): Uint8Array => bytes32(k instanceof PublicKey ? k.toBytes() : k)
+export const keyBytes = (k: PublicKey | Uint8Array): Uint8Array => bytes32(k instanceof PublicKey ? k.toBytes() : k)
 
-/** A line's size in bytes, discriminator included, for a label of `labelBytes` bytes. It never changes. */
-export function lineSpace(labelBytes: number): number {
-  return 8 + 32 + 32 + 32 + 8 + 1 + 32 + 4 + labelBytes
+/** A row's size in bytes, discriminator included, for a label of `labelBytes` bytes. It never changes. */
+export function rowSpace(labelBytes: number): number {
+  return ROW_OFFSET.label + 4 + labelBytes
 }
 
-/** A line's address: derived from its code, so one code has at most one line. */
-export function lineAddress(code: bigint | Uint8Array, programId: PublicKey = PROGRAM_ID): PublicKey {
-  return PublicKey.findProgramAddressSync([Buffer.from(CODE_SEED), Buffer.from(bytes32(code))], programId)[0]
+/** A row's address: derived from its market stamp, so one market stamp has at most one row. */
+export function rowAddress(marketStamp: bigint | Uint8Array, programId: PublicKey = PROGRAM_ID): PublicKey {
+  return PublicKey.findProgramAddressSync([Buffer.from(ROW_SEED), Buffer.from(bytes32(marketStamp))], programId)[0]
 }
 
-/** One proof on the wire: the list's root, then the compressed points. 160 bytes. */
-export type ProofOnWire = { root: bigint | Uint8Array; proof: CompressedProof }
-
-function proofBytes(p: ProofOnWire): Uint8Array {
-  if (p.proof.a.length !== 32 || p.proof.b.length !== 64 || p.proof.c.length !== 32) {
-    throw new RangeError('a compressed proof is 32, 64 and 32 bytes')
-  }
-  return concat([bytes32(p.root), p.proof.a, p.proof.b, p.proof.c])
-}
-
-const ro = (pubkey: PublicKey): AccountMeta => ({ pubkey, isSigner: false, isWritable: false })
+const ro = (pubkey: PublicKey, isSigner = false): AccountMeta => ({ pubkey, isSigner, isWritable: false })
 const rw = (pubkey: PublicKey, isSigner = false): AccountMeta => ({ pubkey, isSigner, isWritable: true })
 
 /**
- * Write a line. Only the payer signs: it pays the line's deposit and is recorded for refunds. The
- * profile key signs nothing; the proof names it.
+ * Write a row. The profile signs; the payer signs, pays the row's deposit and is recorded for
+ * refunds. They may be one key.
  *
- * Data: discriminator, profile (32), label (u32 length, UTF-8), code (32), proof (root 32, a 32,
- * b 64, c 32). Accounts: the line, the payer, the system program.
+ * Data: discriminator, market stamp (32), keeper (32), root (32), keeper signature (64), proof
+ * (a 32, b 64, c 32), label (u32 length, UTF-8). Accounts: the row, the profile, the payer, the
+ * system program.
  */
 export function registerIx(args: {
-  profile: PublicKey | Uint8Array
+  profile: PublicKey
   label: string
-  code: bigint | Uint8Array
-  proof: ProofOnWire
+  marketStamp: bigint | Uint8Array
+  keeper: PublicKey | Uint8Array
+  root: bigint | Uint8Array
+  keeperSignature: Uint8Array
+  proof: CompressedProof
   payer: PublicKey
   programId?: PublicKey
 }): TransactionInstruction {
   const programId = args.programId ?? PROGRAM_ID
   const label = new TextEncoder().encode(args.label)
   if (label.length > MAX_LABEL) throw new RangeError(`a label is at most ${MAX_LABEL} bytes`)
+  if (args.keeperSignature.length !== 64) throw new RangeError('a keeper signature is 64 bytes')
+  const p = args.proof
+  if (p.a.length !== 32 || p.b.length !== 64 || p.c.length !== 32) throw new RangeError('a compressed proof is 32, 64 and 32 bytes')
   return new TransactionInstruction({
     programId,
-    keys: [rw(lineAddress(args.code, programId)), rw(args.payer, true), ro(SystemProgram.programId)],
+    keys: [
+      rw(rowAddress(args.marketStamp, programId)),
+      ro(args.profile, true),
+      rw(args.payer, true),
+      ro(SystemProgram.programId),
+    ],
     data: concat([
       discriminator('global', 'register'),
-      keyBytes(args.profile),
+      bytes32(args.marketStamp),
+      keyBytes(args.keeper),
+      bytes32(args.root),
+      args.keeperSignature,
+      p.a,
+      p.b,
+      p.c,
       u32le(label.length),
       label,
-      bytes32(args.code),
-      proofBytes(args.proof),
     ]),
   })
 }
 
 /**
- * Move what the line holds above its rent-exempt minimum to `payer`, which must be the payer the
- * line records. Nobody signs but whoever sends the transaction.
+ * Move what the row holds above its rent-exempt minimum to `payer`, which must be the payer the
+ * row records. Nobody signs but whoever sends the transaction.
  *
- * Data: discriminator, code (32). Accounts: the line, the recorded payer.
+ * Data: the discriminator alone. Accounts: the row, the recorded payer.
  */
-export function refundIx(args: { code: bigint | Uint8Array; payer: PublicKey; programId?: PublicKey }): TransactionInstruction {
-  const programId = args.programId ?? PROGRAM_ID
+export function refundIx(args: { row: PublicKey; payer: PublicKey; programId?: PublicKey }): TransactionInstruction {
   return new TransactionInstruction({
-    programId,
-    keys: [rw(lineAddress(args.code, programId)), rw(args.payer)],
-    data: concat([discriminator('global', 'refund'), bytes32(args.code)]),
+    programId: args.programId ?? PROGRAM_ID,
+    keys: [rw(args.row), rw(args.payer)],
+    data: Buffer.from(discriminator('global', 'refund')),
   })
 }
 
-export type Line = {
-  /** The profile's ed25519 key: its did:key name and its Solana wallet. */
+export type Row = {
+  /** The profile's ed25519 key, which signed `register`. */
   profile: PublicKey
-  /** The proof's nullifier: one per human per label. */
-  code: Uint8Array
+  /** The keeper's ed25519 key, as the row was sent. */
+  keeper: PublicKey
+  /** The root of the keeper's list the proof was made against. */
+  root: Uint8Array
+  /** The keeper's signature over the root, as sent; check it with `keeperSigned`. */
+  keeperSignature: Uint8Array
   /** Who paid the deposit; refunds go here. */
   payer: PublicKey
-  /** When the line was written, unix seconds. */
-  time: bigint
   bump: number
-  /** The root of the issuer's list the proof was made against. Checked by nobody but readers. */
-  root: Uint8Array
   label: string
 }
 
-/**
- * A line's bytes, read back. Offsets after the discriminator: profile 8, code 40, payer 72, time
- * 104 (i64), bump 112, root 113, label 145 (u32 length then UTF-8). Refuses anything that is not
- * exactly a line.
- */
-export function decodeLine(data: Uint8Array): Line {
-  if (data.length < lineSpace(0) || !LINE_DISCRIMINATOR.every((v, i) => data[i] === v)) {
-    throw new RangeError('not a line')
-  }
-  const labelLength = readU32le(data, 145)
-  if (labelLength > MAX_LABEL || data.length !== lineSpace(labelLength)) throw new RangeError('not a line: label')
+/** A row's bytes, read back. Refuses anything that is not exactly a row. */
+export function decodeRow(data: Uint8Array): Row {
+  if (data.length < rowSpace(0) || !ROW_DISCRIMINATOR.every((v, i) => data[i] === v)) throw new RangeError('not a row')
+  const labelLength = readU32le(data, ROW_OFFSET.label)
+  if (labelLength > MAX_LABEL || data.length !== rowSpace(labelLength)) throw new RangeError('not a row: label')
+  const o = ROW_OFFSET
   return {
-    profile: new PublicKey(data.subarray(8, 40)),
-    code: data.slice(40, 72),
-    payer: new PublicKey(data.subarray(72, 104)),
-    time: readI64le(data, 104),
-    bump: data[112],
-    root: data.slice(113, 145),
-    label: new TextDecoder('utf-8', { fatal: true }).decode(data.subarray(149, 149 + labelLength)),
+    profile: new PublicKey(data.subarray(o.profile, o.profile + 32)),
+    keeper: new PublicKey(data.subarray(o.keeper, o.keeper + 32)),
+    root: data.slice(o.root, o.root + 32),
+    keeperSignature: data.slice(o.keeperSignature, o.keeperSignature + 64),
+    payer: new PublicKey(data.subarray(o.payer, o.payer + 32)),
+    bump: data[o.bump],
+    label: new TextDecoder('utf-8', { fatal: true }).decode(data.subarray(o.label + 4)),
   }
 }

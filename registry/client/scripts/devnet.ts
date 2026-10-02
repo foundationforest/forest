@@ -1,6 +1,6 @@
-// The registry on devnet, used for real: a relayer writes one line for the test person's profile
-// (test/person.json) against one issuer's list, shows what the program refuses and what a refund
-// does, then makes a second issuer's membership for that line and checks it against the chain.
+// The registry on devnet, used for real: a relayer pays for one row, which the profile signs, for a
+// person on a stand-in keeper's list; then the refusal of a second row for the same market stamp,
+// and a refund.
 //
 //   FOREST_DEVNET_KEYS=<dir> node scripts/devnet.ts        (after registry/devnet/deploy.sh)
 //
@@ -10,35 +10,37 @@
 // (FOREST_DEVNET_RECORD overrides the path; FOREST_DEVNET_RPC the endpoint). Each step checks the
 // chain first and is skipped if it is done, so the script can be run again after a failure.
 //
-// The person is test/person.json: a profile and an identity secret, pinned as plain values. The
-// profile key signs nothing. The two issuers' lists, and issuer B's key, are stand-ins this script
-// makes (strangers' commitments around the person's), because issuers publish their lists outside
-// the registry and no issuer publishes one yet; they are recorded as such.
+// The person is the keys recipe's pinned test seed (`keys/test/vectors.json`): their secret for
+// the keeper's list comes from it through `keys/` itself. The keeper, its list and the profiles are
+// stand-ins this script makes, each key from a fixed text, and are recorded as such: no keeper
+// publishes a list yet, and the registry does not care how a profile key was made.
 
 import { readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { Identity } from '@semaphore-protocol/identity'
+import { ed25519 } from '@noble/curves/ed25519.js'
+import { sha256 } from '@noble/hashes/sha2.js'
 import { Connection, Keypair, PublicKey, SystemProgram, Transaction, VersionedTransaction } from '@solana/web3.js'
 
+import { listIdentity, listSecret } from '../../../keys/src/index.ts'
 import {
   buildRegistration,
-  codeFor,
-  commitmentOf,
-  fetchLine,
-  fetchLines,
-  lineAddress,
-  lineSpace,
+  fetchRow,
+  fetchRows,
+  keeperSigned,
   listRoot,
-  makeMembership,
+  marketStampOf,
   refundIx,
+  rootBytes,
+  rowAddress,
+  rowSpace,
+  stampOf,
   toBytes32,
-  verifyMembership,
 } from '../src/index.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
-/** A badge label as `market/role`, the recommended shape: this profile sells in `freelance`. */
+/** A label as `market/role`, the recommended shape: this profile sells in `freelance`. */
 const LABEL = 'freelance/seller'
 
 const keysDir = process.env.FOREST_DEVNET_KEYS
@@ -55,6 +57,9 @@ if (payer.publicKey.toBase58() !== base.keys.payer) throw new Error('the payer k
 
 const hex = (b: Uint8Array) => Buffer.from(b).toString('hex')
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+/** A stand-in key: its private seed is sha256 of this text. Public on purpose; devnet only. */
+const standInSeed = (name: string) => sha256(new TextEncoder().encode(`forest devnet stand-in: ${name}`))
+const standIn = (name: string) => Keypair.fromSeed(standInSeed(name))
 
 function save(): void {
   writeFileSync(recordPath, JSON.stringify(record, null, 2) + '\n')
@@ -97,17 +102,17 @@ async function meta(signature: string) {
   throw new Error(`no transaction for ${signature}`)
 }
 
-async function sendVersioned(tx: VersionedTransaction, skipPreflight = false): Promise<{ signature: string; err: unknown }> {
-  tx.sign([payer])
+async function sendVersioned(tx: VersionedTransaction, signers: Keypair[], skipPreflight = false): Promise<{ signature: string; err: unknown }> {
+  tx.sign(signers)
   const signature = await connection.sendRawTransaction(tx.serialize(), { skipPreflight })
   return { signature, err: await settle(signature) }
 }
 
-async function sendLegacy(tx: Transaction, skipPreflight = false): Promise<{ signature: string; err: unknown }> {
+async function sendLegacy(tx: Transaction): Promise<{ signature: string; err: unknown }> {
   tx.feePayer = payer.publicKey
   tx.recentBlockhash = (await connection.getLatestBlockhash('confirmed')).blockhash
   tx.sign(payer)
-  const signature = await connection.sendRawTransaction(tx.serialize(), { skipPreflight })
+  const signature = await connection.sendRawTransaction(tx.serialize())
   return { signature, err: await settle(signature) }
 }
 
@@ -117,124 +122,123 @@ const blockhash = async () => (await connection.getLatestBlockhash('confirmed'))
 
 console.log(`registry ${programId.toBase58()} on ${rpc}`)
 
-// The person: test/person.json's profile and identity secret.
-const person = JSON.parse(readFileSync(join(here, '../test/person.json'), 'utf8'))
-const profile = new PublicKey(person.profile)
-const secret = Buffer.from(person.secret, 'hex')
-const mine = commitmentOf(secret)
-if (mine.toString() !== person.commitment) throw new Error("the commitment is not test/person.json's")
+// The person: the keys recipe's pinned test seed, and their secret for the stand-in keeper's list.
+const vectors = JSON.parse(readFileSync(join(here, '../../../keys/test/vectors.json'), 'utf8'))
+const seed = Buffer.from(vectors.seed, 'hex')
+const keeper = standIn('keeper')
+const secret = await listSecret(seed, keeper.publicKey.toBase58())
+const { stamp } = await listIdentity(seed, keeper.publicKey.toBase58())
+if (stampOf(secret) !== stamp) throw new Error('keys/ and the client disagree on the stamp')
 
-// Two issuers' lists, stand-ins: strangers' commitments around the person's. Issuer B's key, a
-// stand-in too, is named in the membership by the did:key of the ed25519 key whose seed is
-// SHA-256('forest devnet stand-in issuer B: key'), pinned as text.
-const stranger = (issuer: string, n: number) => commitmentOf(new Identity(Buffer.from(`forest devnet stand-in issuer ${issuer}: member ${n}`)))
-const lists = {
-  A: [stranger('A', 1), stranger('A', 2), mine, stranger('A', 3), stranger('A', 4)],
-  B: [stranger('B', 1), mine, stranger('B', 2)],
-}
-const issuerB = 'did:key:z6MkvwV2QLMkm9ipRS5dRpCQMKqtNozhevvnrFgz6KoE6xqW'
-const code = codeFor(secret, LABEL)
-const address = lineAddress(code, programId)
+// The keeper's list: strangers' stamps around the person's, and the keeper's signature on its root.
+const stranger = (n: number) => stampOf(Buffer.from(`forest devnet stand-in keeper: member ${n}`))
+const stamps = [stranger(1), stranger(2), stamp, stranger(3), stranger(4)]
+const root = listRoot(stamps)
+const keeperSignature = ed25519.sign(rootBytes(root), standInSeed('keeper'))
+
+// Two profiles the person holds: the row's, and a second one the registry refuses on this list.
+const profile = standIn(`profile ${LABEL}`)
+const second = standIn(`second profile ${LABEL}`)
+const marketStamp = marketStampOf(secret, LABEL)
+const address = rowAddress(marketStamp, programId)
 const artifacts = {
   wasm: join(here, '../../artifacts/semaphore-32.wasm'),
   zkey: join(here, '../../artifacts/semaphore-32.zkey'),
 }
-record.line = {
-  ...(record.line ?? {}),
-  what: "the test person's profile (registry/client/test/person.json), one verified human under freelance/seller, proven against a stand-in issuer's list (A); a second stand-in issuer (B) vouches off chain, in a membership record; a relayer (the payer) sends everything, the profile key signs nothing",
+record.row = {
+  ...(record.row ?? {}),
+  what: "one row: the keys recipe's test seed, on a stand-in keeper's list, under freelance/seller, for a stand-in profile; the profile signs, a relayer (the payer) pays",
   label: LABEL,
-  profile: profile.toBase58(),
-  code: hex(toBytes32(code)),
+  profile: profile.publicKey.toBase58(),
+  keeper: keeper.publicKey.toBase58(),
+  list: { standIn: true, stamps: stamps.map(String), root: hex(toBytes32(root)), keeperSignature: hex(keeperSignature) },
+  marketStamp: hex(toBytes32(marketStamp)),
   address: address.toBase58(),
-  lists: Object.fromEntries(
-    Object.entries(lists).map(([name, l]) => [name, { standIn: true, commitments: l.map(String), root: hex(toBytes32(listRoot(l))) }]),
-  ),
+  standInKeys: "each stand-in key's private seed is sha256 of `forest devnet stand-in: <name>`, the names `keeper`, `profile freelance/seller` and `second profile freelance/seller`",
 }
 save()
 
-// register, with list A's proof.
-let line = await fetchLine(connection, code, { programId })
-if (!line) {
+const build = async (who: Keypair) =>
+  buildRegistration({
+    secret,
+    label: LABEL,
+    profile: who.publicKey,
+    keeper: keeper.publicKey,
+    stamps,
+    keeperSignature,
+    artifacts,
+    payer: payer.publicKey,
+    recentBlockhash: await blockhash(),
+    programId,
+  })
+
+// register: the profile signs, the relayer pays.
+if (!(await fetchRow(connection, marketStamp, { programId }))) {
   const started = Date.now()
-  const reg = await buildRegistration({ secret, label: LABEL, profile, commitments: lists.A, artifacts, payer: payer.publicKey, recentBlockhash: await blockhash(), programId })
+  const reg = await build(profile)
   const provingMs = Date.now() - started
   const bytes = reg.transaction.serialize().length
-  const { signature, err } = await sendVersioned(reg.transaction)
+  const { signature, err } = await sendVersioned(reg.transaction, [payer, profile])
   if (err) throw new Error(`register failed: ${JSON.stringify(err)}`)
   const m = await meta(signature)
-  record.line.register = { signature, provingMs, bytes, computeUnits: m.computeUnitsConsumed ?? null, fee: m.fee }
-  note(`register: profile 0 under "${LABEL}", list A's proof, the relayer paying; the profile key signed nothing`, signature)
-  line = await fetchLine(connection, code, { programId })
+  record.row.register = { signature, provingMs, bytes, computeUnits: m.computeUnitsConsumed ?? null, fee: m.fee }
+  note(`register: a row under "${LABEL}", the profile signing, the relayer paying`, signature)
 }
 const written = (await connection.getAccountInfo(address, 'confirmed'))!.data
 
-// Refused on chain, sent without a preflight so the refusal has a signature: a second register for
-// the same code, with list B's proof. A line never changes; another issuer goes off chain instead.
-if (!record.line.refused) {
-  const again = await buildRegistration({ secret, label: LABEL, profile, commitments: lists.B, artifacts, payer: payer.publicKey, recentBlockhash: await blockhash(), programId })
-  const second = await sendVersioned(again.transaction, true)
-  if (!second.err) throw new Error('a second register for the code landed')
-  const logs = async (s: string) => ((await meta(s)).logMessages ?? []).filter((l) => /already in use|Error Code|failed/.test(l))
-  record.line.refused = {
-    secondRegister: { signature: second.signature, err: second.err, log: await logs(second.signature) },
-  }
-  note("register again for the same code, with list B's proof: refused, the line already exists", second.signature)
+// Refused on chain, sent without a preflight so the refusal has a signature: the same person, list
+// and label for their second profile. The same market stamp, so the row already exists.
+if (!record.row.refused) {
+  const again = await build(second)
+  if (!again.row.equals(address)) throw new Error('the second profile has another market stamp')
+  const sent = await sendVersioned(again.transaction, [payer, second], true)
+  if (!sent.err) throw new Error('a second row for the market stamp landed')
+  const logs = ((await meta(sent.signature)).logMessages ?? []).filter((l) => /already in use|Error Code|failed/.test(l))
+  record.row.refused = { secondProfile: second.publicKey.toBase58(), signature: sent.signature, err: sent.err, log: logs }
+  note("register again for the same market stamp, for the person's second profile: refused, the row already exists", sent.signature)
 }
 
-// Refund: 0.001 SOL sent to the line, then refund, which anyone may send, pays exactly that back
-// to the payer the line records. Devnet charges today's rate, so nothing else is above the minimum.
-if (!record.line.refund) {
+// Refund: 0.001 SOL sent to the row, then refund, which anyone may send, pays exactly that back to
+// the payer the row records.
+if (!record.row.refund) {
   const gift = await sendLegacy(new Transaction().add(SystemProgram.transfer({ fromPubkey: payer.publicKey, toPubkey: address, lamports: 1_000_000 })))
   if (gift.err) throw new Error(`the gift failed: ${JSON.stringify(gift.err)}`)
-  note('0.001 SOL sent to the line, above its minimum', gift.signature)
-  const lineBefore = await connection.getBalance(address, 'confirmed')
-  const refund = await sendLegacy(new Transaction().add(refundIx({ code, payer: payer.publicKey, programId })))
+  note('0.001 SOL sent to the row, above its minimum', gift.signature)
+  const before = await connection.getBalance(address, 'confirmed')
+  const refund = await sendLegacy(new Transaction().add(refundIx({ row: address, payer: payer.publicKey, programId })))
   if (refund.err) throw new Error(`refund failed: ${JSON.stringify(refund.err)}`)
   const m = await meta(refund.signature)
-  const lineAfter = await connection.getBalance(address, 'confirmed')
-  if (lineBefore - lineAfter !== 1_000_000) throw new Error(`refund moved ${lineBefore - lineAfter}, not the gift`)
-  record.line.refund = { gift: gift.signature, signature: refund.signature, lamports: lineBefore - lineAfter, computeUnits: m.computeUnitsConsumed ?? null }
-  note('refund: exactly the 0.001 SOL above the minimum, back to the payer the line records', refund.signature)
+  const after = await connection.getBalance(address, 'confirmed')
+  if (before - after !== 1_000_000) throw new Error(`refund moved ${before - after}, not the gift`)
+  record.row.refund = { gift: gift.signature, signature: refund.signature, lamports: before - after, computeUnits: m.computeUnitsConsumed ?? null }
+  note('refund: exactly the 0.001 SOL above the minimum, back to the payer the row records', refund.signature)
 }
 
-// A second issuer, off chain: the person proves they are on list B for the same label and profile.
-// The record would be published in the profile's folder; here it is kept in this file, and checked
-// the way a reader checks it, against the line on chain and B's published root.
-const verificationKey = JSON.parse(readFileSync(join(here, '../../artifacts/semaphore-32.json'), 'utf8'))
-record.line.membership ??= await makeMembership({ secret, label: LABEL, profile, commitments: lists.B, issuer: issuerB, artifacts })
-const onChain = await fetchLine(connection, Buffer.from(record.line.membership.membership.code, 'hex'), { programId })
-if (!onChain) throw new Error('no line at the membership\'s code')
-const issuer = { key: issuerB, roots: [listRoot(lists.B)] }
-if (!(await verifyMembership(record.line.membership, { profile, line: onChain, issuer, verificationKey }))) throw new Error('the membership does not verify')
-if (await verifyMembership(record.line.membership, { profile, line: onChain, issuer: { key: issuerB, roots: [listRoot(lists.A)] }, verificationKey })) {
-  throw new Error('the membership verified against a root B did not publish')
-}
-save()
-console.log("  membership: list B vouches for the line off chain, checked against the line on chain")
-
-// Read back the way any reader would: every line of this profile.
-const read = await fetchLines(connection, { profile, programId }).catch((e) => {
-  console.log(`  getProgramAccounts refused by this RPC (${String(e).slice(0, 80)}); read the one line directly`)
+// Read back the way any reader would: every row of this profile, and the keeper's signature.
+const read = await fetchRows(connection, { profile: profile.publicKey, programId }).catch((e) => {
+  console.log(`  getProgramAccounts refused by this RPC (${String(e).slice(0, 80)}); read the one row directly`)
   return null
 })
-const final = await fetchLine(connection, code, { programId })
-if (!final) throw new Error('the line is gone')
+const final = await fetchRow(connection, marketStamp, { programId })
+if (!final) throw new Error('the row is gone')
 const account = (await connection.getAccountInfo(address, 'confirmed'))!
-if (!account.data.equals(written) || account.data.length !== lineSpace(Buffer.byteLength(LABEL))) throw new Error('the line changed')
-record.line.onChain = {
-  readBy: read ? 'getProgramAccounts, filtered by profile' : 'getAccountInfo at the code\'s address',
-  linesOfThisProfile: read?.length ?? null,
+if (!account.data.equals(written) || account.data.length !== rowSpace(Buffer.byteLength(LABEL))) throw new Error('the row changed')
+if (!keeperSigned(final)) throw new Error("the keeper's signature does not check")
+record.row.onChain = {
+  readBy: read ? 'getProgramAccounts, filtered by profile' : "getAccountInfo at the market stamp's address",
+  rowsOfThisProfile: read?.length ?? null,
   profile: final.profile.toBase58(),
+  keeper: final.keeper.toBase58(),
   payer: final.payer.toBase58(),
-  time: Number(final.time),
   label: final.label,
   root: hex(final.root),
+  keeperSigned: true,
   bytes: account.data.length,
   lamports: account.lamports,
 }
 save()
-if (hex(final.root) !== record.line.lists.A.root || final.profile.toBase58() !== profile.toBase58() || !final.payer.equals(payer.publicKey)) {
-  throw new Error('the line is not what was sent')
+if (hex(final.root) !== record.row.list.root || !final.profile.equals(profile.publicKey) || !final.payer.equals(payer.publicKey)) {
+  throw new Error('the row is not what was sent')
 }
 console.log('done')
 // snarkjs leaves worker threads running; nothing else is pending.

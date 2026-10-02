@@ -1,170 +1,111 @@
 {
-  "note": "The devnet deploy of the registry whose lines never change, beside the earlier registries, which it does not touch. Public keys, addresses and signatures only. The program id is derived from the devnet phrase under the label registry-lines-program; the deploy key and the payer are the ones devnet/devnet.json names. Written by registry/devnet/deploy.sh and registry/client/scripts/devnet.ts; read by registry/client/test/devnet.test.ts.",
+  "note": "The devnet deploy of the registry: one row per market stamp. Public keys, addresses and signatures only. The program id is derived from the devnet phrase under the label registry-rows-program; the deploy key and the payer are the ones devnet/devnet.json names. Written by registry/devnet/deploy.sh and registry/client/scripts/devnet.ts; read by registry/client/test/devnet.test.ts.",
   "cluster": "devnet",
   "rpc": "https://api.devnet.solana.com",
-  "earlier": [
-    {
-      "programId": "GWyKGgoRg2g3kpKNgsXBWS1ayHTHHzwbtLJW4XGVP2RW",
-      "what": "the free list of badges whose lines grew by add_proof, key label registry-badges-program; closed on 2026-09-30 (`closed`). Its record is this file at commit fdb16ea.",
-      "closed": {
-        "what": "closed: superseded by Hyh5\u2026, its program data's deposit returned to the deploy key. Its one line stays as an account no program owns any more, readable, its rent locked for good.",
-        "date": "2026-09-30",
-        "signature": "5ZqZT5QboYkcm6paacEqk3pZVexZcEzwXsBAya2nyvtZNUYf1zEMcZ1kbphsT1kfimefEBSTqVoJMsUgJ8x4yL4Y",
-        "slot": 506034576,
-        "programDataLamports": 959373240,
-        "returnedToDeployKey": 959368240,
-        "fee": 5000,
-        "strandedAccounts": 1,
-        "strandedLamports": 1671320
-      }
-    },
-    {
-      "programId": "8sUyd9JXRGEUqf2hYVnLCybi74549VG27dAK6YvbbU3i",
-      "what": "the first registry, with lists, a code tree and a fee; closed on 2026-09-30 (`closed`). Its record is devnet/devnet.json.",
-      "closed": {
-        "what": "closed: superseded by Hyh5\u2026, its program data's deposit returned to the deploy key. Its config, list, code tree and codes stay as accounts no program owns any more, readable, their rent locked for good.",
-        "date": "2026-09-30",
-        "signature": "3Nzwf1R8dhDQfMavjrRhYhNu941o4KAfoicYeerytR7rp5uRoTekVmZmxWPrPg7L3foUWVPcCnShyVe2C8podepG",
-        "slot": 506034586,
-        "programDataLamports": 1549913080,
-        "returnedToDeployKey": 1549908080,
-        "fee": 5000,
-        "strandedAccounts": 7,
-        "strandedLamports": 42113200
-      }
-    }
-  ],
   "registry": {
-    "programId": "Hyh5Lt1ErzYV3pF9ZkFWTdjhE2wwTuXnPMVgzCKEv9hf",
-    "programData": "A7RsBQdNTuUXcBCJoMsqPzmH6Brx8UiLgGSjXemGPJnC",
+    "programId": "5zTPm1bGY8ANLcJd12fPiKSTd71bvnq38LAUDT4ToeoC",
+    "programData": "8GcbCkBaeurcprsApALLJYR7eh3Rp4ZJQ4ZULhwSBDsk",
     "upgradeAuthority": "2mz33wBK7FKRXoAi7LptGGTwVQJDbrSyrVwbYRCqwP3A",
-    "lastDeploySlot": 505982873,
-    "soSha256": "7546409d84dc86c9e67fc7cc7739c34487e908f68cc93c1daf907b6ea5c4d7d3",
-    "soBytes": 165320,
+    "lastDeploySlot": 506563978,
+    "soSha256": "f54c4f9abbad65fcd19538e91e40fe9fe6191e28ea508418ec5907321d3be155",
+    "soBytes": 164288,
     "sbpfVersion": "v3",
-    "deploySignature": "58P5pSkm8EENgcXuJu9mBbvqznGuC9hd1uwww2fzFo6X7Wf3LSCr1s6gR8QYVR6n2JWcmAy1sjbqmPVGbFFcbg4X",
+    "deploySignature": "4m5TmthNkn9jGqFfrkKVabBxEpkGGJn7pNB6spAy528HFaqjaxAWtMgP6eRqGfGPKSbMCnEAnWhhBoK8nuUyxMHc",
     "deployCost": {
-      "bytes": 165320,
-      "programDataRent": 840704440,
+      "bytes": 164288,
+      "programDataRent": 835461880,
       "programRent": 833120,
-      "writes": 164,
-      "fees": 840000,
-      "total": 842377560,
-      "balanceBefore": 3356018280,
-      "balanceAfter": 2513640720,
-      "spent": 842377560
+      "writes": 163,
+      "fees": 835000,
+      "total": 837130000,
+      "balanceBefore": 4812992720,
+      "balanceAfter": 3975862720,
+      "spent": 837130000
     }
   },
   "transactions": [
     {
       "what": "deploy: the registry (SBPF v3), upgrade authority kept on the deploy key",
-      "signature": "58P5pSkm8EENgcXuJu9mBbvqznGuC9hd1uwww2fzFo6X7Wf3LSCr1s6gR8QYVR6n2JWcmAy1sjbqmPVGbFFcbg4X"
+      "signature": "4m5TmthNkn9jGqFfrkKVabBxEpkGGJn7pNB6spAy528HFaqjaxAWtMgP6eRqGfGPKSbMCnEAnWhhBoK8nuUyxMHc"
     },
     {
-      "what": "register: profile 0 under \"freelance/seller\", list A's proof, the relayer paying; the profile key signed nothing",
-      "signature": "3v99SKtktdhYyg4TYrLLhWk7fjekc8zehnDiWnYEi2d7kQeJU4Qzbgpp6vsW2XxfVXn8QSXMFrS2YksASFST5jn9"
+      "what": "register: a row under \"freelance/seller\", the profile signing, the relayer paying",
+      "signature": "FFUrgkJoe6xuArGTLW67rsLbPrjnxjvhmArLsGUJc1KyEBrJXaQKgn9oB1N5ZiSoKNCAB2CvgrQQndkdAv5bJCu"
     },
     {
-      "what": "register again for the same code, with list B's proof: refused, the line already exists",
-      "signature": "3gsQLSSchL282DcGxM6SXdxatJPupqyqN7drMNs88kgkQWmCFmYziNY75YjRYrG71GbGeJLfM2Mf4ZPmRDS4L5WW"
+      "what": "register again for the same market stamp, for the person's second profile: refused, the row already exists",
+      "signature": "3qTLUCHWMF2j59s5Ev5kXrgSeV7mZd49s2bUMfh4Sw5Usk75r27CwJj7NjGLTVeCZaPRmGZZR1o5EQYQ8RvxujgU"
     },
     {
-      "what": "0.001 SOL sent to the line, above its minimum",
-      "signature": "5qCi272F8LP9mZotZQS81LLB8KqyFpHJS6JMvJNwxWsYU5YAQVeCaRYsD2WusYf8x1cPLeWvvSZtXu8BMsgw4ezt"
+      "what": "0.001 SOL sent to the row, above its minimum",
+      "signature": "HsGu7WnnPUkB7GQy6Tbac3DF1oyGYb4Qjs279MHBbeyM97R1W7W1qaeq3wGMUve8np7t6rJzTSwUQXW1AG1ggpf"
     },
     {
-      "what": "refund: exactly the 0.001 SOL above the minimum, back to the payer the line records",
-      "signature": "2BXADd3KPQqxxcWhtURnp5hAHjTvDKVfC5Umpv4Dcaxh27YpEQaMx14wNdP2Ud2AuZwXcwRwNADu5sNduECv6MP5"
+      "what": "refund: exactly the 0.001 SOL above the minimum, back to the payer the row records",
+      "signature": "5TfyH1jexj74SNmSz9ipZhDnvEqHRB9EFA4eYqMV2BtwJnQP5dJx2RoyRLxeNrxKZcxPmF4sC4Nygh1Q6dyWooTg"
     }
   ],
-  "line": {
-    "what": "the test person's profile (registry/client/test/person.json), one verified human under freelance/seller, proven against a stand-in issuer's list (A); a second stand-in issuer (B) vouches off chain, in a membership record; a relayer (the payer) sends everything, the profile key signs nothing",
+  "row": {
+    "what": "one row: the keys recipe's test seed, on a stand-in keeper's list, under freelance/seller, for a stand-in profile; the profile signs, a relayer (the payer) pays",
     "label": "freelance/seller",
-    "profile": "Azh4zBXfQsXLKrrD6YanN7VZhpNyQot7vVdtB2r41UWx",
-    "code": "13a8925799f4da90c705505d75e6e80cfc760b8c29f50fe0e42353bbd784c236",
-    "address": "469GDtZ4yNERtQJHHAFvQvGUmMWJgtzw1oFGinYuDaKt",
-    "lists": {
-      "A": {
-        "standIn": true,
-        "commitments": [
-          "17267500762544374024106351218309472160400766846653130248818773996455286420731",
-          "20835780386388904453293284057755017977131398289876578123071978205571469355504",
-          "14568690134484466610252976219100933485694269593799802854234702390895629808185",
-          "16366078799365875499563310419550784487746534383716144609294358391757663487543",
-          "15838149072391876804666341625599372647470768711346325733106674817994939545853"
-        ],
-        "root": "1d13615ac341b9c932f13fb484f3a35cb5d417a1712cea7e88ddc13960b69be6"
-      },
-      "B": {
-        "standIn": true,
-        "commitments": [
-          "17205727339291075842815701526866915711885890964839048909096086873765183355152",
-          "14568690134484466610252976219100933485694269593799802854234702390895629808185",
-          "12077280769117229052694791889390356995185134941023246911435926799323878606857"
-        ],
-        "root": "243a73e7b24e703b2f7ee391de7f6e8129dc0cb73804ef6d952b9e138b53de9c"
-      }
+    "profile": "c6Nd6Y3NX1yyt6gWdPa23V9TNvkGXVtq4gtLmjBjxLs",
+    "keeper": "5tUPxWGKqNbFctBXKS8LgnkM8A1Jfn5qVrUGxKjFXozB",
+    "list": {
+      "standIn": true,
+      "stamps": [
+        "14068935072511089923511292505687573849261528248458821040462980657940127196603",
+        "17345030848540796704634822249290901754830353767723022262886058602977818141212",
+        "10694249757422601743480420404932755555722433096006791568508873502373209984562",
+        "4383624340734824265930566872361702388861252719174052541223342045253792251577",
+        "15358735913213598388622218463426325445944709616833779840023445291983688240143"
+      ],
+      "root": "12672909e4a5ad908967ca4bdca3270e1f6a1775ffcbe194914c2ca5a52edbc5",
+      "keeperSignature": "7477f1d481180afcd844261cca1672d1dfb420f45c25756a1d75600cc2ef17466af3118c67ead4c359829fbc24f146e5bb2e51dbe8af92094f1871e28d8ead01"
     },
+    "marketStamp": "243d6e9983876a58f190e988ad294983b7e27c3be9cf233c8c31f63254cf1fca",
+    "address": "9UDuRdcKnuYPKeafnW4C29WdpDnFKtYLhqdwvFRKfhkr",
+    "standInKeys": "each stand-in key's private seed is sha256 of `forest devnet stand-in: <name>`, the names `keeper`, `profile freelance/seller` and `second profile freelance/seller`",
     "register": {
-      "signature": "3v99SKtktdhYyg4TYrLLhWk7fjekc8zehnDiWnYEi2d7kQeJU4Qzbgpp6vsW2XxfVXn8QSXMFrS2YksASFST5jn9",
-      "provingMs": 1547,
-      "bytes": 491,
-      "computeUnits": 125258,
-      "fee": 5000
+      "signature": "FFUrgkJoe6xuArGTLW67rsLbPrjnxjvhmArLsGUJc1KyEBrJXaQKgn9oB1N5ZiSoKNCAB2CvgrQQndkdAv5bJCu",
+      "provingMs": 1424,
+      "bytes": 652,
+      "computeUnits": 124158,
+      "fee": 10000
     },
     "refused": {
-      "secondRegister": {
-        "signature": "3gsQLSSchL282DcGxM6SXdxatJPupqyqN7drMNs88kgkQWmCFmYziNY75YjRYrG71GbGeJLfM2Mf4ZPmRDS4L5WW",
-        "err": {
-          "InstructionError": [
-            0,
-            {
-              "Custom": 0
-            }
-          ]
-        },
-        "log": [
-          "Allocate: account Address { address: 469GDtZ4yNERtQJHHAFvQvGUmMWJgtzw1oFGinYuDaKt, base: None } already in use",
-          "Program 11111111111111111111111111111111 failed: custom program error: 0x0",
-          "Program Hyh5Lt1ErzYV3pF9ZkFWTdjhE2wwTuXnPMVgzCKEv9hf failed: custom program error: 0x0"
-        ]
-      }
-    },
-    "refund": {
-      "gift": "5qCi272F8LP9mZotZQS81LLB8KqyFpHJS6JMvJNwxWsYU5YAQVeCaRYsD2WusYf8x1cPLeWvvSZtXu8BMsgw4ezt",
-      "signature": "2BXADd3KPQqxxcWhtURnp5hAHjTvDKVfC5Umpv4Dcaxh27YpEQaMx14wNdP2Ud2AuZwXcwRwNADu5sNduECv6MP5",
-      "lamports": 1000000,
-      "computeUnits": 4769
-    },
-    "membership": {
-      "issuer": "did:key:z6MkvwV2QLMkm9ipRS5dRpCQMKqtNozhevvnrFgz6KoE6xqW",
-      "membership": {
-        "label": "freelance/seller",
-        "code": "13a8925799f4da90c705505d75e6e80cfc760b8c29f50fe0e42353bbd784c236",
-        "root": "243a73e7b24e703b2f7ee391de7f6e8129dc0cb73804ef6d952b9e138b53de9c",
-        "proof": [
-          "08cb4abbc3df2dde9612784b524feb86e739d4e96936d3fce2aa34b1dad3b4a0",
-          "00e433fc89f63b935a7c00d9267f43a658df6a9f6da544db76e33e4bc394e3ff",
-          "08db4616693351acb0c032a7156911517e62a7c6738d914ac76a1d7ba980961e",
-          "2a56826746b082f1a28dbbfd060c24c19b86362d2ef4e42b0075ea7b38ccd47c",
-          "2e74b365af5b2663d73e281bc80bd5cd7f35a007e3312b4308998307ce12cdc0",
-          "07b960532a8da984f3429399dd580f84e05df8347d5356006be20db7db8db310",
-          "1734cfa7ef9b39f93cd05fe65e1cb0b19770648b633ef4ba46b937fbf5e286e3",
-          "0ab09b7ead3cf917a8029b0e5d61de303e0f9d8d9bce3f75180669ea25758a89"
+      "secondProfile": "G7mahzDMnPsHnQR7ofnGpPoRQgXReY3dY2xExiE54kn6",
+      "signature": "3qTLUCHWMF2j59s5Ev5kXrgSeV7mZd49s2bUMfh4Sw5Usk75r27CwJj7NjGLTVeCZaPRmGZZR1o5EQYQ8RvxujgU",
+      "err": {
+        "InstructionError": [
+          0,
+          {
+            "Custom": 0
+          }
         ]
       },
-      "createdAt": "2026-09-30T17:38:50.686Z"
+      "log": [
+        "Allocate: account Address { address: 9UDuRdcKnuYPKeafnW4C29WdpDnFKtYLhqdwvFRKfhkr, base: None } already in use",
+        "Program 11111111111111111111111111111111 failed: custom program error: 0x0",
+        "Program 5zTPm1bGY8ANLcJd12fPiKSTd71bvnq38LAUDT4ToeoC failed: custom program error: 0x0"
+      ]
+    },
+    "refund": {
+      "gift": "HsGu7WnnPUkB7GQy6Tbac3DF1oyGYb4Qjs279MHBbeyM97R1W7W1qaeq3wGMUve8np7t6rJzTSwUQXW1AG1ggpf",
+      "signature": "5TfyH1jexj74SNmSz9ipZhDnvEqHRB9EFA4eYqMV2BtwJnQP5dJx2RoyRLxeNrxKZcxPmF4sC4Nygh1Q6dyWooTg",
+      "lamports": 1000000,
+      "computeUnits": 3194
     },
     "onChain": {
       "readBy": "getProgramAccounts, filtered by profile",
-      "linesOfThisProfile": 1,
-      "profile": "Azh4zBXfQsXLKrrD6YanN7VZhpNyQot7vVdtB2r41UWx",
+      "rowsOfThisProfile": 1,
+      "profile": "c6Nd6Y3NX1yyt6gWdPa23V9TNvkGXVtq4gtLmjBjxLs",
+      "keeper": "5tUPxWGKqNbFctBXKS8LgnkM8A1Jfn5qVrUGxKjFXozB",
       "payer": "9CKUm2s7nwT7HrCpjtaffNH3PnUUVyQr2gELjHrWYBUd",
-      "time": 1790789924,
       "label": "freelance/seller",
-      "root": "1d13615ac341b9c932f13fb484f3a35cb5d417a1712cea7e88ddc13960b69be6",
-      "bytes": 165,
-      "lamports": 1488440
+      "root": "12672909e4a5ad908967ca4bdca3270e1f6a1775ffcbe194914c2ca5a52edbc5",
+      "keeperSigned": true,
+      "bytes": 221,
+      "lamports": 1772920
     }
   }
 }

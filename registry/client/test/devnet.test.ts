@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url'
 
 import { Connection, PublicKey } from '@solana/web3.js'
 
-import { fetchLine, fetchLines, lineAddress, lineSpace, listRoot, verifyMembership } from '../src/index.ts'
+import { fetchRow, fetchRows, keeperSigned, listRoot, rowAddress, rowSpace, toBytes32 } from '../src/index.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const record = JSON.parse(readFileSync(join(here, '../../devnet/devnet.json'), 'utf8'))
@@ -47,41 +47,35 @@ test('the registry is deployed at its recorded id, its bytes the build, its upgr
   assert.equal(createHash('sha256').update(so).digest('hex'), record.registry.soSha256)
 })
 
-test('the line is on chain as recorded: the profile, the label, list A\'s root, the relayer as payer, never changed', { skip }, async () => {
-  const code = Buffer.from(record.line.code, 'hex')
-  assert.equal(lineAddress(code, programId).toBase58(), record.line.address)
-  const line = await retry(() => fetchLine(connection, code, { programId }))
-  assert.ok(line, 'the line exists')
-  assert.equal(line.profile.toBase58(), record.line.profile)
-  assert.equal(line.label, record.line.label)
-  assert.equal(hex(line.root), record.line.lists.A.root)
-  assert.equal(line.payer.toBase58(), record.line.onChain.payer)
-  const info = await retry(() => connection.getAccountInfo(new PublicKey(record.line.address)))
-  assert.equal(info?.data.length, lineSpace(Buffer.byteLength(record.line.label)))
+test("the row is on chain as recorded, the keeper's signature checks, never changed", { skip }, async () => {
+  const r = record.row
+  const marketStamp = Buffer.from(r.marketStamp, 'hex')
+  assert.equal(rowAddress(marketStamp, programId).toBase58(), r.address)
+  const row = await retry(() => fetchRow(connection, marketStamp, { programId }))
+  assert.ok(row, 'the row exists')
+  assert.equal(row.profile.toBase58(), r.profile)
+  assert.equal(row.keeper.toBase58(), r.keeper)
+  assert.equal(row.label, r.label)
+  assert.equal(hex(row.root), r.list.root)
+  assert.equal(hex(row.root), hex(toBytes32(listRoot(r.list.stamps.map(BigInt)))), "the root is the list's")
+  assert.equal(hex(row.keeperSignature), r.list.keeperSignature)
+  assert.equal(keeperSigned(row), true)
+  assert.equal(row.payer.toBase58(), r.onChain.payer)
+  const info = await retry(() => connection.getAccountInfo(new PublicKey(r.address)))
+  assert.equal(info?.data.length, rowSpace(Buffer.byteLength(r.label)))
   assert.equal(info?.lamports, await retry(() => connection.getMinimumBalanceForRentExemption(info!.data.length)), 'exactly rent exempt after the refund')
 })
 
-test("a second issuer vouches off chain: the recorded membership checks against the line on chain and B's root", { skip }, async () => {
-  const record_ = record.line.membership
-  const line = await retry(() => fetchLine(connection, Buffer.from(record_.membership.code, 'hex'), { programId }))
-  assert.ok(line)
-  const verificationKey = JSON.parse(readFileSync(join(here, '../../artifacts/semaphore-32.json'), 'utf8'))
-  const rootOf = (list: string) => listRoot(record.line.lists[list].commitments.map(BigInt))
-  assert.equal(hex(Buffer.from(record_.membership.root, 'hex')), record.line.lists.B.root)
-  const profile = new PublicKey(record.line.profile)
-  const check = (roots: bigint[]) => verifyMembership(record_, { profile, line, issuer: { key: record_.issuer, roots }, verificationKey })
-  assert.equal(await check([rootOf('B')]), true)
-  assert.equal(await check([rootOf('A')]), false, 'a root the issuer did not publish')
-})
-
-test('the profile has one line, read the way any reader reads', { skip }, async () => {
-  const lines = await retry(() => fetchLines(connection, { profile: new PublicKey(record.line.profile), programId }))
-  assert.equal(lines.length, 1)
-  assert.equal(lines[0].address.toBase58(), record.line.address)
+test('the profile has one row and the keeper one, read the way any reader reads', { skip }, async () => {
+  const byProfile = await retry(() => fetchRows(connection, { profile: new PublicKey(record.row.profile), programId }))
+  assert.equal(byProfile.length, 1)
+  assert.equal(byProfile[0].address.toBase58(), record.row.address)
+  const byKeeper = await retry(() => fetchRows(connection, { keeper: new PublicKey(record.row.keeper), programId }))
+  assert.deepEqual(byKeeper.map((r) => r.address.toBase58()), [record.row.address])
 })
 
 test('every recorded transaction landed, and only the refusal failed', { skip, timeout: 300_000 }, async () => {
-  const refused = new Set([record.line.refused.secondRegister.signature])
+  const refused = new Set([record.row.refused.signature])
   for (const { what, signature } of record.transactions.filter((t: { signature?: string }) => t.signature)) {
     const { value } = await retry(() => connection.getSignatureStatuses([signature], { searchTransactionHistory: true }))
     assert.ok(value[0], `${what}: not found`)
