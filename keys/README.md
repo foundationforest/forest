@@ -4,28 +4,28 @@ Up: [the repo](../README.md).
 
 ## What it is
 
-The standard for a person's keys in Forest, and a small library that follows it. A person owns
-one seed: 24 random words, kept in their password manager. Every key they use is mixed from it,
-on their own device. Any app that follows this page gets the same keys from the same seed, so a
-person is never locked into one app.
+The standard for a person's keys in Forest, and a small library that follows it. The standard is
+the 24 words, the recipe and the rules for apps. A person owns one seed: 24 random words. Every key
+they use is mixed from it, on their own device. Any app that follows this page gets the same keys
+from the same seed, so a person is never locked into one app. Where the words live is the person's
+choice.
 
 This README is the standard. The library in `src/` follows it, and `test/vectors.json` pins its
 answers.
 
 ## How it works
 
-### The seed, in your vault
+### The 24 words
 
 - The seed is 32 random bytes, written as 24 English words: BIP39, the 32 bytes plus an 8-bit
   checksum.
-- The person keeps the words in their password manager, like a password.
 - An app that needs a key asks for the words, mixes the key, and forgets the words.
 - The words are the 32 bytes and nothing more. BIP39's own seed step (PBKDF2, with a passphrase)
   is not used.
 - Case and spacing in the words do not matter. A wrong word, or a word out of place, fails the
   checksum.
 
-### The mixing table
+### The recipe
 
 Every mix is HKDF-SHA256 (RFC 5869): an empty salt, the info string's UTF-8 bytes, 32 bytes out.
 
@@ -76,7 +76,8 @@ From the list secret on, Semaphore's own hashes take over (below).
 ### Rules for apps that hold keys
 
 1. **Never store or send the seed.** Ask for the words when a key is needed, mix it, and forget
-   them. The seed opens every profile and every list, so it lives only in the person's vault.
+   them. The seed opens every profile and every list, so it lives only where the person keeps the
+   words.
 2. **Keys stay on the device.** A key never leaves the device that mixed it, and no server holds
    one. Whoever holds a key is that profile.
 3. **Show what the profile key signs.** Before each signature, show the person what it says, in
@@ -131,7 +132,7 @@ stamp step by step without Semaphore's wrapper.
 
 ## Limits
 
-- **It trusts the person's password manager** to keep the words and show them to no one else.
+- **It trusts wherever the person keeps the words** to keep them and show them to no one else.
 - **It trusts its pieces, used unchanged:** Web Crypto (HKDF-SHA256, and its random source for new
   seeds), `@noble/curves` (ed25519), `@scure/base` (base58, bech32), `@scure/bip39`,
   `age-encryption` (whose hybrid runs on `@noble/post-quantum`), and
@@ -145,17 +146,16 @@ stamp step by step without Semaphore's wrapper.
   computer; the reading key, age's ML-KEM-768 hybrid, does not (see the FAQ).
 - **No wiping of memory.** JavaScript cannot promise that bytes are erased; an app closes the
   page, the library cannot.
-- **Tests run in Node.** No password manager is tested here.
+- **Tests run in Node.**
 
 ## FAQ
 
-**Why 24 words in a password manager?**
-24 words are 256 random bits: nobody guesses them. A password manager already keeps secrets for a
-person: it syncs them to their devices, backs them up, and locks them behind the person's own
-unlock. So the seed needs no new place to live, works with any app on any device, and can also go
-on paper. A secret one provider keeps for you stays with that provider; words go anywhere. And no
-app stores the seed, so no app can leak it. The cost: whoever gets into the password manager gets
-every key.
+**Why 24 words?**
+24 words are 256 random bits: nobody guesses them. A secret one provider keeps for you stays with
+that provider; words go anywhere, so the seed works with any app on any device, and the person
+keeps it wherever they choose. How they keep it, and how they back it up, is an app's to offer, not
+this standard's. No app stores the seed, so no app can leak it. The cost: whoever gets the words
+gets every key.
 
 **What if I give the words to the wrong app?**
 Then that app has everything the seed opens, and nothing takes it back:
@@ -179,8 +179,9 @@ it.
 **Can anyone tell that two profiles are mine?**
 Not from the keys. Each profile key is mixed from the seed and its own label, and each list secret
 from the seed and its keeper's address, so nothing public ties two of a person's profiles together,
-or their stamps on two lists. How an app writes them can still link them
-([records](../records/README.md), Limits).
+or their stamps on two lists: off chain they are private by default. How an app writes them can
+still link them ([records](../records/README.md), Limits). On chain, moving money between your own
+profiles links them until a privacy pool is used.
 
 **Why is the reading key mixed from the profile key, not from the seed?**
 So that whoever holds a profile can read what is encrypted to it, and nothing more: the reading key

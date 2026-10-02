@@ -6,10 +6,13 @@ Up: [the repo](../README.md). Down: the [security checklist](security-checklist.
 
 ## What it is
 
-One sealed Solana program and its client. An escrow holds an amount of one token between two keys,
-a buyer and a seller, and lets it out only when both sides agree, or by an arbiter or a timer that
-was in the escrow from the start. Either side can object, which turns the timer off. Every escrow
-that held the money leaves a receipt at its address, for good.
+A program the foundation offers, and its client; use any escrow. An escrow holds an amount of one
+token between two keys, a buyer and a seller, and lets it out only when both sides agree, or by an
+arbiter or a timer that was in the escrow from the start. Either side can object, which turns the
+timer off. Every escrow that held the money leaves a receipt at its address, for good.
+
+Each version is to be sealed on mainnet the day it deploys, because it holds money. A new version
+comes as a new program at a new address, and the old ones keep working.
 
 - `program/`: the program (Anchor 1.2), its LiteSVM tests and its fuzzer.
 - `client/`: builds every instruction and reads every account and event. It talks to no network of
