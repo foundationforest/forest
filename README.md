@@ -28,9 +28,8 @@ What it does not hold:
 | [`records/`](records/README.md) | The records protocol: its spec, the library, a reference board, the approval page, and the four record shapes (profile, offer, review, proof) | Tested; not deployed |
 | [`keys/`](keys/README.md) | The keys recipe: a passkey's secret becomes a seed, and the seed every key a person uses | Tested; not deployed |
 | [`registry/`](registry/README.md) | Sealed program and client: one badge per human per label, free | On devnet |
-| [`escrow/`](escrow/README.md) | Sealed program and client, v1: money out only when both sides agree; classic tokens | On devnet |
-| [`escrow/v2/`](escrow/v2/README.md) | v1 plus an objection, the funding time on every receipt, and both token programs | On devnet |
-| [`devnet/`](devnet/README.md) | The devnet key recipe, and escrow v1's build and deploy scripts and record | Rebuilds escrow v1's deployed bytes |
+| [`escrow/`](escrow/README.md) | Sealed program and client: money out when both sides agree, or by an arbiter or timer set at the start; either side can object; classic and Token-2022 tokens | On devnet |
+| [`devnet/`](devnet/README.md) | The devnet key recipe, and the shared devnet record | |
 | [`docs/`](docs/) | [Why things are as they are](docs/decisions.md); [what runs on devnet](docs/devnet.md) | |
 | [`.claude/skills/safe-solana-builder/`](.claude/skills/safe-solana-builder/SKILL.md) | The security checklist every program change goes through | |
 
@@ -41,18 +40,18 @@ What `.github/workflows/checks.yml` runs on every pull request. Node 22.18 or la
 
 ```
 # Each package: install, type-check, tests that need no chain. keys first: registry/client reads it.
-for d in keys records registry/client escrow/client escrow/v2/client; do
+for d in keys records registry/client escrow/client; do
   (cd "$d" && npm ci && npm run check && npm test)
 done
 
 # Each program: build as SBPF v3, then its LiteSVM tests against that build.
-for p in registry/program escrow/program escrow/v2/program; do
+for p in registry/program escrow/program; do
   (cd "$p" && cargo build-sbf --arch v3 && cd tests-litesvm && cargo test)
 done
 ```
 
 A test that cannot find what it needs (Chromium for `records/`'s browser test) skips; the workflow
-fails on any skip. The slower checks (local-validator tests, the registry's property test, escrow
-v1's fuzzer) run nightly there; each folder's README says how to run them.
+fails on any skip. The slower checks (the registry client's local-validator test, the registry's
+property test, the escrow's fuzzer) run nightly there; each folder's README says how to run them.
 
 Licensed Apache 2.0. [`CLAUDE.md`](CLAUDE.md) holds the rules for AI sessions working here.
