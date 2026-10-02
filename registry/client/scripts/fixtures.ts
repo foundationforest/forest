@@ -12,7 +12,7 @@
 // format written twice, checked against each other.
 //
 // The `membership` section is a record the client's `makeMembership` made for that line against a
-// second issuer's list: the client's tests verify it, and records/test checks it fits the schema.
+// second issuer's list: the client's tests verify it.
 
 import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'

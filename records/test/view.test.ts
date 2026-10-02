@@ -1,156 +1,174 @@
-// The merge rules: versions, deletes, owner first, grants and arrival order. All pure, no network.
+// The view: versions, deletes, the owner first, writer keys and permissions. All pure, no network.
 
 import assert from 'node:assert/strict'
 import { randomInt } from 'node:crypto'
 import { describe, test } from 'node:test'
-import { type Entry, checkEntry } from '../src/entry.ts'
-import { type Version, liveContent, viewProfile } from '../src/view.ts'
-import { delegateEntry, grantEntry, nextTime, ownerEntry, revokeEntry } from '../src/write.ts'
-import { DAY, MINUTE, T0, alice, bob, offerBody, profileBody, signer, stranger } from './fixtures.ts'
+import { type Checked, type SignedRecord, checkRecord } from '../src/record.ts'
+import { liveContent, viewProfile } from '../src/view.ts'
+import { hostsRecord, nextTime, ownerRecord, permissionsRecord, writerRecord } from '../src/write.ts'
+import { DAY, MINUTE, T0, alice, allow, bob, offerBody, profileBody, stranger, writer } from './fixtures.ts'
 
-const checked = (...entries: Entry[]): Version[] => entries.map((e) => checkEntry(e))
-/** One feed, in the order given: what one host took in. */
-const view = (entries: Entry[], now = T0 + MINUTE) => viewProfile(alice.did, [checked(...entries)], now)
-const idOf = (e: Entry) => checkEntry(e).id
+const checked = (...records: SignedRecord[]): Checked[] => records.map((r) => checkRecord(r))
+const view = (records: SignedRecord[], now = T0 + MINUTE) => viewProfile(alice.address, checked(...records), now)
+const idOf = (r: SignedRecord) => checkRecord(r).id
 
 describe('versions', () => {
-  test('an update is a newer version on top; the older one stays as history', () => {
-    const v1 = ownerEntry(alice, 'offer/maths', offerBody('30'), T0)
-    const v2 = ownerEntry(alice, 'offer/maths', offerBody('35'), T0 + 1000)
-    const v = view([v2, v1])
-    assert.equal((v.current.get('offer/maths')!.entry.body as { price: { amount: string } }).price.amount, '35')
-    assert.equal(v.history.get('offer/maths')!.length, 1)
+  test('the newest time wins, whatever order the records come in', () => {
+    const v1 = ownerRecord(alice, 'offer/maths', offerBody('30'), T0)
+    const v2 = ownerRecord(alice, 'offer/maths', offerBody('35'), T0 + 1000)
+    assert.equal(view([v2, v1]).current.get('offer/maths')!.id, idOf(v2))
+    assert.equal(view([v1, v2]).ignored.get(idOf(v1)), 'older')
   })
 
-  test('a delete is an empty version; the live view drops the path', () => {
-    const v1 = ownerEntry(alice, 'offer/maths', offerBody('30'), T0)
-    const gone = ownerEntry(alice, 'offer/maths', null, T0 + 1000)
+  test('a null body deletes; the live content drops the path', () => {
+    const v1 = ownerRecord(alice, 'offer/maths', offerBody('30'), T0)
+    const gone = ownerRecord(alice, 'offer/maths', null, T0 + 1000)
     const v = view([v1, gone])
-    assert.equal(v.current.get('offer/maths')!.entry.body, null)
+    assert.equal(v.current.get('offer/maths')!.record.body, null)
     assert.equal(liveContent(v).has('offer/maths'), false)
   })
 
   test('the writer never loses to its own older version, whatever its clock says', () => {
-    const v1 = ownerEntry(alice, 'profile', profileBody('A'), T0 + 5 * MINUTE)
+    const v1 = ownerRecord(alice, 'profile', profileBody('A'), T0 + 5 * MINUTE)
     const slowClock = T0 // a phone whose clock is five minutes slow
-    const v2 = ownerEntry(alice, 'profile', profileBody('B'), nextTime(slowClock, view([v1]), 'profile'))
-    assert.equal((view([v1, v2], T0 + 6 * MINUTE).current.get('profile')!.entry.body as { name: string }).name, 'B')
+    const v2 = ownerRecord(alice, 'profile', profileBody('B'), nextTime(slowClock, view([v1], T0 + 6 * MINUTE), 'profile'))
+    assert.equal(view([v1, v2], T0 + 6 * MINUTE).current.get('profile')!.id, idOf(v2))
   })
 
-  test('entries dated more than ten minutes ahead are held back until their time', () => {
-    const ahead = ownerEntry(alice, 'profile', profileBody('future'), T0 + 11 * MINUTE)
+  test('records dated more than ten minutes ahead are held back until their time', () => {
+    const ahead = ownerRecord(alice, 'profile', profileBody('future'), T0 + 11 * MINUTE)
     assert.equal(view([ahead], T0).current.size, 0)
     assert.equal(view([ahead], T0).ignored.get(idOf(ahead)), 'future')
     assert.equal(view([ahead], T0 + 11 * MINUTE).current.size, 1)
   })
 
-  test('the owner’s entries in any order, over any split into feeds, with duplicates, give the same view', () => {
-    const entries = [
-      ownerEntry(alice, 'profile', profileBody('A'), T0),
-      ownerEntry(alice, 'profile', profileBody('B'), T0), // same time: the larger id wins
-      ownerEntry(alice, 'offer/a', offerBody('1'), T0),
-      ownerEntry(alice, 'offer/a', null, T0 + 1),
-      ownerEntry(alice, 'offer/b', offerBody('2'), T0 + 2),
+  test('the hosts record is the owner’s newest; a delete leaves no hosts', () => {
+    const one = hostsRecord(alice, ['https://a.example'], T0)
+    const two = hostsRecord(alice, ['https://b.example', 'https://c.example'], T0 + 1)
+    assert.deepEqual(view([two, one]).hosts, ['https://b.example', 'https://c.example'])
+    assert.deepEqual(view([one, two, hostsRecord(alice, null, T0 + 2)]).hosts, [])
+    assert.deepEqual(view([]).hosts, [])
+  })
+
+  test('any set of records, in any order, with duplicates, gives the same view', () => {
+    const records = [
+      permissionsRecord(alice, [allow(writer, ['offer'], T0 + DAY)], T0),
+      ownerRecord(alice, 'profile', profileBody('A'), T0),
+      ownerRecord(alice, 'profile', profileBody('B'), T0), // same time: the larger id wins
+      ownerRecord(alice, 'offer/a', offerBody('1'), T0),
+      ownerRecord(alice, 'offer/a', null, T0 + 1),
+      writerRecord(writer, alice.address, 'offer/a', offerBody('9'), T0 + 2), // the owner wrote here
+      writerRecord(writer, alice.address, 'offer/b', offerBody('2'), T0 + 2),
+      writerRecord(writer, alice.address, 'offer/b', offerBody('3'), T0 + 3),
+      writerRecord(stranger, alice.address, 'offer/c', offerBody('4'), T0 + 3),
     ]
-    const summary = (feeds: Version[][]) => [...viewProfile(alice.did, feeds, T0 + MINUTE).current].map(([p, v]) => `${p}:${v.id}`).sort().join()
-    const expected = summary([checked(...entries)])
+    const summary = (list: Checked[]) => [...viewProfile(alice.address, list, T0 + MINUTE).current].map(([p, c]) => `${p}:${c.id}`).sort().join()
+    const expected = summary(checked(...records))
     for (let round = 0; round < 50; round++) {
-      const shuffled = checked(...entries, ...entries.slice(0, randomInt(entries.length)))
+      const shuffled = checked(...records, ...records.slice(0, randomInt(records.length)))
       for (let i = shuffled.length - 1; i > 0; i--) {
         const j = randomInt(i + 1)
         ;[shuffled[i], shuffled[j]] = [shuffled[j]!, shuffled[i]!]
       }
-      const cut = randomInt(shuffled.length)
-      assert.equal(summary([shuffled.slice(0, cut), shuffled.slice(cut), shuffled.slice(randomInt(cut + 1))]), expected)
+      assert.equal(summary(shuffled), expected)
     }
   })
 })
 
-describe('grants', () => {
+describe('writer keys and permissions', () => {
   const until = T0 + 7 * DAY
-  const { entry: grant, grantId } = grantEntry(alice, 'mine', { to: signer.did, paths: ['offer'], until, label: 'My signer, offers' }, T0)
-  const written = delegateEntry(signer, alice.did, grantId, 'offer/physics', offerBody('40'), T0 + MINUTE)
+  const permissions = permissionsRecord(alice, [allow(writer, ['offer'], until)], T0)
+  const written = writerRecord(writer, alice.address, 'offer/physics', offerBody('40'), T0 + MINUTE)
 
-  test('a delegate writes under the owner’s grant, with its own key', () => {
-    const v = view([grant, written], T0 + 2 * MINUTE)
+  test('a writer key the permissions record lists writes at the paths it allows', () => {
+    const v = view([permissions, written], T0 + 2 * MINUTE)
     assert.equal(v.current.get('offer/physics')!.id, idOf(written))
-    assert.equal(v.current.get('offer/physics')!.entry.by, signer.did)
+    assert.deepEqual(v.writers, [allow(writer, ['offer'], until)])
   })
 
-  test('outside its paths, it counts for nothing', () => {
-    const review = delegateEntry(signer, alice.did, grantId, 'review/x', { subject: bob.did }, T0 + MINUTE)
-    const sneaky = delegateEntry(signer, alice.did, grantId, 'offerx', offerBody('1'), T0 + MINUTE) // prefix is per segment
-    const v = view([grant, review, sneaky], T0 + 2 * MINUTE)
-    assert.equal(v.ignored.get(idOf(review)), 'out-of-scope')
-    assert.equal(v.ignored.get(idOf(sneaky)), 'out-of-scope')
+  test('without a permissions record, or outside its paths, a writer record counts for nothing', () => {
+    assert.equal(view([written]).ignored.get(idOf(written)), 'not-allowed')
+    const review = writerRecord(writer, alice.address, 'review/x', { subject: bob.address }, T0 + MINUTE)
+    const sneaky = writerRecord(writer, alice.address, 'offerx', offerBody('1'), T0 + MINUTE) // a prefix covers whole segments
+    const v = view([permissions, review, sneaky], T0 + 2 * MINUTE)
+    assert.equal(v.ignored.get(idOf(review)), 'not-allowed')
+    assert.equal(v.ignored.get(idOf(sneaky)), 'not-allowed')
   })
 
-  test('another key naming the same grant counts for nothing', () => {
-    const imposter = delegateEntry(stranger, alice.did, grantId, 'offer/x', offerBody('1'), T0 + MINUTE)
-    assert.equal(view([grant, imposter], T0 + 2 * MINUTE).ignored.get(idOf(imposter)), 'grant-not-for-signer')
+  test('a key the permissions record does not list counts for nothing', () => {
+    const imposter = writerRecord(stranger, alice.address, 'offer/x', offerBody('1'), T0 + MINUTE)
+    assert.equal(view([permissions, imposter]).ignored.get(idOf(imposter)), 'not-allowed')
   })
 
-  test('what you wrote yourself, a delegate cannot overwrite or delete', () => {
-    const mine = ownerEntry(alice, 'offer/maths', offerBody('30'), T0)
-    const overwrite = delegateEntry(signer, alice.did, grantId, 'offer/maths', null, T0 + 2 * MINUTE)
-    const v = view([grant, mine, overwrite], T0 + 3 * MINUTE)
-    assert.equal(v.current.get('offer/maths')!.entry.by, undefined)
-    assert.equal(v.ignored.get(idOf(overwrite)), 'owner-first')
+  test('the owner wins: a writer cannot overwrite or delete what the owner wrote, even later', () => {
+    const mine = ownerRecord(alice, 'offer/maths', offerBody('30'), T0)
+    const overwrite = writerRecord(writer, alice.address, 'offer/maths', null, T0 + 2 * MINUTE)
+    const v = view([permissions, mine, overwrite], T0 + 3 * MINUTE)
+    assert.equal(v.current.get('offer/maths')!.id, idOf(mine))
+    assert.equal(v.ignored.get(idOf(overwrite)), 'owner-wins')
   })
 
-  test('an entry that arrived before its grant counts for nothing', () => {
-    assert.equal(view([written, grant], T0 + 2 * MINUTE).ignored.get(idOf(written)), 'grant-not-current')
+  test('the owner overrides a writer by writing at its path, at any time', () => {
+    const fix = ownerRecord(alice, 'offer/physics', null, T0) // dated before the writer's record
+    const v = view([permissions, written, fix], T0 + 2 * MINUTE)
+    assert.equal(v.current.get('offer/physics')!.id, idOf(fix))
   })
 
-  test('revoking ends a grant from then on: what arrived before stays; what arrives after never counts, however it is dated', () => {
-    const revoke = revokeEntry(alice, 'mine', T0 + 10 * MINUTE)
-    const late = delegateEntry(signer, alice.did, grantId, 'offer/late', offerBody('9'), T0 + 11 * MINUTE)
-    const backdated = delegateEntry(signer, alice.did, grantId, 'offer/old', offerBody('9'), T0 + 2 * MINUTE) // "before" the revocation
-    const v = view([grant, written, revoke, late, backdated], T0 + 30 * DAY)
-    assert.equal(v.current.get('offer/physics')!.id, idOf(written), 'posted before: stays, a month later too')
-    assert.equal(v.ignored.get(idOf(late)), 'grant-not-current')
-    assert.equal(v.ignored.get(idOf(backdated)), 'grant-not-current')
-    assert.equal(v.grants.size, 0)
+  test('removing a writer key is setting its until to now: what it already wrote still counts, nothing dated from then on does', () => {
+    const removedAt = T0 + 10 * MINUTE
+    const removed = permissionsRecord(alice, [allow(writer, ['offer'], removedAt)], removedAt)
+    const atRemoval = writerRecord(writer, alice.address, 'offer/at', offerBody('1'), removedAt)
+    const later = writerRecord(writer, alice.address, 'offer/later', offerBody('1'), removedAt + DAY)
+    const v = view([permissions, written, removed, atRemoval, later], T0 + 30 * DAY)
+    assert.equal(v.current.get('offer/physics')!.id, idOf(written), 'written before removal: still counts a month later')
+    assert.equal(v.ignored.get(idOf(atRemoval)), 'not-allowed', 'dated at until is not before it')
+    assert.equal(v.ignored.get(idOf(later)), 'not-allowed')
   })
 
-  test('editing a grant ends the old version from then on; reviving it does not bring back what arrived in between', () => {
-    const { entry: widened, grantId: widenedId } = grantEntry(alice, 'mine', { to: signer.did, paths: ['offer', 'review'], until }, T0 + 5 * MINUTE)
-    const underOld = delegateEntry(signer, alice.did, grantId, 'offer/after-edit', offerBody('1'), T0 + 6 * MINUTE)
-    const underNew = delegateEntry(signer, alice.did, widenedId, 'review/1', { subject: bob.did }, T0 + 6 * MINUTE)
-    let v = view([grant, written, widened, underOld, underNew], T0 + 7 * MINUTE)
+  test('a writer with no until has no end', () => {
+    const open = permissionsRecord(alice, [allow(writer, ['offer'])], T0)
+    const years = writerRecord(writer, alice.address, 'offer/years', offerBody('1'), T0 + 3 * 365 * DAY)
+    const v = view([open, written, years], T0 + 3 * 365 * DAY)
     assert.equal(v.current.get('offer/physics')!.id, idOf(written))
-    assert.equal(v.ignored.get(idOf(underOld)), 'grant-not-current')
-    assert.equal(v.current.get('review/1')!.id, idOf(underNew))
-
-    const revoke = revokeEntry(alice, 'mine', T0 + 10 * MINUTE)
-    const between = delegateEntry(signer, alice.did, widenedId, 'offer/between', offerBody('1'), T0 + 11 * MINUTE)
-    const { entry: revived } = grantEntry(alice, 'mine', { to: signer.did, paths: ['offer'], until }, T0 + 20 * MINUTE)
-    v = view([grant, widened, revoke, between, revived], T0 + 21 * MINUTE)
-    assert.equal(v.ignored.get(idOf(between)), 'grant-not-current')
+    assert.equal(v.current.get('offer/years')!.id, idOf(years))
   })
 
-  test('there is no expiry by the reader’s clock: what arrived before until still counts a year later; what is dated after never does', () => {
-    const after = delegateEntry(signer, alice.did, grantId, 'offer/after', offerBody('1'), until + 1)
-    const v = view([grant, written, after], until + 365 * DAY)
-    assert.equal(v.current.get('offer/physics')!.id, idOf(written))
-    assert.equal(v.ignored.get(idOf(after)), 'after-until')
+  test('a key left out of the permissions record, or a deleted permissions record, counts for nothing: what it wrote stops counting', () => {
+    const dropped = permissionsRecord(alice, [], T0 + 10 * MINUTE)
+    const v = view([permissions, written, dropped], T0 + 30 * DAY)
+    assert.equal(v.current.has('offer/physics'), false)
+    assert.equal(v.ignored.get(idOf(written)), 'not-allowed')
+    assert.equal(view([permissions, written, permissionsRecord(alice, null, T0 + 10 * MINUTE)], T0 + DAY).current.has('offer/physics'), false)
   })
 
-  test('each feed is walked in its own order: an entry counts if any feed took it in before the revocation', () => {
-    const revoke = revokeEntry(alice, 'mine', T0 + 10 * MINUTE)
-    const onTime = checked(grant, written, revoke) // a host that took the post, then the revocation
-    const tooLate = checked(grant, revoke, written) // a host that got the post after the revocation
-    const without = checked(grant, revoke) // a host that never got the post
-    const counts = (feeds: Version[][]) => viewProfile(alice.did, feeds, T0 + DAY).current.has('offer/physics')
-    assert.equal(counts([onTime]), true)
-    assert.equal(counts([tooLate]), false)
-    assert.equal(counts([without, tooLate]), false)
-    assert.equal(counts([tooLate, onTime]), true)
-    assert.equal(counts([onTime, tooLate]), true, 'the order the feeds are read in does not matter')
+  test('narrowing its paths ends what it wrote outside them; another writer key is untouched', () => {
+    const other = writerRecord(stranger, alice.address, 'review/1', { subject: bob.address }, T0 + MINUTE)
+    const both = permissionsRecord(alice, [allow(writer, ['offer', 'note'], until), allow(stranger, ['review'], until)], T0 + 1)
+    const note = writerRecord(writer, alice.address, 'note/a', { text: 'x' }, T0 + MINUTE)
+    const narrowed = permissionsRecord(alice, [allow(writer, ['note'], until), allow(stranger, ['review'], until)], T0 + 5 * MINUTE)
+    const v = view([both, written, note, other, narrowed], T0 + 6 * MINUTE)
+    assert.equal(v.current.has('offer/physics'), false)
+    assert.equal(v.current.get('note/a')!.id, idOf(note))
+    assert.equal(v.current.get('review/1')!.id, idOf(other))
   })
 
-  test('a grant only the owner signed counts: a delegate cannot grant itself', () => {
-    // A delegate cannot even produce a control entry: the shape check refuses it.
-    assert.throws(() => delegateEntry(signer, alice.did, grantId, 'grant/mine', { to: signer.did, paths: ['review'], until }, T0), /only the owner/)
+  test('a writer key back in the permissions record brings its records back: the view is only what is current', () => {
+    const dropped = permissionsRecord(alice, [], T0 + 10 * MINUTE)
+    const back = permissionsRecord(alice, [allow(writer, ['offer'], until)], T0 + 20 * MINUTE)
+    assert.equal(view([permissions, written, dropped, back], T0 + DAY).current.get('offer/physics')!.id, idOf(written))
+  })
+
+  test('until is checked against the record’s own time: no reader’s clock ends anything', () => {
+    const late = writerRecord(writer, alice.address, 'offer/late', offerBody('1'), until)
+    const v = view([permissions, written, late], until + 365 * DAY)
+    assert.equal(v.current.get('offer/physics')!.id, idOf(written), 'dated before until: still counts a year later')
+    assert.equal(v.ignored.get(idOf(late)), 'not-allowed', 'dated at until or after: never counts')
+  })
+
+  test('only the owner’s permissions count: a writer cannot list itself, or use one profile’s permissions in another', () => {
+    assert.throws(() => writerRecord(writer, alice.address, 'permissions', { writers: [allow(writer, ['review'], until)] }, T0), /only the owner/)
+    const intoBob = writerRecord(writer, bob.address, 'offer/x', offerBody('1'), T0 + 1)
+    const v = viewProfile(bob.address, checked(permissions, intoBob), T0 + MINUTE)
+    assert.equal(v.ignored.get(idOf(intoBob)), 'not-allowed')
   })
 })

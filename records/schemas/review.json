@@ -7,9 +7,10 @@
   "properties": {
     "subject": {
       "type": "string",
-      "description": "The reviewed profile's name: its did:key.",
-      "maxLength": 64,
-      "pattern": "^did:key:z[1-9A-HJ-NP-Za-km-z]+$"
+      "description": "The reviewed profile's name: its address.",
+      "minLength": 32,
+      "maxLength": 44,
+      "pattern": "^[1-9A-HJ-NP-Za-km-z]{32,44}$"
     },
     "ratings": {
       "$ref": "#/$defs/ratings"
@@ -28,7 +29,7 @@
     },
     "dealId": {
       "type": "string",
-      "description": "The deal this review is about: the escrow account's address (base58 of 32 bytes) when an escrow exists, else 32 random bytes as lowercase hex, chosen when the deal began. Two reviews across one deal id are the two sides' receipts. Optional; an index weighs a review without one, or without evidence under it, near zero.",
+      "description": "The deal this review is about: its escrow receipt's address (base58 of 32 bytes) when it went through the escrow, else 32 random bytes as lowercase hex, chosen when the deal began. Two reviews across one deal id show both sides took part. Optional; an index weighs a review without one, or without evidence under it, near zero.",
       "minLength": 32,
       "maxLength": 64,
       "pattern": "^([0-9a-f]{64}|[1-9A-HJ-NP-Za-km-z]{32,44})$"
@@ -41,7 +42,7 @@
   "$defs": {
     "rating": {
       "type": "string",
-      "description": "From \"1\" to \"10\", with at most one decimal (\"8.5\"): decimal text, since an entry holds no fractional numbers.",
+      "description": "From \"1\" to \"10\", with at most one decimal (\"8.5\"): decimal text, since a record holds no fractional numbers.",
       "pattern": "^(10(\\.0)?|[1-9](\\.[0-9])?)$"
     },
     "ratings": {

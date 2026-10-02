@@ -1,5 +1,0 @@
-:root { color-scheme: light dark; font: 17px/1.5 system-ui, sans-serif; }
-body { max-width: 34rem; margin: 0 auto; padding: 1.5rem 1rem; }
-#note p { margin: 0.25rem 0; overflow-wrap: anywhere; }
-#note p:first-child { font-weight: 600; }
-button { font: inherit; padding: 0.7rem 1.2rem; margin: 0.75rem 0.5rem 0 0; }

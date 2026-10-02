@@ -1,19 +1,19 @@
-// Talking to hosts over HTTP: publish entries, read them back. Every entry read is checked
+// Talking to hosts over HTTP: publish records, read them back. Every record read is checked
 // here, whatever host it came from: a reader trusts no host.
 
-import { type Entry, EntryError, decodeEntry, encodeEntry } from './entry.ts'
 import type { ReadOptions, Result } from './host.ts'
-import type { Version } from './view.ts'
+import { type Checked, RecordError, type SignedRecord, decodeRecord, encodeRecord } from './record.ts'
+import { type View, viewProfile } from './view.ts'
 
 export type PublishOutcome = { host: string; status: number; results: Result[]; error?: string }
 
-/** Send entries to each host; one request per host. A host that fails does not stop the others. */
-export async function publish(hosts: string[], entries: Entry[]): Promise<PublishOutcome[]> {
-  const body = entries.map((e) => encodeEntry(e) + '\n').join('')
+/** Send records to each host; one request per host. A host that fails does not stop the others. */
+export async function publish(hosts: string[], records: SignedRecord[]): Promise<PublishOutcome[]> {
+  const body = records.map((r) => encodeRecord(r) + '\n').join('')
   return Promise.all(
     hosts.map(async (host): Promise<PublishOutcome> => {
       try {
-        const res = await fetch(`${host}/v1/entries`, { method: 'POST', headers: { 'content-type': 'application/x-ndjson' }, body })
+        const res = await fetch(`${host}/v1/records`, { method: 'POST', headers: { 'content-type': 'application/x-ndjson' }, body })
         const text = await res.text()
         const results = text
           .split('\n')
@@ -27,7 +27,7 @@ export async function publish(hosts: string[], entries: Entry[]): Promise<Publis
   )
 }
 
-export type Page = { versions: Version[]; cursor: number; refused: Array<{ line: string; reason: string }> }
+export type Page = { records: Checked[]; cursor: number; refused: Array<{ line: string; reason: string }> }
 
 /** The largest page a reader takes, and a host serves. */
 export const MAX_PAGE_BYTES = 4 * 1024 * 1024
@@ -35,31 +35,30 @@ export const MAX_PAGE_BYTES = 4 * 1024 * 1024
 export const READ_TIMEOUT_MS = 60_000
 
 /**
- * One page of a host's feed after a cursor, in the host's order, each entry checked. It throws
- * on a page over MAX_PAGE_BYTES, or one not read within `timeout` ms (READ_TIMEOUT_MS when omitted).
+ * One page of what a host stores, after a cursor, in the order it took them, each record checked.
+ * It throws on a page over MAX_PAGE_BYTES, or one not read within `timeout` ms (READ_TIMEOUT_MS
+ * when omitted).
  */
 export async function readPage(host: string, options: ReadOptions & { timeout?: number } = {}): Promise<Page> {
   const query = new URLSearchParams()
   if (options.after !== undefined) query.set('after', String(options.after))
   if (options.profile !== undefined) query.set('profile', options.profile)
-  if (options.badged) query.set('badged', '1')
-  if (options.limit !== undefined) query.set('limit', String(options.limit))
-  const res = await fetch(`${host}/v1/entries?${query}`, { signal: AbortSignal.timeout(options.timeout ?? READ_TIMEOUT_MS) })
+  const res = await fetch(`${host}/v1/records?${query}`, { signal: AbortSignal.timeout(options.timeout ?? READ_TIMEOUT_MS) })
   if (!res.ok) throw new Error(`${host} answered ${res.status}`)
   const cursor = Number.parseInt(res.headers.get('forest-cursor') ?? '0', 10)
   const text = await readText(res, MAX_PAGE_BYTES)
   if (text === null) throw new Error(`${host} served a page over ${MAX_PAGE_BYTES} bytes`)
-  const versions: Version[] = []
+  const records: Checked[] = []
   const refused: Page['refused'] = []
   for (const line of text.split('\n')) {
     if (!line) continue
     try {
-      versions.push(decodeEntry(line))
+      records.push(decodeRecord(line))
     } catch (err) {
-      refused.push({ line, reason: err instanceof EntryError ? err.code : 'invalid' })
+      refused.push({ line, reason: err instanceof RecordError ? err.code : 'invalid' })
     }
   }
-  return { versions, cursor, refused }
+  return { records, cursor, refused }
 }
 
 /** A response's text, or null as soon as it passes `max` bytes. */
@@ -81,14 +80,35 @@ async function readText(res: Response, max: number): Promise<string | null> {
   }
 }
 
-/** A host's whole feed (for one profile, or badged profiles only), page by page, in its order. */
-export async function readAll(host: string, options: Omit<ReadOptions, 'after' | 'limit'> = {}): Promise<Page> {
-  const out: Page = { versions: [], cursor: 0, refused: [] }
+/** Everything a host stores (for one profile, if asked), page by page. */
+export async function readAll(host: string, options: Omit<ReadOptions, 'after'> = {}): Promise<Page> {
+  const out: Page = { records: [], cursor: 0, refused: [] }
   for (;;) {
     const page = await readPage(host, { ...options, after: out.cursor })
-    out.versions.push(...page.versions)
+    out.records.push(...page.records)
     out.refused.push(...page.refused)
     if (page.cursor === out.cursor) return out
     out.cursor = page.cursor
   }
+}
+
+/**
+ * A profile as its hosts show it: the hosts given, then every host its current hosts record names,
+ * until no new one turns up. A host that does not answer is skipped: the others still count.
+ */
+export async function readProfile(hosts: string[], profile: string, now: number): Promise<View> {
+  const read = new Set<string>()
+  const found: Checked[] = []
+  for (let next = hosts; next.length; ) {
+    for (const host of next) {
+      read.add(host)
+      try {
+        found.push(...(await readAll(host, { profile })).records)
+      } catch {
+        // Skipped.
+      }
+    }
+    next = viewProfile(profile, found, now).hosts.filter((h) => !read.has(h))
+  }
+  return viewProfile(profile, found, now)
 }

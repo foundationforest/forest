@@ -2,9 +2,10 @@
 //
 // A line holds the root of one issuer's list and never changes. Every other issuer that vouches for
 // the same human is one record in the profile's folder, at `proof/<id>`, of the `membership` kind
-// (`records/schemas/proof.json`): the issuer's key, and a Semaphore proof for the line's own label
-// and profile against that issuer's list, with the code and the root it carries. The proof is the
-// same circuit, the same scope and message and the same code as the line's; only the list differs.
+// (records/ defines no shape for it): the issuer's key, and a Semaphore proof for the line's own
+// label and profile against that issuer's list, with the code and the root it carries. The proof is
+// the same circuit, the same scope and message and the same code as the line's; only the list
+// differs.
 //
 // A reader checks a record against the profile's line and the roots that issuer published, with the
 // verification key the program is sealed with (`registry/artifacts/semaphore-32.json`). Nothing here
@@ -20,7 +21,7 @@ import { BN254_P, fromBytes32, isFieldElement, messageOf, scopeOf, toBytes32 } f
 import type { Line } from './program.ts'
 import { proveMembership, type Artifacts } from './proof.ts'
 
-/** The body of a `proof/<id>` record of the membership kind, as `records/schemas/proof.json` defines it. */
+/** The body of a `proof/<id>` record of the membership kind. */
 export type Membership = {
   /** The issuer's key, as a did:key: the key its published roots are signed with. */
   issuer: string

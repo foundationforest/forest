@@ -1,48 +1,34 @@
-// Keys, canonical text, entries: the pieces every other part stands on.
+// Keys, canonical text, records: the pieces every other part stands on.
 
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 import { base58, hex } from '../src/bytes.ts'
 import { canonical, parseCanonical } from '../src/canonical.ts'
-import { EntryError, MAX_ENTRY_BYTES, checkEntry, decodeEntry, encodeEntry, entryId, signEntry, unsignedOf } from '../src/entry.ts'
-import { addressFromDid, didFromPublicKey, publicKeyFromDid } from '../src/keys.ts'
-import { boxKey } from '../src/sealed.ts'
-import { ownerEntry } from '../src/write.ts'
-import { SEED, T0, VECTORS, alice, aliceBuyer, offerBody, profileBody, sizedEntry } from './fixtures.ts'
+import { keyFromPrivate, publicKeyFromAddress } from '../src/keys.ts'
+import { MAX_RECORD_BYTES, RecordError, checkRecord, decodeRecord, encodeRecord, recordId, signRecord, unsignedOf } from '../src/record.ts'
+import { ownerRecord, permissionsRecord, writerRecord } from '../src/write.ts'
+import { KEYS, T0, alice, aliceBuyer, allow, offerBody, profileBody, sizedRecord, writer } from './fixtures.ts'
 
 describe('keys', () => {
-  test('the seed and every profile key are exactly what test/keys.json pins: the profile id is its wallet', async () => {
-    assert.equal(hex.encode(SEED), VECTORS.seed)
-    for (const [key, pinned] of [alice, aliceBuyer].map((k, i) => [k, VECTORS.profiles[i]!] as const)) {
-      assert.equal(key.index, pinned.index)
-      assert.equal(key.did, pinned.did)
-      assert.equal(key.address, pinned.wallet)
-      assert.deepEqual(await boxKey(SEED, key.index), pinned.box)
-    }
-    assert.equal(addressFromDid(alice.did), alice.address)
-    assert.match(alice.did, /^did:key:z6Mk/)
+  test("profile keys are keys/'s: its pinned profiles sign here, and a name is the key in base58", () => {
+    assert.equal(alice.address, KEYS.profiles[0].address)
+    assert.equal(aliceBuyer.address, KEYS.profiles[1].address)
+    assert.equal(alice.address, base58.encode(alice.publicKey), 'the name is the key in base58: the same text as the wallet')
+    assert.deepEqual(keyFromPrivate(alice.privateKey), { privateKey: alice.privateKey, publicKey: alice.publicKey, address: alice.address })
+    assert.throws(() => keyFromPrivate(alice.privateKey.subarray(1)), /32 bytes/)
   })
 
-  test('a did:key has one spelling and names a usable key', () => {
-    assert.deepEqual(publicKeyFromDid(alice.did), alice.publicKey)
-    assert.equal(publicKeyFromDid(alice.did + 'x'), null)
-    assert.equal(publicKeyFromDid(alice.did.replace('did:key:z', 'did:key:Z')), null)
-    assert.equal(publicKeyFromDid('did:key:z' + base58.encode(Uint8Array.of(0xe7, 0x01, ...alice.publicKey))), null) // secp256k1 prefix
+  test('an address has one spelling and names a usable key', () => {
+    assert.deepEqual(publicKeyFromAddress(alice.address), alice.publicKey)
+    assert.equal(publicKeyFromAddress(alice.address + '1'), null)
+    assert.equal(publicKeyFromAddress('1' + alice.address), null, 'a leading 1 is a leading zero byte: 33 bytes')
+    assert.equal(publicKeyFromAddress(alice.address.replace(/.$/, '0')), null, 'not base58')
+    assert.equal(publicKeyFromAddress(`did:key:z${alice.address}`), null)
     // The identity point, and a small-order point, are refused as names.
     const identity = new Uint8Array(32)
     identity[0] = 1
-    assert.equal(publicKeyFromDid(didFromPublicKey(identity)), null)
-    assert.equal(publicKeyFromDid(didFromPublicKey(hex.decode('c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa'))), null)
-  })
-
-  test('the box key is deterministic from the seed and post-quantum', async () => {
-    const a = await boxKey(SEED, 0)
-    const again = await boxKey(SEED, 0)
-    const other = await boxKey(SEED, 1)
-    assert.equal(a.recipient, again.recipient)
-    assert.notEqual(a.recipient, other.recipient)
-    assert.match(a.recipient, /^age1pq1/)
-    assert.match(a.identity, /^AGE-SECRET-KEY-PQ-1/)
+    assert.equal(publicKeyFromAddress(base58.encode(identity)), null)
+    assert.equal(publicKeyFromAddress(base58.encode(hex.decode('c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa'))), null)
   })
 })
 
@@ -75,63 +61,89 @@ describe('canonical text', () => {
   })
 })
 
-describe('entries', () => {
-  const entry = ownerEntry(alice, 'offer/maths', offerBody('30'), T0)
+describe('records', () => {
+  const record = ownerRecord(alice, 'offer/maths', offerBody('30'), T0)
 
-  test('an owner entry verifies, and its id is the hash of what was signed', () => {
-    const { id } = checkEntry(entry)
-    assert.equal(id, entryId(unsignedOf(entry)))
-    const wire = encodeEntry(entry)
-    assert.equal(decodeEntry(wire).id, id)
+  test('an owner record verifies, and its id is the hash of what was signed', () => {
+    const { id } = checkRecord(record)
+    assert.equal(id, recordId(unsignedOf(record)))
+    const wire = encodeRecord(record)
+    assert.equal(decodeRecord(wire).id, id)
     assert.ok(wire.startsWith('{"body":'))
   })
 
+  test('a writer record verifies with the writer key, and names it in by', () => {
+    const written = writerRecord(writer, alice.address, 'offer/physics', offerBody('40'), T0)
+    assert.equal(checkRecord(written).record.by, writer.address)
+    const { by: _by, ...asOwner } = written
+    assert.throws(() => checkRecord(asOwner), (err: RecordError) => err.code === 'signature', 'without by it is not the owner’s')
+  })
+
   test('any change to any field breaks the signature', () => {
-    const changes: Array<Record<string, unknown>> = [
-      { path: 'offer/other' },
-      { time: T0 + 1 },
-      { profile: aliceBuyer.did },
-      { body: offerBody('3') },
-      { body: null },
-    ]
+    const changes: Array<{ [key: string]: unknown }> = [{ path: 'offer/other' }, { time: T0 + 1 }, { profile: aliceBuyer.address }, { body: offerBody('3') }, { body: null }, { by: writer.address }]
     for (const change of changes) {
-      const forged = { ...entry, ...change }
-      assert.throws(() => checkEntry(forged), (err: EntryError) => err.code === 'signature', JSON.stringify(change))
+      assert.throws(() => checkRecord({ ...record, ...change }), (err: RecordError) => err.code === 'signature', JSON.stringify(change))
     }
   })
 
-  test('a key cannot sign as another profile', () => {
-    assert.throws(() => signEntry({ v: 1, profile: aliceBuyer.did, path: 'profile', time: T0, body: profileBody('x') }, alice.secretKey), /not the signer/)
+  test('a key cannot sign as another profile, or as a writer it is not', () => {
+    assert.throws(() => signRecord({ v: 1, profile: aliceBuyer.address, path: 'profile', time: T0, body: profileBody('x') }, alice.privateKey), /not the signer/)
+    assert.throws(() => signRecord({ v: 1, profile: alice.address, path: 'profile', time: T0, body: profileBody('x'), by: writer.address }, alice.privateKey), /not the signer/)
   })
 
-  test('shape rules: unknown fields, control paths, delegates', () => {
-    const base = { v: 1 as const, profile: alice.did, path: 'profile', time: T0, body: profileBody('A') }
-    assert.throws(() => signEntry({ ...base, extra: 1 } as never, alice.secretKey), /unknown field/)
-    assert.throws(() => signEntry({ ...base, path: 'Offer/x' }, alice.secretKey), /path/)
-    assert.throws(() => signEntry({ ...base, path: 'offer/../x' }, alice.secretKey), /path/)
-    assert.throws(() => signEntry({ ...base, path: 'folder/x' }, alice.secretKey), /folder/)
-    assert.throws(() => signEntry({ ...base, path: 'grant/a/b' }, alice.secretKey), /grant/)
-    assert.throws(() => signEntry({ ...base, by: alice.did, grant: 'a'.repeat(64) }, alice.secretKey), /owner signs without/)
-    assert.throws(() => signEntry({ ...base, time: -1 }, alice.secretKey), /time/)
-    assert.throws(() => signEntry({ ...base, path: 'folder', body: { hosts: ['http://example.com'] } }, alice.secretKey), /origin/)
-    assert.throws(() => signEntry({ ...base, path: 'grant/g', body: { to: alice.did, paths: ['offer'], until: T0, pay: 5 } }, alice.secretKey), /grants nothing/)
-    assert.throws(() => signEntry({ ...base, path: 'grant/g', body: { to: alice.did, paths: ['grant'], until: T0 } }, alice.secretKey), /content path/)
+  test('shape rules: unknown fields, paths, control records, writers', () => {
+    const base = { v: 1 as const, profile: alice.address, path: 'profile', time: T0, body: profileBody('A') }
+    const code = (c: string) => (err: RecordError) => err.code === c
+    assert.throws(() => signRecord({ ...base, extra: 1 } as never, alice.privateKey), code('shape'))
+    assert.throws(() => signRecord({ ...base, grant: 'a'.repeat(64) } as never, alice.privateKey), code('shape'), 'grants are gone')
+    assert.throws(() => signRecord({ ...base, v: 2 } as never, alice.privateKey), code('version'))
+    assert.throws(() => signRecord({ ...base, path: 'Offer/x' }, alice.privateKey), code('path'))
+    assert.throws(() => signRecord({ ...base, path: 'offer/../x' }, alice.privateKey), code('path'))
+    assert.throws(() => signRecord({ ...base, path: 'a/b/c/d/e' }, alice.privateKey), code('path'))
+    assert.throws(() => signRecord({ ...base, path: 'hosts/x' }, alice.privateKey), code('path'))
+    assert.throws(() => signRecord({ ...base, time: -1 }, alice.privateKey), code('time'))
+    assert.throws(() => signRecord({ ...base, body: [] as never }, alice.privateKey), code('body'))
+    assert.throws(() => signRecord({ ...base, by: alice.address }, alice.privateKey), code('shape'), 'the owner signs without by')
+    assert.throws(() => writerRecord(writer, alice.address, 'permissions', { writers: [] }, T0), code('control'), 'only the owner writes control records')
+    assert.throws(() => writerRecord(writer, alice.address, 'hosts', null, T0), code('control'))
+  })
+
+  test('hosts and permissions bodies are exact: a field nobody knows refuses the record', () => {
+    const hosts = (body: unknown) => () => ownerRecord(alice, 'hosts', body as never, T0)
+    assert.throws(hosts({ urls: [] }), /1 to 8/)
+    assert.throws(hosts({ urls: ['http://example.com'] }), /origin/)
+    assert.throws(hosts({ urls: ['https://a.example/path'] }), /origin/)
+    assert.throws(hosts({ urls: ['https://a.example', 'https://a.example'] }), /repeat/)
+    assert.throws(hosts({ urls: ['https://a.example'], keep: 30 }), /unknown hosts field keep/)
+    assert.ok(checkRecord(ownerRecord(alice, 'hosts', { urls: ['https://a.example', 'http://127.0.0.1:8080'] }, T0)))
+
+    const perms = (writers: unknown[]) => () => permissionsRecord(alice, writers as never, T0)
+    assert.throws(perms([{ ...allow(writer, ['offer'], T0), pay: 5 }]), /unknown writer field pay/)
+    assert.throws(perms([allow(writer, ['hosts'], T0)]), /content path/)
+    assert.throws(perms([allow(writer, ['permissions'], T0)]), /content path/)
+    assert.throws(perms([{ key: `did:key:z${writer.address}`, paths: ['offer'], until: T0 }]), /usable/)
+    assert.throws(perms([{ key: writer.address, paths: ['offer'], until: -1 }]), /until/)
+    assert.throws(perms([{ key: writer.address, paths: ['offer'], until: '1' }]), /until/)
+    assert.ok(checkRecord(permissionsRecord(alice, [{ key: writer.address, paths: ['offer'] }], T0)), 'until is optional')
+    assert.throws(perms(Array(17).fill(allow(writer, ['offer'], T0))), /at most 16/)
+    assert.throws(() => ownerRecord(alice, 'permissions', { writers: [], more: 1 }, T0), /unknown permissions field/)
+    assert.ok(checkRecord(permissionsRecord(alice, [allow(writer, ['offer', 'review'], T0)], T0)))
+    assert.ok(checkRecord(permissionsRecord(alice, null, T0)), 'a delete removes every writer')
   })
 
   test('size cap', () => {
-    const big = { about: 'x'.repeat(70_000) }
-    assert.throws(() => ownerEntry(alice, 'profile', big, T0), /at most/)
+    assert.throws(() => ownerRecord(alice, 'profile', { about: 'x'.repeat(70_000) }, T0), /at most/)
   })
 
   test('the size cap counts UTF-8 bytes, not characters', () => {
-    const atCap = encodeEntry(sizedEntry(alice, 'note/a', MAX_ENTRY_BYTES))
-    assert.ok(decodeEntry(atCap).id)
+    const atCap = encodeRecord(sizedRecord(alice, 'note/a', MAX_RECORD_BYTES))
+    assert.ok(decodeRecord(atCap).id)
     // One more byte, from one two-byte character: still 65,536 characters, now 65,537 bytes.
-    const over = sizedEntry(alice, 'note/a', MAX_ENTRY_BYTES + 1, 1)
-    const text = encodeEntry(over)
-    assert.deepEqual([text.length, Buffer.byteLength(text)], [MAX_ENTRY_BYTES, MAX_ENTRY_BYTES + 1])
-    assert.throws(() => decodeEntry(text), (err: EntryError) => err.code === 'size')
-    assert.throws(() => checkEntry(over), (err: EntryError) => err.code === 'size')
-    assert.throws(() => ownerEntry(alice, 'note/a', over.body, T0), /at most/)
+    const over = sizedRecord(alice, 'note/a', MAX_RECORD_BYTES + 1, 1)
+    const text = encodeRecord(over)
+    assert.deepEqual([text.length, Buffer.byteLength(text)], [MAX_RECORD_BYTES, MAX_RECORD_BYTES + 1])
+    assert.throws(() => decodeRecord(text), (err: RecordError) => err.code === 'size')
+    assert.throws(() => checkRecord(over), (err: RecordError) => err.code === 'size')
+    assert.throws(() => ownerRecord(alice, 'note/a', over.body, T0), /at most/)
   })
 })

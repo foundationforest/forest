@@ -1,18 +1,18 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "profile",
-  "description": "A profile's public card, at the path `profile`: one per profile. A profile lives in one market, as one side of it; a badge counts for it only under market/role. Markets may add fields.",
+  "description": "A profile's public card, at the path `profile`: one per profile. A profile lives in one market, in one role; its label is market/role. Markets may add fields.",
   "type": "object",
   "required": ["name", "market", "role", "createdAt"],
   "properties": {
     "market": {
       "type": "string",
-      "description": "The one market this profile lives in, as the markets directory spells it.",
+      "description": "The market this profile lives in, as the markets directory spells it: the first half of its label.",
       "maxLength": 64
     },
     "role": {
       "type": "string",
-      "description": "Its side in that market: seller or buyer in a two-sided market, peer in a one-sided one.",
+      "description": "Its role in that market: seller or buyer in a two-sided market, peer in a one-sided one. The second half of its label.",
       "maxLength": 64
     },
     "name": {
@@ -32,6 +32,11 @@
       "type": "string",
       "description": "What I do.",
       "maxLength": 1000
+    },
+    "read": {
+      "type": "string",
+      "description": "Optional. The profile's reading key, as an age post-quantum hybrid recipient (mlkem768x25519, 1,959 characters): what others make private records for. Without it, nobody can make a private record for this profile.",
+      "pattern": "^age1pq1[02-9ac-hj-np-z]{1952}$"
     },
     "createdAt": {
       "type": "string",
