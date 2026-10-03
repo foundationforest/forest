@@ -1,9 +1,10 @@
 // Private records: a body only chosen reading keys open. The body on a host is
-// `{ private: <age file, base64url> }`. The age file is the envelope: it wraps one random file key
-// to each reading key and names none of them. A reading key is age's post-quantum hybrid
-// (mlkem768x25519: ML-KEM-768 with X25519), which keys/ mixes from the profile key; its recipient,
-// `age1pq1…`, is what the profile record's `read` field publishes. The record around the envelope
-// is signed as usual, so no reader can forge content for the others.
+// `{ private: <age file, base64url> }`. The age file is the envelope: one random file key per
+// record, sealed once to each reading key, naming none of them. A reading key is age's
+// post-quantum hybrid (mlkem768x25519: ML-KEM-768 with X25519); its recipient is `age1pq1…`. The
+// readers are reading keys the owner makes for each reader and hands over, and usually the owner's
+// own, which keys/ mixes from the main key and the profile record's `read` field publishes. The
+// record around the envelope is signed as usual, so no reader can forge content for the others.
 //
 // What this does not hide: that a private record exists, its path, time and size, and how many
 // reading keys it was made for (one stanza each). Removing a reader means a new version made for

@@ -1,7 +1,7 @@
 {
-  "about": "Forest records vectors. The profile is keys/'s tutoring/seller profile, from its test seed, and the profile record's read field is that profile's reading key: both are pinned in keys/test/vectors.json. The writer key is the ed25519 key whose private key is 32 bytes of 0x2a.",
+  "about": "Forest records vectors. The profile is keys/'s tutoring/seller profile, from its test seed, and the profile record's read field is that profile's reading key: both are pinned in keys/test/vectors.json. The access key is the ed25519 key whose private key is 32 bytes of 0x2a.",
   "profile": "EofQN9U3MiKVmAo3Pyvuw19WjyYbpddfN52E1Q1uBwhu",
-  "writer": "2iXtA8oeZqUU5pofxK971TCEvFGfems2AcDRaZHKD2pQ",
+  "accessKey": "2iXtA8oeZqUU5pofxK971TCEvFGfems2AcDRaZHKD2pQ",
   "hosts": {
     "wire": "{\"body\":{\"urls\":[\"https://host-a.example\",\"https://host-b.example\"]},\"path\":\"hosts\",\"profile\":\"EofQN9U3MiKVmAo3Pyvuw19WjyYbpddfN52E1Q1uBwhu\",\"sig\":\"w-GDlMsfuAVfncP8tf7aa8qtsBNuM2guZT0HIoqqhffCqy5bxhBt2jlXzrsAoWERJm19PAu0H6vwgra_6_-GAQ\",\"time\":1790000000000,\"v\":1}",
     "signingInputHex": "ff666f726573742f76312f7265636f72640a7b22626f6479223a7b2275726c73223a5b2268747470733a2f2f686f73742d612e6578616d706c65222c2268747470733a2f2f686f73742d622e6578616d706c65225d7d2c2270617468223a22686f737473222c2270726f66696c65223a22456f66514e3955334d694b566d416f3350797675773139576a795962706464664e3532453151317542776875222c2274696d65223a313739303030303030303030302c2276223a317d",
@@ -18,9 +18,9 @@
     "id": "602edc52b5d539491e17dbab98a965d4cf06a2626ea4ffe69b596e53dbfde266"
   },
   "permissions": {
-    "wire": "{\"body\":{\"writers\":[{\"key\":\"2iXtA8oeZqUU5pofxK971TCEvFGfems2AcDRaZHKD2pQ\",\"paths\":[\"offer\"],\"until\":1790604800000}]},\"path\":\"permissions\",\"profile\":\"EofQN9U3MiKVmAo3Pyvuw19WjyYbpddfN52E1Q1uBwhu\",\"sig\":\"HJy0x3eqbgHG0g03CY5dbJO7MU5TWvAKsf8iKEbLohgNT4dM5HSxYcsuGwQV4t822mXswjNa_M-Lzh4BvuecAQ\",\"time\":1790000000000,\"v\":1}",
-    "signingInputHex": "ff666f726573742f76312f7265636f72640a7b22626f6479223a7b2277726974657273223a5b7b226b6579223a223269587441386f655a71555535706f66784b39373154434576464766656d733241634452615a484b44327051222c227061746873223a5b226f66666572225d2c22756e74696c223a313739303630343830303030307d5d7d2c2270617468223a227065726d697373696f6e73222c2270726f66696c65223a22456f66514e3955334d694b566d416f3350797675773139576a795962706464664e3532453151317542776875222c2274696d65223a313739303030303030303030302c2276223a317d",
-    "id": "f6606df3721aadd7607a41c3f52d90c8e0e7fab1e34e9a7d532377dc8c0d8fb7"
+    "wire": "{\"body\":{\"access\":[{\"key\":\"2iXtA8oeZqUU5pofxK971TCEvFGfems2AcDRaZHKD2pQ\",\"paths\":[\"offer\"],\"until\":1790604800000}]},\"path\":\"permissions\",\"profile\":\"EofQN9U3MiKVmAo3Pyvuw19WjyYbpddfN52E1Q1uBwhu\",\"sig\":\"IOu_MmedtInP-u793xr56UXqc9xvKav-u-KYkdVjobeWGpVOYuPR1TZjno0II7DpVuc_N4SRHvb7FX5cuJnPCA\",\"time\":1790000000000,\"v\":1}",
+    "signingInputHex": "ff666f726573742f76312f7265636f72640a7b22626f6479223a7b22616363657373223a5b7b226b6579223a223269587441386f655a71555535706f66784b39373154434576464766656d733241634452615a484b44327051222c227061746873223a5b226f66666572225d2c22756e74696c223a313739303630343830303030307d5d7d2c2270617468223a227065726d697373696f6e73222c2270726f66696c65223a22456f66514e3955334d694b566d416f3350797675773139576a795962706464664e3532453151317542776875222c2274696d65223a313739303030303030303030302c2276223a317d",
+    "id": "a29c8c2ef6a7c04dd9579738bfec55e7f4f6efced85b9a051bd87ebc24232a77"
   },
   "written": {
     "wire": "{\"body\":{\"createdAt\":\"2026-09-21T13:34:20Z\",\"description\":\"Physics, one hour.\",\"direction\":\"offer\"},\"by\":\"2iXtA8oeZqUU5pofxK971TCEvFGfems2AcDRaZHKD2pQ\",\"path\":\"offer/physics\",\"profile\":\"EofQN9U3MiKVmAo3Pyvuw19WjyYbpddfN52E1Q1uBwhu\",\"sig\":\"r1PByLjshksS01y7O1kSPiDbr_XQWNn4nEJ2tIjxg_dKEntLykD9hVL-exacalfx97i949xnob9GRVzXiKVYDw\",\"time\":1790000060000,\"v\":1}",

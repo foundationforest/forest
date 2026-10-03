@@ -19,12 +19,12 @@ test('the vectors are what this implementation computes', async () => {
   assert.deepEqual(await vectors(), pinned)
 })
 
-test("the keys are keys/'s pinned ones; the writer key, recomputed with node:crypto", () => {
+test("the keys are keys/'s pinned ones; the access key, recomputed with node:crypto", () => {
   assert.equal(pinned.profile, KEYS.profiles[0].address)
   assert.equal(decodeRecord(pinned.profileCard.wire).record.body!.read, KEYS.profiles[0].reading.recipient)
   const der = Buffer.concat([Buffer.from('302e020100300506032b657004220420', 'hex'), Buffer.alloc(32, 0x2a)]) // Ed25519 PKCS#8
   const publicKey = createPublicKey(createPrivateKey({ key: der, format: 'der', type: 'pkcs8' })).export({ format: 'der', type: 'spki' }).subarray(-32)
-  assert.equal(base58.encode(new Uint8Array(publicKey)), pinned.writer)
+  assert.equal(base58.encode(new Uint8Array(publicKey)), pinned.accessKey)
 })
 
 test('each record checks with a second Ed25519 and a second SHA-256', () => {

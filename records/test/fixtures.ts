@@ -1,5 +1,5 @@
 // Shared test fixtures: keys/'s test seed, a few keys, and ready-made bodies. Records mixes no
-// key: the profile keys come from keys/, as an app gets them.
+// key: the main keys come from keys/, as an app gets them.
 
 import { readFileSync } from 'node:fs'
 import { ed25519 } from '@noble/curves/ed25519.js'
@@ -7,7 +7,7 @@ import { profileKey } from '../../keys/src/index.ts'
 import { b64u, hex } from '../src/bytes.ts'
 import { canonical } from '../src/canonical.ts'
 import { keyFromPrivate, type Key } from '../src/keys.ts'
-import { type Body, type SignedRecord, type UnsignedRecord, type Writer, signingInput } from '../src/record.ts'
+import { type AccessKey, type Body, type SignedRecord, type UnsignedRecord, signingInput } from '../src/record.ts'
 
 /** keys/'s pinned vectors: its test seed (bytes 00 01 … 1f), its profiles and their reading keys. */
 export const KEYS = JSON.parse(readFileSync(new URL('../../keys/test/vectors.json', import.meta.url), 'utf8'))
@@ -18,8 +18,8 @@ export const OTHER_SEED = new Uint8Array(32).fill(7)
 export const alice = await profileKey(SEED, 'tutoring/seller')
 export const aliceBuyer = await profileKey(SEED, 'tutoring/buyer') // the same person, another label
 export const bob = await profileKey(OTHER_SEED, 'tutoring/buyer') // someone else
-/** A writer key an app made: never the profile key. */
-export const writer = keyFromPrivate(new Uint8Array(32).fill(42))
+/** An access key an app made: never the main key. */
+export const accessKey = keyFromPrivate(new Uint8Array(32).fill(42))
 export const stranger = keyFromPrivate(new Uint8Array(32).fill(99))
 
 export const T0 = Date.UTC(2026, 9, 2, 12, 0, 0)
@@ -50,8 +50,8 @@ export const reviewBody = (subject: string): Body => ({
   createdAt: '2026-10-02T12:00:00Z',
 })
 
-/** One writer in a permissions record: this key, these paths, and until then if given. */
-export const allow = (key: Key, paths: string[], until?: number): Writer => (until === undefined ? { key: key.address, paths } : { key: key.address, paths, until })
+/** One access key in a permissions record: this key, these paths, and until then if given. */
+export const allow = (key: Key, paths: string[], until?: number): AccessKey => (until === undefined ? { key: key.address, paths } : { key: key.address, paths, until })
 
 /**
  * A signed owner record whose canonical text is exactly `bytes` long, `wide` of its characters

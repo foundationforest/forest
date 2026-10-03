@@ -3,8 +3,8 @@
 //   { v: 1, profile, path, time, body | null, by?, sig }
 //
 // `sig` is Ed25519 (RFC 8032, strict) over 0xff || "forest/v1/record\n" || JCS(the rest), by the
-// profile key, or by the writer key named in `by`. 0xff can never begin a Solana transaction
-// message, so a profile key that also holds money cannot be made to sign a payment through this
+// main key, or by the access key named in `by`. 0xff can never begin a Solana transaction
+// message, so a main key that also holds money cannot be made to sign a payment through this
 // path, and no payment signature is a record's.
 
 import { ed25519 } from '@noble/curves/ed25519.js'
@@ -28,7 +28,7 @@ export type UnsignedRecord = {
   path: string
   time: number
   body: Body | null
-  /** Present only when a writer key signed: its address. */
+  /** Present only when an access key signed: its address. */
   by?: string
 }
 export type SignedRecord = UnsignedRecord & { sig: string }
@@ -188,23 +188,23 @@ export type HostsBody = {
   urls: string[]
 }
 
-export type Writer = {
-  /** The writer key's address. */
+export type AccessKey = {
+  /** The access key's address. */
   key: string
   /** Path prefixes it may write under, segment by segment. Never a control path. */
   paths: string[]
   /**
    * Optional. Milliseconds since 1970. A record it signs counts only if dated before it; a host
-   * also refuses one that arrives once it has passed, by the host's own clock. Removing a writer
-   * is setting it to now.
+   * also refuses one that arrives once it has passed, by the host's own clock. Removing an access
+   * key is setting it to now.
    */
   until?: number
 }
-export type PermissionsBody = { writers: Writer[] }
+export type PermissionsBody = { access: AccessKey[] }
 
 export const MAX_HOSTS = 8
-export const MAX_WRITERS = 16
-export const MAX_WRITER_PATHS = 16
+export const MAX_ACCESS_KEYS = 16
+export const MAX_ACCESS_PATHS = 16
 
 const only = (body: object, fields: string[], code: string, what: string) => {
   for (const key of Object.keys(body)) if (!fields.includes(key)) fail(code, `unknown ${what} field ${key}`)
@@ -219,17 +219,17 @@ export function checkControlBody(path: string, body: Body): void {
     if (new Set(urls as string[]).size !== (urls as string[]).length) fail('hosts', 'urls repeat')
     return
   }
-  only(body, ['writers'], 'permissions', 'permissions')
-  const writers = body.writers
-  if (!Array.isArray(writers) || writers.length > MAX_WRITERS) fail('permissions', `writers is at most ${MAX_WRITERS}`)
-  for (const w of writers as unknown[]) {
-    if (w === null || typeof w !== 'object' || Array.isArray(w)) fail('permissions', 'a writer is an object')
-    only(w, ['key', 'paths', 'until'], 'permissions', 'writer')
-    const { key, paths, until } = w as { [key: string]: unknown }
-    if (!publicKeyFromAddress(key)) fail('permissions', 'a writer key is a usable ed25519 address')
-    if (!Array.isArray(paths) || paths.length > MAX_WRITER_PATHS) fail('permissions', `paths is at most ${MAX_WRITER_PATHS} prefixes`)
-    for (const p of paths as unknown[]) if (typeof p !== 'string' || !PATH.test(p) || isControlPath(p)) fail('permissions', 'a writer path is a content path prefix')
-    if ('until' in (w as object) && (!Number.isSafeInteger(until) || (until as number) < 0)) fail('permissions', 'until is whole milliseconds since 1970')
+  only(body, ['access'], 'permissions', 'permissions')
+  const access = body.access
+  if (!Array.isArray(access) || access.length > MAX_ACCESS_KEYS) fail('permissions', `access is at most ${MAX_ACCESS_KEYS} keys`)
+  for (const k of access as unknown[]) {
+    if (k === null || typeof k !== 'object' || Array.isArray(k)) fail('permissions', 'an access entry is an object')
+    only(k, ['key', 'paths', 'until'], 'permissions', 'access')
+    const { key, paths, until } = k as { [key: string]: unknown }
+    if (!publicKeyFromAddress(key)) fail('permissions', 'an access key is a usable ed25519 address')
+    if (!Array.isArray(paths) || paths.length > MAX_ACCESS_PATHS) fail('permissions', `paths is at most ${MAX_ACCESS_PATHS} prefixes`)
+    for (const p of paths as unknown[]) if (typeof p !== 'string' || !PATH.test(p) || isControlPath(p)) fail('permissions', 'an access path is a content path prefix')
+    if ('until' in (k as object) && (!Number.isSafeInteger(until) || (until as number) < 0)) fail('permissions', 'until is whole milliseconds since 1970')
   }
 }
 

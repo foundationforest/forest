@@ -14,8 +14,8 @@ import type { Host } from '../src/host.ts'
 import { readingKey } from '../../keys/src/index.ts'
 import { checkRecord, encodeRecord, signingInput, unsignedOf, verifySignature } from '../src/record.ts'
 import { viewProfile } from '../src/view.ts'
-import { hostsRecord, ownerRecord, permissionsRecord, writerRecord } from '../src/write.ts'
-import { DAY, MINUTE, SEED, T0, alice, aliceBuyer, allow, bob, offerBody, profileBody, writer } from './fixtures.ts'
+import { accessRecord, hostsRecord, ownerRecord, permissionsRecord } from '../src/write.ts'
+import { DAY, MINUTE, SEED, T0, accessKey, alice, aliceBuyer, allow, bob, offerBody, profileBody } from './fixtures.ts'
 import { startHost } from './helpers.ts'
 
 const L = 2n ** 252n + 27742317777372353535851937790883648493n
@@ -67,7 +67,7 @@ describe('nobody forges; a signature means one thing everywhere', () => {
       assert.equal(verifySignature(universal, message, weak), false)
       t.diagnostic(`node:crypto (OpenSSL) accepts the universal signature for small-order key ${hex.encode(weak).slice(0, 8)}…: ${nodeAccepts(universal, message, weak)}`)
     }
-    // A permissions record naming a small-order writer key cannot even be written.
+    // A permissions record naming a small-order access key cannot even be written.
     assert.throws(() => permissionsRecord(alice, [{ key: base58.encode(identity), paths: ['offer'], until: T0 + MINUTE }], T0), /usable/)
   })
 
@@ -103,7 +103,7 @@ describe('nobody forges; a signature means one thing everywhere', () => {
       }
     })()
     t.diagnostic(`the same bytes without 0xff, fed to Solana's decoder: ${outcome}`)
-    // A Solana-style message signed by the profile's wallet key is not a record signature.
+    // A Solana-style message signed by the main key is not a record signature.
     const payment = concat(Uint8Array.of(1, 0, 1, 2), alice.publicKey, new Uint8Array(32), new Uint8Array(32), Uint8Array.of(1, 1, 1, 0, 0))
     assert.throws(() => checkRecord({ ...record, sig: b64u.encode(ed25519.sign(payment, alice.privateKey)) }), /signature/)
   })
@@ -116,25 +116,25 @@ describe('nobody forges; a signature means one thing everywhere', () => {
   })
 })
 
-describe('a stolen writer key', () => {
+describe('a stolen access key', () => {
   const until = T0 + 7 * DAY
-  const permissions = permissionsRecord(alice, [allow(writer, ['offer'], until)], T0)
+  const permissions = permissionsRecord(alice, [allow(accessKey, ['offer'], until)], T0)
   const mine = ownerRecord(alice, 'offer/maths', offerBody('30'), T0)
   const view = (...records: Parameters<typeof checkRecord>[0][]) => viewProfile(alice.address, records.map((r) => checkRecord(r)), T0 + DAY)
 
   test('cannot rewrite or delete what the owner wrote, cannot touch hosts or permissions, cannot write outside its paths', () => {
-    const overwrite = writerRecord(writer, alice.address, 'offer/maths', offerBody('1'), T0 + DAY)
-    const card = writerRecord(writer, alice.address, 'profile', profileBody('Not Alice'), T0 + DAY)
+    const overwrite = accessRecord(accessKey, alice.address, 'offer/maths', offerBody('1'), T0 + DAY)
+    const card = accessRecord(accessKey, alice.address, 'profile', profileBody('Not Alice'), T0 + DAY)
     const v = view(permissions, mine, overwrite, card)
     assert.equal(v.current.get('offer/maths')!.id, checkRecord(mine).id)
     assert.equal(v.current.has('profile'), false)
-    assert.throws(() => writerRecord(writer, alice.address, 'hosts', { urls: ['https://evil.example'] }, T0 + DAY), /only the owner/)
+    assert.throws(() => accessRecord(accessKey, alice.address, 'hosts', { urls: ['https://evil.example'] }, T0 + DAY), /only the owner/)
   })
 
   test('once removed, nothing dated from then on counts, on any host or none', () => {
     const removedAt = T0 + MINUTE
-    const removed = permissionsRecord(alice, [allow(writer, ['offer'], removedAt)], removedAt)
-    const after = writerRecord(writer, alice.address, 'offer/after', offerBody('1'), removedAt + 1)
+    const removed = permissionsRecord(alice, [allow(accessKey, ['offer'], removedAt)], removedAt)
+    const after = accessRecord(accessKey, alice.address, 'offer/after', offerBody('1'), removedAt + 1)
     assert.equal(view(removed, after).current.has('offer/after'), false)
   })
 
@@ -143,8 +143,8 @@ describe('a stolen writer key', () => {
     // own date, so whoever holds a host that takes it can show it. The owner's record wins at that
     // path, so the owner deletes it there.
     const removedAt = T0 + MINUTE
-    const removed = permissionsRecord(alice, [allow(writer, ['offer'], removedAt)], removedAt)
-    const backdated = writerRecord(writer, alice.address, 'offer/old', offerBody('1'), removedAt - 1)
+    const removed = permissionsRecord(alice, [allow(accessKey, ['offer'], removedAt)], removedAt)
+    const backdated = accessRecord(accessKey, alice.address, 'offer/old', offerBody('1'), removedAt - 1)
     const later = T0 + 365 * DAY
     assert.equal(viewProfile(alice.address, [removed, backdated].map((r) => checkRecord(r)), later).current.has('offer/old'), true)
     const deleted = ownerRecord(alice, 'offer/old', null, removedAt + 1)
@@ -197,18 +197,18 @@ describe('over real hosts', () => {
 })
 
 describe('linking two profiles of one person', () => {
-  test('addresses, reading keys and writer keys: nothing public repeats across the two profiles', async () => {
+  test('addresses, reading keys and access keys: nothing public repeats across the two profiles', async () => {
     const [read0, read1] = await Promise.all([readingKey(alice.privateKey), readingKey(aliceBuyer.privateKey)])
-    const writerFor = (n: number) => ({ key: base58.encode(ed25519.getPublicKey(sha512(utf8(`writer ${n}`)).subarray(0, 32))), paths: ['offer'], until: T0 + 1 })
+    const accessFor = (n: number) => ({ key: base58.encode(ed25519.getPublicKey(sha512(utf8(`access ${n}`)).subarray(0, 32))), paths: ['offer'], until: T0 + 1 })
     const one = [
       hostsRecord(alice, ['https://big-host.example'], T0),
       ownerRecord(alice, 'profile', { ...profileBody('Alice teaches'), read: read0.recipient }, T0),
-      permissionsRecord(alice, [writerFor(1)], T0),
+      permissionsRecord(alice, [accessFor(1)], T0),
     ]
     const two = [
       hostsRecord(aliceBuyer, ['https://big-host.example'], T0),
       ownerRecord(aliceBuyer, 'profile', { ...profileBody('A. buys'), role: 'buyer', read: read1.recipient }, T0),
-      permissionsRecord(aliceBuyer, [writerFor(2)], T0),
+      permissionsRecord(aliceBuyer, [accessFor(2)], T0),
     ]
     const tokens = (records: object[]) => {
       const out = new Set<string>()
@@ -238,9 +238,9 @@ describe('linking two profiles of one person', () => {
     }
   })
 
-  test('FINDING: one writer key listed by two profiles links them in public', () => {
-    const intoSeller = writerRecord(writer, alice.address, 'offer/x', offerBody('1'), T0)
-    const intoBuyer = writerRecord(writer, aliceBuyer.address, 'offer/y', offerBody('1'), T0)
-    assert.equal(intoSeller.by, intoBuyer.by, 'anyone reading both sees the same by: give each profile its own writer key')
+  test('FINDING: one access key listed by two profiles links them in public', () => {
+    const intoSeller = accessRecord(accessKey, alice.address, 'offer/x', offerBody('1'), T0)
+    const intoBuyer = accessRecord(accessKey, aliceBuyer.address, 'offer/y', offerBody('1'), T0)
+    assert.equal(intoSeller.by, intoBuyer.by, 'anyone reading both sees the same by: give each folder its own access keys')
   })
 })

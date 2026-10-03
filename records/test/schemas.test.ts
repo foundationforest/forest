@@ -9,7 +9,7 @@ import { Ajv2020 } from 'ajv/dist/2020.js'
 import formats from 'ajv-formats'
 import { checkValue } from '../src/canonical.ts'
 import { readingKey } from '../../keys/src/index.ts'
-import { decodeRecord, encodeRecord } from '../src/record.ts'
+import { checkRecord, decodeRecord, encodeRecord } from '../src/record.ts'
 import { ownerRecord } from '../src/write.ts'
 import { T0, alice, offerBody, profileBody, reviewBody } from './fixtures.ts'
 
@@ -84,6 +84,9 @@ describe('schemas', () => {
     assert.ok(fits('review', edit('review', ['media'], Array(10).fill(clip))))
     assert.ok(!fits('review', edit('review', ['media'], Array(11).fill(clip))))
     assert.ok(!fits('review', edit('review', ['media'], [{ ...clip, size: 50_000_001 }])))
+    assert.ok(fits('offer', edit('offer', ['media'], Array(10).fill(clip))), 'an offer carries the same media as a review')
+    assert.ok(!fits('offer', edit('offer', ['media'], Array(11).fill(clip))))
+    assert.ok(!fits('offer', edit('offer', ['media'], [{ ...clip, mimeType: 'image/gif' }])))
   })
 
   test('an offer’s price, terms and timer keep their choices and bounds', () => {
@@ -131,7 +134,17 @@ describe('schemas', () => {
     assert.ok(!fits('review', edit('review', ['ratings', 'punctuality'], '11')), 'and every rating is checked')
   })
 
-  test('a profile’s read is its reading key, an age X25519 recipient', async () => {
+  test('a profile’s addresses on other chains: camelCase chain names, never solana, values up to 128 characters', () => {
+    assert.ok(fits('profile', edit('profile', ['addresses'], { ethereum: '0x' + 'a'.repeat(40), arbitrumOne: '0x' + 'b'.repeat(40) })))
+    assert.ok(fits('profile', edit('profile', ['addresses'], { ['c' + 'x'.repeat(31)]: 'x'.repeat(128) })), '32 characters, 128 characters')
+    for (const chain of ['solana', 'arbitrum-one', 'Ethereum', '1chain', 'c' + 'x'.repeat(32), '']) assert.ok(!fits('profile', edit('profile', ['addresses', chain], 'x')), chain)
+    assert.ok(!fits('profile', edit('profile', ['addresses', 'ethereum'], 'x'.repeat(129))))
+    assert.ok(!fits('profile', edit('profile', ['addresses', 'ethereum'], 1)))
+    assert.ok(checkRecord(ownerRecord(alice, 'profile', edit('profile', ['addresses', 'arbitrumOne'], 'x'), T0)), 'a camelCase name is a key a record carries')
+    assert.throws(() => ownerRecord(alice, 'profile', edit('profile', ['addresses', 'arbitrum-one'], 'x'), T0), /key/, 'a hyphen is not')
+  })
+
+  test('a profile’s read is its reading key, an age post-quantum hybrid recipient', async () => {
     assert.ok(fits('profile', edit('profile', ['read'], (await readingKey(alice.privateKey)).recipient)))
     assert.ok(fits('profile', edit('profile', ['read'], undefined)), 'optional')
     for (const bad of ['age1pq1' + 'q'.repeat(60), alice.address, 'AGE1' + 'Q'.repeat(58), 'age1' + 'b'.repeat(58)]) assert.ok(!fits('profile', edit('profile', ['read'], bad)), bad)
