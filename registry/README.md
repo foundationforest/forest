@@ -8,10 +8,10 @@ Up: [the repo](../README.md). Down: the [security checklist](security-checklist.
 
 A free public list on Solana, and the client a device uses to add to it and read it. Each row says:
 *this profile holds a stamp on this issuer's list, under this label*. It is proven without saying
-which stamp, so without saying who. One person gets at most one row per issuer per label. A row is
-written once and never changes. The program holds nothing else: no fee, no token, no treasury, no
-admin and no list. The only costs are Solana's own: the network fee and the row's deposit, paid by
-whoever sends the transaction.
+which stamp, so without saying who. One stamp gets at most one row per label; whether that is one
+per person is the issuer's policy. A row is written once and never changes. The program holds
+nothing else: no fee, no token, no treasury, no admin and no list. The only costs are Solana's own:
+the network fee and the row's deposit, paid by whoever sends the transaction.
 
 - `program/`: the program (Anchor 1.2) and its LiteSVM tests, the property test among them.
 - `client/`: stamps, proofs and their check off chain, the two instructions, and rows read back.
@@ -37,8 +37,9 @@ whoever sends the transaction.
   The program verifies the proof, requires that signature, and writes the row at the address
   derived from the market stamp. It stores the issuer's address and its signature on the root
   exactly as given.
-- **One per issuer per market per human.** A second row at the same market stamp's address cannot
-  exist. A second profile in the same market needs a stamp on a second issuer's list.
+- **One per market stamp.** A second row at the same market stamp's address cannot exist, so a
+  second profile in the same market needs a second stamp. How many stamps an issuer gives one
+  person is its policy; one that checks faces gives one.
 - **Readers decide.** The program checks no root and no issuer. A reader counts a row when it trusts
   the row's issuer and the issuer's signature on the root checks (`issuerSigned`). Each reader keeps
   its own list of issuers it trusts.
@@ -211,7 +212,7 @@ solana program show <program id>          # Authority: none
 
 ## Promises
 
-- At most one row per market stamp: one per person per issuer per label.
+- At most one row per market stamp: one per stamp per label.
 - Only the main key can put a row on its profile.
 - A proof counts for one label and one profile: the program derives the scope from the label and
   the message from the profile, and verifies against them.
@@ -236,7 +237,8 @@ solana program show <program id>          # Authority: none
 - **One row per list, not per face.** A person on two issuers' lists can hold two rows under one
   label, for two profiles. A reader that trusts both issuers counts both.
 - **Roots can link rows.** Two rows carrying the same root came from one snapshot. When few people
-  are on a snapshot, that narrows who they could be. Apps prove against an issuer's newest list.
+  are on a snapshot, that narrows who they could be. Which snapshot to prove against is the app's
+  choice; the newest holds the most people.
 - **Whoever pays is recorded.** A fee payer that pays gets the refund. A refund to a payer holding
   no SOL is refused until it holds some again.
 - **The source's program id is a placeholder** (`FoRRegistryRows…1111`) nobody holds a key for;
@@ -259,14 +261,15 @@ growing; a proof is made against the list as it was at one moment. The issuer's 
 moment's root lets any reader check, forever and without asking the issuer, that the list was the
 issuer's. The program never needs to know who the issuers are, so anyone can be one.
 
-**Can I have two profiles in one market?** Yes, through two issuers. Each list gives you its own
-market stamp, so one issuer's list gives you one row per market. A second row needs a stamp on a
-second issuer's list, and a second issuer that checks faces means a second face check. Nothing on
-chain ties the two rows to each other, but moving money between your own profiles links them until
-a privacy pool is used.
+**Can I have two profiles in one market?** Yes, with a second stamp. Each stamp gives its own
+market stamp, so one stamp gives one row per market. How many stamps one issuer gives a person is
+its policy: one that checks faces gives one, so a second row needs a second issuer's list, and a
+second face check. Nothing on chain ties the two rows to each other, but moving money between your
+own profiles links them until a privacy pool is used.
 
 **Why are rows not numbered?** A number shared across registrations would link a person's profiles.
-A row's address comes from its market stamp alone: one per issuer, per label, per person.
+A row's address comes from its market stamp alone: one per stamp, per label. Whether that is one per
+person is the issuer's policy.
 
 **Why does the program not check the issuer or the root?** Anyone must be able to keep a list, so
 lists stay off chain and the program knows no issuer. Each reader weighs whose lists it trusts.

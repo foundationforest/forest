@@ -3,8 +3,8 @@
 You own your seed. You make it accountable through stamps, and keep it private through profiles.
 
 Because nothing of you lives inside any service, every host, index, app and AI must be good, cheap
-and open, or people leave. Until there are others, the foundation runs the first of each, and
-should want to lose each one.
+and open, or people leave. Until there are others, the foundation or Soil, which makes the first
+app, runs the first of each, and should want to lose each one.
 
 Anyone can make a new seed, but it starts with no stamps and no reviews, and an issuer that checks
 faces won't stamp the same face twice. Trust is the stamps and records on each of a seed's
@@ -14,12 +14,13 @@ Forest removes one thing: having to trust someone in the middle.
 
 ## How it works
 
-Your seed is 24 random words, kept in the app's secure slot on your device, unlocked by your face
-or fingerprint and used only to derive keys. From it come your main keys, one per label such as
-`tutoring/seller`. Each is a folder (everything it signs on a host), an address (its Solana
-address) and, once registered, a profile. An issuer checks once that you are one human and puts
-your stamp on its list, and registering writes a row in the registry that pins that stamp to one of
-your main keys in a market, without saying who you are. Each main key writes offers and reviews as
+Your seed is 24 random words. Your app keeps it, by default in its secure slot on your device,
+unlocked by your face or fingerprint and used only to derive keys. From it come your main keys, one
+per label such as `tutoring/seller`. Each is a folder (everything it signs on a host), an address
+(its Solana address) and, once registered, a profile. An issuer puts your stamp on its list after
+the checks it chooses, such as checking once that you are one human, and registering writes a row
+in the registry that pins that stamp to one of your main keys in a market, without saying who you
+are. Each main key writes offers and reviews as
 signed records in its folder, on open hosts anyone can read; photos and other large files go beside
 them as blobs. A review belongs to whoever wrote it: the one it's about can't erase it; the one who
 wrote it can. Beside each folder is an inbox, where others leave messages for that main key. Money
@@ -35,7 +36,7 @@ Every piece of Forest is sorted by that question.
 |---|---|---|---|
 | **Core** | two of you | the recipe that mixes keys from the seed; the registry | [`keys/`](keys/README.md), [`registry/`](registry/README.md) |
 | **Standards Forest offers** | anyone can offer another | records, the host socket (the six requests every host answers, for records, the inbox and blobs), the permissions record (which access keys may write in a folder), envelopes (how a record is made private), the inbox, the three shapes (profile, offer and review) | [`records/`](records/README.md); market names in [foundationforest/markets](https://github.com/foundationforest/markets) |
-| **Services** | the foundation runs one to start; anyone can run another | hosts, issuers, indexes, fee payers (who pay Solana's fee for someone else), escrows, connections (how an AI reads and drafts for a person) | [`escrow/`](escrow/README.md) and a reference host in `records/` here; the rest in [foundationforest/services](https://github.com/foundationforest/services) |
+| **Services** | the foundation or Soil runs the first; anyone can run another | hosts, issuers, indexes, fee payers (who pay Solana's fee for someone else), escrows, connections (how an AI reads and drafts for a person) | [`escrow/`](escrow/README.md) and a reference host in `records/` here; the rest, and who runs which, in [foundationforest/services](https://github.com/foundationforest/services) |
 | **Apps** | the person picks one | the secure slot that holds the seed, and the screens | the first, by Soil, in [foundationforest/app](https://github.com/foundationforest/app), its own repo |
 | **The person** | up to them | the words, where they keep them, what they post | with them, in no repo |
 
@@ -51,8 +52,8 @@ The standard holds only what two strangers' implementations must agree on; every
 service's policy, an app's choice, or the person's.
 
 - **The standard** is fixed: no service or app can change it.
-- **A service** decides its own policy. The foundation's services publish theirs, each in its own
-  README in [foundationforest/services](https://github.com/foundationforest/services).
+- **A service** decides its own policy. The first ones publish theirs, each in its own README in
+  [foundationforest/services](https://github.com/foundationforest/services).
 - **An app** makes its choices with the person.
 - **The person** decides the rest.
 
@@ -75,19 +76,23 @@ decides what, and an FAQ.
 
 ## Promises
 
-- **The seed and the main keys stay in the app's secure slot on your device,** unlocked by your
-  face or fingerprint, and used only to derive and sign. Only access keys and signatures leave.
-  Nothing anywhere has user accounts: there are keys, records and rows.
+- **Nothing in the standard needs the seed or a main key to leave your device.** Where they live
+  is the app's choice: by default they stay in its secure slot on your device, unlocked by your
+  face or fingerprint and used only to derive and sign, and only access keys and signatures leave
+  ([keys](keys/README.md)). The standard has no user accounts: there are keys, records and rows;
+  whether a service keeps any is its policy.
 - **Private by default off chain.** Nothing ties your profiles together unless you link them.
-  Reputation is computed per profile, and nothing server-side holds a person next to a profile. On
-  chain, moving money between your own profiles links them until a privacy pool is used.
+  Reputation is computed per profile, and nothing in the standard holds a person next to a profile;
+  whether a service does is its policy. On chain, moving money between your own profiles links them
+  until a privacy pool is used.
 - **Nothing inside charges anything.** The registry and the escrow take no fee. The only costs are
-  Solana's own, paid by whoever sends the transaction, and anyone may pay for someone else. Fees
-  exist only at the ramp in and out.
+  Solana's own, paid by whoever sends the transaction, and anyone may pay for someone else.
+  Services, apps and the ramps in and out set their own prices.
 - **Only the deal decides where money goes.** The escrow has no admin and no custodian: only the
   two sides, and an arbiter or a timer both saw at the start, can move what it holds.
 - **Anyone can take part.** Anyone can run a host, keep a list, name a market or build an app.
-  Everything needed to compete with the foundation is open: here, in services and in markets.
+  Everything needed to compete with the foundation or Soil is open: here, in services and in
+  markets.
 - **The programs are built to be sealed.** On mainnet, the registry and the escrow are to be sealed
   the day they deploy, so a change is a new program at a new address. On devnet they are still
   upgradable.

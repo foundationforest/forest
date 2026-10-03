@@ -216,13 +216,25 @@ a review. Each name gives the hash, the type (`mimeType`) and the size.
   them.
 - Readers fetch a blob from the record's hosts, and check its SHA-256 themselves.
 
+### Indexes
+
+An index reads records from hosts and weighs them by its own policy. It answers one request.
+
+**`POST /v1/hosts`.** An index MAY accept a profile's hosts record: the body is the record's
+canonical text, and the answer is the HTTP status and nothing else. It checks the signature, and
+that the profile holds a registry row from an issuer it trusts, then crawls the hosts the record
+names, reading each host itself, page by page with the cursor (`GET /v1/records`, under Hosts).
+Sending the record again asks the index to look now. Which hosts an index crawls or refuses is its
+policy.
+
 ### Hosts
 
 A host is an HTTPS service with no keys, no accounts and no login: a record's signature is its only
 credential, and a pull's is the recipient's. It is open: it takes signed records for any profile and
 serves them to anyone; it takes messages for any profile whose profile record on it declares an
 inbox, and serves them only to that profile's main key; it takes the bytes a current record names,
-and serves them to anyone. Every host answers the same six requests, the host socket:
+and serves them to anyone. A host never talks to an index. Every host answers the same six
+requests, the host socket:
 
 **`POST /v1/records`.** The body is NDJSON, one canonical record per line. The answer is NDJSON,
 one `{i, id?, ok, error?, message?}` per line (Taking a record in).
@@ -289,27 +301,28 @@ request again in halves, follows the cursor page by page, and refuses unread a l
    [`unnamed`]. So the record comes first.
 3. The host's own policy allows the size and the type [`policy`].
 
-**Keeping.**
+**Keeping** is the host's policy; a host that drops a current record withholds it.
 
-- A host keeps every current record. A record that stops being current is kept for a number of
-  days the host chooses, by its own clock, then deleted.
+- A record that stops being current is kept for a number of days the host chooses, by its own
+  clock, then deleted.
 - A host keeps a message for a number of days it chooses, from when it arrived; a pull does not
   delete it.
-- A host keeps bytes while a current record on it names them. Once none does, it may delete them
-  after its keep days.
+- Once no current record on a host names some bytes, it may delete them after its keep days.
 
 A host SHOULD verify in native code with these same strict rules: OpenSSL's defaults accept a
 small-order signature this protocol refuses.
 
 ### Apps that write records
 
-Follow [keys/](../keys/README.md)'s rules for apps that hold keys. Also:
+Defaults, beside [keys/](../keys/README.md)'s rules for apps that hold keys; an app adopts each, or
+says it doesn't:
 
 - Give each folder its own access keys: an access key named in two folders links them.
 - Set `time = max(now, newest known at that path + 1)`.
 - Post every record to every host the hosts record names, hosts and permissions records first.
   To move, post a hosts record naming the new hosts to old and new, then the copies. To leave a
   host, send it deletes.
+- Send the hosts record to the indexes the person chose (Indexes).
 - Post a record, then the blobs it names, to each of those hosts.
 - Deliver a message to each host the recipient's hosts record names. Pull your inbox from each of
   your own hosts.
@@ -438,9 +451,8 @@ with `tutoring/seller`'s pinned reading key. The profile is
   about 2 KB to the envelope, and a record is at most 64 KB.
 - **Two profiles of one person can be linked by how they are written.** An app that writes both at
   the same moment to the same host puts them side by side in its listing; one access key listed by
-  both names itself in both; and a host that logs addresses links them; the foundation's hosts do
-  not ([services](https://github.com/foundationforest/services)). Write them apart, and give each
-  folder its own access keys.
+  both names itself in both; and a host that logs addresses links them; whether it logs is its
+  policy. Write them apart, and give each folder its own access keys.
 
 ## Who decides what
 
@@ -452,34 +464,35 @@ with `tutoring/seller`'s pinned reading key. The profile is
 - **An app, with the person:** the copies it keeps; which hosts; whether to forward a message to
   email or a notification; dropping a message that arrives twice; and what asks for the person's
   face.
-- **An index, by its own policy:** which hosts, issuers and markets count, and how much each review
-  weighs.
+- **An index, by its own policy:** which hosts, issuers and markets count, which hosts it crawls,
+  and how much each review weighs.
 
 ## FAQ
 
 **What if a host deletes my records?**
-Nothing lasting is lost. Your app keeps a copy of every record it signed, and your hosts record can
-name up to eight hosts, each holding everything. Readers read the others. To replace the host,
-publish a new hosts record and post your copies to the new one. A record checks the same wherever
-it comes from, and your name is your key, so nothing about you changes.
+Nothing lasting is lost. An app that follows [keys/](../keys/README.md)'s rule 9 keeps a copy of
+every record it signed, and your hosts record can name up to eight hosts, each holding everything.
+Readers read the others. To replace the host, publish a new hosts record and post your copies to the
+new one. A record checks the same wherever it comes from, and your name is your key, so nothing
+about you changes.
 
 **Can a host lock me in?**
 No. A host holds no keys and no accounts, takes signed records for any profile, and never refuses a
 newer hosts or permissions record by its own policy. It can stop serving you, but it can never stop
 you moving, and never keep an access key from being removed.
 
-**What if an index ignores my host, or my host ignores an index?**
-Pick another. Your hosts record can name up to eight hosts, so add one or move, and a reader can
-use another index. Indexes compete on who they show, and hosts on who they serve. Nothing here
-needs either to be good, only replaceable.
+**What if an index ignores my host, or my host blocks an index?**
+Pick another. Your hosts record can name up to eight hosts, so add one or move, then send the new
+record to the index; and a reader can use another index. Indexes compete on who they show, and hosts
+on who they serve. Nothing here needs either to be good, only replaceable.
 
 **How does a reader find my records? Is there a directory?**
 Your hosts record says where they live, and no directory or relay is needed. Nothing grows with the
 network but each reader's own work.
 
 **How long does a host keep old versions?**
-The newest record at each path, always; what it replaced, for a number of days the host chooses. A
-field for it in the hosts record would be one more rule for every app.
+For a number of days the host chooses, after a newer record replaces them. A field for it in the
+hosts record would be one more rule for every app.
 
 **Could a record's signature be used to move my money?**
 No. A record's signed bytes begin with `0xff`, and no Solana transaction begins with it, so a

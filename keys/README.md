@@ -5,11 +5,11 @@ Up: [the repo](../README.md).
 ## What it is
 
 The standard for a person's keys in Forest, and a small library that follows it. The standard is
-the 24 words, the recipe and the rules for apps. A person owns one seed: 24 random words. Their main
-keys, reading keys and list secrets are mixed from it, on their own device. Any app that follows
-this page gets the same keys from the same seed, so a person is never locked into one app. The app
-keeps the seed in the device's secure slot; the words in the person's password manager (the vault)
-are the backup.
+the 24 words and the recipe; the rules for apps are defaults an app adopts, or says it doesn't. A
+person owns one seed: 24 random words. Their main keys, reading keys and list secrets are mixed from
+it, on their own device. Any app that follows this page gets the same keys from the same seed, so a
+person is never locked into one app. Where the app keeps the seed is its choice: by default the
+device's secure slot, with the words in the person's password manager (the vault) as the backup.
 
 This README is the standard. The library in `src/` follows it, and `test/vectors.json` pins its
 answers.
@@ -20,9 +20,9 @@ answers.
 
 - The seed is 32 random bytes, written as 24 English words: BIP39, the 32 bytes plus an 8-bit
   checksum.
-- The seed lives in the app's slot of the OS keychain (Apple's Keychain or Android's Keystore),
-  unlocked by the person's biometrics, face or fingerprint, and used only to derive something new.
-  The words in the vault are the backup.
+- Where the seed lives is the app's choice. By default it lives in the app's slot of the OS
+  keychain (Apple's Keychain or Android's Keystore), unlocked by the person's biometrics, face or
+  fingerprint, and used only to derive something new. The words in the vault are the backup.
 - The words are the 32 bytes and nothing more. BIP39's own seed step (PBKDF2, with a passphrase)
   is not used.
 - Case and spacing in the words do not matter. A wrong word, or a word out of place, fails the
@@ -164,8 +164,8 @@ stamp step by step without Semaphore's wrapper.
 ## Who decides what
 
 - **The standard:** the 24 words, the recipe and its info strings.
-- **An app, with the person:** where the seed and keys live and how the face or fingerprint opens
-  them, following the rules above; backups; how a made reading key reaches its reader.
+- **An app, with the person:** which of the rules above it adopts; where the seed and keys live and
+  how the face or fingerprint opens them; backups; how a made reading key reaches its reader.
 - **A service:** nothing. No service holds a main key.
 
 ## FAQ
