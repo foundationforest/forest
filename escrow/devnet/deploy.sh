@@ -13,7 +13,7 @@
 #      key    = the ed25519 keypair whose secret seed is `seed` (Solana's Keypair.fromSeed)
 #
 #    One label per key: `deploy` (pays for the deploy and keeps the upgrade authority), `payer`
-#    (pays every fee and deposit in escrow/client/scripts/devnet.ts, as a relayer would), `buyer`,
+#    (pays every fee and deposit in escrow/client/scripts/devnet.ts, as a fee payer would), `buyer`,
 #    `seller`, and `escrow-v2-program-2`, the program id (the closed first deploy used
 #    `escrow-v2-program`). The keypair files go to FOREST_DEVNET_KEYS (default
 #    ~/.forest-devnet/keys), never under the repo: the directory mode 700, the files 600, and a file

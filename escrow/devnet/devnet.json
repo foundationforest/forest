@@ -93,12 +93,12 @@
       },
       {
         "program": "registry",
-        "what": "token accounts for the test dollar: the treasury's, profile 0's wallet's, the buyer's and the seller's",
+        "what": "token accounts for the test dollar: the treasury's, profile 0's, the buyer's and the seller's",
         "signature": "2VwD2Q3Z3fo7GRVBf9FhCYeTGYveQrxUSaV1MTozTgxYzJpUW2rA2Y5nLndjkiJh3vCut9htCe2ymzGgpvuCpS6X"
       },
       {
         "program": "registry",
-        "what": "test dollars minted: 1.00 to profile 0's wallet, 10.00 to the buyer",
+        "what": "test dollars minted: 1.00 to profile 0, 10.00 to the buyer",
         "signature": "2BCYVQJ156e3S458kQJcpFCtZmquxHsGY91CjFApqo1CZMf3qjqPJoq5s3KXbrz7gmgBSDKQeuqoLxnUZa8XU5Mv"
       }
     ]
@@ -327,7 +327,7 @@
     }
   },
   "openUsdShaped": {
-    "what": "A Token-2022 mint with every extension Open USD (ousd2mJsPEckLHcSCDxyKD7NDGARZcfLbDZkKiatYHB) has on mainnet, in its order, six decimals, the devnet payer key holding every issuer role; three of it minted to the buyer.",
+    "what": "A Token-2022 mint with every extension Open USD (ousd2mJsPEckLHcSCDxyKD7NDGARZcfLbDZkKiatYHB) has on mainnet, in its order, six decimals, the devnet payer key holding every role of the dollar's maker; three of it minted to the buyer.",
     "mint": "g55mjY4swDAFt16TZds3tsmoK55qkdhDLn4kb32RGZz",
     "issuer": "9CKUm2s7nwT7HrCpjtaffNH3PnUUVyQr2gELjHrWYBUd",
     "signatures": {

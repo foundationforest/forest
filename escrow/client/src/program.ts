@@ -174,8 +174,8 @@ export type Token = { mint: PublicKey; program: PublicKey; decimals: number }
 /**
  * The mint, from its account as read from the chain (`owner` and `data`). Throws with the
  * program's own error name where `create` would refuse it: wrapped SOL of either program, or a
- * Token-2022 mint with a transfer fee or that cannot be transferred. Whatever else an issuer can
- * do with its mint (freeze, pause, a permanent delegate, a transfer hook) is accepted;
+ * Token-2022 mint with a transfer fee or that cannot be transferred. Whatever else the token's
+ * maker can do with its mint (freeze, pause, a permanent delegate, a transfer hook) is accepted;
  * `escrow/README.md` lists it.
  */
 export function tokenOf(mint: PublicKey, account: { owner: PublicKey; data: Uint8Array }): Token {
@@ -320,7 +320,7 @@ export type PlannedAccount = { address: PublicKey; owner: PublicKey; mint: Publi
  * The accounts a Token-2022 mint's transfer hook needs for `transfers`, for the escrow to forward
  * (append them to a way out, or pass them to `transferIx`): the hook's program, its validation
  * account and every account that lists, resolved through `reader` by `@solana/spl-token`'s own
- * resolver. Empty for a classic mint and for a mint whose hook names no program; a mint's issuer
+ * resolver. Empty for a classic mint and for a mint whose hook names no program; the token's maker
  * can name one at any time, so resolve before each transaction rather than once per escrow.
  * Each appears once, writable if any transfer needs it so, and never as a signer: the escrow
  * forwards none as one.

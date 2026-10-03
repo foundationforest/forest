@@ -1,11 +1,11 @@
 //! Token-2022 for the tests: a mint with every extension Open USD has on mainnet, made by
-//! Token-2022's own instructions; a transfer hook program the tests can switch on; and the
-//! issuer's powers (pause, freeze, the permanent delegate), used the way an issuer would.
+//! Token-2022's own instructions; a transfer hook program the tests can switch on; and the powers
+//! of the dollar's maker (pause, freeze, the permanent delegate), used the way a maker would.
 //!
-//! The hook is a builtin written here, not an SBF program: LiteSVM runs it where Token-2022 calls
-//! a hook, so nothing extra is built or checked in. Token-2022 finds the accounts it needs among
-//! the ones the escrow forwards, and calls it with them, exactly as it would call any hook; the
-//! hook then checks what an issuer's hook sees (called mid-transfer, no signer, its accounts
+//! The hook is a builtin written here, not an SBF program: LiteSVM runs it where Token-2022 calls a
+//! hook, so nothing extra is built or checked in. Token-2022 finds the accounts it needs among the
+//! ones the escrow forwards, and calls it with them, exactly as it would call any hook; the hook
+//! then checks what the hook of a dollar's maker sees (called mid-transfer, no signer, its accounts
 //! present) and counts its calls in an account it owns, which it can write only because that
 //! account reached it writable.
 
@@ -144,7 +144,8 @@ pub fn spy_on_token_2022(h: &mut Harness) {
 /// Which program the mint's transfer hook names at first.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HookProgram {
-    /// None, as Open USD has it today: the extension is there, the issuer can name one later.
+    /// None, as Open USD has it today: the extension is there, the dollar's maker can name one
+    /// later.
     None,
     /// The test hook.
     Test,
@@ -311,8 +312,8 @@ pub(crate) fn make_open_usd(h: &mut Harness, hook: HookProgram) {
     h.decimals = 6;
     h.token_program = TOKEN_2022_PROGRAM;
 
-    // The hook's accounts exist whether or not the mint names it yet, so the issuer can switch it
-    // on later (`set_hook_program`).
+    // The hook's accounts exist whether or not the mint names it yet, so the dollar's maker can
+    // switch it on later (`set_hook_program`).
     set_hook_list(h, &test_hook_accounts());
     let rent = h.svm.minimum_balance_for_rent_exemption(8);
     h.svm.set_account(hook_counter(), Account { lamports: rent, data: vec![0; 8], owner: TEST_HOOK_PROGRAM, executable: false, rent_epoch: 0 }).unwrap();
@@ -351,14 +352,15 @@ fn issuer(h: &Harness) -> &Issuer {
     h.issuer.as_ref().expect("a Token-2022 harness")
 }
 
-/// The issuer names a hook program, or none: `TransferHook`'s update, signed by its authority.
+/// The dollar's maker names a hook program, or none: `TransferHook`'s update, signed by its
+/// authority.
 pub fn set_hook_program(h: &mut Harness, program: Option<Address>) {
     let admin = issuer(h).admin.insecure_clone();
     let ix = transfer_hook::instruction::update(&TOKEN_2022_PROGRAM, &h.mint, &admin.pubkey(), &[], program).unwrap();
     h.send(&[ix], &[&admin]).expect("the hook updated");
 }
 
-/// The issuer pauses every transfer of the mint, or resumes them.
+/// The dollar's maker pauses every transfer of the mint, or resumes them.
 pub fn set_paused(h: &mut Harness, paused: bool) {
     let admin = issuer(h).admin.insecure_clone();
     let ix = if paused {
@@ -369,7 +371,7 @@ pub fn set_paused(h: &mut Harness, paused: bool) {
     h.send(&[ix], &[&admin]).expect("paused or resumed");
 }
 
-/// The issuer freezes a token account, or thaws it.
+/// The dollar's maker freezes a token account, or thaws it.
 pub fn set_frozen(h: &mut Harness, account: &Address, frozen: bool) {
     let freezer = issuer(h).freezer.insecure_clone();
     let ix = if frozen {
@@ -412,7 +414,7 @@ pub enum OneExtension {
     NonTransferable,
     /// Interest at this many basis points a year, shown in the displayed amount only.
     InterestBearing(i16),
-    /// The displayed amount is the raw one times this, which the issuer can change.
+    /// The displayed amount is the raw one times this, which the token's maker can change.
     ScaledUiAmount(f64),
 }
 

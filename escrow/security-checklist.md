@@ -48,17 +48,17 @@ Each is on purpose, and none can be changed after deploy.
    other side stays silent until it is due. After an objection with no arbiter named, the money
    moves only when the parties agree; each side alone can still give (release everything to the
    other), so the program never strands it, but neither side can take it.
-8. **The sweep pays whoever fronted the rent, not the person who opened the escrow.** When a
-   relayer fronts the rent and charges the person for it, what the rent cuts free later goes to the
-   relayer's key, which was already paid for it. Intended: the relayer keeps it and says so plainly
-   to people. See Known limit 14.
-9. **Any Token-2022 mint without a transfer fee that can be transferred, the issuer's powers
-   included.** The skill says to refuse a permanent delegate, an outside freeze authority and
+8. **The sweep pays whoever fronted the rent, not the person who opened the escrow.** When a fee
+   payer fronts the rent and charges the person for it, what the rent cuts free later goes to the
+   fee payer's key, which was already paid for it. Intended: the fee payer keeps it and says so
+   plainly to people. See Known limit 14.
+9. **Any Token-2022 mint without a transfer fee that can be transferred, the powers of the token's
+   maker included.** The skill says to refuse a permanent delegate, an outside freeze authority and
    confidential transfers (§23.1), and a mint close authority (§17). The program refuses only the
-   transfer fee, non-transferable mints and wrapped SOL; everything else an issuer can do is the
-   issuer's, listed plainly in `README.md` ("What a person accepts by choosing a dollar"). Open USD
-   has every one: a permanent delegate that can empty any deposit account, a freeze authority,
-   pause, a hook it can name at any time, a close authority. Known limits 16 to 21.
+   transfer fee, non-transferable mints and wrapped SOL; everything else the dollar's maker can do
+   is the maker's, listed plainly in `README.md` ("What a person accepts by choosing a dollar").
+   Open USD has every one: a permanent delegate that can empty any deposit account, a freeze
+   authority, pause, a hook it can name at any time, a close authority. Known limits 16 to 21.
 10. **A hook's accounts are forwarded unchecked, and never signing.** Every way out passes the
    accounts after its own to each `transfer_checked`, as a pool Token-2022 picks the hook's accounts
    from by address; the escrow checks none of them (§9.3 asks for it), and passes each without a
@@ -168,7 +168,7 @@ payer may be the creator, or the transaction's fee payer; it only receives lampo
 - **5.1 Program ids. Applied.** The only programs the escrow calls are the token program, one of
   the two by `Interface<TokenInterface>` and the mint's own by `mint::token_program`, and, at
   `create` and `recover_late`, the associated token and system programs, fixed. A hook is called
-  by Token-2022, never by the escrow; which hook is the issuer's (High-risk decision 9).
+  by Token-2022, never by the escrow; which hook is up to the dollar's maker (High-risk decision 9).
 - **The transfer, by hand.** Anchor's `token_interface::transfer_checked` passes only its four
   accounts, which a mint with a hook refuses. `transfer_out` builds the same instruction with
   `spl_token_2022::instruction::transfer_checked` (it takes either program's id), appends the hook
@@ -335,11 +335,11 @@ covered:** tokens of another mint sent to the escrow's address (Known limit 9).
 - **Refused at `create`:** the transfer fee and the confidential transfer fee extensions
   (`TransferFee`), any rate, since the rate can be raised later; §21.6's delta accounting is
   therefore never needed. The non-transferable extension (`NonTransferable`): no payment in, and
-  what its issuer mints into a deposit account could never leave. Token-2022's wrapped SOL, by
+  what the token's maker mints into a deposit account could never leave. Token-2022's wrapped SOL, by
   address (`a_transfer_fee_mint_is_refused_at_create`, `a_non_transferable_mint_is_refused_at_create`,
   `wrapped_sol_of_either_token_program_is_refused`). Removing the non-transferable rule fails its test.
-- **Accepted, as the issuer's powers** (High-risk decision 9): permanent delegate, freeze
-  authority, pause, default account state, transfer hook, mint close authority, confidential
+- **Accepted, as the powers of the dollar's maker** (High-risk decision 9): permanent delegate,
+  freeze authority, pause, default account state, transfer hook, mint close authority, confidential
   transfers, metadata and its pointer; and every extension Open USD does not have (Known limits).
   Each tested as Open USD has it: `the_issuer_can_pause_every_transfer`,
   `the_issuer_can_freeze_a_deposit_account_or_a_partys_account`,
@@ -553,22 +553,23 @@ Each is reported, not fixed: fixing it would change a decided rule, or add one.
 13. **A deadlock holds the money.** With no arbiter, if neither side gives and they do not agree,
     the money stays in the deposit account for good: after an objection, or with no timer at all.
     Nothing in the program can break it.
-14. **The relayer gets the sweep, by decision.** When a relayer is the payer, the rent excess goes
-    to the relayer's key, which already charged the person, in dollars, for the whole deposit at the
-    old rate. Intended: the relayer keeps refunds from Solana's rent cuts and says so to people. A
-    product that wants the person to get it back makes the person's own key the payer, which then
-    needs SOL.
+14. **The fee payer gets the sweep, by decision.** When a fee payer signs as payer, the rent excess
+    goes to the fee payer's key, which already charged the person, in dollars, for the whole deposit
+    at the old rate. Intended: the fee payer keeps refunds from Solana's rent cuts and says so to
+    people. A product that wants the person to get it back makes the person's own key the payer,
+    which then needs SOL.
 15. **An objection sent late may land after the deadline.** The chain's clock decides; the client's
     `canObject` reads the local clock.
 
 Taking both token programs:
 
-16. **The issuer can stop an escrow**, by freezing its deposit account, pausing the dollar, making
-    new accounts start frozen, or a hook that refuses; and can stop a party being paid by freezing
-    that party's account. Nothing in the program routes around any of it. `README.md` lists it.
-17. **The issuer can end the "held until the end" rule.** Only this program can move money out of a
-    deposit account for a classic mint and a Token-2022 mint without a permanent delegate; with
-    one, the delegate can take it at any time.
+16. **The dollar's maker can stop an escrow**, by freezing its deposit account, pausing the dollar,
+    making new accounts start frozen, or a hook that refuses; and can stop a party being paid by
+    freezing that party's account. Nothing in the program routes around any of it. `README.md` lists
+    it.
+17. **The dollar's maker can end the "held until the end" rule.** Only this program can move money
+    out of a deposit account for a classic mint and a Token-2022 mint without a permanent delegate;
+    with one, the delegate can take it at any time.
 18. **A permanent delegate's escrow ends by `close_unfunded`.** Once it holds less than its amount,
     no release, split, arbitration or timer runs; a party closes it and the rest goes to the buyer,
     even if its funding was marked, and the receipt is gone with it.
@@ -576,7 +577,7 @@ Taking both token programs:
     need the mint, so its rent stays.
 20. **Extensions Open USD does not have are accepted too,** but for non-transferable. An
     interest-bearing or scaled mint works on raw amounts: the escrow holds and pays base units, and
-    only the displayed amount drifts, with time or when its issuer changes the scale
+    only the displayed amount drifts, with time or when the token's maker changes the scale
     (`interest_bearing_and_scaled_mints_deal_in_raw_amounts_and_only_their_display_drifts`: 1.00
     shown as 1.051237 after a year at 5%, and as 3 instead of 2 after a rescale, paid as 1,000,000
     raw both times).
@@ -599,12 +600,12 @@ Testing and review:
     runs only v0 programs, so the fuzzer runs a v0 build of the same source; its mint is a classic
     SPL Token mint, so Token-2022 is the LiteSVM tests' alone. There is no local-validator test:
     the devnet script is the client's only run against a real runtime.
-26. **A relayer pays only for what its configuration allows.** A relayer pays for the escrow's
+26. **A fee payer pays only for what its configuration allows.** A fee payer pays for the escrow's
     transactions only if its configuration allows this program's id and Token-2022; that
     configuration lives in `foundationforest/services`.
 27. **No pay link.** The client builds none: a Solana Pay recipient would be the escrow's own
     address, a program-derived address, which has not been tried in a wallet on a phone.
 28. **Unaudited.** No paid review, no lawyer pass.
 29. **Refunds arrive in SOL.** The deposit account's rent goes back to the creator's key, a sweep to
-    the payer's; in a relayer's app either may hold no SOL otherwise. How the app shows or uses it,
-    without saying "SOL", is the app's choice and open.
+    the payer's; in an app that uses a fee payer, either may hold no SOL otherwise. How the app
+    shows or uses it, without saying "SOL", is the app's choice and open.
