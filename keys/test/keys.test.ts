@@ -26,7 +26,7 @@ import {
 const vectors = JSON.parse(readFileSync(new URL('./vectors.json', import.meta.url), 'utf8'))
 const seed = hex.decode(vectors.seed)
 const otherSeed = new Uint8Array(32).fill(7)
-const [seller, buyer] = vectors.profiles
+const [seller, buyer] = vectors.mainKeys
 const [listA, listB] = vectors.lists
 const utf8 = (text: string) => new TextEncoder().encode(text)
 // HKDF-SHA256 from a second implementation: empty salt, 32 bytes.
@@ -37,14 +37,14 @@ const mix = (ikm: Uint8Array, info: string) => nobleHkdf(sha256, ikm, undefined,
 test('the info strings are exactly the standard', () => {
   assert.equal(INFO.profile('tutoring/seller'), 'forest/v1/profile/tutoring/seller')
   assert.equal(INFO.read, 'forest/v1/read')
-  assert.equal(INFO.list(listA.keeper), `forest/v1/list/${listA.keeper}`)
-  for (const v of [...vectors.profiles.map((p: { label: string; info: string }) => [INFO.profile(p.label), p.info]), ...vectors.lists.map((l: { keeper: string; info: string }) => [INFO.list(l.keeper), l.info])]) {
+  assert.equal(INFO.list(listA.issuer), `forest/v1/list/${listA.issuer}`)
+  for (const v of [...vectors.mainKeys.map((p: { label: string; info: string }) => [INFO.profile(p.label), p.info]), ...vectors.lists.map((l: { issuer: string; info: string }) => [INFO.list(l.issuer), l.info])]) {
     assert.equal(v[0], v[1])
   }
 })
 
 test('HKDF agrees with an independent implementation', async () => {
-  for (const info of [INFO.profile('tutoring/seller'), INFO.profile(''), INFO.read, INFO.list(listA.keeper)]) {
+  for (const info of [INFO.profile('tutoring/seller'), INFO.profile(''), INFO.read, INFO.list(listA.issuer)]) {
     assert.equal(hex.encode(await hkdf(seed, info)), hex.encode(mix(seed, info)), info)
   }
 })
@@ -81,7 +81,7 @@ test('a new seed is 32 fresh random bytes, and makes 24 words', () => {
 // Main keys
 
 test('each label gives the pinned main key, and gives it again', async () => {
-  for (const expected of vectors.profiles) {
+  for (const expected of vectors.mainKeys) {
     for (let round = 0; round < 2; round++) {
       const key = await mainKey(seed, expected.label)
       assert.equal(key.label, expected.label)
@@ -110,7 +110,7 @@ test('the label is used exactly: another case, another space, another profile', 
 
 test('keys of one seed have nothing to do with keys of another seed', async () => {
   assert.notEqual((await mainKey(seed, 'tutoring/seller')).address, (await mainKey(otherSeed, 'tutoring/seller')).address)
-  assert.notEqual((await listSecret(seed, listA.keeper)).stamp, (await listSecret(otherSeed, listA.keeper)).stamp)
+  assert.notEqual((await listSecret(seed, listA.issuer)).stamp, (await listSecret(otherSeed, listA.issuer)).stamp)
 })
 
 test('a main key needs a 32-byte seed and a label that is text', async () => {
@@ -122,7 +122,7 @@ test('a main key needs a 32-byte seed and a label that is text', async () => {
 // Reading keys
 
 test('each profile gives the pinned reading key, from its main key alone', async () => {
-  for (const expected of vectors.profiles) {
+  for (const expected of vectors.mainKeys) {
     const key = await mainKey(seed, expected.label)
     const { privateKey, ...reading } = expected.reading
     assert.deepEqual(await readingKey(key.privateKey), reading)
@@ -161,14 +161,14 @@ test('a reading key needs the 32 private bytes of a main key', async () => {
 // List secrets and stamps
 
 test('the issuers are the ones the vectors name', () => {
-  assert.equal(base58.encode(ed25519.getPublicKey(new Uint8Array(32).fill(1))), listA.keeper)
-  assert.equal(base58.encode(ed25519.getPublicKey(new Uint8Array(32).fill(2))), listB.keeper)
+  assert.equal(base58.encode(ed25519.getPublicKey(new Uint8Array(32).fill(1))), listA.issuer)
+  assert.equal(base58.encode(ed25519.getPublicKey(new Uint8Array(32).fill(2))), listB.issuer)
 })
 
 test('each list gives the pinned secret, identity and stamp, and gives them again', async () => {
   for (const expected of vectors.lists) {
     for (let round = 0; round < 2; round++) {
-      const { secret, identity, stamp } = await listSecret(seed, expected.keeper)
+      const { secret, identity, stamp } = await listSecret(seed, expected.issuer)
       assert.equal(hex.encode(secret), expected.secret)
       assert.equal(hex.encode(mix(seed, expected.info)), expected.secret)
       assert.equal(identity.secretScalar.toString(), expected.secretScalar)
@@ -200,8 +200,8 @@ test('the stamp is what Semaphore says it is, recomputed step by step', () => {
 })
 
 test('two lists, two unrelated stamps; and none of it is a main key', async () => {
-  const a = await listSecret(seed, listA.keeper)
-  const b = await listSecret(seed, listB.keeper)
+  const a = await listSecret(seed, listA.issuer)
+  const b = await listSecret(seed, listB.issuer)
   assert.notEqual(a.stamp, b.stamp)
   assert.notEqual(hex.encode(a.secret), hex.encode(b.secret))
   const all = [listA.secret, listB.secret, seller.privateKey, buyer.privateKey, seller.reading.privateKey, buyer.reading.privateKey, vectors.seed]
@@ -209,9 +209,9 @@ test('two lists, two unrelated stamps; and none of it is a main key', async () =
 })
 
 test('the issuer is an address in its one spelling, and the seed 32 bytes', async () => {
-  const short = base58.encode(base58.decode(listA.keeper).subarray(1))
-  for (const issuer of ['', 'not base58: 0OIl', short, `1${listA.keeper}`, hex.encode(base58.decode(listA.keeper)), 7]) {
+  const short = base58.encode(base58.decode(listA.issuer).subarray(1))
+  for (const issuer of ['', 'not base58: 0OIl', short, `1${listA.issuer}`, hex.encode(base58.decode(listA.issuer)), 7]) {
     await assert.rejects(listSecret(seed, issuer as string), /issuer must be an address/, String(issuer))
   }
-  await assert.rejects(listSecret(seed.subarray(1), listA.keeper), /seed must be 32 bytes/)
+  await assert.rejects(listSecret(seed.subarray(1), listA.issuer), /seed must be 32 bytes/)
 })

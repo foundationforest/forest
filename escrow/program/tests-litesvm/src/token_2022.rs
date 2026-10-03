@@ -63,8 +63,8 @@ pub fn hook_counter() -> Address {
 
 /// The second: one read-only account per destination owner, as a hook keeping a list of allowed
 /// holders would have. It need not exist; it only has to be passed.
-pub fn hook_wallet_entry(owner: &Address) -> Address {
-    Address::find_program_address(&[b"wallet", owner.as_ref()], &TEST_HOOK_PROGRAM).0
+pub fn hook_holder_entry(owner: &Address) -> Address {
+    Address::find_program_address(&[b"holder", owner.as_ref()], &TEST_HOOK_PROGRAM).0
 }
 
 /// The hook's validation account for a mint: where Token-2022 and every client read which
@@ -79,7 +79,7 @@ pub fn test_hook_accounts() -> Vec<ExtraAccountMeta> {
     vec![
         ExtraAccountMeta::new_with_seeds(&[Seed::Literal { bytes: b"counter".to_vec() }], false, true).unwrap(),
         ExtraAccountMeta::new_with_seeds(
-            &[Seed::Literal { bytes: b"wallet".to_vec() }, Seed::AccountData { account_index: 2, data_index: 32, length: 32 }],
+            &[Seed::Literal { bytes: b"holder".to_vec() }, Seed::AccountData { account_index: 2, data_index: 32, length: 32 }],
             false,
             false,
         )
@@ -94,7 +94,7 @@ solana_program_runtime::declare_process_instruction!(TestHook, 500, |invoke_cont
     if data.len() != 16 || data[..8] != *ExecuteInstruction::SPL_DISCRIMINATOR_SLICE {
         return Err(InstructionError::InvalidInstructionData);
     }
-    // source, mint, destination, authority, validation, counter, wallet entry.
+    // source, mint, destination, authority, validation, counter, holder entry.
     let n = ic.get_number_of_instruction_accounts();
     if n < 7 {
         return Err(InstructionError::MissingAccount);
@@ -232,8 +232,8 @@ fn system_create(payer: &Address, account: &Address, lamports: u64, space: usize
     }
 }
 
-/// A token account at a fresh keypair's address, not a standard one, made the way a wallet makes
-/// one: the size Token-2022 asks for the mint's extensions, then `InitializeAccount3`.
+/// A token account at a fresh keypair's address, not a standard one, made the way a wallet app
+/// makes one: the size Token-2022 asks for the mint's extensions, then `InitializeAccount3`.
 pub fn make_other_account(h: &mut Harness, owner: &Address) -> Address {
     let account = Keypair::new();
     let mint_types = mint_extensions(&h.account(&h.mint).data);

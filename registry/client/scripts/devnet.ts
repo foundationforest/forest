@@ -25,7 +25,7 @@ import { ed25519 } from '@noble/curves/ed25519.js'
 import { sha256 } from '@noble/hashes/sha2.js'
 import { Connection, Keypair, PublicKey, SystemProgram, Transaction, VersionedTransaction } from '@solana/web3.js'
 
-import { listSecret, profileKey } from '../../../keys/src/index.ts'
+import { listSecret, mainKey } from '../../../keys/src/index.ts'
 import {
   buildRegistration,
   fetchRow,
@@ -140,8 +140,8 @@ const issuerSignature = ed25519.sign(rootBytes(root), standInSeed('keeper'))
 
 // Two profiles the person holds, both from keys/: the row's, and a second one the registry refuses
 // on this list.
-const profile = Keypair.fromSeed((await profileKey(seed, LABEL)).privateKey)
-const second = Keypair.fromSeed((await profileKey(seed, 'freelance/buyer')).privateKey)
+const profile = Keypair.fromSeed((await mainKey(seed, LABEL)).privateKey)
+const second = Keypair.fromSeed((await mainKey(seed, 'freelance/buyer')).privateKey)
 const marketStamp = marketStampOf(secret, LABEL)
 const address = rowAddress(marketStamp, programId)
 const artifacts = {
@@ -182,7 +182,7 @@ record.row = {
   list: { standIn: true, stamps: stamps.map(String), root: hex(toBytes32(root)), issuerSignature: hex(issuerSignature) },
   marketStamp: hex(toBytes32(marketStamp)),
   address: address.toBase58(),
-  keys: "the profiles are keys/'s profileKey(test seed, 'freelance/seller') and (test seed, 'freelance/buyer'); the issuer's private seed is sha256 of `forest devnet stand-in: keeper`",
+  keys: "the profiles are keys/'s mainKey(test seed, 'freelance/seller') and (test seed, 'freelance/buyer'); the issuer's private seed is sha256 of `forest devnet stand-in: keeper`",
 }
 save()
 

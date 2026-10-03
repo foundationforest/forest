@@ -83,7 +83,8 @@ string is a new key for everyone. From the list secret on, Semaphore's own hashe
 ### Rules for apps that hold keys
 
 1. The seed and the main keys stay in the device's secure slot.
-2. Every signature asks for the person's face and shows what is being signed.
+2. Every signature asks for the person's face or fingerprint and shows what is being signed; the
+   person may relax this per action, and the default is never relaxed.
 3. Nothing leaves the device but access keys and signatures.
 4. Each connection gets its own access key for each folder.
 5. Proofs are made in the app, never delegated.

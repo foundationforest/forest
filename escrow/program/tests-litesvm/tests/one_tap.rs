@@ -171,8 +171,8 @@ fn a_second_payment_to_a_one_tap_link_goes_back_to_the_buyer() {
     )
     .expect("one tap");
     let receipt = h.account(&escrow);
-    // Someone pays the same link again: a wallet makes the deposit account again (anyone may) and
-    // sends.
+    // Someone pays the same link again: a wallet app makes the deposit account again (anyone may)
+    // and sends.
     let (make, again) = create_ata_idempotent_ix(buyer.pubkey(), escrow, h.mint);
     assert_eq!(again, s.vault);
     h.send(&[make, spl_transfer_ix(h.buyer_tokens, s.vault, buyer.pubkey(), AMOUNT)], &[&buyer]).expect("a second payment");

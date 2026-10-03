@@ -138,9 +138,10 @@ private record is one age file, the envelope: the canonical text of an object un
 made for that record, and that key sealed once per reader.
 
 The readers are reading keys the owner makes, one for each reader, and hands over. So a reader needs
-no profile and no key of its own, and a made key that leaks opens only what this owner sealed to
-it. The owner usually adds its own reading key, to open its copy. A profile's `read` field is that
-profile's own reading key. How a made key's private half reaches its reader is the app's.
+no profile and no key of its own, a made key that leaks opens only what this owner sealed to it,
+and one relationship can be revoked without the reader rotating its own key. The owner usually adds
+its own reading key, to open its copy. A profile's `read` field is that profile's own reading key.
+How a made key's private half reaches its reader is the app's.
 
 Each reading key is an age post-quantum hybrid recipient (`age1pq1…`, stanza `mlkem768x25519`); an
 app MUST NOT seal an envelope to any other kind. Each one adds about 2 KB, so the 65,536-byte cap
@@ -496,8 +497,9 @@ quantum computer open it for all of them.
 
 **Why does the owner make the readers' keys?**
 So a reader needs no profile and no key of its own: the owner's app makes a reading key for it and
-hands it over. And a made key that leaks opens only what one owner sealed to it, never everything
-ever sealed to the reader's own key.
+hands it over. A made key that leaks opens only what one owner sealed to it, never everything ever
+sealed to the reader's own key. And one relationship can be revoked without the reader rotating its
+own key.
 
 **Why is a message not a record in the sender's folder?**
 Anyone reads a folder. A message there would need a field naming its recipient so hosts could route

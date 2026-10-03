@@ -59,7 +59,7 @@ fn a_deposit_account_is_made_under_token_2022_with_the_extensions_the_mint_requi
         want.sort_by_key(|t| *t as u16);
         assert_eq!(got, want, "{hook:?}");
         assert!(account.data.len() > 165);
-        // A wallet's plain `Transfer` does not reach it: an account with a hook extension takes
+        // A wallet app's plain `Transfer` does not reach it: an account with a hook extension takes
         // only `transfer_checked`, which names the mint.
         let plain = solana_instruction::Instruction { program_id: TOKEN_2022_PROGRAM, ..spl_transfer_ix(h.buyer_tokens, vault, h.buyer.pubkey(), AMOUNT) };
         let buyer = h.buyer.insecure_clone();
@@ -216,7 +216,7 @@ fn one_tap_and_an_invoice_paid_in_one_tap() {
         let create = h.create_ix(&t, buyer.pubkey());
         // The client resolves the hook's accounts against the chain as it stands; in a one-tap the
         // deposit account does not exist yet, so the hook entry for its owner is resolved from the
-        // escrow's key, the same bytes a wallet reads once it exists.
+        // escrow's key, the same bytes a wallet app reads once it exists.
         let (fund, release) = one_tap_transfers(&mut h, &escrow, &[make.clone(), create.clone()], &buyer);
         let label = format!("one tap, Open USD, hook {hook:?}");
         let (_, bytes, events) = h.measure(&label, &[make, create, fund, release], &[&buyer]);
@@ -285,10 +285,10 @@ fn every_hook_account_is_needed_and_each_keeps_its_writability() {
     let full = h.release_to_seller_ix(&escrow);
     let named = 7;
     let extras = hook_metas_of(&full, named);
-    // counter (writable), wallet entry, hook program, validation account.
+    // counter (writable), holder entry, hook program, validation account.
     assert_eq!(extras.len(), 4, "{extras:?}");
     assert!(extras.iter().any(|m| m.pubkey == hook_counter() && m.is_writable));
-    assert!(extras.iter().any(|m| m.pubkey == hook_wallet_entry(&h.seller.pubkey())));
+    assert!(extras.iter().any(|m| m.pubkey == hook_holder_entry(&h.seller.pubkey())));
     assert!(extras.iter().any(|m| m.pubkey == TEST_HOOK_PROGRAM));
     assert!(extras.iter().any(|m| m.pubkey == hook_validation(&h.mint)));
     assert!(extras.iter().all(|m| !m.is_signer));

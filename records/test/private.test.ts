@@ -19,8 +19,8 @@ const strangerRead = await readingKey(new Uint8Array(32).fill(3))
 
 describe('reading keys', () => {
   test("keys/'s reading key, one per profile: age's post-quantum hybrid, the pinned one", async () => {
-    assert.equal(aliceRead.identity, KEYS.profiles[0].reading.identity)
-    assert.equal(aliceRead.recipient, KEYS.profiles[0].reading.recipient)
+    assert.equal(aliceRead.identity, KEYS.mainKeys[0].reading.identity)
+    assert.equal(aliceRead.recipient, KEYS.mainKeys[0].reading.recipient)
     assert.notEqual(aliceRead.recipient, aliceBuyerRead.recipient)
     assert.match(aliceRead.recipient, /^age1pq1[02-9ac-hj-np-z]{1952}$/)
     assert.match(aliceRead.identity, /^AGE-SECRET-KEY-PQ-1[02-9AC-HJ-NP-Z]+$/)

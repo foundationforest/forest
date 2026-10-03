@@ -22,8 +22,8 @@ test('the vectors are what this implementation computes', async () => {
 })
 
 test("the keys are keys/'s pinned ones; the access key, recomputed with node:crypto", () => {
-  assert.equal(pinned.profile, KEYS.profiles[0].address)
-  assert.equal(decodeRecord(pinned.profileCard.wire).record.body!.read, KEYS.profiles[0].reading.recipient)
+  assert.equal(pinned.profile, KEYS.mainKeys[0].address)
+  assert.equal(decodeRecord(pinned.profileCard.wire).record.body!.read, KEYS.mainKeys[0].reading.recipient)
   const der = Buffer.concat([Buffer.from('302e020100300506032b657004220420', 'hex'), Buffer.alloc(32, 0x2a)]) // Ed25519 PKCS#8
   const publicKey = createPublicKey(createPrivateKey({ key: der, format: 'der', type: 'pkcs8' })).export({ format: 'der', type: 'spki' }).subarray(-32)
   assert.equal(base58.encode(new Uint8Array(publicKey)), pinned.accessKey)
@@ -53,9 +53,9 @@ test("the message checks with a second Ed25519 and a second SHA-256, is from key
   const input = hex.decode(v.signingInputHex)
   startsWith(input, 'forest/v1/message\n')
   assert.equal(createHash('sha256').update(input).digest('hex'), v.id)
-  assert.deepEqual([message.from, message.to], [KEYS.profiles[1].address, KEYS.profiles[0].address])
+  assert.deepEqual([message.from, message.to], [KEYS.mainKeys[1].address, KEYS.mainKeys[0].address])
   assert.ok(nodeVerifies(input, message.from, message.sig))
-  assert.deepEqual((await openMessage(v.wire, KEYS.profiles[0].reading.identity)).body, { text: 'Is Tuesday at six free?' })
+  assert.deepEqual((await openMessage(v.wire, KEYS.mainKeys[0].reading.identity)).body, { text: 'Is Tuesday at six free?' })
 })
 
 test('the pull checks with a second Ed25519, by the profile it pulls', () => {
@@ -63,6 +63,6 @@ test('the pull checks with a second Ed25519, by the profile it pulls', () => {
   const pull = checkPull(v.wire, JSON.parse(v.wire).time)
   const input = hex.decode(v.signingInputHex)
   startsWith(input, 'forest/v1/pull\n')
-  assert.equal(pull.profile, KEYS.profiles[0].address)
+  assert.equal(pull.profile, KEYS.mainKeys[0].address)
   assert.ok(nodeVerifies(input, pull.profile, pull.sig))
 })

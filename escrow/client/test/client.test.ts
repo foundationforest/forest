@@ -932,7 +932,7 @@ test('under Token-2022 every address is derived with it and every instruction na
   assert.deepEqual([late.keys[3].pubkey, late.keys[6].pubkey], [refundAddress(buyer, mint, t22), t22])
   assert.deepEqual(meta(late).slice(9), forwarded)
 
-  // A wallet's transfer_checked under Token-2022, hook accounts after its four.
+  // A wallet app's transfer_checked under Token-2022, hook accounts after its four.
   const pay = transferIx({ from: payer, to: vault, owner: buyer, mint, amount: 5n, decimals: 6, tokenProgram: t22, hookAccounts: [{ pubkey: arbiter, isSigner: false, isWritable: true }] })
   assert.deepEqual(pay.programId, t22)
   assert.equal(hex(pay.data), '0c' + '0500000000000000' + '06')
@@ -969,7 +969,7 @@ test('a hook\'s accounts are resolved by spl-token\'s resolver: none without a h
         data: validationBytes([
           { discriminator: 0, config: listed.toBytes(), signer: true, writable: false },
           { discriminator: 1, config: literalSeed('counter'), signer: false, writable: true },
-          { discriminator: 1, config: literalThenAccountData('wallet', 2, 32, 32), signer: false, writable: false },
+          { discriminator: 1, config: literalThenAccountData('holder', 2, 32, 32), signer: false, writable: false },
         ]),
       },
     ],
@@ -977,7 +977,7 @@ test('a hook\'s accounts are resolved by spl-token\'s resolver: none without a h
     [refundAddress(buyer, mint, t22).toBase58(), tokenAccount(buyer)],
   ])
   const reader = readerOf(accounts)
-  const entry = (owner: PublicKey) => PublicKey.findProgramAddressSync([Buffer.from('wallet'), owner.toBuffer()], hookProgram)[0]
+  const entry = (owner: PublicKey) => PublicKey.findProgramAddressSync([Buffer.from('holder'), owner.toBuffer()], hookProgram)[0]
 
   const both = await hookAccounts({ reader, mint, transfers: payoutTransfers(k, ['seller', 'buyer']) })
   const byKey = new Map(both.map((m) => [m.pubkey.toBase58(), m]))

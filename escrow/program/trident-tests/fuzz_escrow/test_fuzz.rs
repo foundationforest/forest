@@ -398,7 +398,7 @@ impl FuzzTest {
     }
 
     /// A plain transfer into a deposit account, from anyone. If the deposit account does not exist
-    /// (a deal that ended or was closed), a wallet would create it first: so does this.
+    /// (a deal that ended or was closed), a wallet app would create it first: so does this.
     #[flow]
     fn deposit(&mut self) {
         let Some(d) = self.any_deal() else { return };

@@ -415,8 +415,8 @@ fn finding_a_buyers_short_timer_to_itself_takes_back_money_the_seller_worked_for
 #[test]
 fn timer_whoever_sends_the_sellers_timer_can_pay_only_its_standard_account() {
     // Anyone sends a due timer. The last version paid the seller at any token account it held, so
-    // the sender chose which: one the seller's wallet might not show. Carlos's second change: the
-    // seller, like the buyer, is paid only at its standard token account for the mint.
+    // the sender chose which: one the seller's wallet app might not show. Carlos's second change:
+    // the seller, like the buyer, is paid only at its standard token account for the mint.
     let mut h = Harness::new();
     let seller = h.seller.insecure_clone();
     let t = Terms { timer: Some(Timer { days: 1, to: Side::Seller }), ..h.terms(1) };
@@ -466,8 +466,8 @@ fn finding_a_part_payment_can_be_closed_under_the_buyer_by_the_seller() {
     // `close_unfunded` runs at any time while the balance is below the amount, by either party. A
     // buyer paying in two transfers can find the escrow closed between them:
     // the first part comes back, and the second, sent to the closed address, lands only if the
-    // wallet makes the deposit account again. Then there is no receipt to recover it through; the
-    // buyer reopening the same id adopts it.
+    // wallet app makes the deposit account again. Then there is no receipt to recover it through;
+    // the buyer reopening the same id adopts it.
     let mut h = Harness::new();
     let buyer = h.buyer.insecure_clone();
     let seller = h.seller.insecure_clone();
@@ -806,7 +806,7 @@ fn finding_a_reused_deposit_address_adopts_a_stranger_buyers_money() {
     let escrow = escrow_address(&seller.pubkey(), 1);
 
     // Buyer A pays the seller's id-1 deposit address before any escrow exists there, making the
-    // account first as a wallet paying a Solana Pay link to a missing account would.
+    // account first as a wallet app paying a Solana Pay link to a missing account would.
     let (make, vault) = create_ata_idempotent_ix(buyer_a.pubkey(), escrow, h.mint);
     h.send(&[make, spl_transfer_ix(h.buyer_tokens, vault, buyer_a.pubkey(), AMOUNT)], &[&buyer_a])
         .expect("buyer A pays the address");
