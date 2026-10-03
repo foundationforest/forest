@@ -442,6 +442,19 @@ with `tutoring/seller`'s pinned reading key. The profile is
   not ([services](https://github.com/foundationforest/services)). Write them apart, and give each
   folder its own access keys.
 
+## Who decides what
+
+- **The standard:** the record and the message, and what makes each valid (the 65,536-byte cap,
+  the ten-minute window); the six requests and their codes; the control records; envelopes; the
+  three shapes; the inbox and its rules.
+- **A host, by its own policy:** its keep days; batch and page sizes; which blob types and sizes it
+  takes; which inbox rules it supports; rate limits; logging; storage.
+- **An app, with the person:** the copies it keeps; which hosts; whether to forward a message to
+  email or a notification; dropping a message that arrives twice; and what asks for the person's
+  face.
+- **An index, by its own policy:** which hosts, issuers and markets count, and how much each review
+  weighs.
+
 ## FAQ
 
 **What if a host deletes my records?**
@@ -454,6 +467,11 @@ it comes from, and your name is your key, so nothing about you changes.
 No. A host holds no keys and no accounts, takes signed records for any profile, and never refuses a
 newer hosts or permissions record by its own policy. It can stop serving you, but it can never stop
 you moving, and never keep an access key from being removed.
+
+**What if an index ignores my host, or my host ignores an index?**
+Pick another. Your hosts record can name up to eight hosts, so add one or move, and a reader can
+use another index. Indexes compete on who they show, and hosts on who they serve. Nothing here
+needs either to be good, only replaceable.
 
 **How does a reader find my records? Is there a directory?**
 Your hosts record says where they live, and no directory or relay is needed. Nothing grows with the

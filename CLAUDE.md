@@ -21,11 +21,17 @@ checklist next to the program (`registry/security-checklist.md`, `escrow/securit
 - The promises in each README change only when Carlos says so in a chat; never change one as a side
   effect of a task.
 - The repo is `keys/`, `records/`, `registry/`, `escrow/`, `README.md`, `CLAUDE.md` and `LICENSE`,
-  with `.github/` and `.claude/`. Each directory has one README: what it is, how it works, promises,
-  limits, FAQ last. The README is the standard.
+  with `.github/` and `.claude/`. The README is the standard.
 - Keep the docs true in the same pull request: a change that makes a README wrong fixes it. A README
   says only what the code does today. Say "on devnet" for what runs; never state anything as
   shipped.
+- One README per level: the repo's, and one in each directory; each starts with what it is and how
+  it works.
+- Each piece's README ends Promises, Limits, Who decides what, FAQ; the repo README has Who decides
+  what after the sort.
+- A question lives at the lowest level whose README explains the thing it is about.
+- A FAQ is only for what the explanation does not answer; when a question shows the explanation is
+  missing something, the explanation changes.
 - When the plan is silent, choose the option that adds no rule and no text a person reads. Write
   its reason down: as a question in the FAQ of the directory it belongs to (the top README's for the
   whole repo) if it shapes Forest, otherwise in a comment beside the code. Ask only when the choice
