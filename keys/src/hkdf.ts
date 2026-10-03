@@ -3,14 +3,14 @@
 // key can be turned into any other key. Changing any of them gives other keys:
 // it is a new version, never an edit to this one.
 
-/** HKDF info strings: what the seed (or a profile key) is mixed with. */
+/** HKDF info strings: what the seed (or a main key) is mixed with. */
 export const INFO = {
-  /** The profile key for a label, mixed from the seed. The label is used exactly as given. */
+  /** The main key for a label, mixed from the seed. The label is used exactly as given. */
   profile: (label: string) => `forest/v1/profile/${label}`,
-  /** The profile's reading key, mixed from the profile key's 32 private bytes. */
+  /** The profile's reading key, mixed from the main key's 32 private bytes. */
   read: 'forest/v1/read',
-  /** The person's secret for one keeper's list, mixed from the seed. */
-  list: (keeper: string) => `forest/v1/list/${keeper}`,
+  /** The person's secret for one issuer's list, mixed from the seed. */
+  list: (issuer: string) => `forest/v1/list/${issuer}`,
 } as const
 
 /** The seed is 32 bytes. */

@@ -1,5 +1,5 @@
 {
-  "about": "Fixed test vectors for Forest keys, v1. The seed is the 32 bytes 00 01 ... 1f: public by construction, so every key here is public; for tests only. Two profiles (labels tutoring/seller and tutoring/buyer), each with its reading key; two lists, kept by the keepers whose ed25519 private keys are 32 bytes of 0x01 and 32 bytes of 0x02. Generated once by this library and pinned; test/keys.test.ts recomputes every value without it. Bytes are hex; field elements are decimal. Changing any value here changes the standard.",
+  "about": "Fixed test vectors for Forest keys, v1. The seed is the 32 bytes 00 01 ... 1f: public by construction, so every key here is public; for tests only. Two profiles (labels tutoring/seller and tutoring/buyer), each with its reading key; two lists, kept by the issuers whose ed25519 private keys are 32 bytes of 0x01 and 32 bytes of 0x02. Generated once by this library and pinned; test/keys.test.ts recomputes every value without it. Bytes are hex; field elements are decimal. Changing any value here changes the standard.",
   "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
   "words": "abandon amount liar amount expire adjust cage candy arch gather drum bullet absurd math era live bid rhythm alien crouch range attend journey unaware",
   "profiles": [

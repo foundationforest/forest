@@ -2,7 +2,7 @@
   "name": "@forest/keys",
   "version": "0.0.0",
   "private": true,
-  "description": "Forest keys: a seed of 24 words, and the keys mixed from it: one profile key per label (its name, signature and wallet), each profile's reading key, and the person's secret and stamp for each keeper's list.",
+  "description": "Forest keys: a seed of 24 words, and the keys mixed from it: one main key per label (its name, signature and Solana address), each profile's reading key, and the person's secret and stamp for each issuer's list.",
   "license": "Apache-2.0",
   "type": "module",
   "main": "./dist/index.js",
