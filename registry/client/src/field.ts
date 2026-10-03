@@ -60,10 +60,11 @@ export function scopeOf(label: string): bigint {
 
 /**
  * The proof's message: what binds a proof to one profile, so it cannot create any other profile's
- * row. The profile is its 32-byte ed25519 key, which is also its name and its Solana wallet.
+ * row. `profile` is the main key, 32 bytes of ed25519: also the profile's name and its Solana
+ * address.
  */
 export function messageOf(profile: PublicKey | Uint8Array): bigint {
   const key = profile instanceof Uint8Array ? profile : profile.toBytes()
-  if (key.length !== 32) throw new RangeError('a profile key is 32 bytes')
+  if (key.length !== 32) throw new RangeError('a main key is 32 bytes')
   return fieldHash(MESSAGE_NS, key)
 }

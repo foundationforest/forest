@@ -33,7 +33,7 @@
       "signature": "4m5TmthNkn9jGqFfrkKVabBxEpkGGJn7pNB6spAy528HFaqjaxAWtMgP6eRqGfGPKSbMCnEAnWhhBoK8nuUyxMHc"
     },
     {
-      "what": "register: a row under \"freelance/seller\", the profile signing, the relayer paying",
+      "what": "register: a row under \"freelance/seller\", the main key signing, the fee payer paying",
       "signature": "FFUrgkJoe6xuArGTLW67rsLbPrjnxjvhmArLsGUJc1KyEBrJXaQKgn9oB1N5ZiSoKNCAB2CvgrQQndkdAv5bJCu"
     },
     {
@@ -49,7 +49,7 @@
       "signature": "5TfyH1jexj74SNmSz9ipZhDnvEqHRB9EFA4eYqMV2BtwJnQP5dJx2RoyRLxeNrxKZcxPmF4sC4Nygh1Q6dyWooTg"
     },
     {
-      "what": "register: a row under \"freelance/seller\", the profile signing, the relayer paying",
+      "what": "register: a row under \"freelance/seller\", the main key signing, the fee payer paying",
       "signature": "2CCCbgJsaKHcsQq4FGZyBReaeGdaHAjDwZ8zQSdkabtQKAhWLKFW6BRgsgGLKvvKQbj6i9v8UoKUNmoUTgSMcuWN"
     },
     {
@@ -67,10 +67,10 @@
   ],
   "earlierRows": [
     {
-      "what": "one row: the keys recipe's test seed, on a stand-in keeper's list, under freelance/seller, for a stand-in profile; the profile signs, a relayer (the payer) pays",
+      "what": "one row: the keys recipe's test seed, on a stand-in issuer's list, under freelance/seller, for a stand-in profile; the main key signs, a fee payer pays",
       "label": "freelance/seller",
       "profile": "c6Nd6Y3NX1yyt6gWdPa23V9TNvkGXVtq4gtLmjBjxLs",
-      "keeper": "5tUPxWGKqNbFctBXKS8LgnkM8A1Jfn5qVrUGxKjFXozB",
+      "issuer": "5tUPxWGKqNbFctBXKS8LgnkM8A1Jfn5qVrUGxKjFXozB",
       "list": {
         "standIn": true,
         "stamps": [
@@ -81,7 +81,7 @@
           "15358735913213598388622218463426325445944709616833779840023445291983688240143"
         ],
         "root": "12672909e4a5ad908967ca4bdca3270e1f6a1775ffcbe194914c2ca5a52edbc5",
-        "keeperSignature": "7477f1d481180afcd844261cca1672d1dfb420f45c25756a1d75600cc2ef17466af3118c67ead4c359829fbc24f146e5bb2e51dbe8af92094f1871e28d8ead01"
+        "issuerSignature": "7477f1d481180afcd844261cca1672d1dfb420f45c25756a1d75600cc2ef17466af3118c67ead4c359829fbc24f146e5bb2e51dbe8af92094f1871e28d8ead01"
       },
       "marketStamp": "243d6e9983876a58f190e988ad294983b7e27c3be9cf233c8c31f63254cf1fca",
       "address": "9UDuRdcKnuYPKeafnW4C29WdpDnFKtYLhqdwvFRKfhkr",
@@ -120,11 +120,11 @@
         "readBy": "getProgramAccounts, filtered by profile",
         "rowsOfThisProfile": 1,
         "profile": "c6Nd6Y3NX1yyt6gWdPa23V9TNvkGXVtq4gtLmjBjxLs",
-        "keeper": "5tUPxWGKqNbFctBXKS8LgnkM8A1Jfn5qVrUGxKjFXozB",
+        "issuer": "5tUPxWGKqNbFctBXKS8LgnkM8A1Jfn5qVrUGxKjFXozB",
         "payer": "9CKUm2s7nwT7HrCpjtaffNH3PnUUVyQr2gELjHrWYBUd",
         "label": "freelance/seller",
         "root": "12672909e4a5ad908967ca4bdca3270e1f6a1775ffcbe194914c2ca5a52edbc5",
-        "keeperSigned": true,
+        "issuerSigned": true,
         "bytes": 221,
         "lamports": 1772920
       },
@@ -136,10 +136,10 @@
     }
   ],
   "row": {
-    "what": "one row: keys/'s test person (its test seed), on a stand-in keeper's list, under freelance/seller, for their freelance/seller profile; the profile signs, a relayer (the payer) pays",
+    "what": "one row: keys/'s test person (its test seed), on a stand-in issuer's list, under freelance/seller, for their freelance/seller profile; the main key signs, a fee payer pays",
     "label": "freelance/seller",
     "profile": "5RWsXwx9Urx8d9sUv1i4viMJZ9pQufyNA76o7sCdLysx",
-    "keeper": "5tUPxWGKqNbFctBXKS8LgnkM8A1Jfn5qVrUGxKjFXozB",
+    "issuer": "5tUPxWGKqNbFctBXKS8LgnkM8A1Jfn5qVrUGxKjFXozB",
     "list": {
       "standIn": true,
       "stamps": [
@@ -150,11 +150,11 @@
         "15358735913213598388622218463426325445944709616833779840023445291983688240143"
       ],
       "root": "2de9fb6e8994df1c80f9e5cb1257e1e874e9ab8cc551af7a431d4ea6dee05e4e",
-      "keeperSignature": "e54b99e4340106a70b52a50c823378f0c01cc9db81396e1f36333be52c966248870a394817a4a7fd3b5fdf3ca297618b1d0e4a08421e70dbaf4c60f88fdd9c03"
+      "issuerSignature": "e54b99e4340106a70b52a50c823378f0c01cc9db81396e1f36333be52c966248870a394817a4a7fd3b5fdf3ca297618b1d0e4a08421e70dbaf4c60f88fdd9c03"
     },
     "marketStamp": "1d8e617c4079ea08d3067b77d65bc14d7e6ba87b48cf07fc73edcbaba86e2b50",
     "address": "LhQV7M3m63r4WWFYbgVhr9C3fo5ouFyb6PLjpHZAAPF",
-    "keys": "the profiles are keys/'s profileKey(test seed, 'freelance/seller') and (test seed, 'freelance/buyer'); the keeper's private seed is sha256 of `forest devnet stand-in: keeper`",
+    "keys": "the profiles are keys/'s profileKey(test seed, 'freelance/seller') and (test seed, 'freelance/buyer'); the issuer's private seed is sha256 of `forest devnet stand-in: keeper`",
     "register": {
       "signature": "2CCCbgJsaKHcsQq4FGZyBReaeGdaHAjDwZ8zQSdkabtQKAhWLKFW6BRgsgGLKvvKQbj6i9v8UoKUNmoUTgSMcuWN",
       "provingMs": 2249,
@@ -189,11 +189,11 @@
       "readBy": "getProgramAccounts, filtered by profile",
       "rowsOfThisProfile": 1,
       "profile": "5RWsXwx9Urx8d9sUv1i4viMJZ9pQufyNA76o7sCdLysx",
-      "keeper": "5tUPxWGKqNbFctBXKS8LgnkM8A1Jfn5qVrUGxKjFXozB",
+      "issuer": "5tUPxWGKqNbFctBXKS8LgnkM8A1Jfn5qVrUGxKjFXozB",
       "payer": "9CKUm2s7nwT7HrCpjtaffNH3PnUUVyQr2gELjHrWYBUd",
       "label": "freelance/seller",
       "root": "2de9fb6e8994df1c80f9e5cb1257e1e874e9ab8cc551af7a431d4ea6dee05e4e",
-      "keeperSigned": true,
+      "issuerSigned": true,
       "bytes": 221,
       "lamports": 1772920
     }

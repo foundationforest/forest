@@ -23,7 +23,7 @@ fn refused(result: Result<litesvm::types::TransactionMetadata, String>, wants: &
 }
 
 #[test]
-fn a_row_is_written_with_its_profile_keeper_root_signature_payer_and_label() {
+fn a_row_is_written_with_its_profile_issuer_root_signature_payer_and_label() {
     let (mut h, f) = ready();
     let alice = f.proof("alice-tutoring-A");
     let meta = h.register(alice).expect("register");
@@ -31,10 +31,10 @@ fn a_row_is_written_with_its_profile_keeper_root_signature_payer_and_label() {
     let row = h.row(&alice.market_stamp());
     let args = alice.args();
     assert_eq!(row.profile, alice.profile_address());
-    assert_eq!(row.keeper, args.keeper);
-    assert_eq!(row.keeper.to_string(), f.keepers.a);
+    assert_eq!(row.issuer, args.issuer);
+    assert_eq!(row.issuer.to_string(), f.issuers.a);
     assert_eq!(row.root, args.root);
-    assert_eq!(row.keeper_signature, args.keeper_signature);
+    assert_eq!(row.issuer_signature, args.issuer_signature);
     assert_eq!(row.payer, h.payer.pubkey());
     assert_eq!(row.label, "tutoring/seller");
     assert_eq!(row.bump, Address::find_program_address(&[b"row", &alice.market_stamp()], &PROGRAM_ID).1, "the canonical bump");
@@ -63,7 +63,7 @@ fn the_profile_must_sign() {
     let result = h.send(&[ix], &[]);
     assert_eq!(custom_error(&result), Some(err::ACCOUNT_NOT_SIGNER), "{result:?}");
     assert!(!h.exists(&alice.row_address()));
-    println!("refused as expected: a row without its profile's signature");
+    println!("refused as expected: a row without its main key's signature");
 }
 
 #[test]
@@ -85,29 +85,29 @@ fn a_stranger_cannot_register_my_profile_or_take_my_proof() {
 
 #[test]
 fn anyone_may_pay_the_profile_included() {
-    // A relayer pays for Alice's row and is recorded as its payer; Bob pays for his own.
+    // A fee payer pays for Alice's row and is recorded as its payer; Bob pays for his own.
     let (mut h, f) = ready();
     let alice = f.proof("alice-tutoring-A");
-    let relayer = h.funded(1_000_000_000);
-    h.register_paid_by(&relayer, alice).expect("a relayer pays");
+    let fee_payer = h.funded(1_000_000_000);
+    h.register_paid_by(&fee_payer, alice).expect("a fee payer pays");
     let row = h.row(&alice.market_stamp());
-    assert_eq!((row.profile, row.payer), (alice.profile_address(), relayer.pubkey()));
+    assert_eq!((row.profile, row.payer), (alice.profile_address(), fee_payer.pubkey()));
 
     let bob = f.proof("bob-tutoring-A");
-    let key = bob.profile_key();
+    let key = bob.main_key();
     h.svm.airdrop(&key.pubkey(), 1_000_000_000).unwrap();
     let ix = register_ix(key.pubkey(), key.pubkey(), &bob.args());
     assert_eq!(ix.accounts.iter().filter(|m| m.is_signer).count(), 2, "two metas, one key");
     h.send_as(&key, &[ix]).expect("the profile pays for itself");
     let row = h.row(&bob.market_stamp());
     assert_eq!((row.profile, row.payer), (key.pubkey(), key.pubkey()));
-    println!("a relayer paid for Alice's row; Bob's profile paid for its own");
+    println!("a fee payer paid for Alice's row; Bob's profile paid for its own");
 }
 
 #[test]
-fn one_row_per_keeper_per_label_per_person() {
+fn one_row_per_issuer_per_label_per_person() {
     // Alice on list A under tutoring/seller: one row. The same list and label for her second
-    // profile is the same market stamp: refused. Her second profile through keeper B is another
+    // profile is the same market stamp: refused. Her second profile through issuer B is another
     // market stamp: it lands. Another label on list A is another market stamp too.
     let (mut h, f) = ready();
     let first = f.proof("alice-tutoring-A");
@@ -120,12 +120,12 @@ fn one_row_per_keeper_per_label_per_person() {
 
     h.register(first).expect("the first row");
     refused(h.register(second_profile), &["already in use"]);
-    h.register(through_b).expect("another keeper");
+    h.register(through_b).expect("another issuer");
     h.register(cleaning).expect("another label");
     let row = h.row(&first.market_stamp());
     assert_eq!(row.profile, first.profile_address(), "the first row is untouched");
-    assert_eq!(h.row(&through_b.market_stamp()).keeper.to_string(), f.keepers.b);
-    println!("one row per keeper per label per person: a second profile needs a second keeper");
+    assert_eq!(h.row(&through_b.market_stamp()).issuer.to_string(), f.issuers.b);
+    println!("one row per issuer per label per person: a second profile needs a second issuer");
 }
 
 #[test]
@@ -160,7 +160,7 @@ fn a_row_never_changes() {
 fn a_proof_with_another_market_stamp_is_refused() {
     let (mut h, f) = ready();
     let alice = f.proof("alice-tutoring-A");
-    let key = alice.profile_key();
+    let key = alice.main_key();
     // Alice's proof under Bob's market stamp, and under her own other label's.
     for other in [f.proof("bob-tutoring-A"), f.proof("alice-cleaning-A")] {
         let args = Args { market_stamp: other.market_stamp(), ..alice.args() };
@@ -176,12 +176,12 @@ fn a_proof_is_bound_to_its_label_and_profile() {
     let (mut h, f) = ready();
     let alice = f.proof("alice-tutoring-A");
     let cases: Vec<(&str, Keypair, String)> = vec![
-        ("Bob's profile, signing", f.proof("bob-tutoring-A").profile_key(), alice.label.clone()),
-        ("Alice's other profile, signing", f.proof("alice-tutoring-B").profile_key(), alice.label.clone()),
+        ("Bob's profile, signing", f.proof("bob-tutoring-A").main_key(), alice.label.clone()),
+        ("Alice's other profile, signing", f.proof("alice-tutoring-B").main_key(), alice.label.clone()),
         ("a stranger's profile, signing", Keypair::new(), alice.label.clone()),
-        ("another label", alice.profile_key(), "cleaning/seller".into()),
-        ("a lookalike label", alice.profile_key(), "tutoring/seller ".into()),
-        ("the label in capitals", alice.profile_key(), "Tutoring/Seller".into()),
+        ("another label", alice.main_key(), "cleaning/seller".into()),
+        ("a lookalike label", alice.main_key(), "tutoring/seller ".into()),
+        ("the label in capitals", alice.main_key(), "Tutoring/Seller".into()),
     ];
     for (what, key, label) in cases {
         let args = Args { label, ..alice.args() };
@@ -194,19 +194,19 @@ fn a_proof_is_bound_to_its_label_and_profile() {
 }
 
 #[test]
-fn the_keeper_and_its_signature_are_stored_as_given() {
-    // The program checks no keeper and no keeper signature: readers do. A row naming a keeper that
+fn the_issuer_and_its_signature_are_stored_as_given() {
+    // The program checks no issuer and no issuer signature: readers do. A row naming an issuer that
     // never signed, with a signature of zeros, lands and reads back exactly as sent.
     let (mut h, f) = ready();
     let a = f.proof("alice-cleaning-A");
     let nobody = Keypair::new().pubkey();
-    let args = Args { keeper: nobody, keeper_signature: [0u8; 64], ..a.args() };
-    let key = a.profile_key();
+    let args = Args { issuer: nobody, issuer_signature: [0u8; 64], ..a.args() };
+    let key = a.main_key();
     h.send(&[register_ix(h.payer.pubkey(), key.pubkey(), &args)], &[&key]).expect("stored as given");
     let row = h.row(&a.market_stamp());
-    assert_eq!((row.keeper, row.keeper_signature), (nobody, [0u8; 64]));
+    assert_eq!((row.issuer, row.issuer_signature), (nobody, [0u8; 64]));
     assert_eq!(row.root, a.args().root, "the root is the proof's: it cannot be swapped");
-    println!("stored as given: a keeper that never signed and a signature of zeros; readers refuse them");
+    println!("stored as given: an issuer that never signed and a signature of zeros; readers refuse them");
 }
 
 #[test]
@@ -275,7 +275,7 @@ fn the_label_is_free_text_up_to_128_bytes() {
     assert_eq!(h.row(&longest.market_stamp()).label, longest.label);
     assert_eq!(h.account(&longest.row_address()).data.len(), 333, "the largest row");
     // 129 bytes is refused before the proof is even looked at.
-    let key = longest.profile_key();
+    let key = longest.main_key();
     let args = Args { label: format!("{}x", longest.label), market_stamp: [9u8; 32], ..longest.args() };
     refused(h.send(&[register_ix(h.payer.pubkey(), key.pubkey(), &args)], &[&key]), &["LabelTooLong"]);
     println!("a 128-byte label registered ({} compute units); 129 bytes refused", meta.compute_units_consumed);
@@ -290,7 +290,7 @@ fn every_fixture_root_is_its_lists_leanimt_root() {
         assert_eq!(lean_imt_root(&f.stamps_of(p)), p.args().root, "{}", p.name);
         assert_eq!(from_hex32(&p.scope), scope_of(&p.label), "{}: scope", p.name);
         assert_eq!(from_hex32(&p.message), message_of(&p.profile_address()), "{}: message", p.name);
-        assert_eq!(&p.keeper, if p.list == "A" { &f.keepers.a } else { &f.keepers.b }, "{}: keeper", p.name);
+        assert_eq!(&p.issuer, if p.list == "A" { &f.issuers.a } else { &f.issuers.b }, "{}: issuer", p.name);
     }
     assert_ne!(f.proof("alice-tutoring-A").args().root, f.proof("alice-tutoring-B").args().root, "two lists, two roots");
     println!("{} proofs: each root is its list's, each scope and message what the program derives", f.proofs.len());
@@ -326,7 +326,7 @@ fn the_wire_format_written_twice_still_matches() {
 
     // The client's own bytes, sent as they are, write exactly the row the client expects.
     h.svm.airdrop(&payer.pubkey(), 1_000_000_000).unwrap();
-    let profile = a.profile_key();
+    let profile = a.main_key();
     let row = a.row_address();
     use solana_instruction::{AccountMeta as M, Instruction};
     let register = Instruction {
@@ -354,7 +354,7 @@ fn what_a_row_costs() {
     let longest = f.proof("alice-longest-A");
     let mut rows = vec![];
     for (what, p) in [("register, a 15-byte label", short), ("register, a 128-byte label", longest)] {
-        let profile = p.profile_key();
+        let profile = p.main_key();
         let ix = register_ix(h.payer.pubkey(), profile.pubkey(), &p.args());
         let msg = Message::new(std::slice::from_ref(&ix), Some(&h.payer.pubkey()));
         let bytes = bincode::serialize(&Transaction::new(&[&h.payer, &profile], msg, h.svm.latest_blockhash())).unwrap().len();

@@ -53,14 +53,14 @@ pub fn custom_error(result: &Result<litesvm::types::TransactionMetadata, String>
 
 #[derive(Deserialize)]
 pub struct Fixtures {
-    pub keepers: Keepers,
+    pub issuers: Issuers,
     pub lists: Lists,
     pub proofs: Vec<FixtureProof>,
     pub wire: Wire,
 }
 
 #[derive(Deserialize)]
-pub struct Keepers {
+pub struct Issuers {
     #[serde(rename = "A")]
     pub a: String,
     #[serde(rename = "B")]
@@ -79,16 +79,16 @@ pub struct Lists {
 pub struct FixtureProof {
     pub name: String,
     pub list: String,
-    /// The keeper's key, base58.
-    pub keeper: String,
+    /// The issuer's key, base58.
+    pub issuer: String,
     pub label: String,
-    /// The profile's key, base58, and its private seed: a test key, so the harness can sign as it.
+    /// The main key, base58, and its private seed: a test key, so the harness can sign as it.
     pub profile: String,
     #[serde(rename = "profileSeed")]
     pub profile_seed: String,
     pub root: String,
-    #[serde(rename = "keeperSignature")]
-    pub keeper_signature: String,
+    #[serde(rename = "issuerSignature")]
+    pub issuer_signature: String,
     #[serde(rename = "marketStamp")]
     pub market_stamp: String,
     pub scope: String,
@@ -144,8 +144,8 @@ impl FixtureProof {
     pub fn profile_address(&self) -> Address {
         self.profile.parse().unwrap()
     }
-    /// The profile's key, to sign with.
-    pub fn profile_key(&self) -> Keypair {
+    /// The main key, to sign with.
+    pub fn main_key(&self) -> Keypair {
         let key = Keypair::new_from_array(from_hex32(&self.profile_seed));
         assert_eq!(key.pubkey(), self.profile_address(), "{}: the profile seed is the profile's", self.name);
         key
@@ -163,9 +163,9 @@ impl FixtureProof {
     pub fn args(&self) -> Args {
         Args {
             market_stamp: self.market_stamp(),
-            keeper: self.keeper.parse().unwrap(),
+            issuer: self.issuer.parse().unwrap(),
             root: from_hex32(&self.root),
-            keeper_signature: hex(&self.keeper_signature).try_into().unwrap(),
+            issuer_signature: hex(&self.issuer_signature).try_into().unwrap(),
             proof: self.proof(),
             label: self.label.clone(),
         }
@@ -260,9 +260,9 @@ pub struct Proof {
 #[derive(Clone, Debug)]
 pub struct Args {
     pub market_stamp: [u8; 32],
-    pub keeper: Address,
+    pub issuer: Address,
     pub root: [u8; 32],
-    pub keeper_signature: [u8; 64],
+    pub issuer_signature: [u8; 64],
     pub proof: Proof,
     pub label: String,
 }
@@ -270,9 +270,9 @@ pub struct Args {
 pub fn register_data(args: &Args) -> Vec<u8> {
     let mut data = discriminator("global", "register").to_vec();
     data.extend_from_slice(&args.market_stamp);
-    data.extend_from_slice(args.keeper.as_ref());
+    data.extend_from_slice(args.issuer.as_ref());
     data.extend_from_slice(&args.root);
-    data.extend_from_slice(&args.keeper_signature);
+    data.extend_from_slice(&args.issuer_signature);
     data.extend_from_slice(&args.proof.a);
     data.extend_from_slice(&args.proof.b);
     data.extend_from_slice(&args.proof.c);
@@ -315,9 +315,9 @@ pub fn refund_ix(payer: Address, row: Address) -> Instruction {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RowView {
     pub profile: Address,
-    pub keeper: Address,
+    pub issuer: Address,
     pub root: [u8; 32],
-    pub keeper_signature: [u8; 64],
+    pub issuer_signature: [u8; 64],
     pub payer: Address,
     pub bump: u8,
     pub label: String,
@@ -331,9 +331,9 @@ pub fn read_row(data: &[u8]) -> RowView {
     assert_eq!(data.len(), row_space(label_len), "a row is exactly its size");
     RowView {
         profile: Address::try_from(&data[8..40]).unwrap(),
-        keeper: Address::try_from(&data[40..72]).unwrap(),
+        issuer: Address::try_from(&data[40..72]).unwrap(),
         root: data[72..104].try_into().unwrap(),
-        keeper_signature: data[104..168].try_into().unwrap(),
+        issuer_signature: data[104..168].try_into().unwrap(),
         payer: Address::try_from(&data[168..200]).unwrap(),
         bump: data[200],
         label: String::from_utf8(data[205..].to_vec()).unwrap(),
@@ -386,7 +386,7 @@ impl Harness {
         Harness { svm, payer }
     }
 
-    /// A funded key, for a second payer, a stranger or a relayer.
+    /// A funded key, for a second payer, a stranger or a fee payer.
     pub fn funded(&mut self, lamports: u64) -> Keypair {
         let k = Keypair::new();
         self.svm.airdrop(&k.pubkey(), lamports).unwrap();
@@ -421,15 +421,15 @@ impl Harness {
         }
     }
 
-    /// The fixture's row: its profile signs, the harness's payer pays.
+    /// The fixture's row: its main key signs, the harness's payer pays.
     pub fn register(&mut self, p: &FixtureProof) -> Result<litesvm::types::TransactionMetadata, String> {
         let payer = self.payer.insecure_clone();
         self.register_paid_by(&payer, p)
     }
 
-    /// The fixture's row: its profile signs, `payer` pays.
+    /// The fixture's row: its main key signs, `payer` pays.
     pub fn register_paid_by(&mut self, payer: &Keypair, p: &FixtureProof) -> Result<litesvm::types::TransactionMetadata, String> {
-        let profile = p.profile_key();
+        let profile = p.main_key();
         let ix = register_ix(payer.pubkey(), profile.pubkey(), &p.args());
         self.send_signed(&payer.pubkey(), &[payer, &profile], &[ix])
     }

@@ -1,21 +1,21 @@
-// The registry on devnet, used for real: a relayer pays for one row, which the profile signs, for a
-// person on a stand-in keeper's list; then the refusal of a second row for the same market stamp,
-// and a refund. A row an earlier test person left is moved to `earlierRows` in the record, with
-// whatever it holds above its minimum refunded: rows never close, so it stays on chain.
+// The registry on devnet, used for real: a fee payer pays for one row, which the main key signs,
+// for a person on a stand-in issuer's list; then the refusal of a second row for the same market
+// stamp, and a refund. A row an earlier test person left is moved to `earlierRows` in the record,
+// with whatever it holds above its minimum refunded: rows never close, so it stays on chain.
 //
 //   FOREST_DEVNET_KEYS=<dir> node scripts/devnet.ts        (after registry/devnet/deploy.sh)
 //
-// <dir> holds payer.json, as registry/devnet/deploy.sh writes it: the relayer, which pays every
+// <dir> holds payer.json, as registry/devnet/deploy.sh writes it: the fee payer, which pays every
 // fee and every deposit. It is read, never printed and never written anywhere. Everything public
 // (addresses, signatures, what each did) goes into registry/devnet/devnet.json
 // (FOREST_DEVNET_RECORD overrides the path; FOREST_DEVNET_RPC the endpoint). Each step checks the
 // chain first and is skipped if it is done, so the script can be run again after a failure.
 //
-// The person is keys/'s pinned test seed (`keys/test/vectors.json`): their secret for the keeper's
+// The person is keys/'s pinned test seed (`keys/test/vectors.json`): their secret for the issuer's
 // list and their two profiles (freelance/seller, which the row names, and freelance/buyer, which
-// tries for the same market stamp) come from it through `keys/` itself. The keeper and its list
-// are stand-ins this script makes, the keeper's key from a fixed text, and are recorded as such: no
-// keeper publishes a list yet.
+// tries for the same market stamp) come from it through `keys/` itself. The issuer and its list
+// are stand-ins this script makes, the issuer's key from a fixed text, and are recorded as such: no
+// issuer publishes a list yet.
 
 import { readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
@@ -30,7 +30,7 @@ import {
   buildRegistration,
   fetchRow,
   fetchRows,
-  keeperSigned,
+  issuerSigned,
   listRoot,
   marketStampOf,
   refundIx,
@@ -123,18 +123,20 @@ const blockhash = async () => (await connection.getLatestBlockhash('confirmed'))
 
 console.log(`registry ${programId.toBase58()} on ${rpc}`)
 
-// The person: keys/'s pinned test seed, and their secret for the stand-in keeper's list.
+// The person: keys/'s pinned test seed, and their secret for the stand-in issuer's list.
 const vectors = JSON.parse(readFileSync(join(here, '../../../keys/test/vectors.json'), 'utf8'))
 const seed = Buffer.from(vectors.seed, 'hex')
-const keeper = standIn('keeper')
-const { secret, stamp } = await listSecret(seed, keeper.publicKey.toBase58())
+// The stand-in texts still say `keeper`: each is a key's seed or a stamp's, and another text would
+// be another issuer and another list, leaving the row on devnet behind.
+const issuer = standIn('keeper')
+const { secret, stamp } = await listSecret(seed, issuer.publicKey.toBase58())
 if (stampOf(secret) !== stamp) throw new Error('keys/ and the client disagree on the stamp')
 
-// The keeper's list: strangers' stamps around the person's, and the keeper's signature on its root.
+// The issuer's list: strangers' stamps around the person's, and the issuer's signature on its root.
 const stranger = (n: number) => stampOf(Buffer.from(`forest devnet stand-in keeper: member ${n}`))
 const stamps = [stranger(1), stranger(2), stamp, stranger(3), stranger(4)]
 const root = listRoot(stamps)
-const keeperSignature = ed25519.sign(rootBytes(root), standInSeed('keeper'))
+const issuerSignature = ed25519.sign(rootBytes(root), standInSeed('keeper'))
 
 // Two profiles the person holds, both from keys/: the row's, and a second one the registry refuses
 // on this list.
@@ -173,14 +175,14 @@ if (record.row && record.row.marketStamp !== hex(toBytes32(marketStamp))) {
 
 record.row = {
   ...(record.row ?? {}),
-  what: "one row: keys/'s test person (its test seed), on a stand-in keeper's list, under freelance/seller, for their freelance/seller profile; the profile signs, a relayer (the payer) pays",
+  what: "one row: keys/'s test person (its test seed), on a stand-in issuer's list, under freelance/seller, for their freelance/seller profile; the main key signs, a fee payer pays",
   label: LABEL,
   profile: profile.publicKey.toBase58(),
-  keeper: keeper.publicKey.toBase58(),
-  list: { standIn: true, stamps: stamps.map(String), root: hex(toBytes32(root)), keeperSignature: hex(keeperSignature) },
+  issuer: issuer.publicKey.toBase58(),
+  list: { standIn: true, stamps: stamps.map(String), root: hex(toBytes32(root)), issuerSignature: hex(issuerSignature) },
   marketStamp: hex(toBytes32(marketStamp)),
   address: address.toBase58(),
-  keys: "the profiles are keys/'s profileKey(test seed, 'freelance/seller') and (test seed, 'freelance/buyer'); the keeper's private seed is sha256 of `forest devnet stand-in: keeper`",
+  keys: "the profiles are keys/'s profileKey(test seed, 'freelance/seller') and (test seed, 'freelance/buyer'); the issuer's private seed is sha256 of `forest devnet stand-in: keeper`",
 }
 save()
 
@@ -189,16 +191,16 @@ const build = async (who: Keypair) =>
     secret,
     label: LABEL,
     profile: who.publicKey,
-    keeper: keeper.publicKey,
+    issuer: issuer.publicKey,
     stamps,
-    keeperSignature,
+    issuerSignature,
     artifacts,
     payer: payer.publicKey,
     recentBlockhash: await blockhash(),
     programId,
   })
 
-// register: the profile signs, the relayer pays.
+// register: the main key signs, the fee payer pays.
 if (!(await fetchRow(connection, marketStamp, { programId }))) {
   const started = Date.now()
   const reg = await build(profile)
@@ -208,7 +210,7 @@ if (!(await fetchRow(connection, marketStamp, { programId }))) {
   if (err) throw new Error(`register failed: ${JSON.stringify(err)}`)
   const m = await meta(signature)
   record.row.register = { signature, provingMs, bytes, computeUnits: m.computeUnitsConsumed ?? null, fee: m.fee }
-  note(`register: a row under "${LABEL}", the profile signing, the relayer paying`, signature)
+  note(`register: a row under "${LABEL}", the main key signing, the fee payer paying`, signature)
 }
 const written = (await connection.getAccountInfo(address, 'confirmed'))!.data
 
@@ -240,7 +242,7 @@ if (!record.row.refund) {
   note('refund: exactly the 0.001 SOL above the minimum, back to the payer the row records', refund.signature)
 }
 
-// Read back the way any reader would: every row of this profile, and the keeper's signature.
+// Read back the way any reader would: every row of this profile, and the issuer's signature.
 const read = await fetchRows(connection, { profile: profile.publicKey, programId }).catch((e) => {
   console.log(`  getProgramAccounts refused by this RPC (${String(e).slice(0, 80)}); read the one row directly`)
   return null
@@ -249,16 +251,16 @@ const final = await fetchRow(connection, marketStamp, { programId })
 if (!final) throw new Error('the row is gone')
 const account = (await connection.getAccountInfo(address, 'confirmed'))!
 if (!account.data.equals(written) || account.data.length !== rowSpace(Buffer.byteLength(LABEL))) throw new Error('the row changed')
-if (!keeperSigned(final)) throw new Error("the keeper's signature does not check")
+if (!issuerSigned(final)) throw new Error("the issuer's signature does not check")
 record.row.onChain = {
   readBy: read ? 'getProgramAccounts, filtered by profile' : "getAccountInfo at the market stamp's address",
   rowsOfThisProfile: read?.length ?? null,
   profile: final.profile.toBase58(),
-  keeper: final.keeper.toBase58(),
+  issuer: final.issuer.toBase58(),
   payer: final.payer.toBase58(),
   label: final.label,
   root: hex(final.root),
-  keeperSigned: true,
+  issuerSigned: true,
   bytes: account.data.length,
   lamports: account.lamports,
 }

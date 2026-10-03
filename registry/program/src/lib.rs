@@ -9,16 +9,16 @@
 
 //! The Forest registry: one row per market stamp.
 //!
-//! A keeper keeps a list of stamps (the issuer keeps the human list) and signs each snapshot of
-//! it: an ed25519 signature over the list's root. A person's stamp on a list comes from their
-//! seed and the keeper's address. Their market stamp is the Semaphore nullifier with the label as
-//! scope: the same for one person on one list under one label, and unguessable for anyone else.
+//! An issuer keeps a list of stamps (one that checks faces keeps a human list) and signs each
+//! snapshot of it: an ed25519 signature over the list's root. A person's stamp on a list comes
+//! from their seed and the issuer's address. Their market stamp is the Semaphore nullifier, the
+//! label its scope: the same for one person on one list under one label, unguessable for others.
 //!
-//! A row says: this profile holds a stamp on this keeper's list, under this label, proven against
-//! this root, which the keeper signed. The row sits at the address derived from the market stamp,
-//! so one person gets at most one row per keeper per label. The program verifies the proof and
-//! requires the profile's signature. It stores the keeper's signature without checking it, and
-//! checks no root and no keeper: readers decide which keepers they trust and check their
+//! A row says: this profile holds a stamp on this issuer's list, under this label, proven against
+//! this root, which the issuer signed. The row sits at the address derived from the market stamp,
+//! so one person gets at most one row per issuer per label. The program verifies the proof and
+//! requires the main key's signature. It stores the issuer's signature without checking it, and
+//! checks no root and no issuer: readers decide which issuers they trust and check their
 //! signatures.
 //!
 //! There is no fee, no token, no treasury, no admin and no list in the program. The only costs are
@@ -46,7 +46,7 @@ pub const MAX_LABEL: usize = 128;
 /// The scope is a hash of the namespaced label, so a label of any text works and a scope from one
 /// namespace can never collide with one from another.
 pub const SCOPE_NS: &[u8] = b"forest.foundation/label/v1/";
-/// The message is a hash of the namespaced profile key: what binds a proof to one profile.
+/// The message is a hash of the namespaced main key: what binds a proof to one profile.
 pub const MESSAGE_NS: &[u8] = b"forest.foundation/profile/v1/";
 
 /// A row's address: `[ROW_SEED, market stamp]`.
@@ -78,15 +78,15 @@ pub fn message_of(profile: &Pubkey) -> [u8; 32] {
 pub mod forest_registry {
     use super::*;
 
-    /// Write one row: this profile holds a stamp on this keeper's list, under this label, proven
+    /// Write one row: this profile holds a stamp on this issuer's list, under this label, proven
     /// against this root. The row is never written again.
     ///
-    /// The profile signs, so nobody can put a row on a profile but its holder. The program derives
-    /// the scope from the label and the message from the profile, and verifies the proof with
+    /// The main key signs, so nobody can put a row on it but its holder. The program derives
+    /// the scope from the label and the message from the main key, and verifies the proof with
     /// public inputs [root, market stamp, message, scope]. So the proof counts for this label, this
-    /// profile and this market stamp and no other: a proof seen in flight cannot land under another
-    /// profile. The root, the keeper and the keeper's signature are stored as given. The row's
-    /// address is derived from the market stamp, and `init` refuses a second row for it.
+    /// main key and this market stamp and no other: a proof seen in flight cannot land under
+    /// another main key. The root, the issuer and the issuer's signature are stored as given. The
+    /// row's address is derived from the market stamp, and `init` refuses a second row for it.
     ///
     /// Anyone may pay. Whoever signs as payer pays the row's deposit and is recorded, so a refund
     /// can find them.
@@ -101,9 +101,9 @@ pub mod forest_registry {
 
         let row = &mut ctx.accounts.row;
         row.profile = profile;
-        row.keeper = args.keeper;
+        row.issuer = args.issuer;
         row.root = args.root;
-        row.keeper_signature = args.keeper_signature;
+        row.issuer_signature = args.issuer_signature;
         row.payer = ctx.accounts.payer.key();
         row.bump = ctx.bumps.row;
         row.label = args.label;
@@ -145,12 +145,12 @@ pub struct CompressedProof {
 pub struct RegisterArgs {
     /// The proof's nullifier, `Poseidon(scope, secret)`: the row's address comes from it.
     pub market_stamp: [u8; 32],
-    /// The keeper's ed25519 key. Stored as given.
-    pub keeper: Pubkey,
-    /// The root of the keeper's list the proof was made against. Taken as given.
+    /// The issuer's ed25519 key. Stored as given.
+    pub issuer: Pubkey,
+    /// The root of the issuer's list the proof was made against. Taken as given.
     pub root: [u8; 32],
-    /// The keeper's ed25519 signature over the root's 32 big-endian bytes. Stored, never checked.
-    pub keeper_signature: [u8; 64],
+    /// The issuer's ed25519 signature over the root's 32 big-endian bytes. Stored, never checked.
+    pub issuer_signature: [u8; 64],
     pub proof: CompressedProof,
     /// Free text. Hashed into the scope.
     pub label: String,
@@ -168,9 +168,9 @@ pub struct Register<'info> {
         bump
     )]
     pub row: Account<'info, Row>,
-    /// The profile the row names: its ed25519 key, which signs.
+    /// The main key the row names, which signs: registered, it is this profile.
     pub profile: Signer<'info>,
-    /// Pays the deposit and is recorded in the row. Anyone, the profile included.
+    /// Pays the deposit and is recorded in the row. Anyone, the main key included.
     #[account(mut)]
     pub payer: Signer<'info>,
     pub system_program: Program<'info, System>,

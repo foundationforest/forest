@@ -1,6 +1,6 @@
-// Stamps and market stamps: what makes one row per person per keeper per label true.
+// Stamps and market stamps: what makes one row per person per issuer per label true.
 //
-// A person's identity for one keeper's list comes from their seed and the keeper's address
+// A person's identity for one issuer's list comes from their seed and the issuer's address
 // (`keys/`'s `listSecret`). Its commitment is their stamp on that list. Their market stamp is the
 // proof's nullifier with the label as scope, `Poseidon(scope, secret)`: the same for one person on
 // one list under one label, unguessable for anyone else, and saying nothing about who they are. A
@@ -19,7 +19,7 @@ export function identityFrom(secret: Uint8Array | Identity): Identity {
   return secret instanceof Identity ? secret : new Identity(secret)
 }
 
-/** The person's stamp on the list: what the keeper puts in it. */
+/** The person's stamp on the list: what the issuer puts in it. */
 export function stampOf(secret: Uint8Array | Identity): bigint {
   return identityFrom(secret).commitment
 }

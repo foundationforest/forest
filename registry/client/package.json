@@ -2,7 +2,7 @@
   "name": "@forest/registry-client",
   "version": "0.0.0",
   "private": true,
-  "description": "Builds a Forest registry row: the market stamp, the proof against a keeper's list, compressed points, and the transaction the profile and any payer sign; reads rows back and checks keepers' signatures.",
+  "description": "Builds a Forest registry row: the market stamp, the proof against an issuer's list, compressed points, and the transaction the main key and any payer sign; reads rows back and checks issuers' signatures, and checks proofs off chain.",
   "license": "Apache-2.0",
   "type": "module",
   "main": "./dist/index.js",

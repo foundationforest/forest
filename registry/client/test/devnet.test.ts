@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url'
 
 import { Connection, PublicKey } from '@solana/web3.js'
 
-import { fetchRow, fetchRows, keeperSigned, listRoot, rowAddress, rowSpace, toBytes32 } from '../src/index.ts'
+import { fetchRow, fetchRows, issuerSigned, listRoot, rowAddress, rowSpace, toBytes32 } from '../src/index.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const record = JSON.parse(readFileSync(join(here, '../../devnet/devnet.json'), 'utf8'))
@@ -47,33 +47,33 @@ test('the registry is deployed at its recorded id, its bytes the build, its upgr
   assert.equal(createHash('sha256').update(so).digest('hex'), record.registry.soSha256)
 })
 
-test("the row is on chain as recorded, the keeper's signature checks, never changed", { skip }, async () => {
+test("the row is on chain as recorded, the issuer's signature checks, never changed", { skip }, async () => {
   const r = record.row
   const marketStamp = Buffer.from(r.marketStamp, 'hex')
   assert.equal(rowAddress(marketStamp, programId).toBase58(), r.address)
   const row = await retry(() => fetchRow(connection, marketStamp, { programId }))
   assert.ok(row, 'the row exists')
   assert.equal(row.profile.toBase58(), r.profile)
-  assert.equal(row.keeper.toBase58(), r.keeper)
+  assert.equal(row.issuer.toBase58(), r.issuer)
   assert.equal(row.label, r.label)
   assert.equal(hex(row.root), r.list.root)
   assert.equal(hex(row.root), hex(toBytes32(listRoot(r.list.stamps.map(BigInt)))), "the root is the list's")
-  assert.equal(hex(row.keeperSignature), r.list.keeperSignature)
-  assert.equal(keeperSigned(row), true)
+  assert.equal(hex(row.issuerSignature), r.list.issuerSignature)
+  assert.equal(issuerSigned(row), true)
   assert.equal(row.payer.toBase58(), r.onChain.payer)
   const info = await retry(() => connection.getAccountInfo(new PublicKey(r.address)))
   assert.equal(info?.data.length, rowSpace(Buffer.byteLength(r.label)))
   assert.equal(info?.lamports, await retry(() => connection.getMinimumBalanceForRentExemption(info!.data.length)), 'exactly rent exempt after the refund')
 })
 
-test('the profile has one row and the keeper one, read the way any reader reads', { skip }, async () => {
+test('the profile has one row and the issuer one, read the way any reader reads', { skip }, async () => {
   const byProfile = await retry(() => fetchRows(connection, { profile: new PublicKey(record.row.profile), programId }))
   assert.equal(byProfile.length, 1)
   assert.equal(byProfile[0].address.toBase58(), record.row.address)
-  // The stand-in keeper's rows: this one, and any earlier test person's on the same keeper's list.
-  const byKeeper = await retry(() => fetchRows(connection, { keeper: new PublicKey(record.row.keeper), programId }))
-  const earlier = (record.earlierRows ?? []).filter((r: { keeper: string }) => r.keeper === record.row.keeper).map((r: { address: string }) => r.address)
-  assert.deepEqual(byKeeper.map((r) => r.address.toBase58()).sort(), [record.row.address, ...earlier].sort())
+  // The stand-in issuer's rows: this one, and any earlier test person's on the same issuer's list.
+  const byIssuer = await retry(() => fetchRows(connection, { issuer: new PublicKey(record.row.issuer), programId }))
+  const earlier = (record.earlierRows ?? []).filter((r: { issuer: string }) => r.issuer === record.row.issuer).map((r: { address: string }) => r.address)
+  assert.deepEqual(byIssuer.map((r) => r.address.toBase58()).sort(), [record.row.address, ...earlier].sort())
 })
 
 test("an earlier test person's row is still on chain, unchanged, at its minimum: rows never close", { skip }, async () => {
@@ -82,7 +82,7 @@ test("an earlier test person's row is still on chain, unchanged, at its minimum:
     assert.ok(row, `${r.address}: the row exists`)
     assert.equal(row.profile.toBase58(), r.profile)
     assert.equal(hex(row.root), r.list.root)
-    assert.equal(keeperSigned(row), true)
+    assert.equal(issuerSigned(row), true)
     const info = await retry(() => connection.getAccountInfo(new PublicKey(r.address)))
     assert.equal(info?.lamports, await retry(() => connection.getMinimumBalanceForRentExemption(info!.data.length)))
   }
