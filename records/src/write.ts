@@ -1,11 +1,11 @@
 // Making records: what an app does before publishing them.
 
 import type { Key } from './keys.ts'
-import { type Body, type SignedRecord, type Writer, signRecord } from './record.ts'
+import { type AccessKey, type Body, type SignedRecord, signRecord } from './record.ts'
 import type { View } from './view.ts'
 
 /**
- * The time for a new version: the clock, but always after the newest version the writer knows
+ * The time for a new version: the clock, but always after the newest version the app knows
  * at that path, so a slow clock cannot make an edit lose to what it replaces.
  */
 export function nextTime(now: number, view: View | undefined, path: string): number {
@@ -13,14 +13,14 @@ export function nextTime(now: number, view: View | undefined, path: string): num
   return top ? Math.max(now, top.record.time + 1) : now
 }
 
-/** A record signed by the profile key itself. */
+/** A record signed by the main key itself. */
 export function ownerRecord(owner: Key, path: string, body: Body | null, time: number): SignedRecord {
   return signRecord({ v: 1, profile: owner.address, path, time, body }, owner.privateKey)
 }
 
-/** A record signed by a writer key, into a profile whose permissions record lists it. */
-export function writerRecord(writer: Key, profile: string, path: string, body: Body | null, time: number): SignedRecord {
-  return signRecord({ v: 1, profile, path, time, body, by: writer.address }, writer.privateKey)
+/** A record signed by an access key, into a profile whose permissions record lists it. */
+export function accessRecord(key: Key, profile: string, path: string, body: Body | null, time: number): SignedRecord {
+  return signRecord({ v: 1, profile, path, time, body, by: key.address }, key.privateKey)
 }
 
 /** Where the profile's records live. */
@@ -29,10 +29,10 @@ export function hostsRecord(owner: Key, urls: string[] | null, time: number): Si
 }
 
 /**
- * Which writer keys may write, where, and until when. To remove a writer, set its `until` to now:
- * what it wrote before then still counts. Apps never delete an entry from the list: a key not on it
+ * Which access keys may write, where, and until when. To remove one, set its `until` to now: what
+ * it wrote before then still counts. Apps never delete an entry from the list: a key not on it
  * counts for nothing, so its past records would stop counting.
  */
-export function permissionsRecord(owner: Key, writers: Writer[] | null, time: number): SignedRecord {
-  return ownerRecord(owner, 'permissions', writers && { writers }, time)
+export function permissionsRecord(owner: Key, access: AccessKey[] | null, time: number): SignedRecord {
+  return ownerRecord(owner, 'permissions', access && { access }, time)
 }

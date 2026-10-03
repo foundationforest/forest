@@ -1,17 +1,18 @@
-// Private records: a body only chosen reading keys open, whoever writes it: the owner, or a writer
-// key the permissions record allows. Hosts check and store them like any record, and read none.
+// Private records: a body only chosen reading keys open, whoever writes it: the owner, or an
+// access key the permissions record allows. Hosts check and store them like any record, and read none.
 
 import assert from 'node:assert/strict'
+import { randomBytes } from 'node:crypto'
 import { describe, test } from 'node:test'
 import { publish, readAll, readProfile } from '../src/client.ts'
 import { DAY } from '../src/host.ts'
 import { readingKey } from '../../keys/src/index.ts'
 import { isPrivate, makePrivate, openPrivate, readerCount } from '../src/private.ts'
-import { hostsRecord, ownerRecord, permissionsRecord, writerRecord } from '../src/write.ts'
+import { accessRecord, hostsRecord, ownerRecord, permissionsRecord } from '../src/write.ts'
 import { canonical } from '../src/canonical.ts'
 import { MAX_RECORD_BYTES } from '../src/record.ts'
-import { KEYS, MINUTE, T0, alice, aliceBuyer, allow, bob, profileBody, writer } from './fixtures.ts'
-import { Clock, startHost } from './helpers.ts'
+import { KEYS, MINUTE, T0, accessKey, alice, aliceBuyer, allow, bob } from './fixtures.ts'
+import { startHost } from './helpers.ts'
 
 const [aliceRead, aliceBuyerRead, bobRead] = await Promise.all([readingKey(alice.privateKey), readingKey(aliceBuyer.privateKey), readingKey(bob.privateKey)])
 const strangerRead = await readingKey(new Uint8Array(32).fill(3))
@@ -36,52 +37,52 @@ describe('reading keys', () => {
 })
 
 describe('private records', () => {
-  test('a reader finds a reading key in a profile record; that reader opens the envelope; the host, a stranger and the owner’s other profile cannot', async () => {
-    const clock = new Clock(T0)
-    const host = await startHost({ now: clock.now })
+  test('the owner makes a reading key for a reader and hands it over: that reader opens the envelope; the host, a stranger, the owner’s other profile and the reader’s own key cannot', async () => {
+    const host = await startHost({ now: () => T0 })
     try {
-      await publish([host.url], [hostsRecord(bob, [host.url], T0), ownerRecord(bob, 'profile', { ...profileBody('Bob'), role: 'buyer', read: bobRead.recipient }, T0)])
-
-      // Alice reads Bob's reading key from his signed profile record.
-      const bobsCard = (await readProfile([host.url], bob.address, clock.t)).current.get('profile')!.record.body as { read: string }
+      // Alice's app makes a reading key for Bob and hands him its private half: Bob needs no profile and no key of his own.
+      const forBob = await readingKey(randomBytes(32))
       const secret = { text: 'My phone is +00 555 0100; call after six.', createdAt: '2026-10-02T12:00:00Z' }
-      const body = await makePrivate(secret, [bobsCard.read, aliceRead.recipient])
-      clock.advance(MINUTE)
-      await publish([host.url], [hostsRecord(alice, [host.url], T0), ownerRecord(alice, 'note/1', body, clock.t)])
+      await publish([host.url], [hostsRecord(alice, [host.url], T0), ownerRecord(alice, 'note/1', await makePrivate(secret, [forBob.recipient, aliceRead.recipient]), T0)])
 
-      // What the host holds: no plaintext, no reader named.
+      // What the host holds: no plaintext, no reading key.
       assert.ok(!host.dump().join('\n').includes('555 0100'))
-      const onHost = (await readProfile([host.url], alice.address, clock.t)).current.get('note/1')!.record.body!
+      assert.ok(!host.dump().join('\n').includes(forBob.recipient))
+      const onHost = (await readProfile([host.url], alice.address, T0)).current.get('note/1')!.record.body!
       assert.ok(isPrivate(onHost))
-      assert.ok(!JSON.stringify(onHost).includes(bob.address))
 
-      assert.deepEqual(await openPrivate(onHost, bobRead.identity), secret)
+      assert.deepEqual(await openPrivate(onHost, forBob.identity), secret)
       assert.deepEqual(await openPrivate(onHost, aliceRead.identity), secret)
+      await assert.rejects(openPrivate(onHost, bobRead.identity), 'Bob’s own reading key is not one it was sealed to')
       await assert.rejects(openPrivate(onHost, aliceBuyerRead.identity))
       await assert.rejects(openPrivate(onHost, strangerRead.identity))
-      // What anyone can see: that it exists, its size, and how many reading keys it was made for.
+      // A made key that leaks opens only what the owner who made it sealed to it.
+      const fromOther = await readingKey(randomBytes(32))
+      await assert.rejects(openPrivate(await makePrivate(secret, [fromOther.recipient]), forBob.identity))
+      // What anyone can see: that it exists, its size, and how many reading keys it was sealed to.
       assert.equal(readerCount(onHost as { private: string }), 2)
     } finally {
       await host.close()
     }
   })
 
-  test('a writer key writes a private record where the permissions record allows it; the host checks that, and reads nothing', async () => {
+  test('an access key writes a private record where the permissions record allows it; the host checks that, and reads nothing', async () => {
     const host = await startHost({ now: () => T0 + MINUTE })
     try {
-      await publish([host.url], [permissionsRecord(alice, [allow(writer, ['note'], T0 + DAY)], T0)])
-      // The writer holds no reading key of anyone's: it makes the envelope for the two that profile records publish.
+      await publish([host.url], [permissionsRecord(alice, [allow(accessKey, ['note'], T0 + DAY)], T0)])
+      // The access key's app holds no reading key's private half: it seals to the recipients it was given.
+      const forBob = await readingKey(randomBytes(32))
       const note = { text: 'The keys are under the mat.', createdAt: '2026-10-02T12:01:00Z' }
-      const readers = [aliceRead.recipient, bobRead.recipient]
-      const inside = writerRecord(writer, alice.address, 'note/door', await makePrivate(note, readers), T0 + MINUTE)
-      const outside = writerRecord(writer, alice.address, 'offer/door', await makePrivate(note, readers), T0 + MINUTE)
+      const readers = [aliceRead.recipient, forBob.recipient]
+      const inside = accessRecord(accessKey, alice.address, 'note/door', await makePrivate(note, readers), T0 + MINUTE)
+      const outside = accessRecord(accessKey, alice.address, 'offer/door', await makePrivate(note, readers), T0 + MINUTE)
       const [outcome] = await publish([host.url], [inside, outside])
       assert.deepEqual(outcome!.results.map((r) => r.error ?? 'ok'), ['ok', 'permission'], 'private or not, the permissions record is checked')
 
       const onHost = host.view(alice.address).current.get('note/door')!
-      assert.equal(onHost.record.by, writer.address)
+      assert.equal(onHost.record.by, accessKey.address)
       assert.deepEqual(await openPrivate(onHost.record.body!, aliceRead.identity), note)
-      assert.deepEqual(await openPrivate(onHost.record.body!, bobRead.identity), note)
+      assert.deepEqual(await openPrivate(onHost.record.body!, forBob.identity), note)
       assert.ok(!host.dump().join('\n').includes('under the mat'))
     } finally {
       await host.close()

@@ -1,22 +1,22 @@
 // Keys, and the one way a key is written down.
 //
-// Records mixes no key. A profile's key and its reading key come from the person's seed by keys/
-// (keys/README.md): the profile key signs the profile's records, and its base58 address is the
-// profile's name and wallet. A writer key is any other ed25519 key, made by an app. Both go in as
-// their 32 private bytes.
+// Records mixes no key. A profile's main key and its reading key come from the person's seed by
+// keys/ (keys/README.md): the main key signs the folder's records, and its base58 address is the
+// profile's name and its Solana address. An access key is any other ed25519 key, made by an app.
+// Both go in as their 32 private bytes.
 
 import { ed25519 } from '@noble/curves/ed25519.js'
 import { base58 } from './bytes.ts'
 
 export type Key = {
-  /** The 32-byte ed25519 private key: keys/'s `profileKey(...).privateKey`, or a writer key's. */
+  /** The 32-byte ed25519 private key: keys/'s `profileKey(...).privateKey`, or an access key's. */
   privateKey: Uint8Array
   publicKey: Uint8Array
-  /** The public key in base58: a profile's name and wallet, or a writer key as permissions lists it. */
+  /** The public key in base58: a profile's name and its Solana address, or an access key as permissions lists it. */
   address: string
 }
 
-/** Any ed25519 private key, such as a writer key an app makes at random, as a Key. */
+/** Any ed25519 private key, such as an access key an app makes at random, as a Key. */
 export function keyFromPrivate(privateKey: Uint8Array): Key {
   if (privateKey.length !== 32) throw new Error('a private key is 32 bytes')
   const publicKey = ed25519.getPublicKey(privateKey)

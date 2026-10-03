@@ -31,6 +31,14 @@
     "location": {
       "$ref": "#/$defs/location"
     },
+    "media": {
+      "type": "array",
+      "description": "Optional. Photos and short videos of the work.",
+      "items": {
+        "$ref": "#/$defs/media"
+      },
+      "maxItems": 10
+    },
     "expires": {
       "type": "string",
       "description": "Optional. After this the offer is stale.",
@@ -123,6 +131,28 @@
           "type": "string",
           "description": "The place in words: a neighbourhood, a town.",
           "maxLength": 128
+        }
+      }
+    },
+    "media": {
+      "type": "object",
+      "description": "A photo or a short video, named by the SHA-256 of its bytes.",
+      "required": ["sha256", "mimeType", "size"],
+      "additionalProperties": false,
+      "properties": {
+        "sha256": {
+          "type": "string",
+          "description": "SHA-256 of the file, lowercase hex.",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "mimeType": {
+          "enum": ["image/png", "image/jpeg", "video/mp4"]
+        },
+        "size": {
+          "type": "integer",
+          "description": "Bytes.",
+          "minimum": 0,
+          "maximum": 50000000
         }
       }
     }

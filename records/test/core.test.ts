@@ -6,14 +6,14 @@ import { base58, hex } from '../src/bytes.ts'
 import { canonical, parseCanonical } from '../src/canonical.ts'
 import { keyFromPrivate, publicKeyFromAddress } from '../src/keys.ts'
 import { MAX_RECORD_BYTES, RecordError, checkRecord, decodeRecord, encodeRecord, recordId, signRecord, unsignedOf } from '../src/record.ts'
-import { ownerRecord, permissionsRecord, writerRecord } from '../src/write.ts'
-import { KEYS, T0, alice, aliceBuyer, allow, offerBody, profileBody, sizedRecord, writer } from './fixtures.ts'
+import { accessRecord, ownerRecord, permissionsRecord } from '../src/write.ts'
+import { KEYS, T0, accessKey, alice, aliceBuyer, allow, offerBody, profileBody, sizedRecord } from './fixtures.ts'
 
 describe('keys', () => {
-  test("profile keys are keys/'s: its pinned profiles sign here, and a name is the key in base58", () => {
+  test("main keys are keys/'s: its pinned profiles sign here, and a name is the key in base58", () => {
     assert.equal(alice.address, KEYS.profiles[0].address)
     assert.equal(aliceBuyer.address, KEYS.profiles[1].address)
-    assert.equal(alice.address, base58.encode(alice.publicKey), 'the name is the key in base58: the same text as the wallet')
+    assert.equal(alice.address, base58.encode(alice.publicKey), 'the name is the key in base58: the same text as its Solana address')
     assert.deepEqual(keyFromPrivate(alice.privateKey), { privateKey: alice.privateKey, publicKey: alice.publicKey, address: alice.address })
     assert.throws(() => keyFromPrivate(alice.privateKey.subarray(1)), /32 bytes/)
   })
@@ -72,26 +72,26 @@ describe('records', () => {
     assert.ok(wire.startsWith('{"body":'))
   })
 
-  test('a writer record verifies with the writer key, and names it in by', () => {
-    const written = writerRecord(writer, alice.address, 'offer/physics', offerBody('40'), T0)
-    assert.equal(checkRecord(written).record.by, writer.address)
+  test('a record by an access key verifies with that key, and names it in by', () => {
+    const written = accessRecord(accessKey, alice.address, 'offer/physics', offerBody('40'), T0)
+    assert.equal(checkRecord(written).record.by, accessKey.address)
     const { by: _by, ...asOwner } = written
     assert.throws(() => checkRecord(asOwner), (err: RecordError) => err.code === 'signature', 'without by it is not the owner’s')
   })
 
   test('any change to any field breaks the signature', () => {
-    const changes: Array<{ [key: string]: unknown }> = [{ path: 'offer/other' }, { time: T0 + 1 }, { profile: aliceBuyer.address }, { body: offerBody('3') }, { body: null }, { by: writer.address }]
+    const changes: Array<{ [key: string]: unknown }> = [{ path: 'offer/other' }, { time: T0 + 1 }, { profile: aliceBuyer.address }, { body: offerBody('3') }, { body: null }, { by: accessKey.address }]
     for (const change of changes) {
       assert.throws(() => checkRecord({ ...record, ...change }), (err: RecordError) => err.code === 'signature', JSON.stringify(change))
     }
   })
 
-  test('a key cannot sign as another profile, or as a writer it is not', () => {
+  test('a key cannot sign as another profile, or as an access key it is not', () => {
     assert.throws(() => signRecord({ v: 1, profile: aliceBuyer.address, path: 'profile', time: T0, body: profileBody('x') }, alice.privateKey), /not the signer/)
-    assert.throws(() => signRecord({ v: 1, profile: alice.address, path: 'profile', time: T0, body: profileBody('x'), by: writer.address }, alice.privateKey), /not the signer/)
+    assert.throws(() => signRecord({ v: 1, profile: alice.address, path: 'profile', time: T0, body: profileBody('x'), by: accessKey.address }, alice.privateKey), /not the signer/)
   })
 
-  test('shape rules: unknown fields, paths, control records, writers', () => {
+  test('shape rules: unknown fields, paths, control records, access keys', () => {
     const base = { v: 1 as const, profile: alice.address, path: 'profile', time: T0, body: profileBody('A') }
     const code = (c: string) => (err: RecordError) => err.code === c
     assert.throws(() => signRecord({ ...base, extra: 1 } as never, alice.privateKey), code('shape'))
@@ -104,8 +104,8 @@ describe('records', () => {
     assert.throws(() => signRecord({ ...base, time: -1 }, alice.privateKey), code('time'))
     assert.throws(() => signRecord({ ...base, body: [] as never }, alice.privateKey), code('body'))
     assert.throws(() => signRecord({ ...base, by: alice.address }, alice.privateKey), code('shape'), 'the owner signs without by')
-    assert.throws(() => writerRecord(writer, alice.address, 'permissions', { writers: [] }, T0), code('control'), 'only the owner writes control records')
-    assert.throws(() => writerRecord(writer, alice.address, 'hosts', null, T0), code('control'))
+    assert.throws(() => accessRecord(accessKey, alice.address, 'permissions', { access: [] }, T0), code('control'), 'only the owner writes control records')
+    assert.throws(() => accessRecord(accessKey, alice.address, 'hosts', null, T0), code('control'))
   })
 
   test('hosts and permissions bodies are exact: a field nobody knows refuses the record', () => {
@@ -117,18 +117,18 @@ describe('records', () => {
     assert.throws(hosts({ urls: ['https://a.example'], keep: 30 }), /unknown hosts field keep/)
     assert.ok(checkRecord(ownerRecord(alice, 'hosts', { urls: ['https://a.example', 'http://127.0.0.1:8080'] }, T0)))
 
-    const perms = (writers: unknown[]) => () => permissionsRecord(alice, writers as never, T0)
-    assert.throws(perms([{ ...allow(writer, ['offer'], T0), pay: 5 }]), /unknown writer field pay/)
-    assert.throws(perms([allow(writer, ['hosts'], T0)]), /content path/)
-    assert.throws(perms([allow(writer, ['permissions'], T0)]), /content path/)
-    assert.throws(perms([{ key: `did:key:z${writer.address}`, paths: ['offer'], until: T0 }]), /usable/)
-    assert.throws(perms([{ key: writer.address, paths: ['offer'], until: -1 }]), /until/)
-    assert.throws(perms([{ key: writer.address, paths: ['offer'], until: '1' }]), /until/)
-    assert.ok(checkRecord(permissionsRecord(alice, [{ key: writer.address, paths: ['offer'] }], T0)), 'until is optional')
-    assert.throws(perms(Array(17).fill(allow(writer, ['offer'], T0))), /at most 16/)
-    assert.throws(() => ownerRecord(alice, 'permissions', { writers: [], more: 1 }, T0), /unknown permissions field/)
-    assert.ok(checkRecord(permissionsRecord(alice, [allow(writer, ['offer', 'review'], T0)], T0)))
-    assert.ok(checkRecord(permissionsRecord(alice, null, T0)), 'a delete removes every writer')
+    const perms = (access: unknown[]) => () => permissionsRecord(alice, access as never, T0)
+    assert.throws(perms([{ ...allow(accessKey, ['offer'], T0), pay: 5 }]), /unknown access field pay/)
+    assert.throws(perms([allow(accessKey, ['hosts'], T0)]), /content path/)
+    assert.throws(perms([allow(accessKey, ['permissions'], T0)]), /content path/)
+    assert.throws(perms([{ key: `did:key:z${accessKey.address}`, paths: ['offer'], until: T0 }]), /usable/)
+    assert.throws(perms([{ key: accessKey.address, paths: ['offer'], until: -1 }]), /until/)
+    assert.throws(perms([{ key: accessKey.address, paths: ['offer'], until: '1' }]), /until/)
+    assert.ok(checkRecord(permissionsRecord(alice, [{ key: accessKey.address, paths: ['offer'] }], T0)), 'until is optional')
+    assert.throws(perms(Array(17).fill(allow(accessKey, ['offer'], T0))), /at most 16/)
+    assert.throws(() => ownerRecord(alice, 'permissions', { access: [], more: 1 }, T0), /unknown permissions field/)
+    assert.ok(checkRecord(permissionsRecord(alice, [allow(accessKey, ['offer', 'review'], T0)], T0)))
+    assert.ok(checkRecord(permissionsRecord(alice, null, T0)), 'a delete removes every access key')
   })
 
   test('size cap', () => {

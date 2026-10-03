@@ -28,7 +28,7 @@ const MAX_REQUEST_BYTES = MAX_BATCH * (MAX_RECORD_BYTES + 1)
 /**
  * A host's own policy for content records: null takes the record, a reason refuses it. It is
  * never asked about a hosts or permissions record, so a person can always move and always remove
- * a writer key.
+ * an access key.
  */
 export type Policy = (record: SignedRecord, stored: { records: number; bytes: number }) => string | null | Promise<string | null>
 
@@ -95,8 +95,8 @@ export class Host {
         results.push({ i, ok: false, error: err instanceof RecordError ? err.code : 'invalid', message: (err as Error).message })
       }
     })
-    // Hosts and permissions records first, so writer records sent with their permissions in one
-    // request are checked against them; the rest in the order sent.
+    // Hosts and permissions records first, so access keys' records sent with their permissions in
+    // one request are checked against them; the rest in the order sent.
     const control = (c: Checked) => Number(isControlPath(c.record.path))
     decoded.sort((a, b) => control(b.checked) - control(a.checked) || a.i - b.i)
     for (const { i, checked } of decoded) results.push({ i, id: checked.id, ...(await this.acceptOne(checked, now)) })
@@ -111,12 +111,12 @@ export class Host {
     if (view.current.get(record.path)?.id !== c.id) {
       const reason = view.ignored.get(c.id)
       if (reason === 'owner-wins') return { ok: false, error: 'permission', message: 'the owner wrote at this path' }
-      if (reason === 'not-allowed') return { ok: false, error: 'permission', message: 'the permissions record does not allow this writer key here' }
+      if (reason === 'not-allowed') return { ok: false, error: 'permission', message: 'the permissions record does not allow this access key here' }
       return { ok: false, error: 'older', message: 'a newer version is already here' }
     }
-    // A writer record also needs the writer listed for its path now, and its until not passed by
-    // this host's clock: a reader checks only the record's own date.
-    if (record.by !== undefined && !allowsArrival(view.writers, record, now)) return { ok: false, error: 'permission', message: 'this writer key is past its until' }
+    // An access key's record also needs the key listed for its path now, and its until not passed
+    // by this host's clock: a reader checks only the record's own date.
+    if (record.by !== undefined && !allowsArrival(view.access, record, now)) return { ok: false, error: 'permission', message: 'this access key is past its until' }
     if (this.policy && !isControlPath(record.path)) {
       const stored = this.db.prepare('SELECT COUNT(*) AS records, COALESCE(SUM(bytes), 0) AS bytes FROM records WHERE profile = ?').get(record.profile) as { records: number; bytes: number }
       const refused = await this.policy(record, stored)

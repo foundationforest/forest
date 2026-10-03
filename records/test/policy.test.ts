@@ -1,6 +1,6 @@
 // Keys are free, and the protocol sets no budget. A host may refuse content records by its own
 // policy, from the record and what it already stores. It is never asked about a hosts or
-// permissions record, so a person can always move and always remove a writer key. The policy below
+// permissions record, so a person can always move and always remove an access key. The policy below
 // is one host's example, not the protocol's.
 
 import assert from 'node:assert/strict'
@@ -8,8 +8,8 @@ import { describe, test } from 'node:test'
 import { publish } from '../src/client.ts'
 import type { Policy } from '../src/host.ts'
 import { keyFromPrivate } from '../src/keys.ts'
-import { hostsRecord, ownerRecord, permissionsRecord, writerRecord } from '../src/write.ts'
-import { DAY, T0, alice, allow, offerBody, profileBody, writer } from './fixtures.ts'
+import { accessRecord, hostsRecord, ownerRecord, permissionsRecord } from '../src/write.ts'
+import { DAY, T0, accessKey, alice, allow, offerBody, profileBody } from './fixtures.ts'
 import { startHost } from './helpers.ts'
 
 const freshKey = (i: number) => keyFromPrivate(new Uint8Array(32).map((_, j) => (i * 31 + j * 7 + 1) & 255))
@@ -39,9 +39,9 @@ describe('host policy', () => {
       const results = async (records: Parameters<typeof publish>[1]) => (await publish([host.url], records))[0]!.results.map((r) => r.error ?? 'ok')
       assert.deepEqual(await results([ownerRecord(alice, 'profile', profileBody('A'), T0), ownerRecord(alice, 'offer/a', offerBody('1'), T0), ownerRecord(alice, 'offer/b', offerBody('1'), T0)]), ['ok', 'ok', 'ok'])
       assert.deepEqual(await results([ownerRecord(alice, 'offer/c', offerBody('1'), T0)]), ['policy'])
-      // A writer key went bad and floods: the person can always remove it, and always move.
-      assert.deepEqual(await results([permissionsRecord(alice, [allow(writer, ['offer'], T0 + DAY)], T0)]), ['ok'])
-      assert.deepEqual(await results([writerRecord(writer, alice.address, 'offer/w', offerBody('1'), T0)]), ['policy'])
+      // An access key went bad and floods: the person can always remove it, and always move.
+      assert.deepEqual(await results([permissionsRecord(alice, [allow(accessKey, ['offer'], T0 + DAY)], T0)]), ['ok'])
+      assert.deepEqual(await results([accessRecord(accessKey, alice.address, 'offer/w', offerBody('1'), T0)]), ['policy'])
       assert.deepEqual(await results([permissionsRecord(alice, [], T0 + 1), hostsRecord(alice, ['https://elsewhere.example'], T0)]), ['ok', 'ok'])
     } finally {
       await host.close()

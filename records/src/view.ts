@@ -4,17 +4,18 @@
 //
 // Rules:
 //   1. Records dated more than MAX_FUTURE_MS ahead of the reader's clock are held back.
-//   2. `hosts` and `permissions` are the owner's alone (the shape check refuses a writer there).
-//      The newest is current.
+//   2. `hosts` and `permissions` are the owner's alone (the shape check refuses an access key
+//      there). The newest is current.
 //   3. At a content path, if the owner ever wrote there, the owner's newest version is current and
-//      no writer record counts. Otherwise the newest writer record the current permissions record
-//      allows: its key is listed, one of its paths covers the record's path, and, if the writer
-//      has an `until`, the record is dated before it. The record's own date is all a reader
-//      checks: not when it arrived, and no reader's clock. When it arrived is the host's check.
-//      So removing a writer, by setting its `until` to now, erases nothing it already wrote.
+//      no access key's record counts. Otherwise the newest access key's record the current
+//      permissions record allows, by the access rule: its key is listed, one of its paths covers
+//      the record's path, and, if the key has an `until`, the record is dated before it. The
+//      record's own date is all a reader checks: not when it arrived, and no reader's clock. When
+//      it arrived is the host's check. So removing an access key, by setting its `until` to now,
+//      erases nothing it already wrote.
 //   4. Newest: the later time, then the larger id. A null body is a delete.
 
-import { type Checked, type HostsBody, MAX_FUTURE_MS, type PermissionsBody, type SignedRecord, type Writer, isControlPath, pathCovers } from './record.ts'
+import { type AccessKey, type Checked, type HostsBody, MAX_FUTURE_MS, type PermissionsBody, type SignedRecord, isControlPath, pathCovers } from './record.ts'
 
 export type View = {
   profile: string
@@ -22,8 +23,8 @@ export type View = {
   current: Map<string, Checked>
   /** The current hosts record's urls; empty if there is none, or it was deleted. */
   hosts: string[]
-  /** The current permissions record's writers; empty if there is none, or it was deleted. */
-  writers: Writer[]
+  /** The current permissions record's access keys; empty if there is none, or it was deleted. */
+  access: AccessKey[]
   /** Records present that do not count, by id, with the reason. */
   ignored: Map<string, 'future' | 'older' | 'owner-wins' | 'not-allowed'>
 }
@@ -35,19 +36,20 @@ export function isNewer(a: Checked, b: Checked): boolean {
 }
 
 /**
- * Whether the writers listed allow a writer record, as a reader checks it: its key, a path that
- * covers it, and, if that writer has an `until`, a record dated before it.
+ * The access rule, as a reader checks it: whether the access keys listed allow a record one of
+ * them signed: its key, a path that covers it, and, if that key has an `until`, a record dated
+ * before it.
  */
-export function allows(writers: readonly Writer[], record: SignedRecord): boolean {
-  return writers.some((w) => w.key === record.by && w.paths.some((p) => pathCovers(p, record.path)) && (w.until === undefined || record.time < w.until))
+export function allows(access: readonly AccessKey[], record: SignedRecord): boolean {
+  return access.some((k) => k.key === record.by && k.paths.some((p) => pathCovers(p, record.path)) && (k.until === undefined || record.time < k.until))
 }
 
 /**
- * Whether a host takes a writer record arriving at `now`: the writer is listed for its path, and
- * its `until`, if it has one, has not passed by the host's clock.
+ * Whether a host takes an access key's record arriving at `now`: the key is listed for its path,
+ * and its `until`, if it has one, has not passed by the host's clock.
  */
-export function allowsArrival(writers: readonly Writer[], record: SignedRecord, now: number): boolean {
-  return writers.some((w) => w.key === record.by && w.paths.some((p) => pathCovers(p, record.path)) && (w.until === undefined || now < w.until))
+export function allowsArrival(access: readonly AccessKey[], record: SignedRecord, now: number): boolean {
+  return access.some((k) => k.key === record.by && k.paths.some((p) => pathCovers(p, record.path)) && (k.until === undefined || now < k.until))
 }
 
 export function viewProfile(profile: string, records: Iterable<Checked>, now: number): View {
@@ -66,7 +68,7 @@ export function viewProfile(profile: string, records: Iterable<Checked>, now: nu
 
   const newest = (list: Checked[]) => list.reduce((a, b) => (isNewer(b, a) ? b : a))
   const permissions = byPath.get('permissions')
-  const writers = permissions ? ((newest([...permissions.values()]).record.body as PermissionsBody | null)?.writers ?? []) : []
+  const access = permissions ? ((newest([...permissions.values()]).record.body as PermissionsBody | null)?.access ?? []) : []
 
   const current = new Map<string, Checked>()
   for (const [path, atPath] of byPath) {
@@ -75,7 +77,7 @@ export function viewProfile(profile: string, records: Iterable<Checked>, now: nu
     if (candidates.length) {
       for (const c of all) if (c.record.by !== undefined) ignored.set(c.id, 'owner-wins')
     } else {
-      candidates = all.filter((c) => allows(writers, c.record))
+      candidates = all.filter((c) => allows(access, c.record))
       for (const c of all) if (!candidates.includes(c)) ignored.set(c.id, 'not-allowed')
     }
     if (!candidates.length) continue
@@ -85,7 +87,7 @@ export function viewProfile(profile: string, records: Iterable<Checked>, now: nu
   }
 
   const hosts = (current.get('hosts')?.record.body as HostsBody | null | undefined)?.urls ?? []
-  return { profile, current, hosts, writers, ignored }
+  return { profile, current, hosts, access, ignored }
 }
 
 /** The live content of a view: current versions that are not deletes, control records left out. */
