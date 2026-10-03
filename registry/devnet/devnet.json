@@ -154,7 +154,7 @@
     },
     "marketStamp": "1d8e617c4079ea08d3067b77d65bc14d7e6ba87b48cf07fc73edcbaba86e2b50",
     "address": "LhQV7M3m63r4WWFYbgVhr9C3fo5ouFyb6PLjpHZAAPF",
-    "keys": "the profiles are keys/'s profileKey(test seed, 'freelance/seller') and (test seed, 'freelance/buyer'); the issuer's private seed is sha256 of `forest devnet stand-in: keeper`",
+    "keys": "the profiles are keys/'s mainKey(test seed, 'freelance/seller') and (test seed, 'freelance/buyer'); the issuer's private seed is sha256 of `forest devnet stand-in: keeper`",
     "register": {
       "signature": "2CCCbgJsaKHcsQq4FGZyBReaeGdaHAjDwZ8zQSdkabtQKAhWLKFW6BRgsgGLKvvKQbj6i9v8UoKUNmoUTgSMcuWN",
       "provingMs": 2249,

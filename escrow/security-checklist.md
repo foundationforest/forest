@@ -590,7 +590,7 @@ Taking both token programs:
     are the real ones, and no dollar on devnet names a hook program.
 23. **A hook uses up call depth.** The escrow calls Token-2022, which calls the hook; an escrow
     called from another program leaves the hook one level less of the runtime's limit.
-24. **Wallets must pay in with `transfer_checked`.** Token-2022 refuses a plain transfer from an
+24. **Wallet apps must pay in with `transfer_checked`.** Token-2022 refuses a plain transfer from an
     account with a hook extension, as Open USD's accounts have.
 
 Testing and review:
@@ -604,7 +604,7 @@ Testing and review:
     transactions only if its configuration allows this program's id and Token-2022; that
     configuration lives in `foundationforest/services`.
 27. **No pay link.** The client builds none: a Solana Pay recipient would be the escrow's own
-    address, a program-derived address, which has not been tried in a wallet on a phone.
+    address, a program-derived address, which has not been tried in a wallet app on a phone.
 28. **Unaudited.** No paid review, no lawyer pass.
 29. **Refunds arrive in SOL.** The deposit account's rent goes back to the creator's key, a sweep to
     the payer's; in an app that uses a fee payer, either may hold no SOL otherwise. How the app

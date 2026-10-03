@@ -20,7 +20,7 @@ import { ed25519 } from '@noble/curves/ed25519.js'
 import { sha256 } from '@noble/hashes/sha2.js'
 import { Keypair, PublicKey } from '@solana/web3.js'
 
-import { listSecret, profileKey } from '../../../keys/src/index.ts'
+import { listSecret, mainKey } from '../../../keys/src/index.ts'
 import { MESSAGE_NS, SCOPE_NS, toBytes32 } from '../src/field.ts'
 import { rootBytes } from '../src/issuer.ts'
 import { ROW_DISCRIMINATOR, refundIx, registerIx, rowAddress, rowSpace } from '../src/program.ts'
@@ -61,14 +61,14 @@ const secrets = {
 type Who = keyof typeof secrets
 
 const profileSeeds = {
-  alice: (await profileKey(seed, 'tutoring/seller')).privateKey,
-  'alice 2': (await profileKey(seed, 'tutoring/buyer')).privateKey,
+  alice: (await mainKey(seed, 'tutoring/seller')).privateKey,
+  'alice 2': (await mainKey(seed, 'tutoring/buyer')).privateKey,
   bob: seedOf('profile bob'),
   carol: seedOf('profile carol'),
 }
 type Profile = keyof typeof profileSeeds
 for (const [i, name] of (['alice', 'alice 2'] as const).entries()) {
-  if (Keypair.fromSeed(profileSeeds[name]).publicKey.toBase58() !== keysVectors.profiles[i].address) throw new Error(`${name} is not keys/'s profile`)
+  if (Keypair.fromSeed(profileSeeds[name]).publicKey.toBase58() !== keysVectors.mainKeys[i].address) throw new Error(`${name} is not keys/'s profile`)
 }
 
 const labels = { tutoring: 'tutoring/seller', cleaning: 'cleaning/seller' }

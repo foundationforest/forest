@@ -59,7 +59,7 @@ const describeMessage = (message: SignedMessage) => ({
 })
 
 export async function vectors() {
-  const reading = KEYS.profiles[0].reading
+  const reading = KEYS.mainKeys[0].reading
   const pull = pullRequest(alice, 0, TIME + 240_000)
   const { sig: _sig, ...unsignedPull } = pull
   const offer = { direction: 'offer', description: 'One hour of maths tutoring, online.', price: { amount: '30', mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', per: 'hour' }, createdAt: '2026-09-21T13:33:20Z' }

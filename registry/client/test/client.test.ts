@@ -105,8 +105,8 @@ test('a label of any text gives a scope, every scope is a field element, and nam
 })
 
 test("Alice is keys/'s test person: her stamps from her seed and each issuer's address, her profiles its pinned ones", async () => {
-  assert.equal(proofNamed('alice-tutoring-A').profile, keysVectors.profiles[0].address, 'her tutoring/seller profile')
-  assert.equal(proofNamed('alice-tutoring-A-second-profile').profile, keysVectors.profiles[1].address, 'her tutoring/buyer profile')
+  assert.equal(proofNamed('alice-tutoring-A').profile, keysVectors.mainKeys[0].address, 'her tutoring/seller profile')
+  assert.equal(proofNamed('alice-tutoring-A-second-profile').profile, keysVectors.mainKeys[1].address, 'her tutoring/buyer profile')
   for (const list of ['A', 'B'] as const) {
     const issuer = fixtures.issuers[list]
     const { secret, stamp } = await listSecret(seed, issuer)

@@ -147,7 +147,7 @@ What the app decides, because the program does not know:
   pass them to each way out and to the payment in. A payment in a Token-2022 dollar must be a
   `transfer_checked`.
 - **Who fronts the rent.** Whoever fronts the rent signs as payer and gets what Solana's rent cuts
-  free later; a fee payer that fronts it charged only the cost. Registry rows follow the same rule.
+  free later; a fee payer that fronts it charges only the cost. Registry rows follow the same rule.
 - **A pay link.** The client builds none. A Solana Pay recipient is the escrow's own address, and
   an invoice's escrow is `escrowAddress(seller, id)`.
 
@@ -308,7 +308,7 @@ deployed and to be closed. There is no smoke test: read a receipt with `solana a
 - **Tested, not audited.** The fuzzer runs an SBPF v0 build, since its runtime runs no v3 program,
   on a classic mint only, and its runtime checks no signatures. There is no local-validator test:
   the devnet run is the client's only run against a real runtime. A Solana Pay link to an escrow's
-  address is untried in a wallet on a phone. No paid review.
+  address is untried in a wallet app on a phone. No paid review.
 
 The [security checklist](security-checklist.md) lists every known limit, with the test that pins
 each.

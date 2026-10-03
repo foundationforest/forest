@@ -366,7 +366,7 @@ pub fn object_ix(escrow: Address, party: Address) -> Instruction {
     ix("object", vec![AccountMeta::new(escrow, false), AccountMeta::new_readonly(party, true)], &[])
 }
 
-/// A plain SPL Token transfer, the way any wallet funds the deposit account: instruction 3,
+/// A plain SPL Token transfer, the way any wallet app funds the deposit account: instruction 3,
 /// amount u64; source, destination, owner.
 pub fn spl_transfer_ix(from: Address, to: Address, owner: Address, amount: u64) -> Instruction {
     let mut data = vec![3u8];
@@ -400,9 +400,9 @@ pub fn spl_transfer_checked_ix(from: Address, mint: Address, to: Address, owner:
     }
 }
 
-/// The associated token program's `CreateIdempotent` (instruction 1): what a wallet sends before
-/// paying an address whose token account does not exist. Payer, account, owner, mint, system,
-/// token. Returns the account's address too.
+/// The associated token program's `CreateIdempotent` (instruction 1): what a wallet app sends
+/// before paying an address whose token account does not exist. Payer, account, owner, mint,
+/// system, token. Returns the account's address too.
 pub fn create_ata_idempotent_ix(payer: Address, owner: Address, mint: Address) -> (Instruction, Address) {
     create_ata_idempotent_ix_under(payer, owner, mint, TOKEN_PROGRAM)
 }
@@ -1006,7 +1006,7 @@ impl Harness {
     }
 
     /// The buyer's transfer of `amount` into the deposit account: a plain transfer for the classic
-    /// mint, the way any wallet pays; a `transfer_checked` carrying the hook's accounts for
+    /// mint, the way any wallet app pays; a `transfer_checked` carrying the hook's accounts for
     /// Token-2022, the only transfer its accounts take.
     pub fn fund_ix(&self, escrow: &Address, amount: u64) -> Instruction {
         let vault = self.vault(escrow);
@@ -1105,10 +1105,10 @@ impl Harness {
         }
     }
 
-    /// `ix`, one of the escrow's ways out or a wallet's transfer, with the accounts the mint's
+    /// `ix`, one of the escrow's ways out or a wallet app's transfer, with the accounts the mint's
     /// transfer hook needs appended for a transfer from `source` to each of `destinations` by
     /// `authority`, resolved from the ledger by `spl-transfer-hook-interface`'s own client code,
-    /// the way a wallet or an app resolves them. Unchanged when the mint names no hook program.
+    /// the way an app resolves them. Unchanged when the mint names no hook program.
     pub fn with_hook(&self, mut ix: Instruction, source: Address, destinations: &[Address], authority: Address) -> Instruction {
         let Some(hook) = token_2022::hook_program_of(&self.svm, &self.mint) else { return ix };
         for destination in destinations {

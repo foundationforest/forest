@@ -706,7 +706,7 @@ fn a_payout_lands_only_at_the_receiving_partys_standard_account() {
     }
 
     // A timer that pays the seller refuses every other account: the buyer's, a stranger's, the
-    // seller's for another mint, the deposit account itself, the seller's wallet.
+    // seller's for another mint, the deposit account itself, the seller's address.
     h.set_time(T0);
     let t = Terms { timer: Some(Timer { days: 1, to: Side::Seller }), ..h.terms(20) };
     let escrow = h.marked(&t);
@@ -724,7 +724,7 @@ fn a_payout_lands_only_at_the_receiving_partys_standard_account() {
         ("another account the seller holds", h.seller_other),
         ("the seller's standard account for another mint", sellers_other_mint),
         ("the deposit account itself", vault),
-        ("the seller's wallet, not a token account", sl),
+        ("the seller's address, not a token account", sl),
     ] {
         let err = h.send(&[timer_release_ix(escrow, vault, h.mint, to, b)], &[]).expect_err(what);
         assert!(err.contains("NotTheSellersAccount"), "{what}: {err}");
@@ -918,7 +918,8 @@ fn money_after_the_end_goes_back_to_the_buyer_whoever_sends_it() {
     let err = h.recover_late(&escrow, &stranger).expect_err("nothing there");
     assert!(err.contains("AccountNotInitialized"), "{err}");
 
-    // A second tap on the old pay link: the buyer's wallet makes the deposit account again and pays.
+    // A second tap on the old pay link: the buyer's wallet app makes the deposit account again and
+    // pays.
     let (make, vault) = create_ata_idempotent_ix(buyer.pubkey(), escrow, h.mint);
     h.send(&[make, spl_transfer_ix(h.buyer_tokens, vault, buyer.pubkey(), 400_000)], &[&buyer]).expect("a second payment");
     let vault_rent = h.lamports(&vault);
@@ -933,7 +934,7 @@ fn money_after_the_end_goes_back_to_the_buyer_whoever_sends_it() {
     assert_eq!(events(&meta.logs), [Event::RecoveredLate { escrow, to_buyer: 400_000, rent_lamports: vault_rent }]);
     assert_eq!(h.balance(&refund), 400_000, "the late money is the buyer's, at its standard account");
     h.assert_closed(&vault, "the deposit account, again");
-    assert_eq!(h.lamports(&buyer.pubkey()), buyer_sol + vault_rent, "its rent to the buyer, whose wallet made it");
+    assert_eq!(h.lamports(&buyer.pubkey()), buyer_sol + vault_rent, "its rent to the buyer, whose wallet app made it");
     assert_eq!(h.lamports(&stranger.pubkey()), stranger_sol - h.lamports(&refund), "the stranger paid for the buyer's account");
     assert_eq!(h.account(&escrow).data, receipt.data, "the receipt does not change");
     assert_eq!(h.account(&escrow).lamports, receipt.lamports);

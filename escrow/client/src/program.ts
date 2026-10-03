@@ -214,7 +214,7 @@ export function associatedTokenAddress(owner: PublicKey, mint: PublicKey, tokenP
 
 /**
  * The deposit address: the escrow's associated token account for the mint, under the mint's
- * token program. The standard derivation, so any wallet that sends this token "to the escrow's
+ * token program. The standard derivation, so any wallet app that sends this token "to the escrow's
  * address" lands it here.
  */
 export function vaultAddress(escrow: PublicKey, mint: PublicKey, tokenProgram: PublicKey = TOKEN_PROGRAM_ID): PublicKey {
@@ -278,10 +278,10 @@ export function makeDepositAddressIx(args: { payer: PublicKey; escrow: PublicKey
 }
 
 /**
- * A wallet's `transfer_checked` (instruction 12: amount, decimals) under the mint's token program,
- * the way a person funds a deposit account: the one transfer both programs take for every mint,
- * and the only one Token-2022 takes from an account with a hook extension. `hookAccounts`, from
- * `hookAccounts`, go after the four it names.
+ * A wallet app's `transfer_checked` (instruction 12: amount, decimals) under the mint's token
+ * program, the way a person funds a deposit account: the one transfer both programs take for every
+ * mint, and the only one Token-2022 takes from an account with a hook extension. `hookAccounts`,
+ * from `hookAccounts`, go after the four it names.
  */
 export function transferIx(args: {
   from: PublicKey

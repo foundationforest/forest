@@ -30,7 +30,7 @@ import {
   VersionedTransaction,
 } from '@solana/web3.js'
 
-import { listSecret, profileKey } from '../../../keys/src/index.ts'
+import { listSecret, mainKey } from '../../../keys/src/index.ts'
 import {
   PROGRAM_ID,
   buildRegistration,
@@ -133,8 +133,8 @@ test('rows go through a real validator: the main key signs, a fee payer pays, on
   // The person: keys/'s pinned test seed, and two of their profiles, mixed from it by keys/.
   const vectors = JSON.parse(readFileSync(join(here, '../../../keys/test/vectors.json'), 'utf8'))
   const seed = Buffer.from(vectors.seed, 'hex')
-  const profile = Keypair.fromSeed((await profileKey(seed, LABEL)).privateKey)
-  const second = Keypair.fromSeed((await profileKey(seed, 'tutoring/buyer')).privateKey)
+  const profile = Keypair.fromSeed((await mainKey(seed, LABEL)).privateKey)
+  const second = Keypair.fromSeed((await mainKey(seed, 'tutoring/buyer')).privateKey)
 
   // Two issuers. Each publishes its list, the person's stamp for that issuer among strangers', and
   // signs the list's root.

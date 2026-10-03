@@ -36,7 +36,8 @@ checklist next to the program (`registry/security-checklist.md`, `escrow/securit
   4.2.2). A test that skips fails CI: the summary must say `# skipped 0`.
 
 ```
-# Each package: install, type-check, tests that need no chain. keys first: records and registry/client read it.
+# Each package: install, type-check, tests that need no chain.
+# keys first: records and registry/client read it.
 for d in keys records registry/client escrow/client; do
   (cd "$d" && npm ci && npm run check && npm test)
 done

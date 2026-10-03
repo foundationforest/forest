@@ -11,8 +11,8 @@ import { KEYS, T0, accessKey, alice, aliceBuyer, allow, offerBody, profileBody, 
 
 describe('keys', () => {
   test("main keys are keys/'s: its pinned profiles sign here, and a name is the key in base58", () => {
-    assert.equal(alice.address, KEYS.profiles[0].address)
-    assert.equal(aliceBuyer.address, KEYS.profiles[1].address)
+    assert.equal(alice.address, KEYS.mainKeys[0].address)
+    assert.equal(aliceBuyer.address, KEYS.mainKeys[1].address)
     assert.equal(alice.address, base58.encode(alice.publicKey), 'the name is the key in base58: the same text as its Solana address')
     assert.deepEqual(keyFromPrivate(alice.privateKey), { privateKey: alice.privateKey, publicKey: alice.publicKey, address: alice.address })
     assert.throws(() => keyFromPrivate(alice.privateKey.subarray(1)), /32 bytes/)
