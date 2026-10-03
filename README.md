@@ -6,23 +6,26 @@ Because nothing of you lives inside any service, every host, index, app and AI m
 and open, or people leave. Until there are others, the foundation runs the first of each, and
 should want to lose each one.
 
-Anyone can make a new seed, but it starts with no stamps and no reviews, and a keeper that checks
-faces, such as the issuer, won't stamp the same face twice. Trust is the stamps and records on each
-of a seed's profiles; indexes decide which stamps count.
+Anyone can make a new seed, but it starts with no stamps and no reviews, and an issuer that checks
+faces won't stamp the same face twice. Trust is the stamps and records on each of a seed's
+profiles; indexes decide which stamps count.
 
 Forest removes one thing: having to trust someone in the middle.
 
 ## How it works
 
-Your seed is 24 random words. From it come your profiles, one per label such as `tutoring/seller`,
-each with its own key that is its name and its wallet. An issuer checks once that you are one
-human and puts your stamp on its list, and the registry pins that stamp to one of your profiles in
-a market, without saying who you are. Your profiles write offers and reviews as signed records,
-kept on open hosts anyone can read. A review is its writer's record: the one it's about can't erase
-it; the one who wrote it can. Money between two people moves through an escrow, and leaves only
-when both sides agree, or by an arbiter or a timer both saw at the start. An app makes all of this
-easy; everything else is open code. The registry and the escrow run on devnet; nothing is on
-mainnet.
+Your seed is 24 random words, kept in the app's secure slot on your device, unlocked by your face
+or fingerprint and used only to derive keys. From it come your main keys, one per label such as
+`tutoring/seller`. Each is a folder (everything it signs on a host), an address (its Solana
+address) and, once registered, a profile. An issuer checks once that you are one human and puts
+your stamp on its list, and registering writes a row in the registry that pins that stamp to one of
+your main keys in a market, without saying who you are. Each main key writes offers and reviews as
+signed records in its folder, on open hosts anyone can read; photos and other large files go beside
+them as blobs. A review belongs to whoever wrote it: the one it's about can't erase it; the one who
+wrote it can. Beside each folder is an inbox, where others leave messages for that main key. Money
+between two people moves through an escrow, and leaves only when both sides agree, or by an arbiter
+or a timer both saw at the start. An app makes this easy; everything else is open code. The
+registry and the escrow run on devnet; nothing is on mainnet.
 
 ## What if there were two of it?
 
@@ -30,38 +33,40 @@ Every piece of Forest is sorted by that question.
 
 | | Two of it would mean | Pieces | Where |
 |---|---|---|---|
-| **Core** | two of you | the recipe that mixes every key from the seed; the registry | [`keys/`](keys/README.md), [`registry/`](registry/README.md) |
-| **Standards Forest offers** | anyone can offer another | records, the host socket (the two requests every host answers), the permissions record, market shapes (the profile, offer and review shapes) | [`records/`](records/README.md); market names in [foundationforest/markets](https://github.com/foundationforest/markets) |
-| **Services** | the foundation runs one to start; anyone can run another | hosts, the issuer, the index, the relayer, the escrow, connections (how an AI reads and drafts for a person) | [`escrow/`](escrow/README.md), a reference host in `records/`; the issuer, the index and the relayer in [foundationforest/services](https://github.com/foundationforest/services) |
-| **Apps** | a person picks one | how a person keeps their words, backups, screens | roots, the first app, in its own repo |
+| **Core** | two of you | the recipe that mixes keys from the seed; the registry | [`keys/`](keys/README.md), [`registry/`](registry/README.md) |
+| **Standards Forest offers** | anyone can offer another | records, the host socket (the six requests every host answers, for records, the inbox and blobs), the permissions record (which access keys may write in a folder), envelopes (how a record is made private), the inbox, the three shapes (profile, offer and review) | [`records/`](records/README.md); market names in [foundationforest/markets](https://github.com/foundationforest/markets) |
+| **Services** | the foundation runs one to start; anyone can run another | hosts, issuers, indexes, fee payers (who pay Solana's fee for someone else), escrows, connections (how an AI reads and drafts for a person) | [`escrow/`](escrow/README.md) and a reference host in `records/` here; the rest in [foundationforest/services](https://github.com/foundationforest/services) |
+| **Apps** | the person picks one | the secure slot that holds the seed, and the screens | the first, by Soil, in [foundationforest/app](https://github.com/foundationforest/app), its own repo |
+| **The person** | up to them | the words, where they keep them, what they post | with them, in no repo |
 
 - **The core does not change.** The registry is to be sealed the day it deploys on mainnet. The
-  recipe stays as it is, since a new one would give every profile a new key and so a new name.
+  recipe stays as it is, since a new one would give every profile a new main key and so a new name.
 - **The escrow is a program the foundation offers; use any.** Each escrow version is to be sealed
   on mainnet the day it deploys, because it holds money. A new version comes as a new program, and
   the old ones keep working.
 
-## The four folders
+## The four pieces
 
-| Folder | What it is | In the sort | Runs |
+| Where | What it is | In the sort | Runs |
 |---|---|---|---|
-| [`keys/`](keys/README.md) | The 24 words, the recipe that mixes every key from them, and the rules for apps that hold keys | core | on the person's device |
-| [`records/`](records/README.md) | Signed records, the host socket, the permissions record, private records, the three record shapes, and a reference host | standards; the reference host is a service | a library and a reference host |
+| [`keys/`](keys/README.md) | The 24 words, the recipe that mixes keys from them, and the rules for apps that hold keys | core | on the person's device |
+| [`records/`](records/README.md) | Signed records, the host socket, the permissions record, envelopes for private records, the inbox, blobs, the three record shapes, and a reference host | standards; the reference host is a service | a library and a reference host |
 | [`registry/`](registry/README.md) | A program and its client: one row per market stamp, free | core | on devnet |
 | [`escrow/`](escrow/README.md) | A program and its client: money out when both sides agree, or by an arbiter or timer set at the start | a service; use any | on devnet |
 
-Each folder's README is its standard: what it is, how it works, its promises, its limits, and an
+Each piece's README is its standard: what it is, how it works, its promises, its limits, and an
 FAQ.
 
 ## On chain, and never on chain
 
 - **On chain:** registry rows, escrows and their receipts, and money moving.
-- **Never on chain:** seeds, private keys, records, keepers' lists, and the index.
+- **Never on chain:** seeds, private keys, records, messages, blobs, issuers' lists, and the index.
 
 ## Promises
 
-- **Your keys stay on your device.** No app stores the seed and no server holds a key. Nothing
-  anywhere has user accounts: there are keys, records and rows.
+- **The seed and the main keys stay in the app's secure slot on your device,** unlocked by your
+  face or fingerprint, and used only to derive and sign. Only access keys and signatures leave.
+  Nothing anywhere has user accounts: there are keys, records and rows.
 - **Private by default off chain.** Nothing ties your profiles together unless you link them.
   Reputation is computed per profile, and nothing server-side holds a person next to a profile. On
   chain, moving money between your own profiles links them until a privacy pool is used.
@@ -82,12 +87,12 @@ FAQ.
   upgraded by the devnet deploy key.
 - **Not audited.** Each program keeps a security checklist next to it; no paid review has been done.
 - **No recovery.** Lose the seed, and every profile and stamp it gives is gone. Nobody else has it.
-- **A row is only as good as its keeper.** The registry checks no keeper; each reader decides which
+- **A row is only as good as its issuer.** The registry checks no issuer; each reader decides which
   issuers it trusts.
-- **A host can withhold.** It cannot forge or change a record, but it can stop serving one. The
-  app's copies and the profile's other hosts cover for it.
-- **Not here:** recovery through an issuer, a zero-knowledge proof across profiles, a privacy pool,
-  video hosting, and an arbiter by default.
+- **A host can withhold.** It cannot forge or change a record, but it can stop serving one, or a
+  message or a blob. The app's copies and the main key's other hosts cover for it.
+- **Not here:** recovery through an issuer, a proof across profiles, a privacy pool built by
+  Forest, and an arbiter by default.
 
 ## FAQ
 
@@ -102,14 +107,19 @@ A sealed program cannot learn new kinds of evidence, and an index can. So the pr
 interpret evidence; indexes weigh it.
 
 **Can Forest take my money or my profile?**
-No. Forest never holds your keys, the escrow has no admin, and Forest arbitrates nothing: an
-arbiter is a key both sides saw at the start.
+No. Forest never holds your seed or your main keys, the escrow has no admin, and Forest arbitrates
+nothing: an arbiter is a key both sides saw at the start.
 
 **Why is all of this open?**
 A piece that only works if everyone shares it is a public good, so the shared pieces are open and
 kept by the foundation. Apps, and the ramps in and out, are products.
 
+**Why is the app in its own repo?**
+An app is the person's choice, one of many, so the standard must not look like one app. The app
+that holds the seed is open source so anyone can check that nothing leaks, and a repo is what
+people check. It pins a version of forest, the way services does.
+
 **What is it built from?**
 Existing pieces, used unchanged: Ed25519, RFC 8785 canonical JSON, age, Semaphore's circuit and its
-public July 2024 setup files, groth16-solana, Anchor, and the SPL token programs. Forest writes only
-what does not exist yet.
+public July 2024 setup files, groth16-solana, Anchor, the SPL token programs, and Kora, in Soil's
+fee payer, in services. Forest writes only what does not exist yet.
