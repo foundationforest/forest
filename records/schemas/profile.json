@@ -47,12 +47,53 @@
       "description": "Optional. The profile's reading key, as an age post-quantum hybrid recipient (mlkem768x25519, 1,959 characters): what others make private records for. Without it, nobody can make a private record for this profile.",
       "pattern": "^age1pq1[02-9ac-hj-np-z]{1952}$"
     },
+    "inbox": {
+      "$ref": "#/$defs/inbox"
+    },
     "createdAt": {
       "type": "string",
       "format": "date-time"
     }
   },
   "$defs": {
+    "inbox": {
+      "type": "object",
+      "description": "Optional. The profile's inbox: who may deliver a message to it on its hosts. Senders seal each message to read, so a profile with an inbox also gives read. Without this field there is no inbox, and hosts refuse deliveries. A host refuses deliveries to an inbox it cannot read: a field, a rule or a value it does not know.",
+      "required": ["senders"],
+      "additionalProperties": false,
+      "properties": {
+        "senders": {
+          "description": "Who may deliver: anyone, or a key holding a registry row from this issuer, under any label.",
+          "oneOf": [
+            {
+              "const": "anyone"
+            },
+            {
+              "type": "object",
+              "required": ["issuer"],
+              "additionalProperties": false,
+              "properties": {
+                "issuer": {
+                  "type": "string",
+                  "description": "The issuer's address, base58.",
+                  "minLength": 32,
+                  "maxLength": 44
+                }
+              }
+            }
+          ]
+        },
+        "once": {
+          "const": true,
+          "description": "Optional. One message from each sender, ever: a host refuses a second from the same key for as long as it keeps the profile."
+        },
+        "maxBytes": {
+          "type": "integer",
+          "description": "Optional. The largest message it takes, as canonical text in bytes. A message is at most 65,536 bytes anyway.",
+          "minimum": 0
+        }
+      }
+    },
     "photo": {
       "type": "object",
       "description": "Profile photo, named by the SHA-256 of its bytes.",

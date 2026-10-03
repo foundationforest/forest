@@ -5,8 +5,8 @@ import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { connect } from 'node:net'
 import { after, before, describe, test } from 'node:test'
-import { MAX_PAGE_BYTES, publish, readAll, readPage, readProfile } from '../src/client.ts'
-import { DAY, type Host } from '../src/host.ts'
+import { publish, readAll, readPage, readProfile } from '../src/client.ts'
+import { DAY, DEFAULT_MAX_PAGE_BYTES, type Host } from '../src/host.ts'
 import { MAX_RECORD_BYTES, type SignedRecord, checkRecord, encodeRecord } from '../src/record.ts'
 import { liveContent } from '../src/view.ts'
 import { accessRecord, hostsRecord, nextTime, ownerRecord, permissionsRecord } from '../src/write.ts'
@@ -285,18 +285,18 @@ describe('hosts that misbehave', () => {
   })
 })
 
-describe('limits: 4 MB a page, the spec’s size a record, 60 seconds a read', () => {
+describe('limits: the standard’s size a record; each host’s own batch and page; 60 seconds a read', () => {
   const bytes = (lines: string[]) => lines.reduce((n, l) => n + Buffer.byteLength(l) + 1, 0)
 
-  test('a host ends a page before 4 MB; a reader still gets every record, page by page', async () => {
+  test('the reference host ends a page before 4 MB; a reader still gets every record, page by page', async () => {
     const h = await startHost({ now: () => T0 })
     try {
       const full = Array.from({ length: 66 }, (_, i) => sizedRecord(alice, `note/${i}`, MAX_RECORD_BYTES))
       const [outcome] = await publish([h.url], full)
       assert.ok(outcome!.results.every((r) => r.ok), JSON.stringify(outcome!.results.filter((r) => !r.ok)))
       const first = h.read()
-      assert.ok(bytes(first.lines) <= MAX_PAGE_BYTES)
-      assert.ok(bytes(first.lines) + MAX_RECORD_BYTES + 1 > MAX_PAGE_BYTES, 'the next record would not have fit')
+      assert.ok(bytes(first.lines) <= DEFAULT_MAX_PAGE_BYTES)
+      assert.ok(bytes(first.lines) + MAX_RECORD_BYTES + 1 > DEFAULT_MAX_PAGE_BYTES, 'the next record would not have fit')
       assert.ok(first.lines.length < 66)
       assert.equal((await readAll(h.url)).records.length, 66)
     } finally {
@@ -304,13 +304,45 @@ describe('limits: 4 MB a page, the spec’s size a record, 60 seconds a read', (
     }
   })
 
-  test('a reader refuses a page over 4 MB, and takes one of exactly 4 MB', async () => {
+  test('a host chooses its batch: a client sends a request it finds too big again in halves, and every record lands', async () => {
+    const h = await startHost({ now: () => T0, maxBatch: 3 })
+    try {
+      const records = Array.from({ length: 10 }, (_, i) => ownerRecord(alice, `offer/${i}`, offerBody('1'), T0))
+      assert.deepEqual(await h.accept(records.map(encodeRecord)), [{ i: 0, ok: false, error: 'batch', message: 'at most 3 records a request' }])
+      const [outcome] = await publish([h.url], [ownerRecord(alice, 'offer/0', offerBody('1'), T0 - 1), ...records])
+      assert.equal(outcome!.status, 200)
+      assert.deepEqual(outcome!.results.map((r) => r.i), [...Array(11).keys()], 'each result at its place in the request')
+      assert.deepEqual(outcome!.results.map((r) => r.error ?? 'ok'), ['ok', ...Array(10).fill('ok')])
+      assert.equal(h.view(alice.address).current.size, 10, 'the newer offer/0 replaced the older')
+    } finally {
+      await h.close()
+    }
+  })
+
+  test('a host chooses its page: a reader follows the cursor whatever the size, and a page always holds one record', async () => {
+    for (const options of [{ maxPageRecords: 2 }, { maxPageBytes: 10 }]) {
+      const h = await startHost({ now: () => T0, ...options })
+      try {
+        await publish([h.url], Array.from({ length: 5 }, (_, i) => ownerRecord(alice, `offer/${i}`, offerBody('1'), T0)))
+        assert.ok(h.read().lines.length <= 2 && h.read().lines.length >= 1, JSON.stringify(options))
+        assert.equal((await readAll(h.url)).records.length, 5, JSON.stringify(options))
+      } finally {
+        await h.close()
+      }
+    }
+  })
+
+  test('a reader takes a page of any length, and refuses a line longer than a record without holding it', async () => {
     const h = await startHost({ now: () => T0 })
     try {
-      h.read = () => ({ lines: ['x'.repeat(MAX_PAGE_BYTES)], cursor: 1 })
-      await assert.rejects(readPage(h.url), /over 4194304 bytes/)
-      h.read = () => ({ lines: ['x'.repeat(MAX_PAGE_BYTES - 1)], cursor: 1 })
-      assert.equal((await readPage(h.url)).cursor, 1)
+      const atCap = encodeRecord(sizedRecord(alice, 'note/a', MAX_RECORD_BYTES))
+      h.read = () => ({ lines: Array(100).fill(atCap), cursor: 1 })
+      const page = await readPage(h.url)
+      assert.ok(bytes(Array(100).fill(atCap)) > 6_000_000)
+      assert.equal(page.records.length, 100)
+      h.read = () => ({ lines: ['x'.repeat(5_000_000), atCap], cursor: 2 })
+      const long = await readPage(h.url)
+      assert.deepEqual([long.records.length, long.refused], [1, [{ line: '', reason: 'size' }]])
     } finally {
       await h.close()
     }

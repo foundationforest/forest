@@ -10,10 +10,15 @@
 // reading keys it was made for (one stanza each). Removing a reader means a new version made for
 // the rest; a reader keeps whatever it already opened. No forward secrecy: a reading key that
 // leaks later opens every envelope ever made for it.
+//
+// A message's body is one of these envelopes, made for one reading key: the recipient profile's
+// `read`. message() seals and signs one; openMessage() checks one and opens it.
 
 import { Decrypter, Encrypter } from 'age-encryption'
 import { b64u } from './bytes.ts'
 import { canonical, parseCanonical } from './canonical.ts'
+import type { Key } from './keys.ts'
+import { type SignedMessage, decodeMessage, encodeMessage, signMessage } from './message.ts'
 import { type Body, isPrivate } from './record.ts'
 
 export { isPrivate }
@@ -45,4 +50,18 @@ export function readerCount(body: { private: string }): number {
   const bytes = b64u.decode(body.private)
   const header = new TextDecoder().decode(bytes.subarray(0, Math.min(bytes.length, 64 * 1024))).split('\n---')[0] ?? ''
   return header.split('\n').filter((line) => line.startsWith('-> ')).length
+}
+
+/**
+ * A message to `to`'s inbox: `body` sealed to `readKey`, the reading key `to`'s profile record
+ * gives as `read`, and nothing else; then signed by `from`.
+ */
+export async function message(from: Key, to: string, body: Body, time: number, readKey: string): Promise<SignedMessage> {
+  return signMessage(from, to, await makePrivate(body, [readKey]), time)
+}
+
+/** A message, as wire text or signed, checked, then its body opened with the recipient's reading key identity. */
+export async function openMessage(message: SignedMessage | string, identity: string): Promise<{ id: string; from: string; to: string; time: number; body: Body }> {
+  const { message: m, id } = decodeMessage(typeof message === 'string' ? message : encodeMessage(message))
+  return { id, from: m.from, to: m.to, time: m.time, body: await openPrivate(m.body, identity) }
 }
