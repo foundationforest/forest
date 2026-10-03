@@ -45,6 +45,17 @@ Every piece of Forest is sorted by that question.
   on mainnet the day it deploys, because it holds money. A new version comes as a new program, and
   the old ones keep working.
 
+## Who decides what
+
+The standard holds only what two strangers' implementations must agree on; everything else is a
+service's policy, an app's choice, or the person's.
+
+- **The standard** is fixed: no service or app can change it.
+- **A service** decides its own policy. The foundation's services publish theirs, each in its own
+  README in [foundationforest/services](https://github.com/foundationforest/services).
+- **An app** makes its choices with the person.
+- **The person** decides the rest.
+
 ## The four pieces
 
 | Where | What it is | In the sort | Runs |
@@ -54,8 +65,8 @@ Every piece of Forest is sorted by that question.
 | [`registry/`](registry/README.md) | A program and its client: one row per market stamp, free | core | on devnet |
 | [`escrow/`](escrow/README.md) | A program and its client: money out when both sides agree, or by an arbiter or timer set at the start | a service; use any | on devnet |
 
-Each piece's README is its standard: what it is, how it works, its promises, its limits, and an
-FAQ.
+Each piece's README is its standard: what it is, how it works, its promises, its limits, who
+decides what, and an FAQ.
 
 ## On chain, and never on chain
 

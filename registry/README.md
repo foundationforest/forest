@@ -244,6 +244,14 @@ solana program show <program id>          # Authority: none
 - **Not audited.** The [security checklist](security-checklist.md) lists every rule and every known
   limit.
 
+## Who decides what
+
+- **The standard:** the row, the proof, and one row per market stamp; to be sealed on mainnet.
+- **An issuer, by its own policy:** how it checks who goes on its list, and how it publishes it.
+- **Other services, by their own policy:** which rows a fee payer pays for; which issuers an index
+  counts.
+- **An app, with the person:** when to register, and making the proof on the device.
+
 ## FAQ
 
 **Why does a row carry a snapshot's root and the issuer's signature?** An issuer's list keeps

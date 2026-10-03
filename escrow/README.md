@@ -308,10 +308,16 @@ deployed and to be closed. There is no smoke test: read a receipt with `solana a
 - **Tested, not audited.** The fuzzer runs an SBPF v0 build, since its runtime runs no v3 program,
   on a classic mint only, and its runtime checks no signatures. There is no local-validator test:
   the devnet run is the client's only run against a real runtime. A Solana Pay link to an escrow's
-  address is untried in a wallet app on a phone. No paid review.
+  address is untried on a phone. No paid review.
 
 The [security checklist](security-checklist.md) lists every known limit, with the test that pins
 each.
+
+## Who decides what
+
+- **The standard:** the program's rules and the receipt; to be sealed on mainnet.
+- **An app, with the person:** the terms, the arbiter, the timer's default, and which escrow to use.
+- **A fee payer, by its own policy:** which transactions it pays for.
 
 ## FAQ
 

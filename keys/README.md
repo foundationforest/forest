@@ -161,6 +161,13 @@ stamp step by step without Semaphore's wrapper.
   page, the library cannot.
 - **Tests run in Node.**
 
+## Who decides what
+
+- **The standard:** the 24 words, the recipe and its info strings.
+- **An app, with the person:** where the seed and keys live and how the face or fingerprint opens
+  them, following the rules above; backups; how a made reading key reaches its reader.
+- **A service:** nothing. No service holds a main key.
+
 ## FAQ
 
 **Why 24 words?**
