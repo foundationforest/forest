@@ -1,9 +1,9 @@
-// One Semaphore proof, made on the device, against a keeper's list.
+// One Semaphore proof, made on the device, against an issuer's list.
 //
-// A keeper publishes its list its own way: every stamp in it, in the order it took them, and its
+// An issuer publishes its list its own way: every stamp in it, in the order it took them, and its
 // signature on each snapshot's root. The device finds its own stamp in the list, builds the Merkle
 // path, and proves "my stamp is on this list" for one label (the scope) and one profile (the
-// message). The registry takes the root as given; readers decide which keepers they trust.
+// message). The registry takes the root as given; readers decide which issuers they trust.
 //
 // Semaphore's own `generateProof` hashes the scope and the message for you, as a 32-byte
 // big-endian number, which caps a label at 32 bytes. The registry hashes a namespaced string
@@ -16,9 +16,10 @@ import type { PublicKey } from '@solana/web3.js'
 import { groth16 } from 'snarkjs'
 
 import { compressProof, type CompressedProof, type SnarkjsProof } from './compress.ts'
-import { messageOf, scopeOf } from './field.ts'
+import { fromBytes32, isFieldElement, messageOf, scopeOf } from './field.ts'
 import { MAX_DEPTH } from './program.ts'
 import { identityFrom, marketStampOf, stampOf } from './stamp.ts'
+import { VERIFICATION_KEY } from './verification-key.ts'
 
 /** The pinned artifacts. Paths on Node, or the bytes themselves in a browser. */
 export type Artifacts = {
@@ -46,12 +47,12 @@ export function listRoot(stamps: bigint[]): bigint {
 }
 
 export async function proveStamp(input: {
-  /** The 32 bytes `keys/`'s `listSecret(seed, keeper)` returns, or the identity itself. */
+  /** The 32 bytes `keys/`'s `listSecret(seed, issuer)` returns, or the identity itself. */
   secret: Uint8Array | Identity
   label: string
   /** The profile's 32-byte key. The proof names it: it counts for this profile's row only. */
   profile: PublicKey | Uint8Array
-  /** The keeper's list: every stamp in it, in the order the keeper published them. */
+  /** The issuer's list: every stamp in it, in the order the issuer published them. */
   stamps: bigint[]
   artifacts: Artifacts
 }): Promise<StampProof> {
@@ -106,5 +107,36 @@ export async function proveStamp(input: {
     proof: compressProof(proof),
     raw: proof,
     publicSignals,
+  }
+}
+
+/**
+ * Does this proof hold for this root, market stamp, label and main key? The program's own check,
+ * without the chain: the scope and the message are derived from the label and the main key, every
+ * public input must be a field element, and the proof is verified with the key the program has
+ * baked in. Like the program, it takes the root as given: a caller checks that an issuer it trusts
+ * signed it (`issuerSigned`). Anything that is not a good proof for these inputs is false.
+ *
+ * Soil's fee payer sponsors a row only against a proof under a `sponsor/<n>` label.
+ */
+export async function verifyStamp(input: {
+  /** The proof as snarkjs writes it: `proveStamp`'s `raw`. */
+  proof: SnarkjsProof
+  root: bigint | Uint8Array
+  marketStamp: bigint | Uint8Array
+  label: string
+  /** The main key the proof names. */
+  profile: PublicKey | Uint8Array
+}): Promise<boolean> {
+  try {
+    const value = (v: bigint | Uint8Array) => (typeof v === 'bigint' ? v : fromBytes32(v))
+    const root = value(input.root)
+    const marketStamp = value(input.marketStamp)
+    if (!isFieldElement(root) || !isFieldElement(marketStamp)) return false
+    // Semaphore's order: root, nullifier, message, scope.
+    const publicSignals = [root, marketStamp, messageOf(input.profile), scopeOf(input.label)].map(String)
+    return await groth16.verify(VERIFICATION_KEY, publicSignals, input.proof)
+  } catch {
+    return false
   }
 }

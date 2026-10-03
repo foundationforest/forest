@@ -2,7 +2,7 @@
 //! generator.
 //!
 //! Random flows by four payers, any of them sending anything: register (the real proofs, sometimes
-//! bent: another profile signing, the profile not signing, another label, another market stamp, a
+//! bent: another main key signing, the main key not signing, another label, another market stamp, a
 //! root nobody has, one flipped bit), refund (of any row or any address, to the recorded payer or
 //! anyone else), lamports sent to a row's address before or after it exists, and the rent rate
 //! moving between the three rates refund exists for. A model says whether each must land; after
@@ -98,7 +98,7 @@ fn registry_invariants_hold_under_random_flows() {
             0..=3 => {
                 what = "register";
                 let p = &f.proofs[rng.below(f.proofs.len())];
-                let mut profile = p.profile_key();
+                let mut profile = p.main_key();
                 let mut args = p.args();
                 let mut profile_signs = true;
                 let bent = rng.chance(40);
@@ -127,9 +127,9 @@ fn registry_invariants_hold_under_random_flows() {
                 if result.is_ok() {
                     let view = RowView {
                         profile: profile.pubkey(),
-                        keeper: args.keeper,
+                        issuer: args.issuer,
                         root: args.root,
-                        keeper_signature: args.keeper_signature,
+                        issuer_signature: args.issuer_signature,
                         payer: k.pubkey(),
                         bump: Address::find_program_address(&[b"row", &args.market_stamp], &PROGRAM_ID).1,
                         label: args.label.clone(),

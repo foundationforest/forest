@@ -13,7 +13,7 @@
 #      key    = the ed25519 keypair whose secret seed is `seed` (Solana's Keypair.fromSeed)
 #
 #    One label per key: `deploy` (pays for the deploy and keeps the upgrade authority), `payer`
-#    (pays every fee and deposit in registry/client/scripts/devnet.ts, as a relayer would), and
+#    (pays every fee and deposit in registry/client/scripts/devnet.ts, as a fee payer would), and
 #    `registry-rows-program`, the program id. The keypair files go to FOREST_DEVNET_KEYS (default
 #    ~/.forest-devnet/keys), never under the repo: the directory mode 700, the files 600, and a file
 #    holding another key is refused, not overwritten. Only public keys are printed, and the phrase

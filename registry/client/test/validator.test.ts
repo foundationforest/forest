@@ -1,5 +1,5 @@
 // The client against a real validator: start one, load the program, and make rows end to end, from
-// the keys recipe's seed and a keeper's signed list to rows on the chain.
+// the keys recipe's seed and an issuer's signed list to rows on the chain.
 //
 //   npm run test:validator
 //
@@ -36,7 +36,7 @@ import {
   buildRegistration,
   fetchRow,
   fetchRows,
-  keeperSigned,
+  issuerSigned,
   listRoot,
   refundIx,
   rootBytes,
@@ -125,7 +125,7 @@ after(() => {
   if (ledger) rmSync(ledger, { recursive: true, force: true })
 })
 
-test('rows go through a real validator: the profile signs, a relayer pays, one row per keeper per label', { timeout: 300_000 }, async (t) => {
+test('rows go through a real validator: the main key signs, a fee payer pays, one row per issuer per label', { timeout: 300_000 }, async (t) => {
   const why = missing()
   if (why) return t.skip(why)
   if (!validator) return t.skip('solana-test-validator did not start (is it on the PATH?)')
@@ -136,38 +136,38 @@ test('rows go through a real validator: the profile signs, a relayer pays, one r
   const profile = Keypair.fromSeed((await profileKey(seed, LABEL)).privateKey)
   const second = Keypair.fromSeed((await profileKey(seed, 'tutoring/buyer')).privateKey)
 
-  // Two keepers. Each publishes its list, the person's stamp for that keeper among strangers', and
+  // Two issuers. Each publishes its list, the person's stamp for that issuer among strangers', and
   // signs the list's root.
-  const keepers = [Keypair.generate(), Keypair.generate()]
+  const issuers = [Keypair.generate(), Keypair.generate()]
   const lists = await Promise.all(
-    keepers.map(async (k, i) => {
+    issuers.map(async (k, i) => {
       const { secret } = await listSecret(seed, k.publicKey.toBase58())
       const stamps = [stampOf(Buffer.from(`stranger ${i} 1`)), stampOf(secret), stampOf(Buffer.from(`stranger ${i} 2`))]
-      return { keeper: k, secret, stamps, signature: ed25519.sign(rootBytes(listRoot(stamps)), k.secretKey.subarray(0, 32)) }
+      return { issuer: k, secret, stamps, signature: ed25519.sign(rootBytes(listRoot(stamps)), k.secretKey.subarray(0, 32)) }
     }),
   )
 
-  // A relayer pays for everything; the profile signs its own row.
-  const relayer = Keypair.generate()
-  await fund(relayer.publicKey)
+  // A fee payer pays for everything; the main key signs its own row.
+  const feePayer = Keypair.generate()
+  await fund(feePayer.publicKey)
   const build = async (who: Keypair, list: (typeof lists)[number]) =>
     buildRegistration({
       secret: list.secret,
       label: LABEL,
       profile: who.publicKey,
-      keeper: list.keeper.publicKey,
+      issuer: list.issuer.publicKey,
       stamps: list.stamps,
-      keeperSignature: list.signature,
+      issuerSignature: list.signature,
       artifacts,
-      payer: relayer.publicKey,
+      payer: feePayer.publicKey,
       recentBlockhash: (await connection.getLatestBlockhash('confirmed')).blockhash,
     })
 
   const reg = await build(profile, lists[0])
   const tx = reg.transaction
-  assert.equal(tx.message.header.numRequiredSignatures, 2, 'the relayer and the profile sign')
+  assert.equal(tx.message.header.numRequiredSignatures, 2, 'the fee payer and the main key sign')
   assert.ok(!tx.message.staticAccountKeys.some((k) => k.equals(ComputeBudgetProgram.programId)), 'no compute-budget instruction')
-  const { signature, err } = await sendVersioned(tx, [relayer, profile])
+  const { signature, err } = await sendVersioned(tx, [feePayer, profile])
   assert.equal(err, null, signature)
   const meta = await connection.getTransaction(signature, { commitment: 'confirmed', maxSupportedTransactionVersion: 0 })
   const units = meta?.meta?.computeUnitsConsumed ?? 0
@@ -175,35 +175,35 @@ test('rows go through a real validator: the profile signs, a relayer pays, one r
   const row = await fetchRow(connection, reg.marketStamp)
   assert.ok(row)
   assert.equal(row.profile.toBase58(), profile.publicKey.toBase58())
-  assert.equal(row.keeper.toBase58(), keepers[0].publicKey.toBase58())
+  assert.equal(row.issuer.toBase58(), issuers[0].publicKey.toBase58())
   assert.equal(row.label, LABEL)
-  assert.equal(row.payer.toBase58(), relayer.publicKey.toBase58())
+  assert.equal(row.payer.toBase58(), feePayer.publicKey.toBase58())
   assert.equal(Buffer.from(row.root).toString('hex'), Buffer.from(toBytes32(listRoot(lists[0].stamps))).toString('hex'))
-  assert.equal(keeperSigned(row), true, "a reader checks the keeper's signature")
+  assert.equal(issuerSigned(row), true, "a reader checks the issuer's signature")
   const written = (await connection.getAccountInfo(reg.row))!.data
   assert.equal(written.length, rowSpace(Buffer.byteLength(LABEL)))
 
-  // Refused on chain: the same keeper and label for the person's second profile, the same market
-  // stamp. Through the second keeper, it is another market stamp, and lands.
+  // Refused on chain: the same issuer and label for the person's second profile, the same market
+  // stamp. Through the second issuer, it is another market stamp, and lands.
   const again = await build(second, lists[0])
   assert.equal(again.row.toBase58(), reg.row.toBase58())
-  assert.notEqual((await sendVersioned(again.transaction, [relayer, second], true)).err, null, 'a second row for the market stamp')
+  assert.notEqual((await sendVersioned(again.transaction, [feePayer, second], true)).err, null, 'a second row for the market stamp')
   const other = await build(second, lists[1])
-  assert.equal((await sendVersioned(other.transaction, [relayer, second])).err, null, 'the second profile, through the second keeper')
+  assert.equal((await sendVersioned(other.transaction, [feePayer, second])).err, null, 'the second profile, through the second issuer')
   const rows = await fetchRows(connection, { label: LABEL })
   assert.deepEqual(rows.map((r) => r.row.profile.toBase58()).sort(), [profile.publicKey.toBase58(), second.publicKey.toBase58()].sort())
-  assert.equal((await fetchRows(connection, { keeper: keepers[1].publicKey })).length, 1)
+  assert.equal((await fetchRows(connection, { issuer: issuers[1].publicKey })).length, 1)
 
-  // Refund: someone sends the row lamports; anyone sends refund; the relayer, its recorded payer,
+  // Refund: someone sends the row lamports; anyone sends refund; the fee payer, its recorded payer,
   // gets exactly them back, and the row is byte for byte what register wrote.
   const stranger = Keypair.generate()
   await fund(stranger.publicKey)
   const gift = new Transaction().add(SystemProgram.transfer({ fromPubkey: stranger.publicKey, toPubkey: reg.row, lamports: 1_000_000 }))
   assert.equal((await sendLegacy(gift, stranger)).err, null)
-  const before = await connection.getBalance(relayer.publicKey)
-  assert.equal((await sendLegacy(new Transaction().add(refundIx({ row: reg.row, payer: relayer.publicKey })), stranger)).err, null)
-  assert.equal((await connection.getBalance(relayer.publicKey)) - before, 1_000_000)
+  const before = await connection.getBalance(feePayer.publicKey)
+  assert.equal((await sendLegacy(new Transaction().add(refundIx({ row: reg.row, payer: feePayer.publicKey })), stranger)).err, null)
+  assert.equal((await connection.getBalance(feePayer.publicKey)) - before, 1_000_000)
   assert.deepEqual((await connection.getAccountInfo(reg.row))!.data, written)
 
-  console.log(`register ${units} compute units on a local validator; two rows through two keepers, one refused, a refund to the relayer`)
+  console.log(`register ${units} compute units on a local validator; two rows through two issuers, one refused, a refund to the fee payer`)
 })

@@ -10,7 +10,7 @@ apply, and every limit known today. The program is `program/src/`; the tests nam
 |---|---|
 | Program | `forest_registry`, `FoRRegistryRowsFreeNoFeeNoAdmin1111111111111` in the source (a placeholder nobody holds a key for); devnet `5zTPm1bGY8ANLcJd12fPiKSTd71bvnq38LAUDT4ToeoC` |
 | Framework | Anchor 1.2, `cargo build-sbf --arch v3` (Solana CLI 4.2.2, platform-tools v1.54), no IDL, no warnings |
-| Testing | LiteSVM, 30 tests: `registry.rs` 16, `adversarial.rs` 13, `invariants.rs` the property test (1,000 steps in CI's nightly job); the client's unit tests (13), a local validator (`test:validator`), and the devnet run with its read-only smoke tests (4) |
+| Testing | LiteSVM, 30 tests: `registry.rs` 16, `adversarial.rs` 13, `invariants.rs` the property test (1,000 steps in CI's nightly job); the client's unit tests (14), a local validator (`test:validator`), and the devnet run with its read-only smoke tests (5) |
 | Risk level | 🟢 Low by the skill's table: no token, no CPI but the system program's, no admin, no custody beyond each row's own rent deposit. Treated as sealed, so this checklist carries a High-risk decisions section. |
 | Upgrade authority | Removed at mainnet deploy (`README.md`). On devnet it stays on the devnet deploy key. No pause, no admin, no override of a row. |
 
@@ -20,18 +20,18 @@ Each is on purpose, and none can be changed after a mainnet deploy.
 
 1. **Sealed.** No upgrade, no pause, no way for anyone to undo or edit a row. A bug found after
    deploy stays; the remedy is a new program at a new address.
-2. **Roots, keepers and keeper signatures are not checked.** The root is a public input the program
-   takes as given; the keeper and its signature are stored as given. Anyone can keep a list of
+2. **Roots, issuers and issuer signatures are not checked.** The root is a public input the program
+   takes as given; the issuer and its signature are stored as given. Anyone can keep a list of
    their own, with as many stamps as they like, and write rows against it under any label. The
-   program guarantees only one row per market stamp; whether a keeper is worth trusting, and whether
-   its signature checks, is each reader's decision (`keeperSigned`). A row with a signature that
-   does not check is stored for good and holds its market stamp; the client checks the signature
-   before proving (`buildRegistration`).
-3. **The profile signs, and the proof names it.** Only the profile's key can put a row on a profile,
-   and a proof seen in flight cannot land under another profile: its message is the profile's key
+   program guarantees only one row per market stamp; whether an issuer is worth trusting, and
+   whether its signature checks, is each reader's decision (`issuerSigned`). A row with a signature
+   that does not check is stored for good and holds its market stamp; the client checks the
+   signature before proving (`buildRegistration`).
+3. **The main key signs, and the proof names it.** Only the main key can put a row on its profile,
+   and a proof seen in flight cannot land under another profile: its message is the main key
    (`a_stranger_cannot_register_my_profile_or_take_my_proof`,
    `finding_a_proof_in_flight_cannot_be_stolen_and_a_whole_transaction_only_lands_as_sent`). The
-   payer signs too, and may be anyone, the profile included.
+   payer signs too, and may be anyone, the main key included.
 4. **A row never changes.** `register` is the only write: no instruction edits a row or closes it,
    and `refund` moves only lamports (`a_row_never_changes`, and the property test's I2).
 5. **A row never closes.** Its existence is the one-row-per-market-stamp rule; closing it would free
@@ -41,14 +41,14 @@ Each is on purpose, and none can be changed after a mainnet deploy.
    only `register` makes such an account, only at a market stamp's address; an account of this
    program with other bytes is refused
    (`an_account_of_the_registry_that_is_not_a_row_is_refused`).
-7. **The keeper is any 32 bytes.** The program does not check that it is a usable ed25519 key;
-   readers do (`finding_the_program_takes_any_32_bytes_as_a_keeper`).
+7. **The issuer is any 32 bytes.** The program does not check that it is a usable ed25519 key;
+   readers do (`finding_the_program_takes_any_32_bytes_as_an_issuer`).
 
 ## Shared base, sections 1 to 31
 
 ### 1. Account and identity validation
 
-- **1.1 Signer checks. Applied.** `register` has two `Signer`s: the profile, whose key the row
+- **1.1 Signer checks. Applied.** `register` has two `Signer`s: the main key, which the row
   names and the proof's message binds, and the payer, which pays and nothing more
   (`the_profile_must_sign`, `register_is_signed_by_the_profile_and_the_payer_and_refund_by_nobody`).
   `refund` takes no signer: the amount and the destination come from the chain.
@@ -65,7 +65,7 @@ Each is on purpose, and none can be changed after a mainnet deploy.
   version's `Line` bytes and a zeroed account of this program are refused
   (`an_account_of_the_registry_that_is_not_a_row_is_refused`).
 - **1.5 Reinitialization. Applied.** A row is `init` at the address derived from its market stamp,
-  and that failure is the one-row rule itself (`one_row_per_keeper_per_label_per_person`,
+  and that failure is the one-row rule itself (`one_row_per_issuer_per_label_per_person`,
   `replay_one_market_stamp_twice_in_one_transaction_reverts_both`). Lamports sent to the address
   first do not block it (`lamports_sent_to_a_row_address_first_do_not_block_it`).
 - **1.6 Writable checks. Applied.** Only the row and the payer are `mut`; the profile is read-only.
@@ -93,7 +93,7 @@ Each is on purpose, and none can be changed after a mainnet deploy.
 ### 4. Duplicate mutable accounts. Applied.
 
 The mutable accounts are the row and the payer. The payer signs and a row's address is a PDA, which
-cannot sign, so they cannot be one account in `register`. The profile and the payer may be one key:
+cannot sign, so they cannot be one account in `register`. The main key and the payer may be one key:
 both are `Signer`s, which serialize nothing on exit, and Anchor allows them to repeat
 (`anyone_may_pay_the_profile_included`). In `refund`, passing the row as its own payer is refused
 (`refund_goes_only_to_the_recorded_payer`).
@@ -153,7 +153,7 @@ that a row's bytes stay exactly what `register` wrote, whatever lands after (I2)
 The label is at most 128 bytes (`LabelTooLong`) and must be UTF-8 (Borsh refuses otherwise:
 `a_label_that_is_not_utf8_is_refused`). An empty label is allowed: the program does not care what
 the text says. Every public input must be a BN254 field element (`NotAFieldElement`); the points
-must decompress (`ProofMalformed`). The keeper and its signature are not checked (High-risk 2, 7).
+must decompress (`ProofMalformed`). The issuer and its signature are not checked (High-risk 2, 7).
 
 ### 19. Type narrowing. Applied.
 
@@ -193,8 +193,8 @@ A row has one state, existing, entered once by `register` and absorbing: nothing
 ### 29. Permissionless initialization and user parameters
 
 - **29.1 Frontrunnable initialization. Applied.** There is no shared state to initialize. A row
-  needs its profile's signature, so nobody can create one for a profile they do not hold.
-- **29.2 User parameters. Applied.** The label, the keeper, the root and the keeper signature are
+  needs its main key's signature, so nobody can create one for a main key they do not hold.
+- **29.2 User parameters. Applied.** The label, the issuer, the root and the issuer signature are
   the user's; the label is bounded, the root is checked to be a field element and bound by the
   proof, and the rest are fixed-size bytes stored as given.
 - **29.3, 29.4 Config. Does not apply: no config.**
@@ -229,9 +229,9 @@ minimum after.
 
 ## LiteSVM checklist (litesvm.md §9)
 
-- [x] Happy path with full state verification: `a_row_is_written_with_its_profile_keeper_root_signature_payer_and_label`, `a_row_never_changes`.
+- [x] Happy path with full state verification: `a_row_is_written_with_its_profile_issuer_root_signature_payer_and_label`, `a_row_never_changes`.
 - [x] Wrong signer: `the_profile_must_sign`, `a_stranger_cannot_register_my_profile_or_take_my_proof`, `a_proof_is_bound_to_its_label_and_profile`.
-- [x] Re-initialization fails: `one_row_per_keeper_per_label_per_person`.
+- [x] Re-initialization fails: `one_row_per_issuer_per_label_per_person`.
 - [ ] Deadlines: none in this program.
 - [x] Over-limit: `the_label_is_free_text_up_to_128_bytes`.
 - [ ] Account closure: a row never closes.
@@ -243,29 +243,28 @@ minimum after.
 
 ## Known limits
 
-- **A self-kept list is a valid list.** The registry cannot tell a trusted keeper's root from anyone
-  else's; readers must (High-risk 2). A keeper that never publishes its list and signs no roots
+- **A self-kept list is a valid list.** The registry cannot tell a trusted issuer's root from anyone
+  else's; readers must (High-risk 2). An issuer that never publishes its list and signs no roots
   backs nothing any reader can check.
-- **A row with a bad keeper signature holds its market stamp for good.** The program stores the
+- **A row with a bad issuer signature holds its market stamp for good.** The program stores the
   signature unchecked. The client refuses to build one; a client that skips the check can burn its
-  own market stamp for that keeper and label.
-- **One row per list, not per face.** A person on two keepers' lists holds two market stamps per
-  label. That is how a second profile in one market works; a reader that trusts both keepers counts
+  own market stamp for that issuer and label.
+- **One row per list, not per face.** A person on two issuers' lists holds two market stamps per
+  label. That is how a second profile in one market works; a reader that trusts both issuers counts
   both rows.
 - **Roots can link rows.** Rows carrying the same root came from one snapshot; when few people are
-  on it, that narrows who they could be. Apps prove against a keeper's newest list.
-- **A row's address funded first, below the row's minimum, cannot be registered through the
-  relayer.** Anchor's `init` then tops the address up with a System transfer from the payer, and the
-  relayer's `kora.toml` lets its key create accounts, never transfer SOL. Kora 2.0.5 refused exactly
-  this path on a local validator with the earlier version of this program, whose `init` was the
-  same. It needs the market stamp before its row exists, which only a sent proof shows. Any other
-  payer still registers it, and what was sent counts toward the deposit
-  (`lamports_sent_to_a_row_address_first_do_not_block_it`).
+  on it, that narrows who they could be. Apps prove against an issuer's newest list.
+- **A fee payer whose policy forbids transfers from its key cannot register a pre-funded address.**
+  When a row's address holds lamports below the row's minimum, Anchor's `init` tops it up with a
+  System transfer from the payer. Funding it first needs the market stamp before its row exists,
+  which only a sent proof shows. Any other payer still registers it, and what was sent counts
+  toward the deposit (`lamports_sent_to_a_row_address_first_do_not_block_it`).
 - **A refund to a payer holding no SOL waits.** The runtime refuses to leave a system account below
   its own rent minimum, so a small refund to an emptied payer is refused until it holds some SOL
   again (`finding_a_refund_to_a_payer_holding_no_sol_fails_until_someone_funds_it`). The excess
   stays in the row meanwhile.
-- **Whoever pays is recorded.** When a relayer sends `register`, refunds go to it, not to the person.
+- **Whoever pays is recorded.** When a fee payer pays for `register`, refunds go to it, not to the
+  person.
 - **The placeholder program id.** The source names `FoRRegistryRows…1111`, which nobody holds a key
   for; every deploy substitutes its own (`devnet/deploy.sh` in this folder).
 - **Not audited.** No paid review has happened.

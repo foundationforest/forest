@@ -31,7 +31,7 @@ fn expect_err(result: Result<litesvm::types::TransactionMetadata, String>, what:
 
 /// Send `args` as `p`'s profile, signed by it, paid by the harness.
 fn send_args(h: &mut Harness, p: &FixtureProof, args: &Args) -> Result<litesvm::types::TransactionMetadata, String> {
-    let key = p.profile_key();
+    let key = p.main_key();
     let ix = register_ix(h.payer.pubkey(), key.pubkey(), args);
     h.send(&[ix], &[&key])
 }
@@ -96,7 +96,7 @@ fn proof_every_single_bit_flip_in_the_points_is_refused() {
 fn a_label_that_is_not_utf8_is_refused() {
     let (mut h, f) = ready();
     let a = f.proof("alice-tutoring-A");
-    let key = a.profile_key();
+    let key = a.main_key();
     let mut ix = register_ix(h.payer.pubkey(), key.pubkey(), &a.args());
     ix.data[REGISTER_LABEL_AT] = 0xff;
     expect_err(h.send(&[ix], &[&key]), "invalid UTF-8", &["InstructionDidNotDeserialize"]);
@@ -111,7 +111,7 @@ fn a_label_that_is_not_utf8_is_refused() {
 fn replay_one_market_stamp_twice_in_one_transaction_reverts_both() {
     let (mut h, f) = ready();
     let a = f.proof("alice-tutoring-A");
-    let key = a.profile_key();
+    let key = a.main_key();
     let ix = register_ix(h.payer.pubkey(), key.pubkey(), &a.args());
     expect_err(h.send(&[ix.clone(), ix], &[&key]), "twice in one transaction", &["already in use"]);
     assert!(!h.exists(&a.row_address()), "not even the first one");
@@ -137,7 +137,7 @@ fn lamports_sent_to_a_row_address_first_do_not_block_it() {
 
 #[test]
 fn finding_a_proof_in_flight_cannot_be_stolen_and_a_whole_transaction_only_lands_as_sent() {
-    // A proof is public once sent. Whoever copies Alice's proof needs her profile's signature to
+    // A proof is public once sent. Whoever copies Alice's proof needs her main key's signature to
     // land it on her profile, and cannot land it on their own: the proof names hers. Her whole
     // signed transaction, rebroadcast, lands exactly as she sent it, and only once.
     let (mut h, f) = ready();
@@ -145,7 +145,7 @@ fn finding_a_proof_in_flight_cannot_be_stolen_and_a_whole_transaction_only_lands
     let thief = h.funded(1_000_000_000);
     expect_err(h.send_as(&thief, &[register_ix(thief.pubkey(), thief.pubkey(), &a.args())]), "under the thief's profile", &["ProofRejected"]);
 
-    let key = a.profile_key();
+    let key = a.main_key();
     h.svm.expire_blockhash();
     let msg = solana_message::Message::new(&[register_ix(h.payer.pubkey(), key.pubkey(), &a.args())], Some(&h.payer.pubkey()));
     let tx = solana_transaction::Transaction::new(&[&h.payer, &key], msg, h.svm.latest_blockhash());
@@ -164,7 +164,7 @@ fn finding_a_proof_in_flight_cannot_be_stolen_and_a_whole_transaction_only_lands
 fn substitution_every_account() {
     let (mut h, f) = ready();
     let a = f.proof("alice-tutoring-A");
-    let key = a.profile_key();
+    let key = a.main_key();
     let wrong_row = row_address(&[1u8; 32]);
     let not_a_pda = Keypair::new().pubkey();
     let fake_system = Keypair::new().pubkey();
@@ -223,15 +223,15 @@ fn an_account_of_the_registry_that_is_not_a_row_is_refused() {
 }
 
 #[test]
-fn finding_the_program_takes_any_32_bytes_as_a_keeper() {
-    // The program does not check that a keeper is a usable ed25519 key, or that it signed: readers
-    // do. The all-zero keeper with an all-zero signature lands; no reader accepts it.
+fn finding_the_program_takes_any_32_bytes_as_an_issuer() {
+    // The program does not check that an issuer is a usable ed25519 key, or that it signed: readers
+    // do. The all-zero issuer with an all-zero signature lands; no reader accepts it.
     let (mut h, f) = ready();
     let a = f.proof("bob-tutoring-A");
-    let args = Args { keeper: Address::new_from_array([0u8; 32]), keeper_signature: [0u8; 64], ..a.args() };
+    let args = Args { issuer: Address::new_from_array([0u8; 32]), issuer_signature: [0u8; 64], ..a.args() };
     send_args(&mut h, a, &args).expect("stored as given");
-    assert_eq!(h.row(&a.market_stamp()).keeper, Address::new_from_array([0u8; 32]));
-    println!("finding: any 32 bytes can be a row's keeper; readers check the keeper and its signature");
+    assert_eq!(h.row(&a.market_stamp()).issuer, Address::new_from_array([0u8; 32]));
+    println!("finding: any 32 bytes can be a row's issuer; readers check the issuer and its signature");
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -22,7 +22,7 @@ import { Keypair, PublicKey } from '@solana/web3.js'
 
 import { listSecret, profileKey } from '../../../keys/src/index.ts'
 import { MESSAGE_NS, SCOPE_NS, toBytes32 } from '../src/field.ts'
-import { rootBytes } from '../src/keeper.ts'
+import { rootBytes } from '../src/issuer.ts'
 import { ROW_DISCRIMINATOR, refundIx, registerIx, rowAddress, rowSpace } from '../src/program.ts'
 import { listRoot, proveStamp } from '../src/proof.ts'
 import { stampOf } from '../src/stamp.ts'
@@ -41,19 +41,20 @@ const sha256File = (p: string) => createHash('sha256').update(readFileSync(p)).d
 const seedOf = (name: string) => sha256(new TextEncoder().encode(`forest registry fixture: ${name}`))
 const fixtureKey = (name: string) => Keypair.fromSeed(seedOf(name))
 
-// Two keepers, each with its own list.
-const keepers = { A: fixtureKey('keeper A'), B: fixtureKey('keeper B') }
-type List = keyof typeof keepers
+// Two issuers, each with its own list. Their names still say `keeper`: a name is its key's seed,
+// and a new name would make new keys and so every proof here new.
+const issuers = { A: fixtureKey('keeper A'), B: fixtureKey('keeper B') }
+type List = keyof typeof issuers
 
 // Alice is the test person: keys/'s pinned test seed (keys/test/vectors.json). Her secret for each
-// list comes from it and the keeper's address, and her two profiles are its tutoring/seller and
+// list comes from it and the issuer's address, and her two profiles are its tutoring/seller and
 // tutoring/buyer profiles, all through `keys/` itself. Bob and Carol are plain bytes, on one list
-// each, with fixed profile keys: the registry does not care how a profile key was made.
+// each, with fixed main keys: the registry does not care how a main key was made.
 const keysVectors = JSON.parse(readFileSync(join(here, '../../../keys/test/vectors.json'), 'utf8'))
 const seed = Buffer.from(keysVectors.seed, 'hex')
 const secrets = {
-  'alice on A': (await listSecret(seed, keepers.A.publicKey.toBase58())).secret,
-  'alice on B': (await listSecret(seed, keepers.B.publicKey.toBase58())).secret,
+  'alice on A': (await listSecret(seed, issuers.A.publicKey.toBase58())).secret,
+  'alice on B': (await listSecret(seed, issuers.B.publicKey.toBase58())).secret,
   'bob on A': Buffer.from('forest registry fixture: bob on A'),
   'carol on B': Buffer.from('forest registry fixture: carol on B'),
 }
@@ -75,7 +76,7 @@ const labels = { tutoring: 'tutoring/seller', cleaning: 'cleaning/seller' }
 const longest = ['c'.repeat(42), 'm'.repeat(42), 'r'.repeat(42)].join('/')
 if (Buffer.byteLength(longest) !== 128) throw new Error('the longest label is not 128 bytes')
 
-// Each keeper's published list. A holds Alice and Bob with strangers between them, so nobody is
+// Each issuer's published list. A holds Alice and Bob with strangers between them, so nobody is
 // at index 0 or the end; B holds Carol and Alice.
 const filler = (n: number) => stampOf(Buffer.from(`forest registry fixture: filler ${n}`))
 const lists: Record<List, bigint[]> = {
@@ -83,14 +84,14 @@ const lists: Record<List, bigint[]> = {
   B: [filler(4), stampOf(secrets['carol on B']), filler(5), stampOf(secrets['alice on B'])],
 }
 const signatures = Object.fromEntries(
-  (Object.keys(keepers) as List[]).map((l) => [l, ed25519.sign(rootBytes(listRoot(lists[l])), seedOf(`keeper ${l}`))]),
+  (Object.keys(issuers) as List[]).map((l) => [l, ed25519.sign(rootBytes(listRoot(lists[l])), seedOf(`keeper ${l}`))]),
 ) as Record<List, Uint8Array>
 
 const cases: { name: string; who: Who; profile: Profile; label: string; list: List }[] = [
   { name: 'alice-tutoring-A', who: 'alice on A', profile: 'alice', label: labels.tutoring, list: 'A' },
   // The same person, list and label for a second profile: the same market stamp, so one row only.
   { name: 'alice-tutoring-A-second-profile', who: 'alice on A', profile: 'alice 2', label: labels.tutoring, list: 'A' },
-  // The second profile under the same label through another keeper: another market stamp.
+  // The second profile under the same label through another issuer: another market stamp.
   { name: 'alice-tutoring-B', who: 'alice on B', profile: 'alice 2', label: labels.tutoring, list: 'B' },
   { name: 'alice-cleaning-A', who: 'alice on A', profile: 'alice', label: labels.cleaning, list: 'A' },
   { name: 'bob-tutoring-A', who: 'bob on A', profile: 'bob', label: labels.tutoring, list: 'A' },
@@ -101,12 +102,12 @@ const cases: { name: string; who: Who; profile: Profile; label: string; list: Li
 type FixtureProof = {
   name: string
   list: List
-  keeper: string
+  issuer: string
   label: string
   profile: string
   profileSeed: string
   root: string
-  keeperSignature: string
+  issuerSignature: string
   marketStamp: string
   scope: string
   message: string
@@ -126,12 +127,12 @@ for (const c of cases) {
   proofs.push({
     name: c.name,
     list: c.list,
-    keeper: keepers[c.list].publicKey.toBase58(),
+    issuer: issuers[c.list].publicKey.toBase58(),
     label: c.label,
     profile: profile.publicKey.toBase58(),
     profileSeed: hex(profileSeeds[c.profile]),
     root: hex(toBytes32(p.root)),
-    keeperSignature: hex(signatures[c.list]),
+    issuerSignature: hex(signatures[c.list]),
     marketStamp: hex(toBytes32(p.marketStamp)),
     scope: hex(toBytes32(p.scope)),
     message: hex(toBytes32(p.message)),
@@ -168,9 +169,9 @@ const register = registerIx({
   profile,
   label: first.label,
   marketStamp,
-  keeper: keepers.A.publicKey,
+  issuer: issuers.A.publicKey,
   root: Buffer.from(first.root, 'hex'),
-  keeperSignature: Buffer.from(first.keeperSignature, 'hex'),
+  issuerSignature: Buffer.from(first.issuerSignature, 'hex'),
   proof: { a: Buffer.from(first.a, 'hex'), b: Buffer.from(first.b, 'hex'), c: Buffer.from(first.c, 'hex') },
   payer: payer.publicKey,
 })
@@ -181,9 +182,9 @@ const bump = PublicKey.findProgramAddressSync([Buffer.from('row'), marketStamp],
 const rowBytes = Buffer.concat([
   ROW_DISCRIMINATOR,
   profile.toBytes(),
-  keepers.A.publicKey.toBytes(),
+  issuers.A.publicKey.toBytes(),
   Buffer.from(first.root, 'hex'),
-  Buffer.from(first.keeperSignature, 'hex'),
+  Buffer.from(first.issuerSignature, 'hex'),
   payer.publicKey.toBytes(),
   Buffer.from([bump]),
   Buffer.from(Uint32Array.of(label.length).buffer),
@@ -201,8 +202,8 @@ const out = {
   },
   scopeNamespace: SCOPE_NS,
   messageNamespace: MESSAGE_NS,
-  messageLayout: 'keccak256(messageNamespace || profile key (32 bytes)) >> 8',
-  keepers: Object.fromEntries((Object.keys(keepers) as List[]).map((l) => [l, keepers[l].publicKey.toBase58()])),
+  messageLayout: 'keccak256(messageNamespace || main key (32 bytes)) >> 8',
+  issuers: Object.fromEntries((Object.keys(issuers) as List[]).map((l) => [l, issuers[l].publicKey.toBase58()])),
   lists: { A: lists.A.map(String), B: lists.B.map(String) },
   proofs,
   wire: {

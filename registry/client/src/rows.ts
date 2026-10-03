@@ -37,17 +37,17 @@ export async function fetchRow(
 }
 
 /**
- * Every row, or every row of one profile, one keeper or one label: each a filter on the row's
+ * Every row, or every row of one profile, one issuer or one label: each a filter on the row's
  * bytes at a fixed offset, so the RPC does the filtering.
  */
 export async function fetchRows(
   connection: Pick<Connection, 'getProgramAccounts'>,
-  options: { profile?: PublicKey; keeper?: PublicKey; label?: string; programId?: PublicKey; commitment?: Commitment } = {},
+  options: { profile?: PublicKey; issuer?: PublicKey; label?: string; programId?: PublicKey; commitment?: Commitment } = {},
 ): Promise<{ address: PublicKey; row: Row }[]> {
   const programId = options.programId ?? PROGRAM_ID
   const filters: { memcmp: { offset: number; bytes: string } }[] = [{ memcmp: { offset: 0, bytes: base58(ROW_DISCRIMINATOR) } }]
   if (options.profile) filters.push({ memcmp: { offset: ROW_OFFSET.profile, bytes: base58(keyBytes(options.profile)) } })
-  if (options.keeper) filters.push({ memcmp: { offset: ROW_OFFSET.keeper, bytes: base58(keyBytes(options.keeper)) } })
+  if (options.issuer) filters.push({ memcmp: { offset: ROW_OFFSET.issuer, bytes: base58(keyBytes(options.issuer)) } })
   if (options.label !== undefined) {
     // The label's length and its bytes, so `tutoring/seller` never matches `tutoring/sellers`. An
     // RPC compares at most 128 bytes, so a longer label is cut there and checked exactly below.
