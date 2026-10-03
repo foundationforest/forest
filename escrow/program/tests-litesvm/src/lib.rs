@@ -827,7 +827,7 @@ pub struct Harness {
     /// The program that owns the mint.
     pub token_program: Address,
     pub decimals: u8,
-    /// The mint's issuer, for a Token-2022 mint: the keys behind its authorities.
+    /// The token's maker, for a Token-2022 mint: the keys behind its authorities.
     pub issuer: Option<Issuer>,
     /// The account the buyer pays from: one it owns, but not its standard account. Payouts never
     /// land here; they land at the refund address (`refund()`), which the harness makes empty.

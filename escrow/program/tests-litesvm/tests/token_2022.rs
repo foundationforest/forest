@@ -1,7 +1,7 @@
 //! Token-2022: a mint made with every extension Open USD has on mainnet (`src/token_2022.rs`),
 //! through every way into and out of an escrow, with its transfer hook naming no program (as Open
-//! USD has it) and naming one; the issuer's powers, used as an issuer would; and the refusals: a
-//! mint with a transfer fee, and a token program or an account that is not the mint's.
+//! USD has it) and naming one; the powers of the dollar's maker, used as a maker would; and the
+//! refusals: a mint with a transfer fee, and a token program or an account that is not the mint's.
 
 use forest_escrow_tests::*;
 use solana_address::Address;
@@ -353,10 +353,10 @@ fn the_escrow_hands_the_token_program_no_signature_but_its_own() {
 
 #[test]
 fn a_hook_that_asks_for_a_signature_gets_none() {
-    // The issuer's list names the seller as a signer. SPL's resolver drops the flag, so a client
-    // following it passes the seller as a plain account; a client that marks it signing anyway,
-    // with the seller signing the split, still hands the hook nothing: the escrow forwards it
-    // without the signature, and the hook, which refuses any signer, lets the split through.
+    // The list the dollar's maker set names the seller as a signer. SPL's resolver drops the flag,
+    // so a client following it passes the seller as a plain account; a client that marks it signing
+    // anyway, with the seller signing the split, still hands the hook nothing: the escrow forwards
+    // it without the signature, and the hook, which refuses any signer, lets the split through.
     let mut h = Harness::open_usd(HookProgram::Test);
     let seller = h.seller.insecure_clone();
     let buyer = h.buyer.insecure_clone();
@@ -506,7 +506,7 @@ fn a_transfer_fee_mint_is_refused_at_create() {
 
 #[test]
 fn a_non_transferable_mint_is_refused_at_create() {
-    // Nothing could be paid into its deposit account, and what its issuer minted there could
+    // Nothing could be paid into its deposit account, and what the token's maker minted there could
     // never leave: the escrow and both rents would be stuck.
     let mut h = Harness::open_usd(HookProgram::None);
     let buyer = h.buyer.insecure_clone();
@@ -528,7 +528,7 @@ fn interest_bearing_and_scaled_mints_deal_in_raw_amounts_and_only_their_display_
         let t = Terms { timer: Some(Timer { days: 30, to: Side::Seller }), ..h.terms(1) };
         let escrow = h.marked(&t);
         let before = shown(&mut h, AMOUNT);
-        // A year passes, or the issuer changes the scale: what the amount shows moves.
+        // A year passes, or the token's maker changes the scale: what the amount shows moves.
         h.advance(365 * DAY);
         if let OneExtension::ScaledUiAmount(_) = extension {
             let ix = spl_token_2022_interface::extension::scaled_ui_amount::instruction::update_multiplier(
@@ -540,7 +540,7 @@ fn interest_bearing_and_scaled_mints_deal_in_raw_amounts_and_only_their_display_
                 0,
             )
             .unwrap();
-            h.send(&[ix], &[&authority]).expect("the issuer rescales");
+            h.send(&[ix], &[&authority]).expect("the token's maker rescales");
         }
         let after = shown(&mut h, AMOUNT);
         assert_ne!(before, after, "{extension:?}: the display drifted ({before} to {after})");

@@ -839,8 +839,9 @@ fn finding_a_reused_deposit_address_adopts_a_stranger_buyers_money() {
 #[test]
 fn finding_a_frozen_deposit_account_blocks_every_way_out() {
     // The checklist reasons that freezing the deposit account stops every way out, since each moves
-    // tokens out of it; only the buyer's account had been frozen in a test. Here the deposit account
-    // itself is frozen: no way out runs until it is thawed. USDC's issuer holds this freeze authority.
+    // tokens out of it; only the buyer's account had been frozen in a test. Here the deposit
+    // account itself is frozen: no way out runs until it is thawed. USDC's maker holds this freeze
+    // authority.
     let mut h = Harness::new();
     let t = Terms { arbiter: Some(h.arbiter.pubkey()), timer: Some(Timer { days: 1, to: Side::Seller }), ..h.terms(1) };
     let escrow = h.marked(&t);

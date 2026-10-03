@@ -13,8 +13,8 @@
 // 3. A Token-2022 mint with every extension Open USD has on mainnet (mint close authority,
 //    permanent delegate, default account state, confidential transfers, a transfer hook naming no
 //    program, a metadata pointer, pause, metadata; and a freeze authority), the payer key holding
-//    every issuer role, and three of it minted to the buyer. Then deals 1 and 2 again in it, so
-//    a one tap and both payouts of a split cross Token-2022.
+//    every role of the dollar's maker, and three of it minted to the buyer. Then deals 1 and 2
+//    again in it, so a one tap and both payouts of a split cross Token-2022.
 // 4. After the upgrade in place that refuses a non-transferable mint: deal 1 once more in the
 //    Token-2022 dollar (the buyer topped up to one if it holds less), and a non-transferable
 //    Token-2022 mint made there, its `create` simulated, which must fail with `NonTransferable`.
@@ -305,7 +305,7 @@ function initializePausableIx(mint: PublicKey, authority: PublicKey): Transactio
 /** Open USD's extension types on mainnet, in order: close authority, permanent delegate, default account state, confidential transfer mint, transfer hook, metadata pointer, pausable, token metadata. */
 const OPEN_USD_EXTENSIONS = [3, 12, 6, 4, 14, 18, 26, 19]
 
-/** Deal 3's mint: made once with Open USD's extensions, the payer holding every issuer role; three of it for the buyer. */
+/** Deal 3's mint: made once with Open USD's extensions, the payer holding every role of the dollar's maker; three of it for the buyer. */
 async function openUsdShaped(): Promise<Token> {
   const file = join(keysDir!, 'open-usd-shaped-mint.json')
   if (!existsSync(file)) writeFileSync(file, JSON.stringify([...Keypair.generate().secretKey]), { mode: 0o600 })
@@ -313,7 +313,7 @@ async function openUsdShaped(): Promise<Token> {
   const mint = mintKey.publicKey
   const issuer = payer.publicKey
   record.openUsdShaped ??= {
-    what: 'A Token-2022 mint with every extension Open USD (ousd2mJsPEckLHcSCDxyKD7NDGARZcfLbDZkKiatYHB) has on mainnet, in its order, six decimals, the devnet payer key holding every issuer role; three of it minted to the buyer.',
+    what: "A Token-2022 mint with every extension Open USD (ousd2mJsPEckLHcSCDxyKD7NDGARZcfLbDZkKiatYHB) has on mainnet, in its order, six decimals, the devnet payer key holding every role of the dollar's maker; three of it minted to the buyer.",
     mint: mint.toBase58(),
     issuer: issuer.toBase58(),
     signatures: {},

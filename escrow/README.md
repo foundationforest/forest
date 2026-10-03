@@ -6,13 +6,14 @@ Up: [the repo](../README.md). Down: the [security checklist](security-checklist.
 
 ## What it is
 
-A program the foundation offers, and its client; use any escrow. An escrow holds an amount of one
-token between two keys, a buyer and a seller, and lets it out only when both sides agree, or by an
-arbiter or a timer that was in the escrow from the start. Either side can object, which turns the
-timer off. Every escrow that held the money leaves a receipt at its address, for good.
+A program Forest offers, and its client; use any escrow. Forest offers one per chain, on Solana only
+for now. An escrow holds an amount of one token between two keys, a buyer and a seller, and lets it
+out only when both sides agree, or by an arbiter or a timer that was in the escrow from the start.
+Either side can object, which turns the timer off. Every escrow that held the money leaves a receipt
+at its address, for good.
 
-Each version is to be sealed on mainnet the day it deploys, because it holds money. A new version
-comes as a new program at a new address, and the old ones keep working.
+Each version is to be sealed on mainnet the day it deploys, because it holds money. There, a new
+version comes as a new program at a new address, never an upgrade, and the old ones keep working.
 
 - `program/`: the program (Anchor 1.2), its LiteSVM tests and its fuzzer.
 - `client/`: builds every instruction and reads every account and event. It talks to no network of
@@ -134,7 +135,7 @@ What the app decides, because the program does not know:
 - **The amount** is the app multiplying per hour, per day or per job before creation: one escrow per
   payment. **The id** is any 64-bit number the creator has not used (`randomId()`).
 - **Make the deposit address first** when paying in the same transaction as `create`
-  (`createAndFund` and the one-tap builders do), so a relayer that checks every transfer's
+  (`createAndFund` and the one-tap builders do), so a fee payer that checks every transfer's
   destination before it signs finds it made. Make the seller's standard account first if the seller
   may not hold the token yet.
 - **Mark the funding** only if there is a timer: it counts from the mark, and only the side it
@@ -145,8 +146,8 @@ What the app decides, because the program does not know:
   transaction (`hookAccounts`), since the dollar's maker can change the program at any time, and
   pass them to each way out and to the payment in. A payment in a Token-2022 dollar must be a
   `transfer_checked`.
-- **Who fronts the rent.** Whoever signs `create` as payer is recorded and gets the sweep. A
-  relayer that fronts it keeps what Solana's rent cuts free later.
+- **Who fronts the rent.** Whoever fronts the rent signs as payer and gets what Solana's rent cuts
+  free later; a fee payer that fronts it charged only the cost. Registry rows follow the same rule.
 - **A pay link.** The client builds none. A Solana Pay recipient is the escrow's own address, and
   an invoice's escrow is `escrowAddress(seller, id)`.
 
@@ -338,8 +339,9 @@ records who created it instead.
 else. It is checked by address alone, so a side that hands that account to another key blocks no
 way out.
 
-**Can Forest, an app or a relayer move the money?** No. There is no admin and no fee, and on mainnet
-the program will be sealed the day it deploys. On devnet the deploy key can still upgrade it.
+**Can Forest, an app or a fee payer move the money?** No. There is no admin and no fee, and on
+mainnet the program will be sealed the day it deploys. On devnet the deploy key can still upgrade
+it.
 
 **Who gets the rent back?** The creator gets the deposit account's at every ending, and both rents
 of an escrow that never held the money. The payer gets what the receipt holds above its minimum.
