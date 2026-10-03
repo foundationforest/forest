@@ -1,25 +1,40 @@
-// Talking to hosts over HTTP: publish records, read them back. Every record read is checked
-// here, whatever host it came from: a reader trusts no host.
+// Talking to hosts over HTTP: publish records and read them back; deliver messages and pull your
+// own; put and get blobs. Every record and message read is checked here, and every blob's bytes
+// hashed, whatever host they came from: a reader trusts no host.
+//
+// How many lines a request or a page holds is each host's choice, and this handles any: a request
+// a host finds too big is sent again in halves, and a page is read line by line, however long.
 
+import { sha256 } from '@noble/hashes/sha2.js'
+import { concat, hex } from './bytes.ts'
+import { canonical } from './canonical.ts'
 import type { ReadOptions, Result } from './host.ts'
-import { type Checked, RecordError, type SignedRecord, decodeRecord, encodeRecord } from './record.ts'
+import { type CheckedMessage, MAX_MESSAGE_BYTES, type SignedMessage, type SignedPull, decodeMessage, encodeMessage } from './message.ts'
+import { type Checked, MAX_RECORD_BYTES, RecordError, type SignedRecord, decodeRecord, encodeRecord } from './record.ts'
 import { type View, viewProfile } from './view.ts'
 
 export type PublishOutcome = { host: string; status: number; results: Result[]; error?: string }
 
-/** Send records to each host; one request per host. A host that fails does not stop the others. */
+/** A read that has not finished by then is given up. */
+export const READ_TIMEOUT_MS = 60_000
+/** The largest blob a reader takes unless told otherwise: the largest the record shapes name. */
+export const MAX_BLOB_READ = 50_000_000
+
+/** Send records to each host. A host that fails does not stop the others. */
 export async function publish(hosts: string[], records: SignedRecord[]): Promise<PublishOutcome[]> {
-  const body = records.map((r) => encodeRecord(r) + '\n').join('')
+  return post(hosts, '/v1/records', records.map(encodeRecord))
+}
+
+/** Deliver messages to each host: each of the recipient's hosts, as its hosts record names them. */
+export async function deliver(hosts: string[], messages: SignedMessage[]): Promise<PublishOutcome[]> {
+  return post(hosts, '/v1/inbox', messages.map(encodeMessage))
+}
+
+async function post(hosts: string[], path: string, lines: string[]): Promise<PublishOutcome[]> {
   return Promise.all(
     hosts.map(async (host): Promise<PublishOutcome> => {
       try {
-        const res = await fetch(`${host}/v1/records`, { method: 'POST', headers: { 'content-type': 'application/x-ndjson' }, body })
-        const text = await res.text()
-        const results = text
-          .split('\n')
-          .filter((l) => l)
-          .map((l) => JSON.parse(l) as Result)
-        return { host, status: res.status, results }
+        return { host, ...(await postLines(`${host}${path}`, lines)) }
       } catch (err) {
         return { host, status: 0, results: [], error: (err as Error).message }
       }
@@ -27,17 +42,27 @@ export async function publish(hosts: string[], records: SignedRecord[]): Promise
   )
 }
 
-export type Page = { records: Checked[]; cursor: number; refused: Array<{ line: string; reason: string }> }
+/** One request; if the host finds it too big (413, or one `batch` refusal), each half again, down to one line. */
+async function postLines(url: string, lines: string[]): Promise<{ status: number; results: Result[] }> {
+  const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/x-ndjson' }, body: lines.map((l) => l + '\n').join('') })
+  const results = (await res.text())
+    .split('\n')
+    .filter((l) => l)
+    .map((l) => JSON.parse(l) as Result)
+  const tooBig = res.status === 413 || (results.length === 1 && results[0]!.error === 'batch')
+  if (!tooBig || lines.length < 2) return { status: res.status, results }
+  const half = Math.ceil(lines.length / 2)
+  const first = await postLines(url, lines.slice(0, half))
+  const second = await postLines(url, lines.slice(half))
+  return { status: first.status !== 200 ? first.status : second.status, results: [...first.results, ...second.results.map((r) => ({ ...r, i: r.i + half }))] }
+}
 
-/** The largest page a reader takes, and a host serves. */
-export const MAX_PAGE_BYTES = 4 * 1024 * 1024
-/** A read that has not finished by then is given up. */
-export const READ_TIMEOUT_MS = 60_000
+export type Page = { records: Checked[]; cursor: number; refused: Array<{ line: string; reason: string }> }
 
 /**
  * One page of what a host stores, after a cursor, in the order it took them, each record checked.
- * It throws on a page over MAX_PAGE_BYTES, or one not read within `timeout` ms (READ_TIMEOUT_MS
- * when omitted).
+ * A page may be any length; a line longer than a record can be is refused unread. It throws on a
+ * page not read within `timeout` ms (READ_TIMEOUT_MS when omitted).
  */
 export async function readPage(host: string, options: ReadOptions & { timeout?: number } = {}): Promise<Page> {
   const query = new URLSearchParams()
@@ -46,38 +71,61 @@ export async function readPage(host: string, options: ReadOptions & { timeout?: 
   const res = await fetch(`${host}/v1/records?${query}`, { signal: AbortSignal.timeout(options.timeout ?? READ_TIMEOUT_MS) })
   if (!res.ok) throw new Error(`${host} answered ${res.status}`)
   const cursor = Number.parseInt(res.headers.get('forest-cursor') ?? '0', 10)
-  const text = await readText(res, MAX_PAGE_BYTES)
-  if (text === null) throw new Error(`${host} served a page over ${MAX_PAGE_BYTES} bytes`)
   const records: Checked[] = []
   const refused: Page['refused'] = []
-  for (const line of text.split('\n')) {
-    if (!line) continue
+  for await (const line of readLines(res, MAX_RECORD_BYTES)) {
     try {
+      if (line === null) throw new RecordError('size', 'longer than a record can be')
       records.push(decodeRecord(line))
     } catch (err) {
-      refused.push({ line, reason: err instanceof RecordError ? err.code : 'invalid' })
+      refused.push({ line: line ?? '', reason: err instanceof RecordError ? err.code : 'invalid' })
     }
   }
   return { records, cursor, refused }
 }
 
-/** A response's text, or null as soon as it passes `max` bytes. */
-async function readText(res: Response, max: number): Promise<string | null> {
-  if (!res.body) return ''
+/**
+ * A response's lines, as they arrive, so a page of any length is read without holding more than a
+ * line. A line over `max` bytes is not held: it comes out as null.
+ */
+async function* readLines(res: Response, max: number): AsyncGenerator<string | null> {
+  if (!res.body) return
   const reader = res.body.getReader()
   const decoder = new TextDecoder()
-  let text = ''
+  let parts: Uint8Array[] = []
   let size = 0
+  let over = false
+  const take = (piece: Uint8Array) => {
+    if (over) return
+    if (size + piece.length > max) {
+      over = true
+      parts = []
+    } else {
+      parts.push(piece)
+      size += piece.length
+    }
+  }
+  const finish = (): string | null | undefined => {
+    const line = over ? null : size ? decoder.decode(Buffer.concat(parts)) : undefined
+    parts = []
+    size = 0
+    over = false
+    return line
+  }
   for (;;) {
     const { done, value } = await reader.read()
-    if (done) return text + decoder.decode()
-    size += value.length
-    if (size > max) {
-      await reader.cancel()
-      return null
+    if (done) break
+    let start = 0
+    for (let at = value.indexOf(10); at !== -1; at = value.indexOf(10, start)) {
+      take(value.subarray(start, at))
+      const line = finish()
+      if (line !== undefined) yield line
+      start = at + 1
     }
-    text += decoder.decode(value, { stream: true })
+    take(value.subarray(start))
   }
+  const last = finish()
+  if (last !== undefined) yield last
 }
 
 /** Everything a host stores (for one profile, if asked), page by page. */
@@ -111,4 +159,95 @@ export async function readProfile(hosts: string[], profile: string, now: number)
     next = viewProfile(profile, found, now).hosts.filter((h) => !read.has(h))
   }
   return viewProfile(profile, found, now)
+}
+
+export type MessagePage = { messages: CheckedMessage[]; cursor: number; refused: Array<{ line: string; reason: string }> }
+
+/**
+ * One page of a profile's inbox on one host. `request` is pullRequest(owner, after, now): the
+ * profile's main key signs each pull. Each message is checked, and one not to that profile is
+ * refused. It throws a RecordError with the host's code (stale, signature, ...) when the host
+ * refuses the pull, and on a page not read within `timeout` ms.
+ */
+export async function pull(host: string, request: SignedPull, options: { timeout?: number } = {}): Promise<MessagePage> {
+  const res = await fetch(`${host}/v1/inbox/pull`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: canonical(request), signal: AbortSignal.timeout(options.timeout ?? READ_TIMEOUT_MS) })
+  if (!res.ok) {
+    const why = (await res.json().catch(() => ({}))) as { error?: string; message?: string }
+    throw new RecordError(why.error ?? 'host', `${host} answered ${res.status}${why.message ? `: ${why.message}` : ''}`)
+  }
+  const cursor = Number.parseInt(res.headers.get('forest-cursor') ?? '0', 10)
+  const messages: CheckedMessage[] = []
+  const refused: MessagePage['refused'] = []
+  for await (const line of readLines(res, MAX_MESSAGE_BYTES)) {
+    try {
+      if (line === null) throw new RecordError('size', 'longer than a message can be')
+      const checked = decodeMessage(line)
+      if (checked.message.to !== request.profile) throw new RecordError('to', 'not to this profile')
+      messages.push(checked)
+    } catch (err) {
+      refused.push({ line: line ?? '', reason: err instanceof RecordError ? err.code : 'invalid' })
+    }
+  }
+  return { messages, cursor, refused }
+}
+
+export type BlobOutcome = { host: string; status: number; ok: boolean; error?: string; message?: string }
+
+/**
+ * Put bytes on each host, named by their SHA-256, as `type`: post the record that names them
+ * first, with this hash and this type, or a host refuses them as unnamed.
+ */
+export async function putBlob(hosts: string[], bytes: Uint8Array, type: string): Promise<BlobOutcome[]> {
+  const name = hex.encode(sha256(bytes))
+  return Promise.all(
+    hosts.map(async (host): Promise<BlobOutcome> => {
+      try {
+        const res = await fetch(`${host}/v1/blobs/${name}`, { method: 'PUT', headers: { 'content-type': type }, body: new Uint8Array(bytes) })
+        const answer = (await res.json().catch(() => ({ ok: false }))) as Omit<BlobOutcome, 'host' | 'status'>
+        return { host, status: res.status, ...answer, ok: res.ok && answer.ok }
+      } catch (err) {
+        return { host, status: 0, ok: false, error: 'unreachable', message: (err as Error).message }
+      }
+    }),
+  )
+}
+
+/**
+ * The bytes a record names by `sha256`, from the first of its hosts that serves bytes with that
+ * hash; null if none does. A host that serves other bytes, or more than `maxBytes`
+ * (MAX_BLOB_READ when omitted), is skipped.
+ */
+export async function getBlob(hosts: string[], name: string, options: { maxBytes?: number; timeout?: number } = {}): Promise<{ host: string; bytes: Uint8Array; type: string } | null> {
+  for (const host of hosts) {
+    try {
+      const res = await fetch(`${host}/v1/blobs/${name}`, { signal: AbortSignal.timeout(options.timeout ?? READ_TIMEOUT_MS) })
+      if (!res.ok) {
+        await res.body?.cancel()
+        continue
+      }
+      const bytes = await readBytes(res, options.maxBytes ?? MAX_BLOB_READ)
+      if (bytes && hex.encode(sha256(bytes)) === name) return { host, bytes, type: res.headers.get('content-type') ?? '' }
+    } catch {
+      // The next host.
+    }
+  }
+  return null
+}
+
+/** A response's bytes, or null as soon as they pass `max`. */
+async function readBytes(res: Response, max: number): Promise<Uint8Array | null> {
+  if (!res.body) return new Uint8Array()
+  const reader = res.body.getReader()
+  const parts: Uint8Array[] = []
+  let size = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) return concat(...parts)
+    size += value.length
+    if (size > max) {
+      await reader.cancel()
+      return null
+    }
+    parts.push(value)
+  }
 }

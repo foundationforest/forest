@@ -3,7 +3,7 @@
 
 import { readFileSync } from 'node:fs'
 import { ed25519 } from '@noble/curves/ed25519.js'
-import { profileKey } from '../../keys/src/index.ts'
+import { mainKey } from '../../keys/src/index.ts'
 import { b64u, hex } from '../src/bytes.ts'
 import { canonical } from '../src/canonical.ts'
 import { keyFromPrivate, type Key } from '../src/keys.ts'
@@ -15,9 +15,9 @@ export const SEED = hex.decode(KEYS.seed)
 /** A second person. */
 export const OTHER_SEED = new Uint8Array(32).fill(7)
 
-export const alice = await profileKey(SEED, 'tutoring/seller')
-export const aliceBuyer = await profileKey(SEED, 'tutoring/buyer') // the same person, another label
-export const bob = await profileKey(OTHER_SEED, 'tutoring/buyer') // someone else
+export const alice = await mainKey(SEED, 'tutoring/seller')
+export const aliceBuyer = await mainKey(SEED, 'tutoring/buyer') // the same person, another label
+export const bob = await mainKey(OTHER_SEED, 'tutoring/buyer') // someone else
 /** An access key an app made: never the main key. */
 export const accessKey = keyFromPrivate(new Uint8Array(32).fill(42))
 export const stranger = keyFromPrivate(new Uint8Array(32).fill(99))

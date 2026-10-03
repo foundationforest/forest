@@ -9,6 +9,7 @@ import { Ajv2020 } from 'ajv/dist/2020.js'
 import formats from 'ajv-formats'
 import { checkValue } from '../src/canonical.ts'
 import { readingKey } from '../../keys/src/index.ts'
+import { inboxOf } from '../src/message.ts'
 import { checkRecord, decodeRecord, encodeRecord } from '../src/record.ts'
 import { ownerRecord } from '../src/write.ts'
 import { T0, alice, offerBody, profileBody, reviewBody } from './fixtures.ts'
@@ -148,6 +149,18 @@ describe('schemas', () => {
     assert.ok(fits('profile', edit('profile', ['read'], (await readingKey(alice.privateKey)).recipient)))
     assert.ok(fits('profile', edit('profile', ['read'], undefined)), 'optional')
     for (const bad of ['age1pq1' + 'q'.repeat(60), alice.address, 'AGE1' + 'Q'.repeat(58), 'age1' + 'b'.repeat(58)]) assert.ok(!fits('profile', edit('profile', ['read'], bad)), bad)
+  })
+
+  test('a profile’s inbox: open to anyone or to an issuer’s rows, once, a size; nothing else', () => {
+    for (const inbox of [{ senders: 'anyone' }, { senders: { issuer: alice.address } }, { senders: 'anyone', once: true, maxBytes: 4000 }]) {
+      assert.ok(fits('profile', edit('profile', ['inbox'], inbox)), JSON.stringify(inbox))
+      assert.ok(inboxOf(edit('profile', ['inbox'], inbox)) !== 'unsupported', 'and a host reads it')
+    }
+    assert.ok(fits('profile', edit('profile', ['inbox'], undefined)), 'optional: no field, no inbox')
+    for (const inbox of [{}, 'anyone', { senders: 'everyone' }, { senders: { issuer: 'x' } }, { senders: { issuer: alice.address, label: 'x' } }, { senders: { deposit: '5' } }, { senders: 'anyone', once: false }, { senders: 'anyone', maxBytes: -1 }, { senders: 'anyone', deposit: '5' }]) {
+      assert.ok(!fits('profile', edit('profile', ['inbox'], inbox)), JSON.stringify(inbox))
+      assert.equal(inboxOf(edit('profile', ['inbox'], inbox)), 'unsupported', 'and a host refuses deliveries to it')
+    }
   })
 
   test('a deal id is an escrow address or 32 bytes of lowercase hex', () => {
