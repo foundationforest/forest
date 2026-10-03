@@ -147,7 +147,8 @@ What the app decides, because the program does not know:
   pass them to each way out and to the payment in. A payment in a Token-2022 dollar must be a
   `transfer_checked`.
 - **Who fronts the rent.** Whoever fronts the rent signs as payer and gets what Solana's rent cuts
-  free later; a fee payer that fronts it charges only the cost. Registry rows follow the same rule.
+  free later; what a fee payer charges for fronting it is its own policy. Registry rows follow the
+  same rule.
 - **A pay link.** The client builds none. A Solana Pay recipient is the escrow's own address, and
   an invoice's escrow is `escrowAddress(seller, id)`.
 
