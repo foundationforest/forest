@@ -1,0 +1,5 @@
+node_modules/
+build/
+devnet/reputation.zkey
+devnet/reputation.wasm
+devnet/*.ptau

@@ -35,7 +35,7 @@ Every piece of Forest is sorted by that question.
 | | Two of it would mean | Pieces | Where |
 |---|---|---|---|
 | **Core** | two of you | the recipe that mixes keys from the seed; the registry | [`keys/`](keys/README.md), [`registry/`](registry/README.md) |
-| **Standards Forest offers** | anyone can offer another | records, the host socket (the six requests every host answers, for records, the inbox and blobs), the permissions record (which access keys may write in a folder), envelopes (how a record is made private), the inbox, the three shapes (profile, offer and review) | [`records/`](records/README.md); market names in [foundationforest/markets](https://github.com/foundationforest/markets) |
+| **Standards Forest offers** | anyone can offer another | records, the host socket (the six requests every host answers, for records, the inbox and blobs), the permissions record (which access keys may write in a folder), envelopes (how a record is made private), the inbox, the three shapes (profile, offer and review), the reputation proof and the tree an index publishes for it | [`records/`](records/README.md), [`circuits/`](circuits/README.md); market names in [foundationforest/markets](https://github.com/foundationforest/markets) |
 | **Services** | the foundation or Soil runs the first; anyone can run another | hosts, issuers, indexes, fee payers (who pay Solana's fee for someone else), escrows, connections (how an AI reads and drafts for a person) | [`escrow/`](escrow/README.md) and a reference host in `records/` here; the rest, and who runs which, in [foundationforest/services](https://github.com/foundationforest/services) |
 | **Apps** | the person picks one | the secure slot that holds the seed, and the screens | the first, by Soil, in [foundationforest/app](https://github.com/foundationforest/app), its own repo |
 | **The person** | up to them | the words, where they keep them, what they post | with them, in no repo |
@@ -57,7 +57,7 @@ service's policy, an app's choice, or the person's.
 - **An app** makes its choices with the person.
 - **The person** decides the rest.
 
-## The four pieces
+## The five pieces
 
 | Where | What it is | In the sort | Runs |
 |---|---|---|---|
@@ -65,6 +65,7 @@ service's policy, an app's choice, or the person's.
 | [`records/`](records/README.md) | Signed records, the host socket, the permissions record, envelopes for private records, the inbox, blobs, the three record shapes, and a reference host | standards; the reference host is a service | a library and a reference host |
 | [`registry/`](registry/README.md) | A program and its client: one row per market stamp, free | core | on devnet |
 | [`escrow/`](escrow/README.md) | A program and its client: money out when both sides agree, or by an arbiter or timer set at the start | a service; use any | on devnet |
+| [`circuits/`](circuits/README.md) | The proofs Forest offers: membership and reputation, and the tree an index publishes | a standard | on the person's device; the reputation circuit's setup is devnet only |
 
 Each piece's README is its standard: what it is, how it works, its promises, its limits, who
 decides what, and an FAQ.
@@ -107,8 +108,8 @@ decides what, and an FAQ.
   issuers it trusts.
 - **A host can withhold.** It cannot forge or change a record, but it can stop serving one, or a
   message or a blob. The app's copies and the main key's other hosts cover for it.
-- **Not here:** recovery through an issuer, a proof across profiles, a privacy pool built by
-  Forest, and an arbiter by default.
+- **Not here:** recovery through an issuer, a privacy pool built by Forest, and an arbiter by
+  default.
 
 ## FAQ
 
@@ -137,5 +138,6 @@ people check. It pins a version of forest, the way services does.
 
 **What is it built from?**
 Existing pieces, used unchanged: Ed25519, RFC 8785 canonical JSON, age, Semaphore's circuit and its
-public July 2024 setup files, groth16-solana, Anchor, the SPL token programs, and Kora, in Soil's
+public July 2024 setup files, circomlib's Poseidon and zk-kit's Merkle circuit on PSE's Perpetual
+Powers of Tau, snarkjs, groth16-solana, Anchor, the SPL token programs, and Kora, in Soil's
 fee payer, in services. Forest writes only what does not exist yet.
