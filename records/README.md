@@ -216,6 +216,18 @@ a review. Each name gives the hash, the type (`mimeType`) and the size.
   them.
 - Readers fetch a blob from the record's hosts, and check its SHA-256 themselves.
 
+### Proofs
+
+A proof is data anyone checks with its circuit's verifier. The profile record's optional `proofs`
+field carries up to four, each named by its circuit. Today the one circuit is `reputation`, and a
+reputation proof carries the index's key, the root and time it signed and its signature, the
+score, the label when the proof shows one market, and the proof's bytes (`schemas/profile.json`).
+A reader ignores a proof whose circuit it does not know, so a newer kind never makes a profile
+invalid for an older app. A proof counts for one main key, the circuit's message: a reader checks
+it for the main key of the profile that carries it, so a proof copied to another profile fails.
+Each reader decides which indexes it trusts and how old a time it accepts. What a proof shows and
+how it is made are [circuits/](../circuits/README.md)'s business.
+
 ### Indexes
 
 An index reads records from hosts and weighs them by its own policy. It answers one request.
@@ -324,6 +336,8 @@ says it doesn't:
   host, send it deletes.
 - Send the hosts record to the indexes the person chose (Indexes).
 - Post a record, then the blobs it names, to each of those hosts.
+- Put a proof in the profile record only when the person chooses to show it there:
+  [circuits/](../circuits/README.md#limits) says what one can reveal.
 - Deliver a message to each host the recipient's hosts record names. Pull your inbox from each of
   your own hosts.
 
@@ -442,6 +456,8 @@ with `tutoring/seller`'s pinned reading key. The profile is
   an issuer's rule.
 - **A blob is only as true as its hash.** The record says what it is, and the bytes say what they
   are. A host checks the hash, never that the bytes are the type or size the record gives.
+- **A proof shows what it shows, and no more.** Any index, a stranger's included, may weigh it as it
+  likes, or ignore it.
 - **Messages have no forward secrecy.** A reading key that leaks opens every message sealed to it,
   from any host or copy that still holds them.
 - **Private records have no forward secrecy.** A reading key that leaks opens every envelope sealed
@@ -465,7 +481,7 @@ with `tutoring/seller`'s pinned reading key. The profile is
   email or a notification; dropping a message that arrives twice; and what asks for the person's
   face.
 - **An index, by its own policy:** which hosts, issuers and markets count, which hosts it crawls,
-  and how much each review weighs.
+  how much each review weighs, and which proofs it accepts.
 
 ## FAQ
 
@@ -564,6 +580,12 @@ less, and nothing is refused. An index decides how much each review weighs.
 By its deal id: the escrow receipt's address when the deal went through the escrow, else 32 random
 bytes chosen when the deal began. Two reviews across one id show both sides took part, so no shape
 for it is needed.
+
+**Why is a reputation proof's `proof` 256 bytes, and not snarkjs's JSON?**
+A record's keys cannot spell snarkjs's `pi_a`, `pi_b` and `pi_c`. The bytes are the three points
+whole, in the order Ethereum's and Solana's BN254 precompiles read, so a reader rebuilds snarkjs's
+form by reading eight numbers; compressed, they would save 128 bytes and leave every reader square
+roots to take.
 
 **Why not AT Protocol, Nostr or Pubky as the base?**
 AT Protocol has one server per profile and a central directory. Nostr's keys cannot be Solana keys,

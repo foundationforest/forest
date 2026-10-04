@@ -163,6 +163,40 @@ describe('schemas', () => {
     }
   })
 
+  test('a profile’s proofs: up to four; a reputation proof is exactly what its verifier takes; another circuit’s fields are its own', () => {
+    const one = example('profile').proofs[0]
+    const proofs = (...items: unknown[]) => edit('profile', ['proofs'], items)
+    const set = (field: string, value: unknown) => edit('profile', ['proofs', 0, field], value)
+    assert.ok(fits('profile', edit('profile', ['proofs'], undefined)), 'optional')
+    assert.ok(fits('profile', proofs(one, one, one, one)))
+    assert.ok(!fits('profile', proofs(one, one, one, one, one)))
+    assert.ok(fits('profile', set('label', 'online-tutors/seller')), 'a label, when the proof shows one market')
+
+    const later = { circuit: 'kyc-age', over: 18, anything: { at: ['all'] } }
+    assert.ok(fits('profile', proofs(later, one)), 'a circuit nobody defined yet is not refused, so an older app ignores it')
+    assert.ok(checkRecord(ownerRecord(alice, 'profile', proofs(later, one), T0)), 'and a record carries it')
+    for (const circuit of [undefined, '', 'Reputation', '1x', 'x_y', 'x'.repeat(33), 7]) {
+      assert.ok(!fits('profile', proofs({ ...later, circuit })), String(circuit))
+    }
+
+    for (const field of ['index', 'root', 'time', 'signature', 'score', 'proof']) assert.ok(!fits('profile', set(field, undefined)), field)
+    assert.ok(!fits('profile', set('extra', 1)), 'a reputation proof carries nothing its verifier does not take')
+    const bad: { [field: string]: unknown[] } = {
+      index: ['x', alice.address.replace(/^./, '0'), 'I'.repeat(44)],
+      root: [one.root.toUpperCase(), one.root.slice(1), '0x' + one.root.slice(2), BigInt('0x' + one.root).toString()],
+      time: [-1, 1.5, 2 ** 53, '1790812800000'],
+      signature: [one.signature.slice(1), one.signature + 'A', one.signature.replace(/^./, '+'), one.signature + '=='],
+      score: [-1, 2 ** 32, 8.7, '87'],
+      label: ['', 'x'.repeat(129), 1],
+      proof: [one.proof.slice(1), one.proof + 'A', one.proof.replace(/^./, '/')],
+    }
+    for (const [field, values] of Object.entries(bad)) {
+      for (const value of values) assert.ok(!fits('profile', set(field, value)), `${field} ${JSON.stringify(value)}`)
+    }
+    assert.ok(fits('profile', set('score', 2 ** 32 - 1)), 'the largest score')
+    assert.ok(fits('profile', set('time', 2 ** 53 - 1)), 'the latest time')
+  })
+
   test('a deal id is an escrow address or 32 bytes of lowercase hex', () => {
     assert.ok(fits('review', edit('review', ['dealId'], 'a1'.repeat(32))))
     assert.ok(fits('review', edit('review', ['dealId'], alice.address)))

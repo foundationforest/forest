@@ -50,6 +50,14 @@
     "inbox": {
       "$ref": "#/$defs/inbox"
     },
+    "proofs": {
+      "type": "array",
+      "description": "Optional. Proofs the profile shows, each one data anyone checks with its circuit's verifier (circuits/), for this profile's main key.",
+      "items": {
+        "$ref": "#/$defs/proof"
+      },
+      "maxItems": 4
+    },
     "createdAt": {
       "type": "string",
       "format": "date-time"
@@ -91,6 +99,79 @@
           "type": "integer",
           "description": "Optional. The largest message it takes, as canonical text in bytes. A message is at most 65,536 bytes anyway.",
           "minimum": 0
+        }
+      }
+    },
+    "proof": {
+      "type": "object",
+      "description": "One proof, named by its circuit. A reader ignores a proof whose circuit it does not know, so a profile carrying a newer kind stays valid for an older app. A reputation proof has the shape below; another circuit's fields are its own.",
+      "required": ["circuit"],
+      "properties": {
+        "circuit": {
+          "type": "string",
+          "description": "The circuit that checks it, as circuits/ names it. Today only reputation.",
+          "pattern": "^[a-z][a-z0-9-]{0,31}$"
+        }
+      },
+      "if": {
+        "properties": {
+          "circuit": {
+            "const": "reputation"
+          }
+        }
+      },
+      "then": {
+        "$ref": "#/$defs/reputation"
+      }
+    },
+    "reputation": {
+      "type": "object",
+      "description": "A reputation proof (circuits/): the count-weighted score of profiles the person holds in an index's tree, for this profile's main key, which profiles hidden. Everything its verifier takes but the main key, which is the profile's own.",
+      "required": ["circuit", "index", "root", "time", "signature", "score", "proof"],
+      "additionalProperties": false,
+      "properties": {
+        "circuit": {
+          "const": "reputation"
+        },
+        "index": {
+          "type": "string",
+          "description": "The index's signing key: its address, base58.",
+          "minLength": 32,
+          "maxLength": 44,
+          "pattern": "^[1-9A-HJ-NP-Za-km-z]{32,44}$"
+        },
+        "root": {
+          "type": "string",
+          "description": "The root of the index's tree the proof was made against: the 32 big-endian bytes the index signed, lowercase hex.",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "time": {
+          "type": "integer",
+          "description": "The time the index signed with the root, ms since 1970.",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "signature": {
+          "type": "string",
+          "description": "The index's ed25519 signature over the root and the time, as circuits/ defines its signed bytes; 64 bytes in base64url without padding.",
+          "pattern": "^[A-Za-z0-9_-]{86}$"
+        },
+        "score": {
+          "type": "integer",
+          "description": "The score the proof shows: the count-weighted score of the profiles counted, times ten, rounded down.",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "label": {
+          "type": "string",
+          "description": "Present only when the proof shows one market: the label of the one profile counted, exactly as registered.",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "proof": {
+          "type": "string",
+          "description": "The proof's three points, uncompressed: 256 bytes in base64url without padding. Eight numbers of 32 bytes big-endian, in snarkjs's names pi_a[0], pi_a[1], pi_b[0][1], pi_b[0][0], pi_b[1][1], pi_b[1][0], pi_c[0], pi_c[1]: the order Ethereum's and Solana's BN254 precompiles read.",
+          "pattern": "^[A-Za-z0-9_-]{342}$"
         }
       }
     },
