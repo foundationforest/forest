@@ -1,0 +1,54 @@
+{
+  "note": "The reputation circuit's devnet setup. One party made it, so that party could make false proofs: devnet only. A public setup ceremony comes before mainnet. Made by devnet/setup.sh.",
+  "parties": 1,
+  "made": "2026-10-04",
+  "circuit": {
+    "file": "reputation.circom",
+    "slots": 8,
+    "depth": 20,
+    "constraints": 44493
+  },
+  "circom": {
+    "version": "2.2.3",
+    "linuxSha256": "85342c7ff332d948df7c0c50ecf201e6129349aef550ce873f3c811b79fe53a3",
+    "flags": "--O2"
+  },
+  "libraries": {
+    "snarkjs": "0.7.5",
+    "circomlib": "2.0.5",
+    "@zk-kit/binary-merkle-root.circom": "2.0.0"
+  },
+  "phase1": {
+    "what": "PSE's Perpetual Powers of Tau, up to 2^16 constraints",
+    "url": "https://pse-trusted-setup-ppot.s3.eu-central-1.amazonaws.com/pot28_0080/ppot_0080_16.ptau",
+    "sha256": "ed3622a7c79b0b49aadd134ebbc5b77df8c8c59bccebdfd0d9bf2c1a51561cf9"
+  },
+  "phase2": {
+    "contributions": 1,
+    "contributionHash": "856d112c09411cbae402f7d05a4a6a6b034ee4d9de9df1b1cccdda112e17ae0333f320f61a6132a6c7daac4b749e4475d904b8bada096cdbe8ef79716216031f"
+  },
+  "r1cs": {
+    "bytes": 21757440,
+    "sha256": "d537a45d2b55f786a1b7942330070945b288a1ce7f28714b559eb44b68456684"
+  },
+  "release": {
+    "tag": "reputation-devnet-1",
+    "baseUrl": "https://github.com/foundationforest/forest/releases/download/reputation-devnet-1/"
+  },
+  "files": {
+    "reputation.zkey": {
+      "bytes": 28241035,
+      "sha256": "1b18b394ce8f19984d09259b901f3116e831525f177f11c5026344b2978863c9"
+    },
+    "reputation.wasm": {
+      "bytes": 2592737,
+      "sha256": "70b90c31b3769018ae1801431b6ac82c28e67aea3d1a6799fbbcf63665db7543"
+    }
+  },
+  "committed": {
+    "verification-key.json": {
+      "bytes": 3469,
+      "sha256": "23710bab5211c73197c3ae149e7bd45ec01250a99195bd7db282c9838a2ea13f"
+    }
+  }
+}
