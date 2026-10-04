@@ -64,6 +64,29 @@ fn proof_bound_to_its_root_market_stamp_and_field() {
 }
 
 #[test]
+fn a_proof_made_with_the_earlier_4_0_0_files_is_refused() {
+    // One row, proven twice: with Semaphore 4.0.0's files, the pin whose circuit left the path bits
+    // unconstrained, and with 4.13.0's. Every public input is the same; only the proof differs. The
+    // program's key is 4.13.0's, so the first is refused and the second lands.
+    let (mut h, f) = ready();
+    let old = Fixtures::earlier_pin();
+    let new = f.proof(&old.name);
+    let (o, n) = (old.args(), new.args());
+    assert_eq!(o.market_stamp, n.market_stamp, "the same market stamp");
+    assert_eq!(o.root, n.root, "the same root");
+    assert_eq!(o.label, n.label, "the same label");
+    assert_eq!(o.issuer, n.issuer, "the same issuer");
+    assert_eq!(old.profile_address(), new.profile_address(), "the same profile");
+    assert_ne!((o.proof.a, o.proof.c), (n.proof.a, n.proof.c), "two different proofs");
+
+    expect_err(send_args(&mut h, &old, &o), "a proof made with the 4.0.0 files", &["ProofRejected"]);
+    assert!(!h.exists(&new.row_address()));
+    send_args(&mut h, new, &n).expect("the same row, proven with the 4.13.0 files");
+    assert!(h.exists(&new.row_address()));
+    println!("refused as expected: a 4.0.0 proof; the 4.13.0 proof for the same row lands");
+}
+
+#[test]
 fn proof_every_single_bit_flip_in_the_points_is_refused() {
     // Every bit of A, B and C, flipped one at a time: 1,024 attempts at a register for a row that
     // does not exist yet. Unflipped, it lands, as the last line shows.

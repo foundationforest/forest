@@ -66,14 +66,13 @@ export async function proveStamp(input: {
   const scope = scopeOf(input.label)
   const message = messageOf(input.profile)
 
-  // The circuit walks `merkleProofLength` levels; the arrays are padded to the sealed depth and
-  // the padding is never read.
+  // The circuit walks `merkleProofLength` levels; the siblings are padded to the sealed depth and
+  // the padding is never read. The path is one number, which the circuit splits into 32 bits,
+  // each forced to be 0 or 1.
   const merkleProofLength = merkleProof.siblings.length
   if (merkleProofLength > MAX_DEPTH) throw new Error('the list is deeper than the sealed depth')
-  const merkleProofIndices: number[] = []
   const merkleProofSiblings: bigint[] = [...merkleProof.siblings]
   for (let i = 0; i < MAX_DEPTH; i++) {
-    merkleProofIndices.push((merkleProof.index >> i) & 1)
     if (merkleProofSiblings[i] === undefined) merkleProofSiblings[i] = 0n
   }
 
@@ -81,7 +80,7 @@ export async function proveStamp(input: {
     {
       secret: identity.secretScalar,
       merkleProofLength,
-      merkleProofIndices,
+      merkleProofIndex: merkleProof.index,
       merkleProofSiblings,
       scope,
       message,

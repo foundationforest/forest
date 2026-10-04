@@ -1,8 +1,8 @@
 //! The Groth16 side: Semaphore's circuit, verified with `groth16-solana` and the sealed key.
 //!
 //! The verification key in `verifying_key.rs` was written by `groth16-solana`'s own converter
-//! from `semaphore-32.json`, the depth-32 verification key of the public July 2024 Semaphore
-//! ceremony. It is baked in forever; see `registry/README.md`.
+//! from `semaphore-32.json`, the depth-32 verification key of Semaphore 4.13.0's public 2025
+//! setup, for the circuit whose path bits are each 0 or 1. Baked in; see `registry/README.md`.
 //!
 //! Two wire-format steps:
 //!

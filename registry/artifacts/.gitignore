@@ -1,3 +1,5 @@
 semaphore-32.zkey
 semaphore-32.wasm
+semaphore.circom
+binary-merkle-root.circom
 node_modules/

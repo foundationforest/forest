@@ -149,7 +149,7 @@ stamp step by step without Semaphore's wrapper.
 - **It trusts its pieces, used unchanged:** Web Crypto (HKDF-SHA256, and its random source for new
   seeds), `@noble/curves` (ed25519), `@scure/base` (base58, bech32), `@scure/bip39`,
   `age-encryption` (whose hybrid runs on `@noble/post-quantum`), and
-  `@semaphore-protocol/identity` 4.12.1, the version that matches the registry's setup files.
+  `@semaphore-protocol/identity` 4.12.1, the version the registry's client uses.
 - **No recovery.** Lose the device and the words, and every profile and every stamp is gone.
   Nobody can reset them, because nobody else has them.
 - **No rotation.** A profile's name is its key, so a leaked main key loses that profile for good

@@ -10,7 +10,7 @@ apply, and every limit known today. The program is `program/src/`; the tests nam
 |---|---|
 | Program | `forest_registry`, `FoRRegistryRowsFreeNoFeeNoAdmin1111111111111` in the source (a placeholder nobody holds a key for); devnet `5zTPm1bGY8ANLcJd12fPiKSTd71bvnq38LAUDT4ToeoC` |
 | Framework | Anchor 1.2, `cargo build-sbf --arch v3` (Solana CLI 4.2.2, platform-tools v1.54), no IDL, no warnings |
-| Testing | LiteSVM, 30 tests: `registry.rs` 16, `adversarial.rs` 13, `invariants.rs` the property test (1,000 steps in CI's nightly job); the client's unit tests (14), a local validator (`test:validator`), and the devnet run with its read-only smoke tests (5) |
+| Testing | LiteSVM, 31 tests: `registry.rs` 16, `adversarial.rs` 14, `invariants.rs` the property test (1,000 steps in CI's nightly job); the client's unit tests (16, two of them on the circuit), a local validator (`test:validator`), and the devnet run with its read-only smoke tests (5) |
 | Risk level | 🟢 Low by the skill's table: no token, no CPI but the system program's, no admin, no custody beyond each row's own rent deposit. Treated as sealed, so this checklist carries a High-risk decisions section. |
 | Upgrade authority | Removed at mainnet deploy (`README.md`). On devnet it stays on the devnet deploy key. No pause, no admin, no override of a row. |
 
@@ -241,6 +241,16 @@ minimum after.
 - [x] No `unwrap()` on sends that must fail.
 - [x] Compute units logged: `what_a_row_costs`.
 
+## The circuit
+
+- [x] **The circuit forbids non-binary path bits.** From Semaphore 4.13.0 the circuit takes a
+  stamp's place in the list as one number and splits it into 32 bits, each forced to be 0 or 1
+  (zk-kit's `BinaryMerkleRoot` 2.0.0, in the circuit sources `artifacts/manifest.json` pins); the
+  4.0.0 circuit pinned before took 32 values and forced none. `client/test/circuit.test.ts`:
+  `a path index that is not 32 binary digits makes no proof` (the witness generator refuses any
+  index that does not fit 32 bits) and `a secret on no list cannot be proven, at any position`. The
+  program holds only 4.13.0's key: `a_proof_made_with_the_earlier_4_0_0_files_is_refused`.
+
 ## Known limits
 
 - **A self-kept list is a valid list.** The registry cannot tell a trusted issuer's root from anyone
@@ -267,4 +277,7 @@ minimum after.
   person.
 - **The placeholder program id.** The source names `FoRRegistryRows…1111`, which nobody holds a key
   for; every deploy substitutes its own (`devnet/deploy.sh` in this folder).
+- **The earlier pin could be forged.** Until the upgrade at slot 507,437,633 on devnet, the program
+  checked proofs with Semaphore 4.0.0's key, whose circuit let a proof be made for a secret on no
+  list. The rows written before it stay, and the program never checks a row again.
 - **Not audited.** No paid review has happened.
