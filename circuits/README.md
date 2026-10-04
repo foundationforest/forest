@@ -14,7 +14,7 @@ profiles and nothing else. The app makes it on the device, from the person's sec
 
 | Circuit | What it proves | Made by | Checked by | Engine | Status |
 |---|---|---|---|---|---|
-| **membership** | My stamp is on this issuer's list, for one label and one main key, and this is its market stamp. Used for registration and, in services, for sponsorship vouchers | the app, on the device | the registry program; a service, off chain (`verifyStamp`) | Semaphore 4.13, Groth16 on BN254; its setup files in [`registry/artifacts`](../registry/README.md#the-setup-files) | on devnet, in the registry, with the setup the registry's README names |
+| **membership** | My stamp is on this issuer's list, for one label and one main key, and this is its market stamp. Used for registration and, in services, for sponsorship vouchers | the app, on the device | the registry program; a service, off chain (`verifyStamp`) | Semaphore 4.13.0 at depth 32, Groth16 on BN254; its setup files in [`registry/artifacts`](../registry/README.md#the-setup-files) | on devnet, in the registry; PSE's public 2025 setup |
 | **reputation** | These profiles are mine, and this is their count-weighted score in an index's tree, for one main key; which profiles stays hidden | the app, on the device | any reader, off chain | this directory: Circom 2.2.3, Groth16 on BN254, with Semaphore's Poseidon and Merkle pieces | devnet setup only, made by one party; a public setup ceremony comes before mainnet |
 
 A sponsorship voucher is a market stamp under the label `sponsor/1`, `sponsor/2` or `sponsor/3`,
@@ -87,7 +87,7 @@ Inside the proof:
 
 Which leaves, and how many, stays hidden.
 
-The Merkle piece is zk-kit's `binary-merkle-root` 2.0.0, the one Semaphore 4.13 uses: it takes the
+The Merkle piece is zk-kit's `binary-merkle-root` 2.0.0, the one Semaphore 4.13.0 uses: it takes the
 path's position as one number and splits it into bits itself.
 
 ### The devnet setup
@@ -203,8 +203,9 @@ Measured in Node 22 on a 4-core machine, with 8 slots at depth 20:
   app that asks the index for its path instead tells the index which profiles are its.
 - **A score is only as good as its index.** The proof shows what the index's tree says. A reader
   decides which indexes it trusts and how old a time it accepts.
-- **Membership before Semaphore 4.13 could be forged.** The registry's earlier pin, Semaphore
-  4.0.0, accepted false membership proofs on devnet until the registry moved to 4.13.
+- **Membership before Semaphore 4.13.0 could be forged.** The registry's earlier pin, 4.0.0,
+  accepted false membership proofs on devnet until the registry's upgrade at slot 507,437,633
+  ([its Limits](../registry/README.md#limits)).
 - **It trusts** circom 2.2.3, snarkjs 0.7.5, circomlib's Poseidon and zk-kit's Merkle circuit
   2.0.0, used unchanged.
 - **Not audited.**

@@ -85,22 +85,25 @@ the rows.
 Semaphore's circuit and its published setup files, in `artifacts/`, used unchanged. Forest wrote
 none of this.
 
-- **Which ones.** The `4.0.0` files at depth 32, from the public Semaphore V4 ceremony (PSE's
-  p0tion, over 400 participants, finished July 13, 2024). The newer `4.13.0` files in the library's
-  default path come from a later setup whose second phase has no published transcript, so these are
-  pinned instead. The library version that matches them is `@semaphore-protocol/*` 4.12.1, which
-  `client/` and `keys/` both use.
+- **Which ones.** The `4.13.0` files at depth 32, from PSE's second public Semaphore V4 setup
+  (p0tion, July 23 to August 2025). It was run for the fixed circuit: from 4.13.0 the circuit takes
+  a stamp's place in the list as one number and splits it into bits that must each be 0 or 1
+  (zk-kit's `BinaryMerkleRoot` 2.0.0). The `4.0.0` circuit before it did not force those bits, so a
+  proof could be made for a secret on no list. The proving key carries the setup's own record: 319
+  contributions and a final beacon. `client/` and `keys/` keep `@semaphore-protocol/identity` and
+  `group` at 4.12.1, whose code 4.13.0 does not change; the client hands the circuit its inputs
+  itself.
 - **What is committed.** `semaphore-32.json`, the verification key. The program has it baked in as
   `program/src/verifying_key.rs`, and the client carries it as `client/src/verification-key.ts` for
   `verifyStamp`, which a test checks is the same key.
 - **What is not.** `semaphore-32.zkey` and `semaphore-32.wasm`, used only to make a proof on a
-  device. `manifest.json` pins them by URL and SHA-256, and `npm run fetch` refuses anything whose
-  hash does not match.
+  device, and the circuit's two Semaphore sources, for reading. `manifest.json` pins them by URL
+  and SHA-256, and `npm run fetch` refuses anything whose hash does not match.
 
 ```
 cd registry/artifacts
 npm ci
-npm run fetch      # the proving key and the witness generator, hash-checked
+npm run fetch      # the proving files and the circuit's sources, hash-checked
 npm run vk         # rewrite ../program/src/verifying_key.rs from semaphore-32.json
 ```
 
@@ -110,9 +113,11 @@ not, the program is no longer sealed against this ceremony.
 
 | File | Bytes | SHA-256 |
 |---|---|---|
-| `semaphore-32.json` | 3,741 | `9b3ab0a193f448714db224bd22540bf4e98f0e6418aa347b0a8cdfbc246ad588` |
-| `semaphore-32.zkey` | 5,841,577 | `0654f6692b026a0e98972db610a7084136ee6303a1960944e866205942d051c7` |
-| `semaphore-32.wasm` | 1,850,862 | `f5c50ff3847c1b93e3439098719739e34136f505d1899b620d1641339d67ee7a` |
+| `semaphore-32.json` | 3,746 | `3c0fd8c30c15df4db6970c0dfac35a3ac8d566ed5924072c9852ee566d4a90ae` |
+| `semaphore-32.zkey` | 5,850,470 | `2e5f7a9f880c337134ee4c7fc4e53573813b4c9c6ae46221c0b56e7992304650` |
+| `semaphore-32.wasm` | 1,859,813 | `528333d1247f585d33c5a40f46053fb7f8b1f5b8b8fa29118abfc47a60921dc5` |
+| `semaphore.circom` | 3,888 | `d67fbae4504476569c03ce7beb23bacf4c4ebb9cbd8f49888f57ed14b288e486` |
+| `binary-merkle-root.circom` | 1,823 | `39adb3f24849775325b322ca53b5a114a5e4e175501a8cb5f4f9c4235e5fe835` |
 
 ### Use it
 
@@ -151,7 +156,7 @@ cd registry/artifacts && npm ci && npm run fetch         # the proving files, ha
 cd registry/program   && cargo build-sbf --arch v3       # Solana CLI 4.2.2 or later
 cd registry/program/tests-litesvm && cargo test          # the rules, the attacks, the property test
 cd registry/program/tests-litesvm && FOREST_FUZZ_ITERATIONS=1000 cargo test --release --test invariants -- --nocapture
-cd registry/client    && npm ci && npm test              # no chain needed (install keys/ first)
+cd registry/client    && npm ci && npm test              # no chain; fetches the proving files (install keys/ first)
 cd registry/client    && npm run test:validator          # starts solana-test-validator itself
 cd registry/client    && npm run test:devnet             # read-only, against registry/devnet/devnet.json
 cd registry/client    && npm run fixtures                # remake the real proofs the Rust tests use
@@ -160,11 +165,13 @@ cd registry/client    && npm run fixtures                # remake the real proof
 The LiteSVM tests run against real proofs committed in
 `program/tests-litesvm/fixtures/proofs.json`, which `npm run fixtures` makes. Their test person is
 keys/'s: list secrets and two profiles from its test seed, through `keys/`. They check the wire
-format against a second copy written by hand in `program/tests-litesvm/src/lib.rs`.
+format against a second copy written by hand in `program/tests-litesvm/src/lib.rs`. One proof made
+with the earlier 4.0.0 files is kept in `fixtures/proof-4.0.0.json`, to show the program refuses it.
 
 Devnet: `FOREST_DEVNET_SEED=<phrase> registry/devnet/deploy.sh` builds a copy with the devnet
-program id, deploys it (its exact cost checked first) and records it in `devnet/devnet.json`; the
-script's header holds the recipe for every devnet key it needs. Then
+program id, deploys it, or upgrades it in place when it holds other bytes (the exact cost checked
+first), and records it in `devnet/devnet.json`; the script's header holds the recipe for every
+devnet key it needs. Then
 `FOREST_DEVNET_KEYS=<dir> node scripts/devnet.ts` in `client/` writes one row, shows the refusal of
 a second profile's row for the same market stamp, and a refund. The person is keys/'s test person:
 its test seed, and two of its profiles, all through `keys/`. The issuer is a stand-in. A row an
@@ -191,7 +198,7 @@ On mainnet the program is sealed the day it deploys: nothing in it can change, a
 is a new program at a new address whose rows start empty. On devnet it stays upgradable, for
 testing. What a mainnet deploy seals:
 
-- **The circuit and the verification key.** Semaphore 4.0.0, depth 32 (the setup files above).
+- **The circuit and the verification key.** Semaphore 4.13.0, depth 32 (the setup files above).
   Public signals in the order root, nullifier, message, scope; `proof_a` negated in the program;
   points arriving compressed; every public input checked to be below BN254's scalar order.
 - **The scope and the message,** as above. Their strings, `forest.foundation/label/v1/` and
@@ -223,12 +230,15 @@ solana program show <program id>          # Authority: none
 ## Limits
 
 - **It trusts Semaphore's circuit, unchanged,** with the depth-32 verification key of its public
-  July 2024 setup, baked into the program (the setup files, above).
+  2025 setup, baked into the program (the setup files, above).
+- **The earlier pin could be forged.** Until the upgrade at slot 507,437,633 on devnet, the program
+  checked proofs with Semaphore 4.0.0's key, whose circuit let a proof be made for a secret on no
+  list. The rows written before it stay, and the program never checks a row again.
 - **It trusts `groth16-solana` 0.2.0** and Solana's `alt_bn128` syscalls to verify, and Anchor 1.2.
 - **It trusts issuers** to put on their lists only the stamps they say they do (one that checks
   faces: one per real, distinct human). The program cannot tell; readers choose whom to trust.
-- **On the device, it trusts** `snarkjs` 0.7.5 and `@semaphore-protocol/*` 4.12.1 to make proofs;
-  `verifyStamp` trusts `snarkjs` to check them.
+- **On the device, it trusts** `snarkjs` 0.7.5 and `@semaphore-protocol/identity` and `group`
+  4.12.1 to make proofs; `verifyStamp` trusts `snarkjs` to check them.
 - **A row is only as good as its issuer.** Roots and issuers are not checked, so anyone can keep a
   list of their own and write rows against it. A reader that trusts no issuer counts no row.
 - **The issuer's signature is checked by readers, not the program.** A row whose signature does not
@@ -285,9 +295,6 @@ names the main key, so a proof seen in flight cannot be landed under anyone else
 move the difference out of its accounts. `refund` sends what a row holds above the new minimum, or
 anything someone sent the row, back to whoever paid for it. Anyone may send it: the amount and the
 destination are read from the chain, never from the caller.
-
-**Why the July 2024 setup files, and not the newer ones?** The later setup's second phase has no
-published transcript, and a sealed program bakes one verification key in forever.
 
 **Why does a row never change or close?** Its existence is the one-row-per-market-stamp rule:
 closing it would free the market stamp for a second row.
