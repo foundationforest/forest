@@ -10,8 +10,8 @@
     "programId": "5zTPm1bGY8ANLcJd12fPiKSTd71bvnq38LAUDT4ToeoC",
     "programData": "8GcbCkBaeurcprsApALLJYR7eh3Rp4ZJQ4ZULhwSBDsk",
     "upgradeAuthority": "2mz33wBK7FKRXoAi7LptGGTwVQJDbrSyrVwbYRCqwP3A",
-    "lastDeploySlot": 506563978,
-    "soSha256": "f54c4f9abbad65fcd19538e91e40fe9fe6191e28ea508418ec5907321d3be155",
+    "lastDeploySlot": 507437633,
+    "soSha256": "eaa7f65236550600fba71373046420672e4e5d872ec66ce17401f788ea15c023",
     "soBytes": 164288,
     "sbpfVersion": "v3",
     "deploySignature": "4m5TmthNkn9jGqFfrkKVabBxEpkGGJn7pNB6spAy528HFaqjaxAWtMgP6eRqGfGPKSbMCnEAnWhhBoK8nuUyxMHc",
@@ -25,7 +25,29 @@
       "balanceBefore": 4812992720,
       "balanceAfter": 3975862720,
       "spent": 837130000
-    }
+    },
+    "upgrades": [
+      {
+        "slot": 507437633,
+        "signature": "4P35fN14XKaC1N36H56LtU1yeTN3PQxXySpYyGeXvdVMB15jWwyW3eBiDUJf7hyvLSJudBn3rueCtW2jVxg7FDta",
+        "soSha256": "eaa7f65236550600fba71373046420672e4e5d872ec66ce17401f788ea15c023",
+        "soBytes": 164288,
+        "cost": {
+          "bytes": 164288,
+          "previousBytes": 164288,
+          "extendBytes": 0,
+          "bufferRent": 835421240,
+          "extendRent": 0,
+          "writes": 163,
+          "fees": 830000,
+          "total": 836251240,
+          "spend": 830000,
+          "balanceBefore": 6246948280,
+          "balanceAfter": 6246118280,
+          "spent": 830000
+        }
+      }
+    ]
   },
   "transactions": [
     {
@@ -63,6 +85,10 @@
     {
       "what": "refund: exactly the 0.001 SOL above the minimum, back to the payer the row records",
       "signature": "8N4kUoP3UbiDEpXFEX7X6QNmJBuLCgthSqjieGsh8Z4XMMQtHct8bKWiFVUersEwdxRjN9oewWigmSsiPLDbPqg"
+    },
+    {
+      "what": "upgrade in place: the registry, now 164288 bytes (sha256 eaa7f65236550600…), same address",
+      "signature": "4P35fN14XKaC1N36H56LtU1yeTN3PQxXySpYyGeXvdVMB15jWwyW3eBiDUJf7hyvLSJudBn3rueCtW2jVxg7FDta"
     }
   ],
   "earlierRows": [

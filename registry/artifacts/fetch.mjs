@@ -4,8 +4,9 @@
 //
 // The verification key (`semaphore-32.json`, 3.7 kB) is committed: the program has it baked in
 // forever, so it belongs in the repo. The proving key and the witness generator are 7.7 MB and
-// only ever used to *make* a proof, so they are pinned by URL and SHA-256 here instead. A file
-// that does not match its hash is deleted rather than kept.
+// only ever used to *make* a proof, so they are pinned by URL and SHA-256 here instead, with the
+// circuit's two Semaphore sources, for reading. A file that does not match its hash is deleted
+// rather than kept.
 
 import { createHash } from 'node:crypto'
 import { readFileSync, writeFileSync, existsSync, unlinkSync } from 'node:fs'
@@ -24,7 +25,7 @@ for (const [name, entry] of Object.entries(manifest.files)) {
     console.log(`${name}: already here and correct`)
     continue
   }
-  const url = `${manifest.baseUrl}${name}`
+  const url = entry.url
   process.stdout.write(`${name}: fetching ${url} ... `)
   const response = await fetch(url)
   if (!response.ok) {

@@ -138,6 +138,18 @@ impl Fixtures {
         let list = if p.list == "A" { &self.lists.a } else { &self.lists.b };
         list.iter().map(|s| dec_to_be32(s)).collect()
     }
+
+    /// One proof made with the Semaphore 4.0.0 files, the pin before this one
+    /// (`fixtures/proof-4.0.0.json`), kept only to show the program refuses it.
+    pub fn earlier_pin() -> FixtureProof {
+        #[derive(Deserialize)]
+        struct File {
+            proof: FixtureProof,
+        }
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/proof-4.0.0.json");
+        let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        serde_json::from_str::<File>(&text).unwrap().proof
+    }
 }
 
 impl FixtureProof {

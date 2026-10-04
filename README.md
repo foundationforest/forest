@@ -137,5 +137,5 @@ people check. It pins a version of forest, the way services does.
 
 **What is it built from?**
 Existing pieces, used unchanged: Ed25519, RFC 8785 canonical JSON, age, Semaphore's circuit and its
-public July 2024 setup files, groth16-solana, Anchor, the SPL token programs, and Kora, in Soil's
+public 2025 setup files, groth16-solana, Anchor, the SPL token programs, and Kora, in Soil's
 fee payer, in services. Forest writes only what does not exist yet.
