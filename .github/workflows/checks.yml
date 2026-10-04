@@ -1,6 +1,7 @@
 # Every pull request and every push to main: each Node package's type-check and tests that need no
-# chain (keys is installed first: records and the registry client read it), and both programs built
-# as SBPF v3 with their LiteSVM tests. After a merge, every package type-checks together. Nightly,
+# chain (keys is installed first: records and the registry client read it), both programs built
+# as SBPF v3 with their LiteSVM tests, and the reputation circuit compiled, checked against its
+# devnet setup, and tested. After a merge, every package type-checks together. Nightly,
 # and by hand: the registry client on a local validator, the registry's property test, and the
 # escrow's fuzzer. A test that skips fails its step: the summary must say "# skipped 0".
 
@@ -20,6 +21,8 @@ permissions:
 env:
   NODE_VERSION: '22'
   SOLANA_VERSION: '4.2.2'
+  CIRCOM_VERSION: '2.2.3'
+  CIRCOM_SHA256: '85342c7ff332d948df7c0c50ecf201e6129349aef550ce873f3c811b79fe53a3'
 
 defaults:
   run:
@@ -58,6 +61,37 @@ jobs:
           npm test | tee "$RUNNER_TEMP/tap"
           grep -qx '# skipped 0' "$RUNNER_TEMP/tap"
 
+  circuits:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: circom, its Linux binary checked by SHA-256
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/circom" "https://github.com/iden3/circom/releases/download/v$CIRCOM_VERSION/circom-linux-amd64"
+          echo "$CIRCOM_SHA256  $RUNNER_TEMP/circom" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/circom"
+          echo "CIRCOM=$RUNNER_TEMP/circom" >> "$GITHUB_ENV"
+      - name: Install
+        run: for dir in keys registry/client circuits/reputation; do (cd "$dir" && npm ci --no-audit --no-fund); done
+      - name: The devnet setup's files, hash-checked
+        working-directory: circuits/reputation
+        run: npm run fetch
+      - name: Compile, and check it is the circuit the setup was made for
+        working-directory: circuits/reputation
+        run: npm run compile
+      - name: Type-check
+        working-directory: circuits/reputation
+        run: npm run check
+      - name: Test
+        working-directory: circuits/reputation
+        run: |
+          npm test | tee "$RUNNER_TEMP/tap"
+          grep -qx '# skipped 0' "$RUNNER_TEMP/tap"
+
   types:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
@@ -68,9 +102,9 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
       - name: Install
-        run: for dir in keys records registry/client escrow/client; do (cd "$dir" && npm ci --no-audit --no-fund); done
+        run: for dir in keys records registry/client escrow/client circuits/reputation; do (cd "$dir" && npm ci --no-audit --no-fund); done
       - name: Type-check every package
-        run: for dir in keys records registry/client escrow/client; do echo "== $dir"; (cd "$dir" && npm run check); done
+        run: for dir in keys records registry/client escrow/client circuits/reputation; do echo "== $dir"; (cd "$dir" && npm run check); done
 
   programs:
     runs-on: ubuntu-latest
