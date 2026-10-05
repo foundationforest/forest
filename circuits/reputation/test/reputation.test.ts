@@ -16,7 +16,7 @@ import { poseidon4 } from 'poseidon-lite/poseidon4'
 import { groth16 } from 'snarkjs'
 
 import { listSecret } from '../../../keys/src/index.ts'
-import { BN254_R, scopeOf } from '../../../registry/client/src/field.ts'
+import { BN254_P, BN254_R, fromBytes32, scopeOf, toBytes32 } from '../../../registry/client/src/field.ts'
 import { identityFrom, marketStampOf } from '../../../registry/client/src/stamp.ts'
 import {
   BOUND,
@@ -25,6 +25,8 @@ import {
   buildTree,
   circuitInput,
   leafHash,
+  proofBytes,
+  proofFromBytes,
   proveReputation,
   signedBytes,
   verifyReputation,
@@ -119,6 +121,29 @@ test('global: three profiles, no label shown, their count-weighted score rounded
   const otherRoot = buildTree([...leaves, ...madeUp(1)]).root
   const otherSigned = { root: otherRoot, signature: ed25519.sign(signedBytes(otherRoot, time), indexKey) }
   assert.equal(await verifyReputation({ ...shown, ...otherSigned }), false, 'another root, even one the index signed')
+})
+
+test('the 256 bytes a record stores: the same proof back, and it verifies from them', async () => {
+  const r = await proveReputation({ secret, labels, leaves, profile, artifacts })
+  const { pi_a, pi_b, pi_c } = r.proof
+  const bytes = proofBytes(r.proof)
+  const order = [pi_a[0], pi_a[1], pi_b[0][1], pi_b[0][0], pi_b[1][1], pi_b[1][0], pi_c[0], pi_c[1]]
+  assert.deepEqual(Buffer.from(bytes), Buffer.concat(order.map((s) => toBytes32(BigInt(s)))), "records/'s order")
+  assert.deepEqual(proofFromBytes(bytes), { pi_a, pi_b, pi_c })
+  const shown = { root: r.root, score: r.score, profile, index, time, signature }
+  assert.equal(await verifyReputation({ ...shown, proof: bytes }), true)
+
+  // A changed byte in any of the eight numbers fails, and so does a number with the modulus added,
+  // which snarkjs would read as the same point.
+  for (let i = 0; i < 8; i++) {
+    const flipped = bytes.slice()
+    flipped[i * 32 + 31] ^= 1
+    assert.equal(await verifyReputation({ ...shown, proof: flipped }), false, `number ${i}, a byte changed`)
+    const plusModulus = bytes.slice()
+    plusModulus.set(toBytes32(fromBytes32(bytes.subarray(i * 32, i * 32 + 32)) + BN254_P), i * 32)
+    assert.equal(await verifyReputation({ ...shown, proof: plusModulus }), false, `number ${i}, the modulus added`)
+  }
+  assert.equal(await verifyReputation({ ...shown, proof: bytes.subarray(0, 255) }), false, 'not 256 bytes')
 })
 
 // The circuit itself refuses: each case starts from a good input and breaks one thing, past the

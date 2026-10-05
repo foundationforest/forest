@@ -125,6 +125,7 @@ from the registry client, unchanged.
 | `signedBytes(root, time)` | The bytes an index signs |
 | `proveReputation({ secret, labels, leaves, profile, show?, artifacts })` | The proof, on the device: one to eight labels of the person's profiles on one list, found in the leaves by their market stamps; `show` shows the label, only with one |
 | `verifyReputation({ proof, root, score, profile, label?, index, time, signature })` | Whether the index signed the root with that time, and the proof holds for that score, main key and shown label |
+| `proofBytes(proof)`, `proofFromBytes(bytes)` | The proof as the 256 bytes a profile record carries ([records/](../records/README.md#proofs)), and back; `verifyReputation` takes either |
 | `circuitInput({...})` | The circuit's input, for a caller that drives snarkjs itself |
 
 ```ts
