@@ -4,9 +4,9 @@ escrow). Read `README.md` and the README of the directory you work in before any
 ## Words
 
 Use these words: seed, main key, profile, address, label, stamp, issuer, list, registry, row,
-record, folder, host, access key, permissions, private, envelope, reading key, inbox, blob, escrow,
-receipt, deal, index, fee payer, app, market, role, ramp, and sealed (for programs only). Plain
-words, no em-dashes.
+record, folder, host, access key, grant, permissions, private, envelope, inbox key, inbox, blob,
+escrow, receipt, deal, index, fee payer, app, market, role, ramp, and sealed (for programs only).
+Plain words, no em-dashes.
 
 Rules for apps: `keys/README.md`, Rules for apps that hold keys. Never copy them here.
 
