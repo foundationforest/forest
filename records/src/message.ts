@@ -18,12 +18,10 @@ import { sha256 } from '@noble/hashes/sha2.js'
 import { b64u, concat, equalBytes, hex, utf8 } from './bytes.ts'
 import { type Json, canonical, parseCanonical } from './canonical.ts'
 import { type Key, publicKeyFromAddress } from './keys.ts'
-import { type Body, MAX_FUTURE_MS, MAX_RECORD_BYTES, RECIPIENT, RecordError, normalizeOrigin, verifySignature } from './record.ts'
+import { type Body, MAX_FUTURE_MS, RECIPIENT, RecordError, normalizeOrigin, verifySignature } from './record.ts'
 
 export const MESSAGE_PREFIX = concat(Uint8Array.of(0xff), utf8('forest/v1/message\n'))
 export const PULL_PREFIX = concat(Uint8Array.of(0xff), utf8('forest/v1/pull\n'))
-/** The largest message, as canonical text: the same cap as a record's. */
-export const MAX_MESSAGE_BYTES = MAX_RECORD_BYTES
 
 /** A sealed body: an age file, base64url, that only the recipient's inbox key and its readers open. */
 export type SealedBody = { private: string }
@@ -41,7 +39,7 @@ export type UnsignedMessage = {
   host?: string
 }
 export type SignedMessage = UnsignedMessage & { sig: string }
-/** A message whose shape and size checked, with its id. */
+/** A message whose shape checked, with its id. */
 export type CheckedMessage = { message: SignedMessage; id: string }
 
 export type UnsignedPull = {
@@ -67,10 +65,6 @@ const only = (value: object, fields: string[], what: string) => {
 const SIG = /^[A-Za-z0-9_-]{86}$/
 const B64U = /^[A-Za-z0-9_-]+$/
 
-function checkSize(text: string) {
-  if (text.length > MAX_MESSAGE_BYTES || utf8(text).length > MAX_MESSAGE_BYTES) fail('size', `a message is at most ${MAX_MESSAGE_BYTES} bytes`)
-}
-
 function checkSig(value: { [key: string]: unknown }, signed: boolean) {
   if (signed) {
     if (typeof value.sig !== 'string' || !SIG.test(value.sig)) fail('shape', 'sig is 64 bytes in base64url')
@@ -86,7 +80,7 @@ function checkKey(value: { [key: string]: unknown }, owner: unknown) {
   if (value.key === owner) fail('shape', 'the main key signs without key')
 }
 
-/** Everything about a message but its signature and size. Throws RecordError. */
+/** Everything about a message but its signature. Throws RecordError. */
 export function checkMessageShape(value: unknown, signed = true): asserts value is SignedMessage {
   if (!isObject(value)) fail('shape', 'a message is an object')
   only(value, ['v', 'to', 'from', 'time', 'body', 'key', 'host', 'sig'], 'message')
@@ -132,9 +126,7 @@ export function signMessage(sender: Sender, to: string, body: SealedBody, time: 
   const unsigned: UnsignedMessage = own ? { v: 1, to, from: sender.address, time, body } : { v: 1, to, from: sender.from, time, body, key: sender.key.address, host: sender.host }
   checkMessageShape(unsigned, false)
   if (!equalBytes(ed25519.getPublicKey(signer.privateKey), publicKeyFromAddress(signer.address)!)) fail('key', 'the private key is not the address that signs')
-  const message: SignedMessage = { ...unsigned, sig: b64u.encode(ed25519.sign(messageSigningInput(unsigned), signer.privateKey)) }
-  checkSize(canonical(message))
-  return message
+  return { ...unsigned, sig: b64u.encode(ed25519.sign(messageSigningInput(unsigned), signer.privateKey)) }
 }
 
 /** A message's wire form: exactly its canonical text. */
@@ -143,11 +135,11 @@ export function encodeMessage(message: SignedMessage): string {
 }
 
 /**
- * Read one message off the wire without checking its signature: size, canonical text, shape, id.
- * A host runs its cheap checks before the signature. Throws RecordError.
+ * Read one message off the wire without checking its signature: canonical text, shape, id. A host
+ * runs its cheap checks before the signature, and how large a message to take is its policy.
+ * Throws RecordError.
  */
 export function readMessage(text: string): CheckedMessage {
-  checkSize(text)
   let value: Json
   try {
     value = parseCanonical(text)

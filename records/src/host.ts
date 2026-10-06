@@ -11,15 +11,17 @@
 //   POST /v1/records                      NDJSON of canonical records; one NDJSON result each
 //   GET  /v1/records?profile=&after=      NDJSON of stored records in the order taken;
 //                                         header forest-cursor: the last sequence number
+//   POST /v1/records/read                 the same, asked by { profile?, after? } in the body
 //   POST /v1/inbox                        NDJSON of canonical messages; one NDJSON result each
 //   POST /v1/inbox/pull                   a signed pull request; NDJSON of that profile's messages
 //                                         after the cursor, in arrival order; header forest-cursor
 //   PUT  /v1/blobs/<sha256>               raw bytes, content-type the type a current record names
 //   GET  /v1/blobs/<sha256>               the bytes, with that type
 //
-// How many lines a request or a page holds is this host's choice (maxBatch, maxPageRecords,
-// maxPageBytes); a client handles any size. It logs nothing about who asks. Where it keeps things
-// is storage.ts's business, and only storage.ts's.
+// How large a record, a message or a blob it takes, and how many lines a request or a page holds,
+// is this host's policy (maxLineBytes, maxBlobBytes, maxBatch, maxPageRecords, maxPageBytes); a
+// client handles any size. It logs nothing about who asks. Where it keeps things is storage.ts's
+// business, and only storage.ts's.
 
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
@@ -27,14 +29,16 @@ import { sha256 } from '@noble/hashes/sha2.js'
 import { hex } from './bytes.ts'
 import { READ_TIMEOUT_MS } from './client.ts'
 import { publicKeyFromAddress } from './keys.ts'
-import { type CheckedMessage, type Inbox, MAX_MESSAGE_BYTES, type SignedMessage, checkPull, inboxOf, readMessage, verifyMessage } from './message.ts'
-import { type Checked, MAX_FUTURE_MS, MAX_RECORD_BYTES, RecordError, type SignedRecord, decodeRecord, encodeRecord, isControlPath } from './record.ts'
+import { type CheckedMessage, type Inbox, type SignedMessage, checkPull, inboxOf, readMessage, verifyMessage } from './message.ts'
+import { type Checked, MAX_FUTURE_MS, RecordError, type SignedRecord, decodeRecord, encodeRecord, isControlPath } from './record.ts'
 import { type BlobDriver, type Row, Storage, blobNames } from './storage.ts'
 import { type View, allowsArrival, viewProfile } from './view.ts'
 
 export { type BlobDriver, type S3Options, rebuild } from './storage.ts'
 
 export const DAY = 86_400_000
+/** The largest record or message it takes, as canonical text in bytes, unless the operator says otherwise. */
+export const DEFAULT_MAX_LINE_BYTES = 65_536
 /** Records or messages a request carries, unless the operator says otherwise. */
 export const DEFAULT_MAX_BATCH = 100
 /** Records or messages a page holds, unless the operator says otherwise. */
@@ -47,8 +51,8 @@ export const DEFAULT_KEEP_DAYS = 30
 export const DEFAULT_MAX_BLOB_BYTES = 50_000_000
 /** The blob types it takes, unless the operator says otherwise: the ones the record shapes name. */
 export const DEFAULT_BLOB_TYPES = ['image/png', 'image/jpeg', 'video/mp4']
-/** A pull request is about 200 bytes. */
-const MAX_PULL_BYTES = 1024
+/** A pull request is about 200 bytes, and a read request under 100. */
+const MAX_ASK_BYTES = 1024
 const BLOB_PATH = /^\/v1\/blobs\/([0-9a-f]{64})$/
 
 /**
@@ -75,6 +79,8 @@ export type HostOptions = {
   now?: () => number
   /** The operator's choice; DEFAULT_KEEP_DAYS when omitted. */
   keepDays?: number
+  /** The largest record or message it takes, as canonical text in bytes; DEFAULT_MAX_LINE_BYTES when omitted. */
+  maxLineBytes?: number
   policy?: Policy
   /** Milliseconds a request may take to arrive in full; past that it gets 408. READ_TIMEOUT_MS when omitted. */
   timeout?: number
@@ -111,6 +117,7 @@ export class Host {
   /** Where it listens, once it does. */
   url = ''
   readonly keepDays: number
+  readonly maxLineBytes: number
   readonly maxBatch: number
   readonly maxPageRecords: number
   readonly maxPageBytes: number
@@ -129,6 +136,7 @@ export class Host {
   constructor(options: HostOptions = {}) {
     this.now = options.now ?? Date.now
     this.keepDays = options.keepDays ?? DEFAULT_KEEP_DAYS
+    this.maxLineBytes = options.maxLineBytes ?? DEFAULT_MAX_LINE_BYTES
     this.maxBatch = options.maxBatch ?? DEFAULT_MAX_BATCH
     this.maxPageRecords = options.maxPageRecords ?? DEFAULT_MAX_PAGE_RECORDS
     this.maxPageBytes = options.maxPageBytes ?? DEFAULT_MAX_PAGE_BYTES
@@ -153,6 +161,7 @@ export class Host {
     const decoded: Array<{ i: number; checked: Checked }> = []
     lines.forEach((line, i) => {
       try {
+        if (this.tooBig(line)) throw new RecordError('size', `this host takes records of at most ${this.maxLineBytes} bytes`)
         const checked = decodeRecord(line)
         if (checked.record.time > now + MAX_FUTURE_MS) results.push({ i, id: checked.id, ok: false, error: 'future', message: 'dated more than ten minutes ahead' })
         else decoded.push({ i, checked })
@@ -179,8 +188,8 @@ export class Host {
       if (reason === 'not-allowed') return { ok: false, error: 'permission', message: 'the permissions record does not allow this access key here' }
       return { ok: false, error: 'older', message: 'a newer version is already here' }
     }
-    // A reader counts a revoked key's records, since it is still listed; a host takes none.
-    if (record.by !== undefined && !allowsArrival(view.access, record)) return { ok: false, error: 'permission', message: 'this access key is revoked' }
+    // A reader counts a past key's records, since it is still listed; a host takes none.
+    if (record.by !== undefined && !allowsArrival(view.access, record)) return { ok: false, error: 'permission', message: 'this access key is past' }
     if (this.policy && !isControlPath(record.path)) {
       const refused = await this.policy(record, this.storage.recordTotals(record.profile))
       if (refused) return { ok: false, error: 'policy', message: refused }
@@ -230,6 +239,11 @@ export class Host {
     return { lines, cursor }
   }
 
+  /** Whether a line is larger than this host takes. Its length in UTF-16 units is never more than its bytes, so huge text is refused unencoded. */
+  private tooBig(line: string): boolean {
+    return line.length > this.maxLineBytes || Buffer.byteLength(line) > this.maxLineBytes
+  }
+
   /** This host's view of a profile, from what it stores. */
   view(profile: string, now = this.now()): View {
     return viewProfile(profile, this.stored(profile), now)
@@ -264,6 +278,7 @@ export class Host {
   }
 
   private async deliverOne(line: string, now: number, inboxes: Map<string, Inbox | null | 'unsupported'>, senders: Map<string, View>): Promise<Answer> {
+    if (this.tooBig(line)) return { ok: false, error: 'size', message: `this host takes messages of at most ${this.maxLineBytes} bytes` }
     let c: CheckedMessage
     try {
       c = readMessage(line)
@@ -293,27 +308,28 @@ export class Host {
       if (!sender.hosts.includes(m.host!)) return refuse('permission', 'host is not one of the hosts from’s hosts record names')
       if (!sender.access.some((k) => k.key === m.key && k.scope === 'message')) return refuse('permission', 'from’s permissions record does not list key with scope message')
     }
-    if (inbox === 'unsupported') return refuse('rule_unsupported', 'this host does not know the inbox’s rule')
-    if (inbox.senders !== 'anyone') {
+    // An inbox's rules are for others: a message whose sender is the recipient skips them.
+    const rules = m.from === m.to ? undefined : inbox
+    if (rules === 'unsupported') return refuse('rule_unsupported', 'this host does not know the inbox’s rule')
+    if (rules && rules.senders !== 'anyone') {
       if (!this.rowLookup) return refuse('rule_unsupported', 'this host has no registry lookup')
       let held: boolean
       try {
-        held = await this.rowLookup(m.from, inbox.senders.issuer)
+        held = await this.rowLookup(m.from, rules.senders.issuer)
       } catch (err) {
         return refuse('lookup', `the registry lookup failed, try again: ${(err as Error).message}`)
       }
       if (!held) return refuse('sender', 'from holds no registry row from the inbox’s issuer')
     }
-    if (inbox.once && this.storage.hasOnce(m.to, m.from)) return refuse('once', 'this inbox takes one message from each sender')
-    const bytes = Buffer.byteLength(line)
-    if (inbox.maxBytes !== undefined && bytes > inbox.maxBytes) return refuse('too_big', `this inbox takes messages of at most ${inbox.maxBytes} bytes`)
+    if (rules?.once && this.storage.hasOnce(m.to, m.from)) return refuse('once', 'this inbox takes one message from each sender')
+    if (rules?.maxBytes !== undefined && Buffer.byteLength(line) > rules.maxBytes) return refuse('too_big', `this inbox takes messages of at most ${rules.maxBytes} bytes`)
     if (this.messagePolicy) {
       const refused = await this.messagePolicy(m, this.storage.messageTotals(m.to))
       if (refused) return refuse('policy', refused)
     }
     // Checked again here, with no wait in between: another request may have taken the same id or
     // pair during a lookup or the policy.
-    if (inbox.once && !this.storage.addOnce(m.to, m.from)) return refuse('once', 'this inbox takes one message from each sender')
+    if (rules?.once && !this.storage.addOnce(m.to, m.from)) return refuse('once', 'this inbox takes one message from each sender')
     if (!this.storage.addMessage(m.to, id, line, now)) return refuse('duplicate', 'this message is already here')
     return { id, ok: true }
   }
@@ -385,7 +401,7 @@ export class Host {
       return
     }
     const blob = BLOB_PATH.exec(url.pathname)?.[1]
-    const methods = url.pathname === '/v1/records' ? ['GET', 'POST'] : url.pathname === '/v1/inbox' || url.pathname === '/v1/inbox/pull' ? ['POST'] : blob ? ['GET', 'PUT'] : []
+    const methods = url.pathname === '/v1/records' ? ['GET', 'POST'] : ['/v1/records/read', '/v1/inbox', '/v1/inbox/pull'].includes(url.pathname) ? ['POST'] : blob ? ['GET', 'PUT'] : []
     if (!methods.length) {
       res.writeHead(404).end()
       return
@@ -411,8 +427,8 @@ export class Host {
     }
 
     if (url.pathname === '/v1/inbox/pull') {
-      const body = await readBody(req, MAX_PULL_BYTES)
-      if (body === null) return sendJson(res, 413, { ok: false, error: 'size', message: `a pull request is at most ${MAX_PULL_BYTES} bytes` })
+      const body = await readBody(req, MAX_ASK_BYTES)
+      if (body === null) return sendJson(res, 413, { ok: false, error: 'size', message: `a pull request is at most ${MAX_ASK_BYTES} bytes` })
       let out: { lines: string[]; cursor: number }
       try {
         out = this.pull(body.toString('utf8'))
@@ -423,19 +439,31 @@ export class Host {
       return sendLines(res, out)
     }
 
-    if (req.method === 'GET') {
-      const after = url.searchParams.get('after')
-      const cursor = after === null ? 0 : Number(after)
-      if (!Number.isSafeInteger(cursor) || cursor < 0) {
+    // A read, by GET with the profile and cursor in the URL, or by POST with them in the body, which
+    // front doors do not log: the same answer.
+    if (req.method === 'GET' || url.pathname === '/v1/records/read') {
+      let asked: ReadOptions | undefined
+      if (req.method === 'GET') {
+        const after = url.searchParams.get('after')
+        asked = { after: after === null ? 0 : Number(after), profile: url.searchParams.get('profile') ?? undefined }
+      } else {
+        const body = await readBody(req, MAX_ASK_BYTES)
+        if (body === null) {
+          res.writeHead(413).end()
+          return
+        }
+        asked = readAsk(body.toString('utf8'))
+      }
+      if (!asked || !Number.isSafeInteger(asked.after) || asked.after! < 0) {
         res.writeHead(400).end()
         return
       }
-      return sendLines(res, this.read({ after: cursor, profile: url.searchParams.get('profile') ?? undefined }))
+      return sendLines(res, this.read(asked))
     }
 
     // POST /v1/records or /v1/inbox: NDJSON in, one NDJSON result a line out.
     const inbox = url.pathname === '/v1/inbox'
-    const body = await readBody(req, this.maxBatch * ((inbox ? MAX_MESSAGE_BYTES : MAX_RECORD_BYTES) + 1))
+    const body = await readBody(req, this.maxBatch * (this.maxLineBytes + 1))
     if (body === null) {
       res.writeHead(413).end()
       return
@@ -445,6 +473,20 @@ export class Host {
     res.writeHead(200, { 'content-type': 'application/x-ndjson' })
     res.end(results.map((r) => JSON.stringify(r) + '\n').join(''))
   }
+}
+
+/** A read request's body: `{ profile?, after? }` and nothing else, or undefined. */
+function readAsk(text: string): ReadOptions | undefined {
+  let value: unknown
+  try {
+    value = JSON.parse(text)
+  } catch {
+    return undefined
+  }
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const { profile, after = 0, ...rest } = value as { [key: string]: unknown }
+  if (Object.keys(rest).length || (profile !== undefined && typeof profile !== 'string') || typeof after !== 'number') return undefined
+  return { after, profile }
 }
 
 function sendJson(res: ServerResponse, status: number, value: object) {

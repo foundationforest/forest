@@ -147,28 +147,28 @@ describe('a stolen access key', () => {
     assert.deepEqual([v.current.has('offer/before'), v.current.has('offer/after')], [false, false])
   })
 
-  test('FINDING: once revoked, a stolen key can still write to a host that skips the check, and that host’s readers count it', () => {
-    // An honest host refuses it (host.test.ts). A reader counts every record a revoked key wrote,
+  test('FINDING: once past, a stolen key can still write to a host that skips the check, and that host’s readers count it', () => {
+    // An honest host refuses it (host.test.ts). A reader counts every record a past key wrote,
     // since it is still listed and no date is checked, so whoever holds a host that takes one can
     // show it. The owner's record wins at that path, so the owner deletes it there.
-    const revoked = permissionsRecord(alice, [allow(accessKey, ['offer'], 'revoked')], T0 + MINUTE)
+    const past = permissionsRecord(alice, [allow(accessKey, ['offer'], 'past')], T0 + MINUTE)
     const sneaked = accessRecord(accessKey, alice.address, 'offer/new', offerBody('1'), T0 + 2 * MINUTE)
     const later = T0 + 365 * DAY
-    assert.equal(viewProfile(alice.address, [revoked, sneaked].map((r) => checkRecord(r)), later).current.has('offer/new'), true)
+    assert.equal(viewProfile(alice.address, [past, sneaked].map((r) => checkRecord(r)), later).current.has('offer/new'), true)
     const deleted = ownerRecord(alice, 'offer/new', null, T0 + 3 * MINUTE)
-    assert.equal(viewProfile(alice.address, [revoked, sneaked, deleted].map((r) => checkRecord(r)), later).current.get('offer/new')!.record.body, null)
+    assert.equal(viewProfile(alice.address, [past, sneaked, deleted].map((r) => checkRecord(r)), later).current.get('offer/new')!.record.body, null)
   })
 })
 
 describe('a stolen message key', () => {
-  test('once revoked, it cannot send through a host that serves the sender’s old permissions record: the sender’s hosts record does not name that host', async () => {
+  test('once past, it cannot send through a host that serves the sender’s old permissions record: the sender’s hosts record does not name that host', async () => {
     const readSender = async (url: string, profile: string) => (await readAll(url, { profile })).records
     const home = await startHost({ now: () => T0 })
     const thief = await startHost({ now: () => T0 }) // keeps copies of Alice's old records: they are public
     const inbox = await startHost({ now: () => T0, readSender })
     try {
       const listed = permissionsRecord(alice, [allow(messageKey, undefined, 'message')], T0)
-      await publish([home.url], [hostsRecord(alice, [home.url], T0), listed, permissionsRecord(alice, [allow(messageKey, undefined, 'revoked')], T0 + 1)])
+      await publish([home.url], [hostsRecord(alice, [home.url], T0), listed, permissionsRecord(alice, [allow(messageKey, undefined, 'past')], T0 + 1)])
       await publish([thief.url], [hostsRecord(alice, [home.url], T0), listed])
       const bobInbox = await readingKey(bob.privateKey)
       const bobCard = { ...profileBody('Bob'), inboxKey: bobInbox.recipient, inbox: { senders: 'anyone' } }
@@ -176,7 +176,7 @@ describe('a stolen message key', () => {
       const send = (host: string) => message({ key: messageKey, from: alice.address, host }, bob.address, { text: 'Send me the money.' }, T0 + 2, bobCard)
       const results = async (host: string) => (await deliver([inbox.url], [await send(host)]))[0]!.results[0]!.error
       assert.equal(await results(thief.url), 'permission', 'the old record, from a host she does not name')
-      assert.equal(await results(home.url), 'permission', 'her current record says revoked')
+      assert.equal(await results(home.url), 'permission', 'her current record says past')
     } finally {
       await home.close()
       await thief.close()

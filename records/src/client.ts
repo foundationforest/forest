@@ -3,21 +3,26 @@
 // hashed, whatever host they came from: a reader trusts no host.
 //
 // How many lines a request or a page holds is each host's choice, and this handles any: a request
-// a host finds too big is sent again in halves, and a page is read line by line, however long.
+// a host finds too big is sent again in halves, and a page is read line by line, however long. How
+// large a record, a message or a blob to take is each host's policy, and each reader's: this
+// ignores what is larger than it is told to take, MAX_LINE_READ and MAX_BLOB_READ unless told
+// otherwise.
 
 import { sha256 } from '@noble/hashes/sha2.js'
 import { concat, hex } from './bytes.ts'
 import { canonical } from './canonical.ts'
 import type { ReadOptions, Result } from './host.ts'
-import { type CheckedMessage, MAX_MESSAGE_BYTES, type SignedMessage, type SignedPull, decodeMessage, encodeMessage } from './message.ts'
-import { type Checked, MAX_RECORD_BYTES, RecordError, type SignedRecord, decodeRecord, encodeRecord } from './record.ts'
+import { type CheckedMessage, type SignedMessage, type SignedPull, decodeMessage, encodeMessage } from './message.ts'
+import { type Checked, RecordError, type SignedRecord, decodeRecord, encodeRecord } from './record.ts'
 import { type View, viewProfile } from './view.ts'
 
 export type PublishOutcome = { host: string; status: number; results: Result[]; error?: string }
 
 /** A read that has not finished by then is given up. */
 export const READ_TIMEOUT_MS = 60_000
-/** The largest blob a reader takes unless told otherwise: the largest the record shapes name. */
+/** The largest record or message, as canonical text, a reader takes unless told otherwise: the most the reference host takes. */
+export const MAX_LINE_READ = 65_536
+/** The largest blob a reader takes unless told otherwise: the most the reference host takes. */
 export const MAX_BLOB_READ = 50_000_000
 
 /** Send records to each host. A host that fails does not stop the others. */
@@ -60,22 +65,30 @@ async function postLines(url: string, lines: string[]): Promise<{ status: number
 export type Page = { records: Checked[]; cursor: number; refused: Array<{ line: string; reason: string }> }
 
 /**
- * One page of what a host stores, after a cursor, in the order it took them, each record checked.
- * A page may be any length; a line longer than a record can be is refused unread. It throws on a
- * page not read within `timeout` ms (READ_TIMEOUT_MS when omitted).
+ * How to read: `post` puts the profile and the cursor in the body (POST /v1/records/read) rather
+ * than the URL, for reading your own profiles; `maxBytes` is the longest line taken (MAX_LINE_READ
+ * when omitted); `timeout` is in ms (READ_TIMEOUT_MS when omitted).
  */
-export async function readPage(host: string, options: ReadOptions & { timeout?: number } = {}): Promise<Page> {
-  const query = new URLSearchParams()
-  if (options.after !== undefined) query.set('after', String(options.after))
-  if (options.profile !== undefined) query.set('profile', options.profile)
-  const res = await fetch(`${host}/v1/records?${query}`, { signal: AbortSignal.timeout(options.timeout ?? READ_TIMEOUT_MS) })
+export type ReadHow = { post?: boolean; maxBytes?: number; timeout?: number }
+
+/**
+ * One page of what a host stores, after a cursor, in the order it took them, each record checked.
+ * A page may be any length; a line longer than `maxBytes` is refused unread. It throws on a page
+ * not read within `timeout` ms.
+ */
+export async function readPage(host: string, options: ReadOptions & ReadHow = {}): Promise<Page> {
+  const signal = AbortSignal.timeout(options.timeout ?? READ_TIMEOUT_MS)
+  const asked = { ...(options.profile !== undefined && { profile: options.profile }), ...(options.after !== undefined && { after: options.after }) }
+  const res = options.post
+    ? await fetch(`${host}/v1/records/read`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(asked), signal })
+    : await fetch(`${host}/v1/records?${new URLSearchParams(Object.entries(asked).map(([k, v]) => [k, String(v)]))}`, { signal })
   if (!res.ok) throw new Error(`${host} answered ${res.status}`)
   const cursor = Number.parseInt(res.headers.get('forest-cursor') ?? '0', 10)
   const records: Checked[] = []
   const refused: Page['refused'] = []
-  for await (const line of readLines(res, MAX_RECORD_BYTES)) {
+  for await (const line of readLines(res, options.maxBytes ?? MAX_LINE_READ)) {
     try {
-      if (line === null) throw new RecordError('size', 'longer than a record can be')
+      if (line === null) throw new RecordError('size', 'longer than this reader takes')
       records.push(decodeRecord(line))
     } catch (err) {
       refused.push({ line: line ?? '', reason: err instanceof RecordError ? err.code : 'invalid' })
@@ -129,7 +142,7 @@ async function* readLines(res: Response, max: number): AsyncGenerator<string | n
 }
 
 /** Everything a host stores (for one profile, if asked), page by page. */
-export async function readAll(host: string, options: Omit<ReadOptions, 'after'> = {}): Promise<Page> {
+export async function readAll(host: string, options: Omit<ReadOptions, 'after'> & ReadHow = {}): Promise<Page> {
   const out: Page = { records: [], cursor: 0, refused: [] }
   for (;;) {
     const page = await readPage(host, { ...options, after: out.cursor })
@@ -144,14 +157,14 @@ export async function readAll(host: string, options: Omit<ReadOptions, 'after'> 
  * A profile as its hosts show it: the hosts given, then every host its current hosts record names,
  * until no new one turns up. A host that does not answer is skipped: the others still count.
  */
-export async function readProfile(hosts: string[], profile: string, now: number): Promise<View> {
+export async function readProfile(hosts: string[], profile: string, now: number, how: ReadHow = {}): Promise<View> {
   const read = new Set<string>()
   const found: Checked[] = []
   for (let next = hosts; next.length; ) {
     for (const host of next) {
       read.add(host)
       try {
-        found.push(...(await readAll(host, { profile })).records)
+        found.push(...(await readAll(host, { ...how, profile })).records)
       } catch {
         // Skipped.
       }
@@ -166,10 +179,11 @@ export type MessagePage = { messages: CheckedMessage[]; cursor: number; refused:
 /**
  * One page of a profile's inbox on one host. `request` is pullRequest(owner, after, now): the
  * profile's main key, or one of its message keys, signs each pull. Each message is checked, and one
- * not to that profile is refused. It throws a RecordError with the host's code (stale, signature,
- * permission, ...) when the host refuses the pull, and on a page not read within `timeout` ms.
+ * not to that profile, or longer than `maxBytes` (MAX_LINE_READ when omitted), is refused. It throws
+ * a RecordError with the host's code (stale, signature, permission, ...) when the host refuses the
+ * pull, and on a page not read within `timeout` ms.
  */
-export async function pull(host: string, request: SignedPull, options: { timeout?: number } = {}): Promise<MessagePage> {
+export async function pull(host: string, request: SignedPull, options: { maxBytes?: number; timeout?: number } = {}): Promise<MessagePage> {
   const res = await fetch(`${host}/v1/inbox/pull`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: canonical(request), signal: AbortSignal.timeout(options.timeout ?? READ_TIMEOUT_MS) })
   if (!res.ok) {
     const why = (await res.json().catch(() => ({}))) as { error?: string; message?: string }
@@ -178,9 +192,9 @@ export async function pull(host: string, request: SignedPull, options: { timeout
   const cursor = Number.parseInt(res.headers.get('forest-cursor') ?? '0', 10)
   const messages: CheckedMessage[] = []
   const refused: MessagePage['refused'] = []
-  for await (const line of readLines(res, MAX_MESSAGE_BYTES)) {
+  for await (const line of readLines(res, options.maxBytes ?? MAX_LINE_READ)) {
     try {
-      if (line === null) throw new RecordError('size', 'longer than a message can be')
+      if (line === null) throw new RecordError('size', 'longer than this reader takes')
       const checked = decodeMessage(line)
       if (checked.message.to !== request.profile) throw new RecordError('to', 'not to this profile')
       messages.push(checked)

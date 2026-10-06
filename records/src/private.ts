@@ -12,13 +12,15 @@
 // envelope ever made for it.
 //
 // A message's body is one of these envelopes, made for the recipient's inbox key and its inbox's
-// readers. message() seals and signs one; openMessage() checks one and opens it. The grants a
-// person received are one private record at `grants`, made for their own inbox key alone.
+// readers, or for the inbox key alone when it holds a grant. message() seals and signs one;
+// openMessage() checks one and opens it. The grants a person received are one private record at
+// `grants`, made for their own inbox key alone; the notes on the keys a person handed out ride in
+// their permissions record, made for their own inbox key alone too.
 
 import { Decrypter, Encrypter } from 'age-encryption'
 import { b64u } from './bytes.ts'
 import { type Json, canonical, parseCanonical } from './canonical.ts'
-import { GRANTS_PATH, type Grant, checkGrant } from './grant.ts'
+import { GRANTS_PATH, type Grant, type Note, checkGrant, checkNote } from './grant.ts'
 import type { Key } from './keys.ts'
 import { type Sender, type SignedMessage, decodeMessage, encodeMessage, sealedTo, signMessage } from './message.ts'
 import { type Body, RecordError, type SignedRecord, isPrivate } from './record.ts'
@@ -58,10 +60,13 @@ export function readerCount(body: { private: string }): number {
 /**
  * A message to `to`'s inbox: `body` sealed, in one envelope, to the inbox key and every reader
  * `card` (to's profile record body) gives, and nothing else; then signed by the sender's own key,
- * or by a message key for its main key.
+ * or by a message key for its main key. A body that holds a grant is sealed to the inbox key alone:
+ * a reader acts on the inbox, and a grant is a key.
  */
 export async function message(sender: Sender, to: string, body: Body, time: number, card: Body): Promise<SignedMessage> {
-  return signMessage(sender, to, await makePrivate(body, sealedTo(card)), time)
+  const keys = sealedTo(card)
+  if ('grant' in body) checkGrant(body.grant)
+  return signMessage(sender, to, await makePrivate(body, 'grant' in body ? keys.slice(0, 1) : keys), time)
 }
 
 /**
@@ -85,4 +90,20 @@ export async function openGrants(body: Body, identity: string): Promise<Grant[]>
   if (Object.keys(inside).length !== 1 || !Array.isArray(inside.grants)) throw new RecordError('grant', 'a grants record holds { grants: [ … ] } and nothing else')
   for (const grant of inside.grants) checkGrant(grant)
   return inside.grants as unknown as Grant[]
+}
+
+/** The notes for a permissions record (permissionsRecord's `notes`): each checked, sealed to the owner's own inbox key alone. */
+export async function makeNotes(notes: Note[], inboxKey: string): Promise<string> {
+  for (const note of notes) checkNote(note)
+  return (await makePrivate({ notes: notes as unknown as Json[] }, [inboxKey])).private
+}
+
+/** The notes a permissions record's body carries, opened with the owner's inbox key identity, each checked; none when it carries none. */
+export async function openNotes(body: Body, identity: string): Promise<Note[]> {
+  if (body.notes === undefined) return []
+  if (typeof body.notes !== 'string') throw new RecordError('permissions', 'notes is an envelope in base64url')
+  const inside = await openPrivate({ private: body.notes }, identity)
+  if (Object.keys(inside).length !== 1 || !Array.isArray(inside.notes)) throw new RecordError('grant', 'notes hold { notes: [ … ] } and nothing else')
+  for (const note of inside.notes) checkNote(note)
+  return inside.notes as unknown as Note[]
 }

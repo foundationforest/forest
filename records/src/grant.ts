@@ -1,12 +1,18 @@
 // A grant: how an access key reaches the one it is for. Its private half and what it is for,
-// handed over as a message body `{ grant }`, and kept by whoever received it in the private
-// record at `grants`, sealed to their profile's own inbox key (grantsRecord and openGrants in
-// private.ts). It holds a private key, and may hold the names, dates and reasons the permissions
-// record never carries, so it is never public.
+// handed over as a message body `{ grant }`, sealed to the recipient's inbox key alone, and kept by
+// whoever received it in the private record at `grants`, sealed to their profile's own inbox key
+// (grantsRecord and openGrants in private.ts). It holds a private key, and may hold the names,
+// dates and reasons the permissions record never carries, so it is never public.
+//
+// A note: the owner's own record of a key it handed out, in the grant shape, but naming the key by
+// its public half, as the permissions record lists it. Who holds a key, until when and why needs
+// nothing private, so a leaked inbox key never leaks the keys the notes are about. The notes ride
+// in the permissions record, sealed to the owner's own inbox key alone (makeNotes and openNotes in
+// private.ts).
 
 import { b64u } from './bytes.ts'
 import { publicKeyFromAddress } from './keys.ts'
-import { RecordError, checkAccessPaths } from './record.ts'
+import { RECIPIENT, RecordError, checkAccessPaths } from './record.ts'
 
 /** The fixed path of the private record where a person keeps the grants they received. */
 export const GRANTS_PATH = 'grants'
@@ -28,6 +34,9 @@ export type Grant = {
   note?: string
 }
 
+/** A note on one key the owner handed out: a grant whose `key` is its public half, as the permissions record lists it. */
+export type Note = Grant
+
 function fail(message: string): never {
   throw new RecordError('grant', message)
 }
@@ -45,13 +54,28 @@ function isPrivateHalf(key: unknown): boolean {
 
 /** A grant's shape: every field as above, and nothing else. Throws RecordError with code `grant`. */
 export function checkGrant(value: unknown): asserts value is Grant {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) fail('a grant is an object')
+  checkShape(value, 'grant', (g) => {
+    if (g.scope === 'read' ? typeof g.key !== 'string' || !IDENTITY.test(g.key) : !isPrivateHalf(g.key)) {
+      fail(g.scope === 'read' ? 'a read key is an age post-quantum hybrid identity' : 'a key is its 32 private bytes in base64url')
+    }
+  })
+}
+
+/** A note's shape: a grant's, with the key's public half. Throws RecordError with code `grant`. */
+export function checkNote(value: unknown): asserts value is Note {
+  checkShape(value, 'note', (n) => {
+    if (n.scope === 'read' ? typeof n.key !== 'string' || !RECIPIENT.test(n.key) : !publicKeyFromAddress(n.key)) {
+      fail(n.scope === 'read' ? 'a note names a read key by its age recipient, age1pq1…' : 'a note names a key by its address')
+    }
+  })
+}
+
+function checkShape(value: unknown, what: string, checkKey: (g: { [key: string]: unknown }) => void) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) fail(`a ${what} is an object`)
   const g = value as { [key: string]: unknown }
-  for (const key of Object.keys(g)) if (!['key', 'folder', 'scope', 'paths', 'from', 'since', 'note'].includes(key)) fail(`unknown grant field ${key}`)
+  for (const key of Object.keys(g)) if (!['key', 'folder', 'scope', 'paths', 'from', 'since', 'note'].includes(key)) fail(`unknown ${what} field ${key}`)
   if (!['write', 'message', 'read', 'pay'].includes(g.scope as string)) fail('scope is one of write, message, read, pay')
-  if (g.scope === 'read' ? typeof g.key !== 'string' || !IDENTITY.test(g.key) : !isPrivateHalf(g.key)) {
-    fail(g.scope === 'read' ? 'a read key is an age post-quantum hybrid identity' : 'a key is its 32 private bytes in base64url')
-  }
+  checkKey(g)
   if (!publicKeyFromAddress(g.folder)) fail('folder is not a usable ed25519 address')
   if ('paths' in g) {
     if (g.scope === 'message' || g.scope === 'pay') fail(`a ${g.scope} key has no paths`)

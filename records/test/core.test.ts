@@ -5,9 +5,9 @@ import { describe, test } from 'node:test'
 import { base58, hex } from '../src/bytes.ts'
 import { canonical, parseCanonical } from '../src/canonical.ts'
 import { keyFromPrivate, publicKeyFromAddress } from '../src/keys.ts'
-import { MAX_RECORD_BYTES, RecordError, checkRecord, decodeRecord, encodeRecord, recordId, signRecord, unsignedOf } from '../src/record.ts'
+import { RecordError, checkRecord, decodeRecord, encodeRecord, recordId, signRecord, unsignedOf } from '../src/record.ts'
 import { accessRecord, ownerRecord, permissionsRecord } from '../src/write.ts'
-import { KEYS, T0, accessKey, alice, aliceBuyer, allow, offerBody, profileBody, sizedRecord } from './fixtures.ts'
+import { KEYS, T0, accessKey, alice, aliceBuyer, allow, messageKey, offerBody, profileBody, sizedRecord, stranger } from './fixtures.ts'
 
 describe('keys', () => {
   test("main keys are keys/'s: its pinned profiles sign here, and a name is the key in base58", () => {
@@ -132,29 +132,23 @@ describe('records', () => {
     }
     assert.throws(perms([{ key: accessKey.address, scope: 'read' }]), /read key is an age/, 'a read key is an age recipient')
     assert.throws(perms([{ key: readKey, scope: 'write' }]), /usable/, 'every other key is an address')
-    assert.throws(perms([{ key: readKey, scope: 'revoked' }]), /usable/, 'only write and message keys are revoked')
-    assert.ok(checkRecord(permissionsRecord(alice, [{ key: readKey, scope: 'read', paths: ['note'] }, { key: readKey, scope: 'read' }], T0)), 'a read key may list paths')
-    assert.ok(checkRecord(permissionsRecord(alice, [allow(accessKey), allow(accessKey, ['offer'], 'revoked'), allow(accessKey, undefined, 'revoked')], T0)), 'paths are optional')
-    assert.throws(perms(Array(17).fill(allow(accessKey, ['offer']))), /at most 16/)
-    assert.ok(checkRecord(permissionsRecord(alice, Array(16).fill({ key: readKey, scope: 'read' }), T0)), 'sixteen read keys fit in one record')
+    assert.throws(perms([{ key: readKey, scope: 'past' }]), /usable/, 'only write and message keys are past')
+    assert.ok(checkRecord(permissionsRecord(alice, [{ key: readKey, scope: 'read', paths: ['note'] }], T0)), 'a read key may list paths')
+    assert.ok(checkRecord(permissionsRecord(alice, [allow(accessKey), allow(messageKey, ['offer'], 'past'), allow(stranger, undefined, 'past')], T0)), 'paths are optional')
+    assert.throws(perms([allow(accessKey), allow(accessKey, ['offer'], 'past')]), /listed twice/, 'one key, one entry')
+    assert.throws(perms([{ key: readKey, scope: 'read' }, { key: readKey, scope: 'read', paths: ['note'] }]), /listed twice/)
+    const many = Array.from({ length: 100 }, (_, i) => ({ key: keyFromPrivate(new Uint8Array(32).fill(i + 1)).address, scope: 'past' as const }))
+    assert.ok(checkRecord(permissionsRecord(alice, many, T0)), 'no cap on how many keys it lists')
     assert.throws(() => ownerRecord(alice, 'permissions', { access: [], more: 1 }, T0), /unknown permissions field/)
+    assert.ok(checkRecord(permissionsRecord(alice, [allow(accessKey)], T0, 'YWdlLWVuY3J5cHRpb24')), 'notes: an envelope in base64url')
+    for (const notes of ['', 'not base64url!', 5, { private: 'abc' }]) assert.throws(() => ownerRecord(alice, 'permissions', { access: [], notes }, T0), /notes is an envelope/, JSON.stringify(notes))
     assert.ok(checkRecord(permissionsRecord(alice, [allow(accessKey, ['offer', 'review'])], T0)))
     assert.ok(checkRecord(permissionsRecord(alice, null, T0)), 'a delete removes every access key')
   })
 
-  test('size cap', () => {
-    assert.throws(() => ownerRecord(alice, 'profile', { about: 'x'.repeat(70_000) }, T0), /at most/)
-  })
-
-  test('the size cap counts UTF-8 bytes, not characters', () => {
-    const atCap = encodeRecord(sizedRecord(alice, 'note/a', MAX_RECORD_BYTES))
-    assert.ok(decodeRecord(atCap).id)
-    // One more byte, from one two-byte character: still 65,536 characters, now 65,537 bytes.
-    const over = sizedRecord(alice, 'note/a', MAX_RECORD_BYTES + 1, 1)
-    const text = encodeRecord(over)
-    assert.deepEqual([text.length, Buffer.byteLength(text)], [MAX_RECORD_BYTES, MAX_RECORD_BYTES + 1])
-    assert.throws(() => decodeRecord(text), (err: RecordError) => err.code === 'size')
-    assert.throws(() => checkRecord(over), (err: RecordError) => err.code === 'size')
-    assert.throws(() => ownerRecord(alice, 'note/a', over.body, T0), /at most/)
+  test('no size is a rule: how large a record to take is each host’s policy (host.test.ts), and each reader’s', () => {
+    const big = ownerRecord(alice, 'profile', { about: 'x'.repeat(200_000) }, T0)
+    assert.ok(decodeRecord(encodeRecord(big)).id)
+    assert.ok(checkRecord(sizedRecord(alice, 'note/a', 100_000, 1)).id)
   })
 })

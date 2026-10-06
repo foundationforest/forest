@@ -15,8 +15,6 @@ import { publicKeyFromAddress } from './keys.ts'
 
 export const VERSION = 1
 export const SIGN_PREFIX = concat(Uint8Array.of(0xff), utf8('forest/v1/record\n'))
-/** The largest record, as canonical text. Bigger things are blobs, named by their hash. */
-export const MAX_RECORD_BYTES = 64 * 1024
 /** Hosts refuse, and readers hold back, records dated further ahead than this. */
 export const MAX_FUTURE_MS = 10 * 60 * 1000
 
@@ -77,6 +75,7 @@ export function isPrivate(body: Body | null): body is { private: string } {
 
 const FIELDS = new Set(['v', 'profile', 'path', 'time', 'body', 'by', 'sig'])
 const SIG = /^[A-Za-z0-9_-]{86}$/
+const B64U = /^[A-Za-z0-9_-]+$/
 
 /** Everything about a record but its signature. Throws RecordError. */
 export function checkShape(value: unknown, signed = true): asserts value is SignedRecord {
@@ -115,11 +114,6 @@ export function signingInput(unsigned: UnsignedRecord): Uint8Array {
   return concat(SIGN_PREFIX, utf8(canonical(unsigned)))
 }
 
-/** The cap counts UTF-8 bytes. A string's length (UTF-16 units) is never more, so huge text is refused unencoded. */
-function checkSize(text: string) {
-  if (text.length > MAX_RECORD_BYTES || utf8(text).length > MAX_RECORD_BYTES) fail('size', `a record is at most ${MAX_RECORD_BYTES} bytes`)
-}
-
 /** The record's id: SHA-256 of what was signed, so a re-encoded signature is not a new record. */
 export function recordId(unsigned: UnsignedRecord): string {
   return hex.encode(sha256(signingInput(unsigned)))
@@ -129,9 +123,7 @@ export function signRecord(unsigned: UnsignedRecord, privateKey: Uint8Array): Si
   checkShape(unsigned, false)
   const signer = publicKeyFromAddress(unsigned.by ?? unsigned.profile)!
   if (!equalBytes(ed25519.getPublicKey(privateKey), signer)) fail('key', 'the private key is not the signer the record names')
-  const record: SignedRecord = { ...unsigned, sig: b64u.encode(ed25519.sign(signingInput(unsigned), privateKey)) }
-  checkSize(canonical(record))
-  return record
+  return { ...unsigned, sig: b64u.encode(ed25519.sign(signingInput(unsigned), privateKey)) }
 }
 
 /**
@@ -151,11 +143,10 @@ export function verifySignature(sig: Uint8Array, message: Uint8Array, publicKey:
   }
 }
 
-/** Shape, size and signature. Returns the record with its id. Throws RecordError. */
+/** Shape and signature. Returns the record with its id. Throws RecordError. How large a record to take is each host's policy, and each reader's. */
 export function checkRecord(value: unknown): Checked {
   checkShape(value)
   const record = value
-  checkSize(canonical(record))
   const unsigned = unsignedOf(record)
   const signer = publicKeyFromAddress(record.by ?? record.profile)!
   if (!verifySignature(b64u.decode(record.sig), signingInput(unsigned), signer)) fail('signature', 'the signature does not verify')
@@ -169,7 +160,6 @@ export function encodeRecord(record: SignedRecord): string {
 
 /** Read one record off the wire: the text must be canonical, then every check. */
 export function decodeRecord(text: string): Checked {
-  checkSize(text)
   let value: Json
   try {
     value = parseCanonical(text)
@@ -191,11 +181,11 @@ export type HostsBody = {
 /**
  * What an access key is for. write: signing records where its paths allow. message: signing
  * messages for the main key, and pulling its inbox. read: opening what is sealed to it. pay: the
- * chain's own allowance to it, which lives on chain. revoked: a write or message key removed: it
- * adds nothing more, and what it wrote still counts.
+ * chain's own allowance to it, which lives on chain. past: a write or message key the owner no
+ * longer allows: it can no longer act, and what it wrote still counts.
  */
-export type Scope = 'write' | 'message' | 'read' | 'pay' | 'revoked'
-export const SCOPES: readonly Scope[] = ['write', 'message', 'read', 'pay', 'revoked']
+export type Scope = 'write' | 'message' | 'read' | 'pay' | 'past'
+export const SCOPES: readonly Scope[] = ['write', 'message', 'read', 'pay', 'past']
 
 export type AccessKey = {
   /** Its public half: an address, or a read key's age post-quantum hybrid recipient (age1pq1…). */
@@ -208,10 +198,13 @@ export type AccessKey = {
    */
   paths?: string[]
 }
-export type PermissionsBody = { access: AccessKey[] }
+export type PermissionsBody = {
+  access: AccessKey[]
+  /** The owner's notes on its keys: an envelope sealed to its own inbox key alone, base64url (makeNotes and openNotes in private.ts). */
+  notes?: string
+}
 
 export const MAX_HOSTS = 8
-export const MAX_ACCESS_KEYS = 16
 export const MAX_ACCESS_PATHS = 16
 /** An age post-quantum hybrid recipient (mlkem768x25519): an inbox key's or a read key's public half. */
 export const RECIPIENT = /^age1pq1[02-9ac-hj-np-z]{1952}$/
@@ -235,9 +228,11 @@ export function checkControlBody(path: string, body: Body): void {
     if (new Set(urls as string[]).size !== (urls as string[]).length) fail('hosts', 'urls repeat')
     return
   }
-  only(body, ['access'], 'permissions', 'permissions')
+  only(body, ['access', 'notes'], 'permissions', 'permissions')
   const access = body.access
-  if (!Array.isArray(access) || access.length > MAX_ACCESS_KEYS) fail('permissions', `access is at most ${MAX_ACCESS_KEYS} keys`)
+  if (!Array.isArray(access)) fail('permissions', 'access is a list of keys')
+  if ('notes' in body && (typeof body.notes !== 'string' || !B64U.test(body.notes))) fail('permissions', 'notes is an envelope in base64url')
+  const listed = new Set<unknown>()
   for (const k of access as unknown[]) {
     if (k === null || typeof k !== 'object' || Array.isArray(k)) fail('permissions', 'an access entry is an object')
     only(k, ['key', 'scope', 'paths'], 'permissions', 'access')
@@ -250,6 +245,8 @@ export function checkControlBody(path: string, body: Body): void {
       if (scope === 'message' || scope === 'pay') fail('permissions', `a ${scope} key has no paths`)
       checkAccessPaths(paths, 'permissions')
     }
+    if (listed.has(key)) fail('permissions', 'a key is listed twice')
+    listed.add(key)
   }
 }
 
