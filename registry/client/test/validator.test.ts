@@ -30,7 +30,7 @@ import {
   VersionedTransaction,
 } from '@solana/web3.js'
 
-import { listSecret, mainKey } from '../../../keys/src/index.ts'
+import { issuerSecret, mainKey } from '../../../keys/src/index.ts'
 import {
   PROGRAM_ID,
   buildRegistration,
@@ -141,7 +141,7 @@ test('rows go through a real validator: the main key signs, a fee payer pays, on
   const issuers = [Keypair.generate(), Keypair.generate()]
   const lists = await Promise.all(
     issuers.map(async (k, i) => {
-      const { secret } = await listSecret(seed, k.publicKey.toBase58())
+      const { secret } = await issuerSecret(seed, `issuer-${i}.example`)
       const stamps = [stampOf(Buffer.from(`stranger ${i} 1`)), stampOf(secret), stampOf(Buffer.from(`stranger ${i} 2`))]
       return { issuer: k, secret, stamps, signature: ed25519.sign(rootBytes(listRoot(stamps)), k.secretKey.subarray(0, 32)) }
     }),

@@ -8,26 +8,24 @@ Up: [the repo](../README.md). The reputation circuit, its setup and its client:
 
 ## What it is
 
-The zero-knowledge proofs Forest offers. Each one shows a single thing about a person's stamps or
-profiles and nothing else. The app makes it on the device, from the person's secret for one list
-(`keys/`'s `listSecret`), so the secret never leaves the device. Whoever it is shown to checks it.
+The zero-knowledge proofs Forest offers. Each one shows a single thing about a person's profiles
+and nothing else. The app makes it on the device, from the person's secret for one issuer
+(`keys/`'s `issuerSecret`), so the secret never leaves the device. Whoever it is shown to checks it.
 
 | Circuit | What it proves | Made by | Checked by | Engine | Status |
 |---|---|---|---|---|---|
-| **membership** | My stamp is on this issuer's list, for one label and one main key, and this is its market stamp. Used for registration and, in services, for sponsorship vouchers | the app, on the device | the registry program; a service, off chain (`verifyStamp`) | Semaphore 4.13.0 at depth 32, Groth16 on BN254; its setup files in [`registry/artifacts`](../registry/README.md#the-setup-files) | on devnet, in the registry; PSE's public 2025 setup |
 | **reputation** | These profiles are mine, and this is their count-weighted score in an index's tree, for one main key; which profiles stays hidden | the app, on the device | any reader, off chain | this directory: Circom 2.2.3, Groth16 on BN254, with Semaphore's Poseidon and Merkle pieces | devnet setup only, made by one party; a public setup ceremony comes before mainnet |
 
-A sponsorship voucher is a market stamp under the label `sponsor/1`, `sponsor/2` or `sponsor/3`,
-from the same list secret, proven with the membership circuit. Soil's fee payer, in
-[foundationforest/services](https://github.com/foundationforest/services), sponsors a registration
-against one.
+The person proof, which registering needs, lives with the registry
+([its section](../registry/README.md#the-note-and-the-person-proof)), because the registry program
+is to be sealed with it.
 
 ### What the reputation proof lets a person do
 
 A profile's reviews are its own, and nothing public ties a person's profiles together. The
 reputation proof lets a person carry a score from their profiles to another one, such as a new
 profile, without naming any of them. An index publishes its scores as a tree; the person's app
-finds their own profiles in it from their list secret, and proves the score on the device. It has
+finds their own profiles in it from their issuer secret, and proves the score on the device. It has
 two uses:
 
 - **Global:** the count-weighted score of the profiles the person picks, up to eight, naming none
@@ -67,7 +65,7 @@ the rest blank.
 
 | | Signals |
 |---|---|
-| Private | `secret`, the person's secret for one list (Semaphore's secret scalar); for each slot, `used`, the leaf's stamp, scope, score and count, and its path's length, position and siblings |
+| Private | `secret`, the person's secret for one issuer (the scalar `keys/`'s `issuerSecret` gives); for each slot, `used`, the leaf's stamp, scope, score and count, and its path's length, position and siblings |
 | Public, in this order | `score`, the output; `root`; `message`; `scope`, the label shown, or 0 |
 
 `message` is the main key the proof is shown for, as in registration:
@@ -77,7 +75,8 @@ only.
 Inside the proof:
 
 1. Each used slot's stamp is `Poseidon(scope, secret)`, the registry's market stamp. Only the
-   person who holds the list secret can count those profiles, and all of them come from one list.
+   person who holds the issuer secret can count those profiles, and all of them come from one
+   issuer.
 2. Each used slot's leaf is in the tree with that root. The root is never 0.
 3. A blank slot is all zeros, and every score and count is below 2^32.
 4. No two used slots share a scope, so a profile counts once.
@@ -123,18 +122,18 @@ from the registry client, unchanged.
 |---|---|
 | `buildTree(leaves)` | For an index: the root to sign. Refuses an empty tree, more than 2^20 leaves, a field out of range, or two leaves for one market stamp |
 | `signedBytes(root, time)` | The bytes an index signs |
-| `proveReputation({ secret, labels, leaves, profile, show?, artifacts })` | The proof, on the device: one to eight labels of the person's profiles on one list, found in the leaves by their market stamps; `show` shows the label, only with one |
+| `proveReputation({ secret, labels, leaves, profile, show?, artifacts })` | The proof, on the device: one to eight labels of the person's profiles from one issuer, found in the leaves by their market stamps; `show` shows the label, only with one |
 | `verifyReputation({ proof, root, score, profile, label?, index, time, signature })` | Whether the index signed the root with that time, and the proof holds for that score, main key and shown label |
 | `proofBytes(proof)`, `proofFromBytes(bytes)` | The proof as the 256 bytes a profile record carries ([records/](../records/README.md#proofs)), and back; `verifyReputation` takes either |
 | `circuitInput({...})` | The circuit's input, for a caller that drives snarkjs itself |
 
 ```ts
-import { listSecret } from '@forest/keys'
+import { issuerSecret } from '@forest/keys'
 import { proveReputation, verifyReputation } from '@forest/reputation'
 
 // On the device: three profiles' score, shown on a new profile.
 const r = await proveReputation({
-  secret: (await listSecret(seed, issuer)).secret,
+  secret: (await issuerSecret(seed, name)).secret,
   labels: ['tutoring/seller', 'tutoring/buyer', 'cleaning/seller'],
   leaves,                      // the index's published leaves, in its order
   profile,                     // the main key the proof is shown for
@@ -180,7 +179,7 @@ Measured in Node 22 on a 4-core machine, with 8 slots at depth 20:
 
 ## Promises
 
-- A proof counts only profiles whose market stamps come from the prover's own list secret.
+- A proof counts only profiles whose market stamps come from the prover's own issuer secret.
 - A profile counts at most once in a proof.
 - A proof counts for one main key: its message names it.
 - A shown label means exactly one profile, under that label.
@@ -191,11 +190,11 @@ Measured in Node 22 on a 4-core machine, with 8 slots at depth 20:
 
 - **Devnet setup only, made by one party.** Whoever ran `devnet/setup.sh` could make false
   reputation proofs. A public setup ceremony comes before mainnet.
-- **The person picks which profiles count.** Up to eight, all on one list. A proof says "these
+- **The person picks which profiles count.** Up to eight, all from one issuer. A proof says "these
   profiles of mine", never "all of them": a low-scored profile can be left out, and nothing public
   can tell which profiles are all of one person's.
-- **One list per proof.** Profiles registered with different lists have different secrets, and
-  cannot be counted together.
+- **One issuer per proof.** Profiles registered through different issuers have different secrets,
+  and cannot be counted together.
 - **A label and an exact score can point to one leaf.** The tree is public. In a market with few
   profiles, the leaves with that label and that score may be just one, and that names the profile.
   A hidden label narrows it too, when few leaves have that score. The app should say so before a
@@ -204,9 +203,6 @@ Measured in Node 22 on a 4-core machine, with 8 slots at depth 20:
   app that asks the index for its path instead tells the index which profiles are its.
 - **A score is only as good as its index.** The proof shows what the index's tree says. A reader
   decides which indexes it trusts and how old a time it accepts.
-- **Membership before Semaphore 4.13.0 could be forged.** The registry's earlier pin, 4.0.0,
-  accepted false membership proofs on devnet until the registry's upgrade at slot 507,437,633
-  ([its Limits](../registry/README.md#limits)).
 - **It trusts** circom 2.2.3, snarkjs 0.7.5, circomlib's Poseidon and zk-kit's Merkle circuit
   2.0.0, used unchanged.
 - **Not audited.**

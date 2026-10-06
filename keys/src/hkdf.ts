@@ -9,8 +9,8 @@ export const INFO = {
   profile: (label: string) => `forest/v1/profile/${label}`,
   /** The profile's reading key, mixed from the main key's 32 private bytes. */
   read: 'forest/v1/read',
-  /** The person's secret for one issuer's list, mixed from the seed. */
-  list: (issuer: string) => `forest/v1/list/${issuer}`,
+  /** The person's secret for one issuer, mixed from the seed. The name is used exactly as given. */
+  issuer: (name: string) => `forest/v1/issuer/${name}`,
 } as const
 
 /** The seed is 32 bytes. */

@@ -1,0 +1,45 @@
+{
+  "note": "The person circuit's devnet setup. One party made it, so that party could make false proofs: devnet only. A public setup ceremony comes before mainnet. Made by devnet/setup.sh.",
+  "parties": 1,
+  "made": "2026-10-06",
+  "circuit": {
+    "file": "person.circom",
+    "constraints": 4958
+  },
+  "circom": {
+    "version": "2.2.3",
+    "linuxSha256": "85342c7ff332d948df7c0c50ecf201e6129349aef550ce873f3c811b79fe53a3",
+    "flags": "--O2"
+  },
+  "libraries": {
+    "snarkjs": "0.7.5",
+    "circomlib": "2.0.5"
+  },
+  "phase1": {
+    "what": "PSE's Perpetual Powers of Tau, up to 2^16 constraints",
+    "url": "https://pse-trusted-setup-ppot.s3.eu-central-1.amazonaws.com/pot28_0080/ppot_0080_16.ptau",
+    "sha256": "ed3622a7c79b0b49aadd134ebbc5b77df8c8c59bccebdfd0d9bf2c1a51561cf9"
+  },
+  "phase2": {
+    "contributions": 1,
+    "contributionHash": "cd82fb4002cf5431563107f30b069ff67a893eb6346c100dc58ff1ae2941b76d9f7e63e6c74d1a683e5a77af80b9b84de2db0fd159ed2c00270cb2e29b0854eb"
+  },
+  "r1cs": {
+    "bytes": 1634592,
+    "sha256": "d8c550559f19a70f8ba5953e26ebc19bcbbc94efde144331612ea9f6327d070e"
+  },
+  "files": {
+    "person.zkey": {
+      "bytes": 3372339,
+      "sha256": "1c95d5c0a740e6e94fcb22461576948a2c2ae1b621171b8291ff5e8bbb81048a"
+    },
+    "person.wasm": {
+      "bytes": 3427571,
+      "sha256": "0c19dc3309e8a256e24846b2e95e567c56975fd3c076891b65b6bf512fc9509c"
+    },
+    "verification-key.json": {
+      "bytes": 3838,
+      "sha256": "9181ed18077cade090d457ba1881e0a1dff68d40ee019bfaa7437c4241637436"
+    }
+  }
+}

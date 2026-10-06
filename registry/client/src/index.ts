@@ -28,6 +28,7 @@ export * from './issuer.ts'
 export * from './program.ts'
 export * from './proof.ts'
 export * from './rows.ts'
+export * from './person.ts'
 
 export type Registration = StampProof & {
   marketStampBytes: Uint8Array
@@ -45,7 +46,7 @@ export type Registration = StampProof & {
  * signature no reader accepts would hold this market stamp for good.
  */
 export async function buildRegistration(input: {
-  /** The 32 bytes `keys/`'s `listSecret(seed, issuer)` returns, or the identity itself. */
+  /** The 32 bytes `keys/`'s `issuerSecret(seed, name)` returns, or the identity itself. */
   secret: Uint8Array | Identity
   label: string
   /** The main key. It signs the transaction; registered, it is this profile. */

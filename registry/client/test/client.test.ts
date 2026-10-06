@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url'
 
 import { Keypair, PublicKey, SystemProgram } from '@solana/web3.js'
 
-import { listSecret } from '../../../keys/src/index.ts'
+import { hkdf } from '../../../keys/src/index.ts'
 import {
   BN254_R,
   MAX_LABEL,
@@ -56,6 +56,9 @@ const keysVectors = JSON.parse(readFileSync(join(here, '../../../keys/test/vecto
 const seed = Buffer.from(keysVectors.seed, 'hex')
 const hex = (b: Uint8Array) => Buffer.from(b).toString('hex')
 const bytes = (h: string) => new Uint8Array(Buffer.from(h, 'hex'))
+// The fixtures were made with the list secret, mixed from the seed and the issuer's address, before
+// keys/ mixed the issuer secret from a name. They go with the membership proof.
+const listSecret = (issuer: string) => hkdf(seed, `forest/v1/list/${issuer}`)
 const proofNamed = (name: string) => fixtures.proofs.find((p: { name: string }) => p.name === name)
 const argsOf = (p: Record<string, string>, payer: PublicKey) => ({
   profile: new PublicKey(p.profile),
@@ -109,19 +112,18 @@ test("Alice is keys/'s test person: her stamps from her seed and each issuer's a
   assert.equal(proofNamed('alice-tutoring-A-second-profile').profile, keysVectors.mainKeys[1].address, 'her tutoring/buyer profile')
   for (const list of ['A', 'B'] as const) {
     const issuer = fixtures.issuers[list]
-    const { secret, stamp } = await listSecret(seed, issuer)
-    assert.equal(stampOf(secret), stamp)
+    const stamp = stampOf(await listSecret(issuer))
     assert.ok(fixtures.lists[list].includes(stamp.toString()), `her stamp is on list ${list}`)
     assert.equal(hex(toBytes32(listRoot(fixtures.lists[list].map(BigInt)))), fixtures.proofs.find((p: { list: string }) => p.list === list).root)
   }
-  const a = await listSecret(seed, fixtures.issuers.A)
-  const b = await listSecret(seed, fixtures.issuers.B)
-  assert.notEqual(a.stamp, b.stamp, 'two lists, two stamps nobody can match')
+  const a = stampOf(await listSecret(fixtures.issuers.A))
+  const b = stampOf(await listSecret(fixtures.issuers.B))
+  assert.notEqual(a, b, 'two lists, two stamps nobody can match')
 })
 
 test('the market stamp is the nullifier the proof carries: one per issuer per label per person', async () => {
-  const onA = (await listSecret(seed, fixtures.issuers.A)).secret
-  const onB = (await listSecret(seed, fixtures.issuers.B)).secret
+  const onA = await listSecret(fixtures.issuers.A)
+  const onB = await listSecret(fixtures.issuers.B)
   for (const [name, secret] of [
     ['alice-tutoring-A', onA],
     ['alice-tutoring-A-second-profile', onA],
@@ -295,7 +297,7 @@ test('the builders refuse what the program or a reader would refuse, before any 
 
   const stamps = fixtures.lists.A.map(BigInt)
   const base = {
-    secret: (await listSecret(seed, fixtures.issuers.A)).secret,
+    secret: await listSecret(fixtures.issuers.A),
     label: 'tutoring/seller',
     profile: payer,
     issuer: new PublicKey(fixtures.issuers.A),
@@ -308,7 +310,7 @@ test('the builders refuse what the program or a reader would refuse, before any 
   await assert.rejects(buildRegistration({ ...base, label: 'x'.repeat(129) }), /at most 128 bytes/)
   await assert.rejects(buildRegistration({ ...base, issuer: new PublicKey(fixtures.issuers.B) }), /issuer's signature is not on this list's root/)
   await assert.rejects(buildRegistration({ ...base, stamps: [...stamps, 1n] }), /issuer's signature is not on this list's root/, 'another snapshot')
-  await assert.rejects(buildRegistration({ ...base, secret: (await listSecret(seed, fixtures.issuers.B)).secret }), /not on the list/)
+  await assert.rejects(buildRegistration({ ...base, secret: await listSecret(fixtures.issuers.B) }), /not on the list/)
 })
 
 test('rows read back through any connection, filtered at fixed offsets', async () => {

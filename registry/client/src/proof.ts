@@ -47,7 +47,7 @@ export function listRoot(stamps: bigint[]): bigint {
 }
 
 export async function proveStamp(input: {
-  /** The 32 bytes `keys/`'s `listSecret(seed, issuer)` returns, or the identity itself. */
+  /** The 32 bytes `keys/`'s `issuerSecret(seed, name)` returns, or the identity itself. */
   secret: Uint8Array | Identity
   label: string
   /** The profile's 32-byte key. The proof names it: it counts for this profile's row only. */
@@ -115,8 +115,6 @@ export async function proveStamp(input: {
  * public input must be a field element, and the proof is verified with the key the program has
  * baked in. Like the program, it takes the root as given: a caller checks that an issuer it trusts
  * signed it (`issuerSigned`). Anything that is not a good proof for these inputs is false.
- *
- * Soil's fee payer sponsors a row only against a proof under a `sponsor/<n>` label.
  */
 export async function verifyStamp(input: {
   /** The proof as snarkjs writes it: `proveStamp`'s `raw`. */

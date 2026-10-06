@@ -6,10 +6,11 @@ Up: [the repo](../README.md).
 
 The standard for a person's keys in Forest, and a small library that follows it. The standard is
 the 24 words and the recipe; the rules for apps are defaults an app adopts, or says it doesn't. A
-person owns one seed: 24 random words. Their main keys, inbox keys and list secrets are mixed from
-it, on their own device. Any app that follows this page gets the same keys from the same seed, so a
-person is never locked into one app. Where the app keeps the seed is its choice: by default the
-device's secure slot, with the words in the person's password manager (the vault) as the backup.
+person owns one seed: 24 random words. Their main keys, inbox keys and issuer secrets are mixed
+from it, on their own device. Any app that follows this page gets the same keys from the same
+seed, so a person is never locked into one app. Where the app keeps the seed is its choice: by
+default the device's secure slot, with the words in the person's password manager (the vault) as
+the backup.
 
 This README is the standard. The library in `src/` follows it, and `test/vectors.json` pins its
 answers.
@@ -36,11 +37,11 @@ Every mix is HKDF-SHA256 (RFC 5869): an empty salt, the info string's UTF-8 byte
 |---|---|---|---|
 | seed | `forest/v1/profile/<label>` | the main key (ed25519) | the profile's name and Solana address, and its signature on records and transactions |
 | the main key's 32 private bytes | `forest/v1/read` | the profile's inbox key (age's post-quantum hybrid) | opening messages and private records encrypted to the profile |
-| seed | `forest/v1/list/<issuer address>` | the person's secret for that issuer's list (Semaphore v4) | the person's stamp on that list, and their market stamps |
+| seed | `forest/v1/issuer/<issuer name>` | the person's secret for that issuer | the person's note number for that issuer, and their stamps |
 
 The info strings are hashed into every key, so they stay as written, `profile` and `read`
-included: a new string is a new key for everyone. From the list secret on, Semaphore's own hashes
-take over (below).
+included: a new string is a new key for everyone. From the issuer secret on, Poseidon takes over
+(below).
 
 **The main key.**
 - One profile per label. A label is free text, used exactly as given, as UTF-8:
@@ -64,21 +65,22 @@ take over (below).
   X25519 are broken.
 - The profile publishes the recipient, the key's public half; the address does not give it.
 
-**The list secret and the stamps.**
-- An issuer is anyone who keeps a list of stamps, such as the human list. The issuer's address is
-  its 32-byte ed25519 public key in base58, in its one spelling.
-- The 32 bytes go unchanged into Semaphore v4's identity (`@semaphore-protocol/identity` 4.12.1).
-  Semaphore then computes the following, restated here only so it can be checked:
+**The issuer secret, the note number and the stamps.**
+- An issuer is anyone who signs notes for people, such as one that checks faces
+  ([registry](../registry/README.md#the-note-and-the-person-proof)). Its name is the text it
+  publishes as its own, such as a domain, used exactly as given, as UTF-8. The secret is mixed
+  from the name, not from the issuer's key, so a new key changes no one's stamps.
+- The 32 bytes become a number the way Semaphore v4 made its secret scalar (zk-kit's
+  `deriveSecretScalar`, `@zk-kit/eddsa-poseidon` 1.0.4), restated here only so it can be checked:
   1. `h` = the first 32 bytes of BLAKE-512 of the 32 bytes.
   2. Prune: `h[0] &= 0xf8; h[31] &= 0x7f; h[31] |= 0x40`.
-  3. The secret scalar = (`h` read little-endian, shifted right 3) mod `l`, the Baby Jubjub
-     subgroup order.
-  4. The public key = the secret scalar times `B8`, on Baby Jubjub.
-  5. **The stamp** = Poseidon(2) of the public key's two coordinates.
-- The stamp goes to that issuer once. The secret is mixed again from the seed whenever a proof is
-  needed; nothing is stored.
-- **A market stamp** is Semaphore's nullifier, Poseidon(scope, secret scalar), with the label as
-  its scope. The registry says how a label becomes a scope ([registry](../registry/README.md)).
+  3. The scalar = (`h` read little-endian, shifted right 3) mod `l`, the Baby Jubjub subgroup
+     order.
+- **The note number** = Poseidon(1) of the scalar (circomlib's Poseidon). It goes to that issuer
+  once, and the issuer signs it in the person's note. The secret is mixed again from the seed
+  whenever a proof is needed; nothing is stored.
+- **A stamp** = Poseidon(scope, scalar), one for each label, with the label as its scope. The
+  registry says how a label becomes a scope ([registry](../registry/README.md)).
 
 ### Rules for apps that hold keys
 
@@ -113,7 +115,7 @@ Everything is exported from `src/index.ts`. Everything that mixes is async.
 | `exportWords(seed)`, `importWords(text)` | The 24 words, and the seed back from them |
 | `mainKey(seed, label)` | The main key: `label`, `privateKey`, `publicKey`, `address` |
 | `readingKey(main.privateKey)` | The inbox key: age's `identity`, and the `recipient` others encrypt to |
-| `listSecret(seed, issuer)` | The list's `secret`, Semaphore's `identity`, and the `stamp` |
+| `issuerSecret(seed, name)` | The issuer's `secret`, its `scalar`, and the `noteNumber` |
 | `hkdf(ikm, info)`, `INFO` | The mixer and its info strings |
 
 ```
@@ -129,19 +131,20 @@ Node 22.18 or later runs the TypeScript directly.
 ### Test vectors
 
 `test/vectors.json` pins, for the seed `00 01 … 1f`: its 24 words; the main keys for
-`tutoring/seller` and `tutoring/buyer`, each with its inbox key; and the list secrets and stamps
-for two issuers. `npm test` checks each value and recomputes it without the library: HKDF from a
-second implementation, ed25519 from `@noble/curves`, the hybrid recipient from
-`@noble/post-quantum`, age's bech32 by hand, an encryption and an opening through age, and the
-stamp step by step without Semaphore's wrapper.
+`tutoring/seller` and `tutoring/buyer`, each with its inbox key; and the issuer secrets, scalars
+and note numbers for two issuers, `issuer-a.example` and `issuer-b.example`. `npm test` checks
+each value and recomputes it without the library: HKDF from a second implementation, ed25519 from
+`@noble/curves`, the hybrid recipient from `@noble/post-quantum`, age's bech32 by hand, an
+encryption and an opening through age, and the scalar step by step without zk-kit.
 
 ## Promises
 
 - **The same seed gives the same keys,** in any app, on any device, every time.
 - **Nothing ties two profiles together.** Each label is its own mix: one profile's main key,
   address or inbox key says nothing about another's.
-- **Nothing ties two lists together.** Each issuer is its own mix, so the same person's stamps on
-  two lists are unrelated, and two issuers comparing their lists cannot match them.
+- **Nothing ties two issuers together.** Each issuer is its own mix, so the same person's note
+  numbers for two issuers are unrelated, and two issuers comparing what they hold cannot match
+  them.
 - **No key gives the seed back.** Every mix is one way. A main key gives its inbox key, and
   nothing else.
 - **Nothing leaves the device.** The library talks to no network and stores nothing.
@@ -152,8 +155,10 @@ stamp step by step without Semaphore's wrapper.
   them to no one else.
 - **It trusts its pieces, used unchanged:** Web Crypto (HKDF-SHA256, and its random source for new
   seeds), `@noble/curves` (ed25519), `@scure/base` (base58, bech32), `@scure/bip39`,
-  `age-encryption` (whose hybrid runs on `@noble/post-quantum`), and
-  `@semaphore-protocol/identity` 4.12.1, the version the registry's client uses.
+  `age-encryption` (whose hybrid runs on `@noble/post-quantum`), `@zk-kit/eddsa-poseidon` 1.0.4,
+  the version the registry's client uses, and `poseidon-lite` 0.3.0.
+- **An issuer's name is its own to keep unique.** Two issuers under one name get the same note
+  number from each person, so they can match their people.
 - **No recovery.** Lose the device and the words, and every profile and every stamp is gone.
   Nobody can reset them, because nobody else has them.
 - **No rotation.** A profile's name is its key, so a leaked main key loses that profile for good
@@ -185,8 +190,8 @@ Then that app has everything the seed opens, and nothing takes it back:
 - every profile: labels are public, so it can mix any main key, sign as that profile and move its
   money;
 - every inbox key, so it can open the person's private records and messages;
-- every list secret, so it can use their stamps. In a market where the person has no registry row
-  yet, it can take that row for a profile of its own, and this seed can never have one there.
+- every issuer secret, so it can use their stamps. In a market where the person has no registry
+  row yet, it can take that row for a profile of its own, and this seed can never have one there.
 
 There is no rotation, so the only way out is a new seed and new profiles, moving the money first if
 there is still time. Another app that asks for 24 words takes them as an ordinary recovery phrase
@@ -200,11 +205,11 @@ on the registry and on Solana, and it needs no directory that could refuse, with
 it.
 
 **Can anyone tell that two profiles are mine?**
-Not from the keys. Each main key is mixed from the seed and its own label, and each list secret
-from the seed and its issuer's address, so nothing public ties two of a person's profiles together,
-or their stamps on two lists: off chain they are private by default. How an app writes them can
-still link them ([records](../records/README.md), Limits). On chain, moving money between your own
-profiles links them until a privacy pool is used.
+Not from the keys. Each main key is mixed from the seed and its own label, and each issuer secret
+from the seed and its issuer's name, so nothing public ties two of a person's profiles together,
+or their note numbers for two issuers: off chain they are private by default. How an app writes
+them can still link them ([records](../records/README.md), Limits). On chain, moving money between
+your own profiles links them until a privacy pool is used.
 
 **Why a separate inbox key and not the main key?**
 Signing and encrypting need different kinds of key: the main key is ed25519, which signs, and
@@ -223,11 +228,11 @@ gives no other profile, and no main key gives the seed.
 **Why two mixers, HKDF and Poseidon?**
 They work in different places. HKDF-SHA256 mixes every key from the seed, on the device: it is a
 standard, built into every browser's Web Crypto, and well studied. Poseidon is a hash made to be
-cheap inside a zero-knowledge proof, where SHA-256 costs far more. Semaphore's circuit uses it to
-turn the list secret into the stamp and the market stamp, so a proof can show that a stamp is on a
-list, and give its market stamp, without showing which stamp. So HKDF mixes up to the list secret,
-outside the proof, and Semaphore's hashes take it from there. Neither is ours; both are used
-unchanged.
+cheap inside a zero-knowledge proof, where SHA-256 costs far more. The registry's circuit uses it
+to turn the issuer secret into the note number and a stamp, so a proof can show that an issuer
+signed a note for the note number, and give the stamp, without showing which note. So HKDF mixes
+up to the issuer secret, outside the proof, and Poseidon takes it from there. Neither is ours;
+both are used unchanged.
 
 **What about quantum computers?**
 Only the inbox key and read keys are post-quantum, so that a private record copied today stays
@@ -248,9 +253,9 @@ name.
 
 **What if a main key leaks?**
 Whoever has it is that profile: it can sign records as the profile, move its money, and mix its
-inbox key to open its private records. It cannot reach the seed, another profile, or a list
+inbox key to open its private records. It cannot reach the seed, another profile, or an issuer
 secret. There is no rotation, because the name is the key, and nothing in Forest marks the profile
 as leaked: the person stops using it. Its registry row stays with it, because rows never change.
-The same seed and label always give the leaked key, and the market stamp depends on the seed, the
-issuer and the label, never on the profile. So with this seed, that label on that list is gone for
-good.
+The same seed and label always give the leaked key, and the stamp depends on the seed, the
+issuer's name and the label, never on the profile. So with this seed, that label with that issuer
+is gone for good.

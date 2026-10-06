@@ -48,9 +48,11 @@ for d in keys records registry/client escrow/client; do
   (cd "$d" && npm ci && npm run check && npm test)
 done
 
-# The reputation circuit, after keys and registry/client, which it reads: its setup's files,
-# then the compile checked against them, then type-check and tests.
-(cd circuits/reputation && npm ci && npm run fetch && npm run compile && npm run check && npm test)
+# Each circuit, after keys and registry/client, which it reads: its setup's files, then the
+# compile checked against them, then type-check and tests.
+for c in circuits/reputation registry/circuit; do
+  (cd "$c" && npm ci && npm run fetch && npm run compile && npm run check && npm test)
+done
 
 # Each program: build as SBPF v3, then its LiteSVM tests against that build.
 for p in registry/program escrow/program; do

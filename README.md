@@ -66,7 +66,7 @@ service's policy, an app's choice, or the person's.
 | [`records/`](records/README.md) | Signed records, the host socket, the permissions record, envelopes for private records, the inbox, blobs, the three record shapes, and a reference host | standards; the reference host is a service | a library and a reference host |
 | [`registry/`](registry/README.md) | A program and its client: one row per market stamp, free | core | on devnet |
 | [`escrow/`](escrow/README.md) | A program and its client: money out when both sides agree, or by an arbiter or timer set at the start | a service; use any | on devnet |
-| [`circuits/`](circuits/README.md) | The proofs Forest offers: membership and reputation, and the tree an index publishes | a standard | on the person's device; the reputation circuit's setup is devnet only |
+| [`circuits/`](circuits/README.md) | The proofs Forest offers: reputation, and the tree an index publishes | a standard | on the person's device; the reputation circuit's setup is devnet only |
 
 Each piece's README is its standard: what it is, how it works, its promises, its limits, who
 decides what, and an FAQ.
@@ -138,6 +138,7 @@ people check. It pins a version of forest, the way services does.
 
 **What is it built from?**
 Existing pieces, used unchanged: Ed25519, RFC 8785 canonical JSON, age, Semaphore's circuit and its
-public 2025 setup files, circomlib's Poseidon and zk-kit's Merkle circuit on PSE's Perpetual
-Powers of Tau, snarkjs, groth16-solana, Anchor, the SPL token programs, and Kora, in the
-foundation's fee payer, in services. Forest writes only what does not exist yet.
+public 2025 setup files, circomlib's Poseidon and EdDSA verifier and zk-kit's Merkle circuit on
+PSE's Perpetual Powers of Tau, zk-kit's EdDSA-Poseidon, snarkjs, groth16-solana, Anchor, the SPL
+token programs, and Kora, in the foundation's fee payer, in services. Forest writes only what does
+not exist yet.
