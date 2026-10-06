@@ -6,7 +6,7 @@ Up: [the repo](../README.md).
 
 The standard for a person's keys in Forest, and a small library that follows it. The standard is
 the 24 words and the recipe; the rules for apps are defaults an app adopts, or says it doesn't. A
-person owns one seed: 24 random words. Their main keys, reading keys and list secrets are mixed from
+person owns one seed: 24 random words. Their main keys, inbox keys and list secrets are mixed from
 it, on their own device. Any app that follows this page gets the same keys from the same seed, so a
 person is never locked into one app. Where the app keeps the seed is its choice: by default the
 device's secure slot, with the words in the person's password manager (the vault) as the backup.
@@ -35,12 +35,12 @@ Every mix is HKDF-SHA256 (RFC 5869): an empty salt, the info string's UTF-8 byte
 | From | Mixed with (info) | Gives | Used for |
 |---|---|---|---|
 | seed | `forest/v1/profile/<label>` | the main key (ed25519) | the profile's name and Solana address, and its signature on records and transactions |
-| the main key's 32 private bytes | `forest/v1/read` | the profile's reading key (age's post-quantum hybrid) | opening private records encrypted to the profile |
+| the main key's 32 private bytes | `forest/v1/read` | the profile's inbox key (age's post-quantum hybrid) | opening messages and private records encrypted to the profile |
 | seed | `forest/v1/list/<issuer address>` | the person's secret for that issuer's list (Semaphore v4) | the person's stamp on that list, and their market stamps |
 
-The info strings are hashed into every key, so they stay as written, `profile` included: a new
-string is a new key for everyone. From the list secret on, Semaphore's own hashes take over
-(below).
+The info strings are hashed into every key, so they stay as written, `profile` and `read`
+included: a new string is a new key for everyone. From the list secret on, Semaphore's own hashes
+take over (below).
 
 **The main key.**
 - One profile per label. A label is free text, used exactly as given, as UTF-8:
@@ -53,7 +53,7 @@ string is a new key for everyone. From the list secret on, Semaphore's own hashe
 - A chain other than Solana gets an address derived from the main key and published in the
   profile. Only Solana is used now, and no code derives another.
 
-**The reading key.**
+**The inbox key.**
 - Mixed from the main key, not from the seed: whoever holds a main key can read what is encrypted
   to its profile.
 - The 32 bytes are used unchanged as age's post-quantum hybrid identity, `mlkem768x25519`
@@ -62,7 +62,7 @@ string is a new key for everyone. From the list secret on, Semaphore's own hashe
 - Others encrypt to its recipient, `age1pq1…`, which age computes from the identity. It is long:
   about 1,960 characters. Anyone else opens what is encrypted to it only if both ML-KEM-768 and
   X25519 are broken.
-- The address does not give the recipient: whoever encrypts needs it from the profile.
+- The profile publishes the recipient, the key's public half; the address does not give it.
 
 **The list secret and the stamps.**
 - An issuer is anyone who keeps a list of stamps, such as the human list. The issuer's address is
@@ -89,15 +89,19 @@ string is a new key for everyone. From the list secret on, Semaphore's own hashe
 4. Each connection gets its own access key for each folder.
 5. Proofs are made in the app, never delegated.
 6. The app works with any host, and its host with any app.
-7. A server that writes for you holds write-scoped access keys only, never a pay-scoped one.
+7. A server that acts for you holds access keys with write, message or read scope, never a pay key.
 8. The app that holds the seed is open source.
 9. Keep a copy of every record signed; a host may drop one, and the copy puts it back.
+10. Keep each grant, an access key handed to the person, as a private record in their own folder.
 
-**Access keys.** A person hands out access keys, never a main key. An access key has one of three
+**Access keys.** A person hands out access keys, never a main key. An access key has one of four
 scopes. Write: a key listed in the folder's permissions record ([records](../records/README.md)).
-Read: a reading key the owner makes at random and hands over; nothing here mixes it, and how it
-reaches the reader is the app's. Pay: the chain's own token allowance to a key, with no Forest
-format. The profile's own reading key is still mixed (above).
+Message: a key that sends and pulls the profile's messages. Read: a read key, which the owner makes
+at random and hands over; nothing here mixes it, and how it reaches the reader is the app's. Pay:
+the chain's own token allowance to a key, with no Forest format. Where a holder keeps the access
+keys it is handed is its own business; the foundation's key holder is one place
+([services](https://github.com/foundationforest/services)). The profile's own inbox key is mixed
+(above), not made.
 
 ### Use it
 
@@ -108,7 +112,7 @@ Everything is exported from `src/index.ts`. Everything that mixes is async.
 | `newSeed()` | A new seed: 32 random bytes |
 | `exportWords(seed)`, `importWords(text)` | The 24 words, and the seed back from them |
 | `mainKey(seed, label)` | The main key: `label`, `privateKey`, `publicKey`, `address` |
-| `readingKey(main.privateKey)` | The reading key: age's `identity`, and the `recipient` others encrypt to |
+| `readingKey(main.privateKey)` | The inbox key: age's `identity`, and the `recipient` others encrypt to |
 | `listSecret(seed, issuer)` | The list's `secret`, Semaphore's `identity`, and the `stamp` |
 | `hkdf(ikm, info)`, `INFO` | The mixer and its info strings |
 
@@ -125,7 +129,7 @@ Node 22.18 or later runs the TypeScript directly.
 ### Test vectors
 
 `test/vectors.json` pins, for the seed `00 01 … 1f`: its 24 words; the main keys for
-`tutoring/seller` and `tutoring/buyer`, each with its reading key; and the list secrets and stamps
+`tutoring/seller` and `tutoring/buyer`, each with its inbox key; and the list secrets and stamps
 for two issuers. `npm test` checks each value and recomputes it without the library: HKDF from a
 second implementation, ed25519 from `@noble/curves`, the hybrid recipient from
 `@noble/post-quantum`, age's bech32 by hand, an encryption and an opening through age, and the
@@ -135,10 +139,10 @@ stamp step by step without Semaphore's wrapper.
 
 - **The same seed gives the same keys,** in any app, on any device, every time.
 - **Nothing ties two profiles together.** Each label is its own mix: one profile's main key,
-  address or reading key says nothing about another's.
+  address or inbox key says nothing about another's.
 - **Nothing ties two lists together.** Each issuer is its own mix, so the same person's stamps on
   two lists are unrelated, and two issuers comparing their lists cannot match them.
-- **No key gives the seed back.** Every mix is one way. A main key gives its reading key, and
+- **No key gives the seed back.** Every mix is one way. A main key gives its inbox key, and
   nothing else.
 - **Nothing leaves the device.** The library talks to no network and stores nothing.
 
@@ -155,8 +159,9 @@ stamp step by step without Semaphore's wrapper.
 - **No rotation.** A profile's name is its key, so a leaked main key loses that profile for good
   (see the FAQ).
 - **One profile per label per seed.** The same seed and label always give the same key.
-- **Only the reading key is post-quantum.** ed25519 and Semaphore's curves fall to a large quantum
-  computer; the reading key, age's ML-KEM-768 hybrid, does not (see the FAQ).
+- **Only the inbox key and read keys are post-quantum.** ed25519 and Semaphore's curves fall to a
+  large quantum computer; the inbox key and read keys, age's ML-KEM-768 hybrid, do not (see the
+  FAQ).
 - **No wiping of memory.** JavaScript cannot promise that bytes are erased; an app closes the
   page, the library cannot.
 - **Tests run in Node.**
@@ -165,7 +170,7 @@ stamp step by step without Semaphore's wrapper.
 
 - **The standard:** the 24 words, the recipe and its info strings.
 - **An app, with the person:** which of the rules above it adopts; where the seed and keys live and
-  how the face or fingerprint opens them; backups; how a made reading key reaches its reader.
+  how the face or fingerprint opens them; backups; how a read key reaches its reader.
 - **A service:** nothing. No service holds a main key.
 
 ## FAQ
@@ -179,7 +184,7 @@ gets the words gets every key.
 Then that app has everything the seed opens, and nothing takes it back:
 - every profile: labels are public, so it can mix any main key, sign as that profile and move its
   money;
-- every reading key, so it can open the person's private records;
+- every inbox key, so it can open the person's private records and messages;
 - every list secret, so it can use their stamps. In a market where the person has no registry row
   yet, it can take that row for a profile of its own, and this seed can never have one there.
 
@@ -201,8 +206,18 @@ or their stamps on two lists: off chain they are private by default. How an app 
 still link them ([records](../records/README.md), Limits). On chain, moving money between your own
 profiles links them until a privacy pool is used.
 
-**Why is the reading key mixed from the main key, not from the seed?**
-So that whoever holds a profile can read what is encrypted to it, and nothing more: the reading key
+**Why a separate inbox key and not the main key?**
+Signing and encrypting need different kinds of key: the main key is ed25519, which signs, and
+nothing is ever encrypted to a main key. The inbox key is mixed from the main key, so there is
+nothing extra to keep.
+
+**Why that kind of key?**
+Private records sit in public for years, so what they are encrypted to is post-quantum: a copy
+taken today stays closed once quantum computers come. Signing does not need that yet: a signature
+can only be forged once such a computer exists.
+
+**Why is the inbox key mixed from the main key, not from the seed?**
+So that whoever holds a profile can read what is encrypted to it, and nothing more: the inbox key
 gives no other profile, and no main key gives the seed.
 
 **Why two mixers, HKDF and Poseidon?**
@@ -215,17 +230,17 @@ outside the proof, and Semaphore's hashes take it from there. Neither is ours; b
 unchanged.
 
 **What about quantum computers?**
-Only the reading key is post-quantum, so that a private record copied today stays private once
-quantum computers come. A large enough quantum computer could:
+Only the inbox key and read keys are post-quantum, so that a private record copied today stays
+private once quantum computers come. A large enough quantum computer could:
 - work out from a profile's address what signs for it, then sign as the profile and move its
   money;
 - forge Semaphore proofs, whose curves it breaks too.
 
 It could not open private records, even ones copied today to open later:
-- the reading key is age's hybrid, so its recipient gives nothing away unless ML-KEM-768 breaks
+- the inbox key is age's hybrid, so its recipient gives nothing away unless ML-KEM-768 breaks
   too;
 - breaking an address gives ed25519's signing number, not the main key's 32 private bytes the
-  reading key is mixed from: ed25519 hashes those bytes with SHA-512 first, and SHA-512 holds.
+  inbox key is mixed from: ed25519 hashes those bytes with SHA-512 first, and SHA-512 holds.
 
 Nor could it undo the mixes: HKDF-SHA256, and so the seed, holds. Quantum-safe main keys would
 be a new version with new info strings, and since a name is a key, every profile would get a new
@@ -233,7 +248,7 @@ name.
 
 **What if a main key leaks?**
 Whoever has it is that profile: it can sign records as the profile, move its money, and mix its
-reading key to open its private records. It cannot reach the seed, another profile, or a list
+inbox key to open its private records. It cannot reach the seed, another profile, or a list
 secret. There is no rotation, because the name is the key, and nothing in Forest marks the profile
 as leaked: the person stops using it. Its registry row stays with it, because rows never change.
 The same seed and label always give the leaked key, and the market stamp depends on the seed, the
