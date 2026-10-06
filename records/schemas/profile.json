@@ -42,9 +42,9 @@
       "description": "What I do.",
       "maxLength": 1000
     },
-    "read": {
+    "inboxKey": {
       "type": "string",
-      "description": "Optional. The profile's reading key, as an age post-quantum hybrid recipient (mlkem768x25519, 1,959 characters): what others make private records for. Without it, nobody can make a private record for this profile.",
+      "description": "Optional. The profile's inbox key, as an age post-quantum hybrid recipient (mlkem768x25519, 1,959 characters): what senders seal messages to, and others seal private records to. Without it, nobody can seal anything to this profile.",
       "pattern": "^age1pq1[02-9ac-hj-np-z]{1952}$"
     },
     "inbox": {
@@ -66,7 +66,7 @@
   "$defs": {
     "inbox": {
       "type": "object",
-      "description": "Optional. The profile's inbox: who may deliver a message to it on its hosts. Senders seal each message to read, so a profile with an inbox also gives read. Without this field there is no inbox, and hosts refuse deliveries. A host refuses deliveries to an inbox it cannot read: a field, a rule or a value it does not know.",
+      "description": "Optional. The profile's inbox: who may deliver a message to it on its hosts. Senders seal each message to inboxKey and to every reader, so a profile with an inbox also gives inboxKey. Without this field there is no inbox, and hosts refuse deliveries. A host refuses deliveries to an inbox it cannot read: a field, a rule or a value it does not know.",
       "required": ["senders"],
       "additionalProperties": false,
       "properties": {
@@ -99,6 +99,14 @@
           "type": "integer",
           "description": "Optional. The largest message it takes, as canonical text in bytes. A message is at most 65,536 bytes anyway.",
           "minimum": 0
+        },
+        "readers": {
+          "type": "array",
+          "description": "Optional. Read keys' public halves. A sender seals every message to inboxKey and to each of these, in one envelope, so a reader listed here can act on the inbox while the person is away. Each adds about 2 KB to every message.",
+          "items": {
+            "type": "string",
+            "pattern": "^age1pq1[02-9ac-hj-np-z]{1952}$"
+          }
         }
       }
     },

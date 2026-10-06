@@ -10,7 +10,8 @@ a path in the profile's folder, such as `profile`, `offer/maths` or `review/7`. 
 folder of the profile that wrote it: the one it's about can't erase it; the one who wrote it can.
 Hosts keep records and serve them to anyone. Any app, index or AI can read them, and checks every
 signature itself. A profile can also declare an inbox: anyone may deliver it a sealed message, and
-only its main key pulls them. Hosts also keep the photos and videos records name: blobs.
+only its main key, or a message key it lists, pulls them. Hosts also keep the photos and videos
+records name: blobs.
 
 This README is the standard. The library in `src/` does every MUST in it, and `test/` checks it.
 MUST, SHOULD and MAY are used as in RFC 2119. The folder also holds a reference host, the three
@@ -19,36 +20,38 @@ record shapes as JSON Schemas, and test vectors.
 ## How it works
 
 ```
-seed ── "forest/v1/profile/tutoring/seller" ──▶ main key ── "forest/v1/read" ──▶ reading key
+seed ── "forest/v1/profile/tutoring/seller" ──▶ main key ── "forest/v1/read" ──▶ inbox key
                                                     │
                                           signs every record
                                                     ▼
 app ── POST /v1/records, then PUT /v1/blobs ──▶ the hosts its hosts record names ── GET ──▶ any reader
 
-sender ── POST /v1/inbox ──▶ the recipient's hosts ── POST /v1/inbox/pull ──▶ the recipient's main key only
+sender ── POST /v1/inbox ──▶ the recipient's hosts ── POST /v1/inbox/pull ──▶ its main key or message keys
 ```
 
 ### Keys
 
-The main key and the reading key are [keys/](../keys/README.md)'s, mixed from the person's seed.
-records mixes no key. Nothing else is needed: no account, no sign-up, no directory.
+The main key and the inbox key are [keys/](../keys/README.md)'s, mixed from the person's seed. An
+access key is made at random by the owner's app and handed out. records mixes no key. Nothing else
+is needed: no account, no sign-up, no directory.
 
 | Key | Made from | Used for |
 |---|---|---|
 | main key | keys/: ed25519, mixed from the seed and the label, such as `tutoring/seller` | signing the folder's records, the messages it sends and the pulls of its inbox; its address is the profile's name and its Solana address; one profile per label |
-| reading key | keys/: age's post-quantum hybrid identity (`mlkem768x25519`), mixed from the main key | opening private records and messages |
-| access key | any ed25519 key an app makes | writing where the permissions record lists it |
+| inbox key | keys/: age's post-quantum hybrid identity (`mlkem768x25519`), mixed from the main key | opening the messages sent to the profile and the private records sealed to it, its grants among them; the profile record gives its public half as `inboxKey` |
+| access key | made at random by the owner's app, listed in the permissions record, handed over in a grant | one scope: **write** (ed25519) signs records where its paths allow; **message** (ed25519) signs messages for the main key and pulls its inbox; **read** (age's hybrid) opens what is sealed to it; **pay** (ed25519) spends the allowance the chain gives it |
 
 - **Names.** A profile's name is its main key in base58: its address, which is also its Solana
-  address. An access key is named the same way. An address has one spelling: decoding and encoding
-  again MUST give the same text.
-- **Usable keys.** A key named anywhere (`profile`, `by`, an access key's `key`, a message's `to`
-  and `from`, an inbox's `issuer`) MUST be a canonical point in the prime-order subgroup and not of
-  small order. Anything else is refused.
+  address. An access key is named the same way, but for a read key: its age recipient,
+  `age1pq1…`. An address has one spelling: decoding and encoding again MUST give the same text.
+- **Usable keys.** A key named by its address anywhere (`profile`, `by`, an access key's `key` but
+  a read key's, a message's `to`, `from` and `key`, a pull's `key`, an inbox's `issuer`, a grant's
+  `folder` and `from`) MUST be a canonical point in the prime-order subgroup and not of small
+  order. Anything else is refused.
 - **What a main key signs:** Solana transactions, records, messages and pull requests. The signed
   bytes of the last three begin with `0xff`, which no Solana message begins with, then each with its
   own text (`forest/v1/record\n`, `forest/v1/message\n`, `forest/v1/pull\n`), so no signature is
-  ever two of them.
+  ever two of them. Write and message keys sign the same bytes.
 
 ### Canonical JSON
 
@@ -83,37 +86,55 @@ received.
 - A path is 1 to 4 segments separated by `/`, each `[a-z0-9][a-z0-9._-]{0,63}`, at most 256 bytes.
 - **Control paths**, the owner's alone: `hosts` and `permissions`.
 - **Content:** `profile` (the card), `offer/<id>` (an offer or a request) and `review/<id>`, shaped
-  by the JSON Schemas in `schemas/`; a market adds fields, never a shape. Other first segments are
-  content too; readers MAY ignore them.
+  by the JSON Schemas in `schemas/`; a market adds fields, never a shape. `grants` holds the grants
+  the profile received (Grants). Other first segments are content too; readers MAY ignore them.
 - A prefix covers a path segment by segment: `offer` covers `offer` and `offer/x`, not `offerx`.
 
 ### Control records
 
 - **hosts:** `{ "urls": [origin, …] }`: 1 to 8 distinct origins, `https://host[:port]`, lower case,
   no path (`http` only on loopback, for tests). Where the profile's records live.
-- **permissions:** `{ "access": [{ "key": <address>, "paths": [prefix, …], "until"?: <ms> }, …] }`:
-  the list of access keys, at most 16, each with at most 16 content-path prefixes. `until` is
-  optional: whole milliseconds, 0 to 2^53 − 1. An access key without it has no end.
+- **permissions:** `{ "access": [{ "key": <key>, "scope": <scope>, "paths"?: [prefix, …] }, …] }`:
+  the access keys the folder lists, at most 16, revoked ones included.
+  - `scope` is `write`, `message`, `read`, `pay` or `revoked` (Access keys).
+  - `key` is the key's address, or, for a read key, its age recipient (`age1pq1…`).
+  - `paths`: at most 16 content-path prefixes, on a write, read or revoked key, never on a message
+    or pay key. With `paths`, the key works only under them: where a write key writes, and which
+    private records the owner's devices seal to a read key. Without, it works at every content path
+    but those `profile` and `grants` cover.
+  - Removing a write or message key is setting its scope to `revoked` and keeping its entry: it
+    adds nothing more, and what it wrote still counts. Only those two scopes are revoked, since only
+    they make things that must keep counting, so a revoked key is an address. Deleting a write or
+    message key's entry instead is the owner disowning what it wrote: none of it counts any more.
+  - Removing a read or pay key is deleting its entry: nothing it did needs to count, and the 16
+    entries do not fill with read keys of about 2 KB each.
+  - No names, dates or reasons: who a key is for, and since when, is in its grant, which is private.
 - A field not named here, at any level, makes the record invalid, so a later limit is never ignored.
 
 ### Access keys
 
-One rule, the access rule: an access key can write while it is on the list; what it already wrote
-always stays.
+A person hands out access keys, never a main key. The owner's app makes one, lists it in the
+permissions record with one scope, and hands its private half to whoever it is for in a grant
+(Grants).
 
-- `until` means the key is on the list up to that date.
-- Removing an access key means setting its `until` to now. Apps never delete entries from the list,
-  so its past records keep counting.
-- Hosts refuse an access key's record after its `until`; readers count it if its date is before its
-  `until`.
+- **write** signs records into the folder, by the access rule below.
+- **message** signs messages for the main key, and pulls its inbox (Inbox).
+- **read** opens the private records and messages sealed to it (Private records, Inbox). Its public
+  half is listed so the owner's other devices can seal to it.
+- **pay** spends the token allowance the chain gives it. The allowance lives on chain, and Forest
+  has no format for it; listing a pay key is the owner's choice.
+
+The access rule: a write key adds records while it is listed with scope `write`; what it wrote
+counts while it is listed, revoked or not.
+
+- Hosts take an access key's record only if its key is listed with scope `write`, its paths
+  covering the record's path.
+- Readers count it if its key is listed with scope `write` or `revoked`, its paths covering the
+  record's path. No date is checked.
 - The owner's record wins over an access key's at the same path, so the owner can always delete an
   access key's record.
 
 An access key's records carry `by`, its key.
-
-Write scope lives here, in the permissions record. Read scope is the envelopes: a private record
-opens only for the reading keys it is sealed to (Private records, below). Pay scope is the chain's
-own allowance, and Forest has no format for it.
 
 ### Which record counts
 
@@ -124,12 +145,13 @@ A reader's view of a profile is a pure function of the records it holds and its 
 3. At `hosts` and at `permissions`, the newest record is current.
 4. At a content path, if the owner has any record there, the owner's newest is current. Otherwise
    the newest access key's record the current permissions record allows by the access rule: an
-   entry on its list whose `key` is `by`, one of whose `paths` covers the record's path, and, if it
-   has an `until`, the record's `time` < `until`. A key not on the list counts for nothing.
+   entry on its list whose `key` is `by`, whose scope is `write` or `revoked`, and one of whose
+   `paths` covers the record's path (with no `paths`, any content path but those `profile` and
+   `grants` cover). A key not on the list counts for nothing.
 5. A current record with a `null` body means the path is deleted.
 
-Readers check `until` against the record's own time and no clock; when an access key's record
-arrived is the host's check (see Hosts).
+Readers check no date and no clock; when an access key's record arrived is the host's check (see
+Hosts).
 
 ### Private records
 
@@ -137,28 +159,31 @@ A private record's body is `{ "private": <base64url of an age file> }` and nothi
 private record is one age file, the envelope: the canonical text of an object under a random key
 made for that record, and that key sealed once per reader.
 
-The readers are reading keys the owner makes, one for each reader, and hands over. So a reader needs
-no profile and no key of its own, a made key that leaks opens only what this owner sealed to it,
-and one relationship can be revoked without the reader rotating its own key. The owner usually adds
-its own reading key, to open its copy. A profile's `read` field is that profile's own reading key.
-How a made key's private half reaches its reader is the app's.
+The readers are read keys the owner's app makes at random, one for each reader, and hands over in a
+grant (Grants). So a reader needs no profile and no key of its own, a read key that leaks opens
+only what this owner sealed to it, and one relationship can be revoked without the reader rotating
+its own key. The permissions record lists each read key's public half, so the owner's other devices
+can seal to it too. The owner usually adds its own inbox key, to open its copy: the profile
+record's `inboxKey` is its public half.
 
-Each reading key is an age post-quantum hybrid recipient (`age1pq1…`, stanza `mlkem768x25519`); an
-app MUST NOT seal an envelope to any other kind. Each one adds about 2 KB, so the 65,536-byte cap
-allows about 30. A host checks a private record like any other and cannot open it. Anyone can see
-that it exists, its path, time and size, and how many reading keys it is sealed to. To remove a
-reader, write a new version for the rest; a reader keeps what it already opened. There is no
-forward secrecy.
+Each key an envelope is sealed to is an age post-quantum hybrid recipient (`age1pq1…`, stanza
+`mlkem768x25519`); an app MUST NOT seal an envelope to any other kind. Each one adds about 2 KB, so
+the 65,536-byte cap allows about 30. A host checks a private record like any other and cannot open
+it. Anyone can see that it exists, its path, time and size, and how many keys it is sealed to. To
+remove a reader, write a new version for the rest; a reader keeps what it already opened. There is
+no forward secrecy.
 
 ### Inbox
 
-A profile can take messages: sealed notes anyone delivers to its hosts, and only its main key pulls.
-A message is not a record: it has no path and no versions, and it is in no one's folder.
+A profile can take messages: sealed notes anyone delivers to its hosts, and only its main key or its
+message keys pull. A message is not a record: it has no path and no versions, and it is in no one's
+folder.
 
 **Declaring it.** The profile record's optional `inbox` field (`schemas/profile.json`):
 
 ```
-"inbox": { "senders": "anyone" | { "issuer": <address> }, "once"?: true, "maxBytes"?: <integer> }
+"inbox": { "senders": "anyone" | { "issuer": <address> }, "once"?: true, "maxBytes"?: <integer>,
+           "readers"?: [<age1pq1…>, …] }
 ```
 
 - No `inbox` field means no inbox: hosts refuse deliveries.
@@ -166,43 +191,81 @@ A message is not a record: it has no path and no versions, and it is in no one's
   issuer, under any label.
 - `once`: one message from each sender, ever.
 - `maxBytes`: the largest message it takes, as canonical text in bytes.
-- Senders seal to the profile's `read`, so a profile with an inbox gives one.
+- `readers`: read keys' public halves. A reader listed here can act on the inbox while the person
+  is away: with a message key too, it pulls, opens and answers.
+- Senders seal every message to the profile's `inboxKey` and to every reader, in one envelope, so a
+  profile with an inbox gives an inbox key. Each reader makes every message about 2 KB larger.
 - A host refuses deliveries to an inbox it cannot read: a field, a rule or a value it does not know.
-  So a new rule can be added later without an old host taking what it should refuse.
+  So a new rule can be added later without an old host taking what it should refuse. A sender's
+  app does not deliver to one either: a field it does not know could name more keys to seal to.
 
 **Messages.**
 
 ```
 { "v": 1, "to": <address>, "from": <address>, "time": <ms since 1970>,
-  "body": { "private": <base64url of an age file> }, "sig": <base64url> }
+  "body": { "private": <base64url of an age file> }, "key"?: <address>, "host"?: <origin>,
+  "sig": <base64url> }
 ```
 
 - `v` is 1. No other field is allowed, in the message or in its body.
 - `to` is the recipient profile. `from` is the sender's key: a main key, or any other ed25519 key.
-- `body` is one envelope (Private records) sealed to `to`'s reading key alone.
-- `sig` is Ed25519 by `from`, strict as a record's, over `0xff` ‖ UTF-8(`forest/v1/message\n`) ‖
-  UTF-8(canonical text of the message without `sig`), in base64url without padding.
+- `key` and `host` come together, when a message key signs for `from`, a main key: `key` is the
+  message key's address, other than `from`, and `host` is one of `from`'s hosts, an origin as the
+  hosts record writes it. So the recipient sees that a message key sent it.
+- `body` is one envelope (Private records) sealed to `to`'s inbox key and its inbox's readers.
+- `sig` is Ed25519 by `key` if present, else by `from`, strict as a record's, over `0xff` ‖
+  UTF-8(`forest/v1/message\n`) ‖ UTF-8(canonical text of the message without `sig`), in base64url
+  without padding.
 - The id is lowercase hex of SHA-256(signing input), as a record's. The canonical text is at most
   65,536 bytes.
 
-**Deliver.** The sender reads the recipient's profile record for its `inbox` and `read`, and its
-hosts record. It seals the body to `read`, signs, and posts the message to each host the hosts
-record names (`POST /v1/inbox`). Anyone may deliver, with no login; each host checks the message on
-its own (Taking a message in, under Hosts).
+**Deliver.** The sender reads the recipient's profile record for its `inbox` and `inboxKey`, and
+its hosts record. It seals the body to the inbox key and every reader, signs, and posts the message
+to each host the hosts record names (`POST /v1/inbox`). Anyone may deliver, with no login; each host
+checks the message on its own (Taking a message in, under Hosts).
+
+**Send with a message key.** The main key lists the message key in its permissions record with
+scope `message`; the message names it as `key`, and one of the main key's hosts as `host`. No
+permissions record travels in the message: the receiving host reads `from`'s current hosts and
+permissions records from `host`, so a key the owner revokes stops being taken once a host reads
+them again. The inbox's rule and `once` apply to `from`, as for any message.
 
 **Pull.** The recipient asks each of its hosts for what arrived after a cursor
 (`POST /v1/inbox/pull`):
 
 ```
-{ "v": 1, "profile": <address>, "after": <cursor>, "time": <ms since 1970>, "sig": <base64url> }
+{ "v": 1, "profile": <address>, "after": <cursor>, "time": <ms since 1970>, "key"?: <address>,
+  "sig": <base64url> }
 ```
 
-- `sig` is Ed25519 by the profile's main key over `0xff` ‖ UTF-8(`forest/v1/pull\n`) ‖
-  UTF-8(canonical text without `sig`). An access key cannot pull.
+- `sig` is Ed25519 by the profile's main key, or by `key`, one of its message keys, over `0xff` ‖
+  UTF-8(`forest/v1/pull\n`) ‖ UTF-8(canonical text without `sig`). A message key pulls only while
+  the profile's permissions record on that host lists it with scope `message`. No other access key
+  pulls.
 - `after` is the `forest-cursor` of the last page; 0 for everything.
 - `time` is within 600,000 ms of the host's clock, either way.
 - It is a POST and not a GET because hosting platforms log URLs, and a signed URL would be a log of
   pulls.
+
+### Grants
+
+A grant is how an access key reaches whoever it is for: its private half, and what it is for.
+
+```
+{ "key": <private half>, "folder": <address>, "scope": "write" | "message" | "read" | "pay",
+  "paths"?: [prefix, …], "from": <address>, "since": <ms since 1970>, "note"?: <text> }
+```
+
+- `key` is a read key's age identity (`AGE-SECRET-KEY-PQ-1…`), or any other key's 32 private bytes
+  in base64url without padding.
+- `folder` is the profile whose permissions record lists the key, and `paths` are as it lists them.
+  `from` is who handed it over, `since` when, and `note` whatever its holder wants to remember. A
+  grant is private, so it can hold the names and reasons the permissions record never does.
+- No other field is allowed.
+- A message body may be `{ "grant": <grant> }`: a grant handed over by message.
+- A person keeps the grants they received as a private record at the fixed path `grants`, body
+  `{ "grants": [<grant>, …] }`, sealed to the profile's own inbox key. The app's local copy of its
+  own records is the working copy; the record on the hosts is why losing the phone loses nothing.
 
 ### Blobs
 
@@ -242,11 +305,12 @@ policy.
 ### Hosts
 
 A host is an HTTPS service with no keys, no accounts and no login: a record's signature is its only
-credential, and a pull's is the recipient's. It is open: it takes signed records for any profile and
-serves them to anyone; it takes messages for any profile whose profile record on it declares an
-inbox, and serves them only to that profile's main key; it takes the bytes a current record names,
-and serves them to anyone. A host never talks to an index. Every host answers the same six
-requests, the host socket:
+credential, and a pull's is the recipient's main key's or message key's. It is open: it takes
+signed records for any profile and serves them to anyone; it takes messages for any profile whose
+profile record on it declares an inbox, and serves them only to that profile's main key and message
+keys; it takes the bytes a current record names, and serves them to anyone. A host never talks to
+an index; to take a message a message key signed, it reads the sender's records from the sender's
+host. Every host answers the same six requests, the host socket:
 
 **`POST /v1/records`.** The body is NDJSON, one canonical record per line. The answer is NDJSON,
 one `{i, id?, ok, error?, message?}` per line (Taking a record in).
@@ -261,8 +325,9 @@ number on the page: the next page is after it.
 **`POST /v1/inbox/pull`.** The body is a pull request's canonical text. The answer is NDJSON of the
 messages to that profile that arrived after the cursor, in arrival order, with `forest-cursor` as
 for records. A pull it refuses is answered 400 with `{ok, error, message}`: [`stale`] when its time
-is more than 600,000 ms from the host's clock, [`signature`] when the profile's main key did not
-sign it, or a shape code.
+is more than 600,000 ms from the host's clock, [`signature`] when neither the profile's main key
+nor the `key` it names signed it, [`permission`] when the profile's permissions record on this host
+does not list that `key` with scope `message`, or a shape code.
 
 **`PUT /v1/blobs/<sha256>`.** The body is the raw bytes, `content-type` their type, and the path
 their SHA-256 in lowercase hex. The answer is `{ok, error?, message?}` (Taking a blob in).
@@ -284,9 +349,8 @@ request again in halves, follows the cursor page by page, and refuses unread a l
 2. Within a request, hosts and permissions records first, then the rest in the order sent.
 3. It MUST become the current record at its path by Which record counts, over what the host stores
    plus it [`older`, `permission`].
-4. An access key's record: when it arrives, its key MUST be on the current permissions record's
-   list for its path, and that key's `until`, if it has one, MUST be later than the host's clock
-   [`permission`].
+4. An access key's record: its key MUST be listed with scope `write`, its paths covering the
+   record's path [`permission`]. A reader also counts a revoked key's records; a host takes none.
 5. A host MAY refuse a content record by its own policy [`policy`]. It MUST NOT refuse a hosts or
    permissions record by policy, so a person can always move and always remove an access key.
 
@@ -296,15 +360,21 @@ request again in halves, follows the cursor page by page, and refuses unread a l
    `time ≤ now + 600,000` [`future`].
 2. No message with the same id is here already [`duplicate`].
 3. The current profile record of `to` on this host declares an inbox [`no_inbox`].
-4. The signature [`signature`].
-5. The rule. `"anyone"` passes. `{ issuer }` needs a row for `from` from that issuer, under any
-   label [`sender`]: a registry lookup, over an RPC the host chooses; a host without one accepts
-   only `"anyone"` [`rule_unsupported`]. A lookup that fails is [`lookup`]: the sender may try
-   again. An inbox the host cannot read is [`rule_unsupported`] too.
-6. `once`: a second message from this `from` to this `to` is refused, ever [`once`]. The host keeps
-   each pair it takes while the inbox says `once`, for as long as it keeps the profile.
-7. `maxBytes`: the canonical text is at most that many bytes [`too_big`].
-8. A host MAY refuse a message by its own policy [`policy`].
+4. The signature: by `key` if the message names one, else by `from` [`signature`].
+5. A message key: the host reads `from`'s records from `host`, as a reader does
+   (`GET /v1/records`), or uses what it read before, kept for a time it chooses. `host` MUST be one
+   the current hosts record names, and the current permissions record MUST list `key` with scope
+   `message` [`permission`]. A read that fails is [`lookup`]: the sender may try again. A host that
+   reads no sender's records refuses every message a message key signed [`rule_unsupported`].
+6. The rule, on `from`. `"anyone"` passes. `{ issuer }` needs a row for `from` from that issuer,
+   under any label [`sender`]: a registry lookup, over an RPC the host chooses; a host without one
+   accepts only `"anyone"` [`rule_unsupported`]. A lookup that fails is [`lookup`]: the sender may
+   try again. An inbox the host cannot read is [`rule_unsupported`] too.
+7. `once`: a second message from this `from` to this `to` is refused, ever, whichever key signed it
+   [`once`]. The host keeps each pair it takes while the inbox says `once`, for as long as it keeps
+   the profile.
+8. `maxBytes`: the canonical text is at most that many bytes [`too_big`].
+9. A host MAY refuse a message by its own policy [`policy`].
 
 **Taking a blob in**, in this order:
 
@@ -347,9 +417,9 @@ says it doesn't:
 
 | Import | What it gives |
 |---|---|
-| `@forest/records` | Keys as addresses (`keyFromPrivate`, `publicKeyFromAddress`); canonical text; signing, checking and encoding records; the view (`viewProfile`, `liveContent`); writing (`ownerRecord`, `accessRecord`, `hostsRecord`, `permissionsRecord`, `nextTime`); messages and pulls (`signMessage`, `decodeMessage`, `messageId`, `pullRequest`, `checkPull`, `inboxOf`); talking to hosts (`publish`, `readPage`, `readAll`, `readProfile`, `deliver`, `pull`, `putBlob`, `getBlob`). No server, database or encryption library in it |
-| `@forest/records/host` | `Host`, the reference host: one SQLite file and the six requests. Unless told otherwise, it takes 100 records or messages a request; serves 1,000 a page, at most 4,194,304 bytes; keeps a replaced record, a message, and bytes no current record names any more for 30 days; and takes png, jpeg and mp4 blobs up to 50,000,000 bytes. Give it `rowLookup` to take messages for inboxes with an issuer's rule |
-| `@forest/records/private` | `makePrivate`, `openPrivate`, `readerCount`; `message` (seal and sign one) and `openMessage`. The reading key itself is keys/'s `readingKey` |
+| `@forest/records` | Keys as addresses (`keyFromPrivate`, `publicKeyFromAddress`); canonical text; signing, checking and encoding records; the view (`viewProfile`, `liveContent`, `allows`, `covers`); writing (`ownerRecord`, `accessRecord`, `hostsRecord`, `permissionsRecord`, `nextTime`); messages and pulls (`signMessage`, `decodeMessage`, `messageId`, `pullRequest`, `checkPull`, `inboxOf`, `sealedTo`); grants (`checkGrant`, `GRANTS_PATH`); talking to hosts (`publish`, `readPage`, `readAll`, `readProfile`, `deliver`, `pull`, `putBlob`, `getBlob`). No server, database or encryption library in it |
+| `@forest/records/host` | `Host`, the reference host: one SQLite file and the six requests. Unless told otherwise, it takes 100 records or messages a request; serves 1,000 a page, at most 4,194,304 bytes; keeps a replaced record, a message, and bytes no current record names any more for 30 days; and takes png, jpeg and mp4 blobs up to 50,000,000 bytes. Give it `rowLookup` to take messages for inboxes with an issuer's rule, and `readSender` to take messages a message key signed: it reads the sender's records again for each request |
+| `@forest/records/private` | `makePrivate`, `openPrivate`, `readerCount`; `message` (seal to a card's inbox key and readers, and sign) and `openMessage`; `grantsRecord` and `openGrants`. The inbox key itself is keys/'s `readingKey` |
 | `@forest/records/schemas/<kind>.json` | The three shapes, as JSON Schemas |
 
 Publish a profile with one offer, read it back, then let another app write offers:
@@ -369,7 +439,7 @@ const view = await readProfile([host], me.address, Date.now())
 view.current.get('offer/maths')?.record.body
 
 const helper = keyFromPrivate(randomBytes(32)) // the other app's own access key
-await publish(view.hosts, [permissionsRecord(me, [{ key: helper.address, paths: ['offer'], until: now + 30 * 86_400_000 }], now)])
+await publish(view.hosts, [permissionsRecord(me, [{ key: helper.address, scope: 'write', paths: ['offer'] }], now)])
 await publish(view.hosts, [accessRecord(helper, me.address, 'offer/physics', { direction: 'offer', description: 'Physics, one hour.', createdAt: new Date(now).toISOString() }, now)])
 ```
 
@@ -381,13 +451,30 @@ import { deliver, pull, pullRequest, readProfile } from '@forest/records'
 import { message, openMessage } from '@forest/records/private'
 
 const buyer = await mainKey(otherSeed, 'tutoring/buyer')
-const seller = await readProfile([host], me.address, Date.now()) // its card declares an inbox and gives read
-const read = seller.current.get('profile')?.record.body?.read as string
-await deliver(seller.hosts, [await message(buyer, me.address, { text: 'Is Tuesday at six free?' }, Date.now(), read)])
+const seller = await readProfile([host], me.address, Date.now()) // its card declares an inbox and gives inboxKey
+const card = seller.current.get('profile')!.record.body!
+await deliver(seller.hosts, [await message(buyer, me.address, { text: 'Is Tuesday at six free?' }, Date.now(), card)])
 
 const page = await pull(host, pullRequest(me, 0, Date.now())) // the main key signs each pull
-const { identity } = await readingKey(me.privateKey)
+const { identity } = await readingKey(me.privateKey) // the inbox key
 for (const m of page.messages) (await openMessage(m.message, identity)).body
+```
+
+Let a helper answer while the owner is away. It holds `messageKey`, listed with scope `message`,
+and `readKey`, listed as a reader of the inbox, both handed over in grants:
+
+```ts
+import { readAll } from '@forest/records'
+import { Host } from '@forest/records/host'
+
+// A host takes a message a message key signed only if it reads the sender's records.
+const buyersHost = new Host({ readSender: async (url, profile) => (await readAll(url, { profile })).records })
+
+const mine = await pull(host, pullRequest({ key: messageKey, profile: me.address }, 0, Date.now()))
+for (const m of mine.messages) (await openMessage(m.message, readKey.identity)).body
+const buyerView = await readProfile([host], buyer.address, Date.now())
+const buyerCard = buyerView.current.get('profile')!.record.body!
+await deliver(buyerView.hosts, [await message({ key: messageKey, from: me.address, host }, buyer.address, { text: 'Tuesday at six, yes.' }, Date.now(), buyerCard)])
 ```
 
 ```
@@ -408,16 +495,23 @@ Node's built-in `node:sqlite` for the host.
 
 `test/vectors.json`: a hosts, profile, offer, permissions, access key's offer and delete record,
 each with its wire text, signing input and id, for keys/'s `tutoring/seller` profile from its test
-seed `00 01 … 1f`; the profile record's `read` is that profile's reading key. The seed, the main key
-and the reading key are pinned in `keys/test/vectors.json`, and checked there. The access key's
-private key is 32 bytes of `0x2a`. It also holds a message from keys/'s `tutoring/buyer` profile to
-`tutoring/seller`, with its wire text, signing input and id, and a pull request by
-`tutoring/seller`. The message's body is sealed to `tutoring/seller`'s reading key; age's sealing is
-random, so the sealed body is pinned as it was made. `test/vectors.test.ts` recomputes the records,
-the message and the pull, checks each with node:crypto (Ed25519, SHA-256), and opens the message
-with `tutoring/seller`'s pinned reading key. The profile is
-`EofQN9U3MiKVmAo3Pyvuw19WjyYbpddfN52E1Q1uBwhu`; every signing input begins
+seed `00 01 … 1f`; the profile record's `inboxKey` is that profile's inbox key. The seed, the main
+key and the inbox key are pinned in `keys/test/vectors.json`, and checked there. The access key's
+private key is 32 bytes of `0x2a`, listed with scope `write`; the message key's is 32 bytes of
+`0x2b`, listed with scope `message`. It also holds a message from keys/'s `tutoring/buyer` profile
+to `tutoring/seller`, and a message from `tutoring/seller` signed by its message key, naming
+`https://host-a.example`, to `tutoring/buyer`, each with its wire text, signing input and id; and a
+pull request by `tutoring/seller`, and the same pull signed by its message key. Each message's body
+is sealed to its recipient's inbox key; age's sealing is random, so the sealed bodies are pinned as
+they were made. `test/vectors.test.ts` recomputes the records, the messages and the pulls, checks
+each with node:crypto (Ed25519, SHA-256), and opens each message with its recipient's pinned inbox
+key. The profile is `EofQN9U3MiKVmAo3Pyvuw19WjyYbpddfN52E1Q1uBwhu`; every signing input begins
 `ff 66 6f 72 65 73 74 2f` (`0xff`, then `forest/`).
+
+What changed in this version: the profile record's `read` became `inboxKey`, and the permissions
+record's entries became `{ key, scope, paths? }` with no `until`, so those two records' wire text,
+signing input and id are new. The message key, the message it signs and its pull are new. Every
+other vector is unchanged, byte for byte.
 
 ## Promises
 
@@ -434,7 +528,7 @@ with `tutoring/seller`'s pinned reading key. The profile is
   refuses a newer hosts or permissions record by its own policy.
 - **A host holds nothing secret.** No keys, no accounts, no login, and it cannot open a private
   record.
-- **Only a profile's main key can pull its inbox.**
+- **Only a profile's main key, or a message key its permissions record lists, can pull its inbox.**
 
 ## Limits
 
@@ -446,25 +540,35 @@ with `tutoring/seller`'s pinned reading key. The profile is
   in native code with the same strict rules (see Hosts).
 - **A host keeps only the newest record at each path,** and what it replaced for its keep days.
   Older history is in the app's copies, or nowhere.
-- **A removed access key can still write to a careless host.** Honest hosts refuse its records once
-  its `until` has passed, but a host that skips that check could take a record it dates before
-  `until`, and readers of that host would count it. The owner deletes it by writing at that path.
-- **A host sees who wrote to whom.** It holds each message's `from`, `to`, time and size, though not
-  what it says. That is less than escrows and reviews already show in public. Filtering by an
-  inbox's rule needs the sender, so there is no anonymous mode.
+- **A revoked access key can still write to a careless host.** Honest hosts refuse its records, but
+  readers count every record a revoked key wrote, since no date is checked: a host that skips the
+  check could take a new one, and readers of that host would count it. The owner deletes it by
+  writing at that path.
+- **A revoked message key can still send until a host reads the sender's permissions again.** A
+  host keeps what it read for a time it chooses, and until then takes what the revoked key signs.
+  One of the sender's own hosts that withholds the newer permissions record lets it send through
+  that host for as long as it withholds.
+- **A host sees who wrote to whom.** It holds each message's `from`, `to`, time and size, and the
+  message key when one signed, though not what it says. That is less than escrows and reviews
+  already show in public. Filtering by an inbox's rule needs the sender, so there is no anonymous
+  mode.
+- **Taking a message key's message tells the sender's host something.** The receiving host asks it
+  for the sender's records, so it sees which host asked, and when: a hint of where the sender
+  wrote.
 - **A host without a registry lookup accepts only "anyone".** It refuses messages to an inbox with
   an issuer's rule.
 - **A blob is only as true as its hash.** The record says what it is, and the bytes say what they
   are. A host checks the hash, never that the bytes are the type or size the record gives.
 - **A proof shows what it shows, and no more.** Any index, a stranger's included, may weigh it as it
   likes, or ignore it.
-- **Messages have no forward secrecy.** A reading key that leaks opens every message sealed to it,
-  from any host or copy that still holds them.
-- **Private records have no forward secrecy.** A reading key that leaks opens every envelope sealed
-  to it, and a reader removed keeps what it already opened. Anyone sees a private record's path,
-  time, size and number of reading keys.
-- **A private record holds about 30 reading keys at most.** Each post-quantum reading key adds
-  about 2 KB to the envelope, and a record is at most 64 KB.
+- **Messages have no forward secrecy.** An inbox key or a read key that leaks opens every message
+  sealed to it, from any host or copy that still holds them.
+- **Private records have no forward secrecy.** A key that leaks opens every envelope sealed to it,
+  and a reader removed keeps what it already opened. Anyone sees a private record's path, time,
+  size and number of keys.
+- **An envelope holds about 30 keys at most.** Each post-quantum key adds about 2 KB to it, and a
+  record or a message is at most 64 KB. Each reader an inbox lists makes every message to it about
+  2 KB larger, and anyone sees how many readers it lists.
 - **Two profiles of one person can be linked by how they are written.** An app that writes both at
   the same moment to the same host puts them side by side in its listing; one access key listed by
   both names itself in both; and a host that logs addresses links them; whether it logs is its
@@ -473,13 +577,14 @@ with `tutoring/seller`'s pinned reading key. The profile is
 ## Who decides what
 
 - **The standard:** the record and the message, and what makes each valid (the 65,536-byte cap,
-  the ten-minute window); the six requests and their codes; the control records; envelopes; the
-  three shapes; the inbox and its rules.
+  the ten-minute window); the six requests and their codes; the control records and the scopes of
+  access keys; envelopes; the three shapes; the inbox and its rules; the grant.
 - **A host, by its own policy:** its keep days; batch and page sizes; which blob types and sizes it
-  takes; which inbox rules it supports; rate limits; logging; storage.
-- **An app, with the person:** the copies it keeps; which hosts; whether to forward a message to
-  email or a notification; dropping a message that arrives twice; and what asks for the person's
-  face.
+  takes; which inbox rules it supports; whether it reads senders' records to take a message key's
+  message, and how long it keeps what it read; rate limits; logging; storage.
+- **An app, with the person:** the copies it keeps; which hosts; which private records it seals to a
+  read key; how a grant reaches its holder; whether to forward a message to email or a
+  notification; dropping a message that arrives twice; and what asks for the person's face.
 - **An index, by its own policy:** which hosts, issuers and markets count, which hosts it crawls,
   how much each review weighs, and which proofs it accepts.
 
@@ -515,22 +620,23 @@ No. A record's signed bytes begin with `0xff`, and no Solana transaction begins 
 record's signature can never be a payment's.
 
 **Can an access key be abused?**
-Within its limits, yes: whoever holds it can write at the paths your permissions record allows,
-until its `until`, and it can replace what it or another access key wrote there. It cannot touch
-any path you wrote with your main key, your hosts record or your permissions record, and it cannot
-write after `until` on an honest host. So list narrow paths and a near `until`. When you are done
-with it, set its `until` to now, and delete with your main key anything it wrote that you do not
-want.
+Within its scope, yes. Whoever holds a write key can write at the paths your permissions record
+allows (every content path but your card and your grants, if it lists none), and replace what it
+or another access key wrote there. Whoever holds a message key can send messages as you, and see
+who wrote to you, though not what, unless it also holds a read key. Neither can touch a path you
+wrote with your main key, your hosts record or your permissions record. So list narrow paths. When
+you are done with a write or message key, set its scope to `revoked`, and delete with your main key
+anything it wrote that you do not want.
 
-**What happens to a removed access key's old records?**
-They stay. Removing an access key is setting its `until` to now, and a reader counts its record if
-it is dated before `until`: everything it wrote before then still counts, and nothing dated later
-does. Hosts refuse whatever it sends from then on, and keep what it wrote. To make one of its
-records yours, publish it again with your main key.
+**What happens to a revoked access key's old records?**
+They stay. A revoked key is still listed, so readers count what it wrote, and hosts refuse whatever
+it sends from then on. To disown all of it, delete its entry instead; to make one of its records
+yours, publish it again with your main key.
 
-**Why does a reader check an access key's record by its date, and not by its own clock?**
-So that readers agree whatever their clocks say, and so that removing an access key never erases
-what it already wrote. When a record arrived is the host's check.
+**Why does the permissions record carry no dates or names?**
+It is public. A date would tell anyone when you met someone or began using an app, and a name would
+say who. Who a key is for, and since when, is in its grant, which only you and its holder can open.
+A key ends when you rewrite the record, so readers check no clock, and agree whatever theirs say.
 
 **Why does the owner win?**
 An access key lives somewhere less safe than the main key: on a server, or with another app. If it
@@ -538,30 +644,45 @@ could replace what you wrote yourself, losing it would let someone rewrite your 
 offers. Because the owner wins, the worst a lost access key can do is add records where you never
 wrote, and you can always overwrite or delete those by writing at the same path.
 
-**Why only post-quantum reading keys?**
-A private record is one envelope for all its readers. One classic key among them would let a
-quantum computer open it for all of them.
+**Why only post-quantum keys in an envelope?**
+A private record or a message is one envelope for all its readers. One classic key among them would
+let a quantum computer open it for all of them.
 
 **Why does the owner make the readers' keys?**
-So a reader needs no profile and no key of its own: the owner's app makes a reading key for it and
-hands it over. A made key that leaks opens only what one owner sealed to it, never everything ever
-sealed to the reader's own key. And one relationship can be revoked without the reader rotating its
-own key.
+So a reader needs no profile and no key of its own: the owner's app makes a read key for it and
+hands it over. A read key that leaks opens only what one owner sealed to it, never everything ever
+sealed to the reader's own inbox key. And one relationship can be revoked without the reader
+rotating its own key.
+
+**Why are an inbox's readers listed in the profile, and not sealed to on the person's device?**
+The device could pull each message and seal it again for a reader, but only while it is on. Listed
+in the profile, a reader gets each message sealed to it by the sender, so with a message key it
+pulls, opens and answers while the person is away.
 
 **Why is a message not a record in the sender's folder?**
 Anyone reads a folder. A message there would need a field naming its recipient so hosts could route
 it, and that field would make every inquiry a public fact: who asked whom, and when. A message goes
 to the recipient's hosts instead, sealed, and only the recipient pulls it.
 
-**Why does the recipient sign the pull?**
+**Why is a pull signed?**
 Otherwise anyone could ask a host for a profile's messages, and who wrote to whom would be public
 to anyone. Each body is sealed, but `from`, `to` and the time are not. A pull signed by the main
-key, within ten minutes of the host's clock, lets only the profile list its inbox.
+key, or by a message key the profile lists, within ten minutes of the host's clock, lets only the
+profile, and the message keys it lists, list its inbox.
 
 **Why is there no deposit rule?**
 A rule that asks senders to pay would have every host check payments. An inbox's `senders` is a
 field with kinds, and a host refuses deliveries under a kind it does not know, so a kind can be
 added later without breaking anything.
+
+**Is a host one machine?**
+No. A host is an address that answers the six requests, however many machines are behind it. The
+hosts record names addresses; how one is run is its operator's business.
+
+**What is a privacy pool for?**
+Moving a person's own dollars between their own profiles without the chain linking them, and
+nothing else. Records need none: nothing here moves money. It is an app feature, for later; Forest
+builds none.
 
 **Why are blobs kept only while a record names them?**
 A host stores records; bytes ride on a record. Bytes no record names would make a host a free file
