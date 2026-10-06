@@ -112,7 +112,7 @@ describe('private records', () => {
       const notes = async () => (await readAll(host.url, { profile: alice.address })).records.filter((c) => c.record.path === 'note/door')
       const old = (await notes()).find((c) => c.record.time === T0 + 1)!
       assert.deepEqual(await openPrivate(old.record.body!, bobInbox.identity), { text: 'first' })
-      host.prune(T0 + 31 * DAY)
+      await host.prune(T0 + 31 * DAY)
       assert.deepEqual((await notes()).map((c) => c.record.time), [T0 + 2])
     } finally {
       await host.close()

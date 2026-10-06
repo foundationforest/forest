@@ -1,11 +1,12 @@
-// A host: plain HTTP and one SQLite file. It holds no keys, has no accounts and asks for no
-// login: a record's signature is its only credential, and a pull's is the recipient's main key's
-// or message key's. It is open: it takes signed records for any profile and serves them to anyone;
-// it takes messages for any profile whose card here declares an inbox, and serves them only to
-// that profile's main key and message keys; it takes the bytes a current record names, and serves
-// them to anyone. Given readSender, it reads a sender's records from one of the sender's hosts to
-// take a message a message key signed. It keeps the newest version at each path; versions that
-// stop being newest, messages, and bytes no current record names any more go after `keepDays`.
+// A host: plain HTTP, a SQLite file per folder, and a blob store (storage.ts). It holds no keys,
+// has no accounts and asks for no login: a record's signature is its only credential, and a pull's
+// is the recipient's main key's or message key's. It is open: it takes signed records for any
+// profile and serves them to anyone; it takes messages for any profile whose card here declares an
+// inbox, and serves them only to that profile's main key and message keys; it takes the bytes a
+// current record names, and serves them to anyone. Given readSender, it reads a sender's records
+// from one of the sender's hosts to take a message a message key signed. It keeps the newest
+// version at each path; versions that stop being newest, messages, and bytes no current record
+// names any more go after `keepDays`.
 //
 //   POST /v1/records                      NDJSON of canonical records; one NDJSON result each
 //   GET  /v1/records?profile=&after=      NDJSON of stored records in the order taken;
@@ -17,17 +18,21 @@
 //   GET  /v1/blobs/<sha256>               the bytes, with that type
 //
 // How many lines a request or a page holds is this host's choice (maxBatch, maxPageRecords,
-// maxPageBytes); a client handles any size. It logs nothing about who asks.
+// maxPageBytes); a client handles any size. It logs nothing about who asks. Where it keeps things
+// is storage.ts's business, and only storage.ts's.
 
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { DatabaseSync } from 'node:sqlite'
 import { sha256 } from '@noble/hashes/sha2.js'
 import { hex } from './bytes.ts'
 import { READ_TIMEOUT_MS } from './client.ts'
+import { publicKeyFromAddress } from './keys.ts'
 import { type CheckedMessage, type Inbox, MAX_MESSAGE_BYTES, type SignedMessage, checkPull, inboxOf, readMessage, verifyMessage } from './message.ts'
-import { type Body, type Checked, MAX_FUTURE_MS, MAX_RECORD_BYTES, RecordError, type SignedRecord, decodeRecord, encodeRecord, isControlPath } from './record.ts'
+import { type Checked, MAX_FUTURE_MS, MAX_RECORD_BYTES, RecordError, type SignedRecord, decodeRecord, encodeRecord, isControlPath } from './record.ts'
+import { type BlobDriver, type Row, Storage, blobNames } from './storage.ts'
 import { type View, allowsArrival, viewProfile } from './view.ts'
+
+export { type BlobDriver, type S3Options, rebuild } from './storage.ts'
 
 export const DAY = 86_400_000
 /** Records or messages a request carries, unless the operator says otherwise. */
@@ -44,7 +49,6 @@ export const DEFAULT_MAX_BLOB_BYTES = 50_000_000
 export const DEFAULT_BLOB_TYPES = ['image/png', 'image/jpeg', 'video/mp4']
 /** A pull request is about 200 bytes. */
 const MAX_PULL_BYTES = 1024
-const HASH = /^[0-9a-f]{64}$/
 const BLOB_PATH = /^\/v1\/blobs\/([0-9a-f]{64})$/
 
 /**
@@ -61,8 +65,13 @@ export type BlobPolicy = (blob: { sha256: string; type: string; size: number }) 
 export const defaultBlobPolicy: BlobPolicy = (blob) => (DEFAULT_BLOB_TYPES.includes(blob.type) ? null : `this host takes ${DEFAULT_BLOB_TYPES.join(', ')}`)
 
 export type HostOptions = {
-  /** SQLite file; in memory when omitted. */
-  file?: string
+  /**
+   * The data directory: `folders/` (a SQLite file per folder), `host.sqlite` (the log and the blob
+   * index) and, for the disk driver, `blobs/`. A fresh temporary one, removed on close, when omitted.
+   */
+  dir?: string
+  /** Where blob bytes go: on disk in the data directory, or an S3-compatible bucket. Disk when omitted. */
+  blobs?: BlobDriver
   now?: () => number
   /** The operator's choice; DEFAULT_KEEP_DAYS when omitted. */
   keepDays?: number
@@ -106,7 +115,7 @@ export class Host {
   readonly maxPageRecords: number
   readonly maxPageBytes: number
   readonly maxBlobBytes: number
-  private readonly db: DatabaseSync
+  private readonly storage: Storage
   private readonly now: () => number
   private readonly policy?: Policy
   private readonly messagePolicy?: MessagePolicy
@@ -130,51 +139,7 @@ export class Host {
     this.rowLookup = options.rowLookup
     this.readSender = options.readSender
     this.timeout = options.timeout ?? READ_TIMEOUT_MS
-    this.db = new DatabaseSync(options.file ?? ':memory:')
-    this.db.exec(`
-      PRAGMA journal_mode = WAL;
-      CREATE TABLE IF NOT EXISTS records (
-        seq INTEGER PRIMARY KEY AUTOINCREMENT,
-        id TEXT NOT NULL UNIQUE,
-        profile TEXT NOT NULL,
-        text TEXT NOT NULL,
-        bytes INTEGER NOT NULL,
-        older_since INTEGER   -- this host's clock when it stopped being the newest at its path
-      );
-      CREATE INDEX IF NOT EXISTS records_by_profile ON records (profile, seq);
-      CREATE TABLE IF NOT EXISTS blob_names (   -- the bytes each stored record names, by hash and type
-        record TEXT NOT NULL,
-        profile TEXT NOT NULL,
-        sha256 TEXT NOT NULL,
-        type TEXT NOT NULL
-      );
-      CREATE INDEX IF NOT EXISTS blob_names_by_hash ON blob_names (sha256);
-      CREATE INDEX IF NOT EXISTS blob_names_by_profile ON blob_names (profile);
-      CREATE INDEX IF NOT EXISTS blob_names_by_record ON blob_names (record);
-      CREATE TABLE IF NOT EXISTS blobs (
-        sha256 TEXT PRIMARY KEY,
-        type TEXT NOT NULL,
-        data BLOB NOT NULL,
-        unnamed_since INTEGER   -- this host's clock when no current record named it any more
-      );
-      CREATE TABLE IF NOT EXISTS messages (
-        seq INTEGER PRIMARY KEY AUTOINCREMENT,
-        id TEXT NOT NULL UNIQUE,
-        recipient TEXT NOT NULL,
-        text TEXT NOT NULL,
-        bytes INTEGER NOT NULL,
-        arrived INTEGER NOT NULL   -- this host's clock
-      );
-      CREATE INDEX IF NOT EXISTS messages_by_recipient ON messages (recipient, seq);
-      -- Who has written to an inbox that takes one message from each sender. Recorded only while
-      -- the inbox says so, so who wrote to whom is not kept past the messages for other inboxes.
-      -- Kept for as long as the profile is: this host never deletes a current record.
-      CREATE TABLE IF NOT EXISTS once_pairs (
-        sender TEXT NOT NULL,
-        recipient TEXT NOT NULL,
-        PRIMARY KEY (sender, recipient)
-      ) WITHOUT ROWID;
-    `)
+    this.storage = new Storage(options.dir, options.blobs)
   }
 
   // ------------------------------------------------------------------------------------------
@@ -204,8 +169,8 @@ export class Host {
   }
 
   private async acceptOne(c: Checked, now: number): Promise<Omit<Result, 'i' | 'id'>> {
-    if (this.db.prepare('SELECT 1 FROM records WHERE id = ?').get(c.id)) return { ok: true, message: 'already here' }
     const { record } = c
+    if (this.storage.hasRecord(record.profile, c.id)) return { ok: true, message: 'already here' }
     // Kept only if it becomes the newest at its path, with the protocol's own rules.
     const view = viewProfile(record.profile, [...this.stored(record.profile), c], now)
     if (view.current.get(record.path)?.id !== c.id) {
@@ -217,47 +182,26 @@ export class Host {
     // A reader counts a revoked key's records, since it is still listed; a host takes none.
     if (record.by !== undefined && !allowsArrival(view.access, record)) return { ok: false, error: 'permission', message: 'this access key is revoked' }
     if (this.policy && !isControlPath(record.path)) {
-      const stored = this.db.prepare('SELECT COUNT(*) AS records, COALESCE(SUM(bytes), 0) AS bytes FROM records WHERE profile = ?').get(record.profile) as { records: number; bytes: number }
-      const refused = await this.policy(record, stored)
+      const refused = await this.policy(record, this.storage.recordTotals(record.profile))
       if (refused) return { ok: false, error: 'policy', message: refused }
     }
-    const text = encodeRecord(record)
-    this.db.prepare('INSERT INTO records (id, profile, text, bytes) VALUES (?, ?, ?, ?)').run(c.id, record.profile, text, Buffer.byteLength(text))
-    const name = this.db.prepare('INSERT INTO blob_names (record, profile, sha256, type) VALUES (?, ?, ?, ?)')
-    for (const blob of blobNames(record.body)) name.run(c.id, record.profile, blob.sha256, blob.type)
-    this.settle(record.profile, now)
+    // From here on, no wait: the policy may have let other requests store records for this
+    // profile, so what is current is worked out again. What is current is kept; what stopped being
+    // current gets a date, and goes `keepDays` later. So do the bytes the profile's records name,
+    // once no current record names them.
+    if (this.storage.hasRecord(record.profile, c.id)) return { ok: true, message: 'already here' }
+    const settled = [...viewProfile(record.profile, [...this.stored(record.profile), c], now).current.values()]
+    this.storage.addRecord(record.profile, c.id, encodeRecord(record), now, new Set(settled.map((s) => s.id)))
+    this.storage.setNames(record.profile, settled.flatMap((s) => blobNames(s.record.body)), now)
     return { ok: true }
-  }
-
-  /**
-   * After a change: what is current is kept; what stopped being current gets a date, and goes
-   * `keepDays` later. So do the bytes this profile's records name, once no current record names them.
-   */
-  private settle(profile: string, now: number) {
-    const current = new Set([...this.view(profile, now).current.values()].map((c) => c.id))
-    const rows = this.db.prepare('SELECT id, older_since FROM records WHERE profile = ?').all(profile) as Array<{ id: string; older_since: number | null }>
-    const mark = this.db.prepare('UPDATE records SET older_since = ? WHERE id = ?')
-    for (const row of rows) {
-      if (current.has(row.id) && row.older_since !== null) mark.run(null, row.id)
-      else if (!current.has(row.id) && row.older_since === null) mark.run(now, row.id)
-    }
-    const named = 'EXISTS (SELECT 1 FROM blob_names n JOIN records r ON r.id = n.record WHERE n.sha256 = blobs.sha256 AND n.type = blobs.type AND r.older_since IS NULL)'
-    const its = 'sha256 IN (SELECT sha256 FROM blob_names WHERE profile = ?)'
-    this.db.prepare(`UPDATE blobs SET unnamed_since = ? WHERE unnamed_since IS NULL AND ${its} AND NOT ${named}`).run(now, profile)
-    this.db.prepare(`UPDATE blobs SET unnamed_since = NULL WHERE unnamed_since IS NOT NULL AND ${its} AND ${named}`).run(profile)
   }
 
   /**
    * Delete what stopped being the newest at its path, the messages that arrived, and the bytes no
    * current record has named, more than `keepDays` ago. Returns how many it deleted.
    */
-  prune(now = this.now()): number {
-    const before = now - this.keepDays * DAY
-    this.db.prepare('DELETE FROM blob_names WHERE record IN (SELECT id FROM records WHERE older_since IS NOT NULL AND older_since <= ?)').run(before)
-    const records = this.db.prepare('DELETE FROM records WHERE older_since IS NOT NULL AND older_since <= ?').run(before).changes
-    const messages = this.db.prepare('DELETE FROM messages WHERE arrived <= ?').run(before).changes
-    const blobs = this.db.prepare('DELETE FROM blobs WHERE unnamed_since IS NOT NULL AND unnamed_since <= ?').run(before).changes
-    return Number(records) + Number(messages) + Number(blobs)
+  prune(now = this.now()): Promise<number> {
+    return this.storage.prune(now - this.keepDays * DAY, now)
   }
 
   /**
@@ -266,21 +210,18 @@ export class Host {
    * maxPageBytes, though it always holds one.
    */
   read(options: ReadOptions = {}): { lines: string[]; cursor: number } {
-    const where = ['seq > ?']
-    const args: Array<string | number> = [options.after ?? 0]
-    if (options.profile !== undefined) {
-      where.push('profile = ?')
-      args.push(options.profile)
-    }
-    const rows = this.db.prepare(`SELECT seq, text, bytes FROM records WHERE ${where.join(' AND ')} ORDER BY seq LIMIT ?`).all(...args, this.maxPageRecords) as Row[]
-    return this.page(rows, options.after ?? 0)
+    const after = options.after ?? 0
+    // A profile that is no address has no folder: nothing to read, and no file to look for.
+    if (options.profile !== undefined && !publicKeyFromAddress(options.profile)) return { lines: [], cursor: after }
+    return this.page(this.storage.recordsAfter(after, options.profile), after)
   }
 
-  private page(rows: Row[], after: number): { lines: string[]; cursor: number } {
+  private page(rows: Iterable<Row>, after: number): { lines: string[]; cursor: number } {
     const lines: string[] = []
     let cursor = after
     let size = 0
     for (const row of rows) {
+      if (lines.length >= this.maxPageRecords) break
       size += row.bytes + 1
       if (size > this.maxPageBytes && lines.length) break
       lines.push(row.text)
@@ -296,20 +237,16 @@ export class Host {
 
   /** A profile's stored records. They were checked on the way in. */
   private stored(profile: string): Checked[] {
-    const rows = this.db.prepare('SELECT id, text FROM records WHERE profile = ? ORDER BY seq').all(profile) as Array<{ id: string; text: string }>
-    return rows.map((r) => ({ id: r.id, record: JSON.parse(r.text) as SignedRecord }))
+    return this.storage.records(profile).map((r) => ({ id: r.id, record: JSON.parse(r.text) as SignedRecord }))
   }
 
   count(profile?: string): number {
-    const row = (profile === undefined
-      ? this.db.prepare('SELECT COUNT(*) AS n FROM records').get()
-      : this.db.prepare('SELECT COUNT(*) AS n FROM records WHERE profile = ?').get(profile)) as { n: number }
-    return row.n
+    return this.storage.count(profile)
   }
 
   /** Every stored record's and message's text: what a host operator can see on its own disk. */
   dump(): string[] {
-    return (this.db.prepare('SELECT text FROM records UNION ALL SELECT text FROM messages').all() as Array<{ text: string }>).map((r) => r.text)
+    return this.storage.dump()
   }
 
   // ------------------------------------------------------------------------------------------
@@ -336,7 +273,7 @@ export class Host {
     const { message: m, id } = c
     const refuse = (error: string, message: string): Answer => ({ id, ok: false, error, message })
     if (m.time > now + MAX_FUTURE_MS) return refuse('future', 'dated more than ten minutes ahead')
-    if (this.db.prepare('SELECT 1 FROM messages WHERE id = ?').get(id)) return refuse('duplicate', 'this message is already here')
+    if (this.storage.hasMessage(m.to, id)) return refuse('duplicate', 'this message is already here')
     let inbox = inboxes.get(m.to)
     if (inbox === undefined) inboxes.set(m.to, (inbox = inboxOf(this.view(m.to, now).current.get('profile')?.record.body)))
     if (inbox === null) return refuse('no_inbox', 'the profile record here declares no inbox')
@@ -367,19 +304,17 @@ export class Host {
       }
       if (!held) return refuse('sender', 'from holds no registry row from the inbox’s issuer')
     }
-    const pair = [m.from, m.to]
-    if (inbox.once && this.db.prepare('SELECT 1 FROM once_pairs WHERE sender = ? AND recipient = ?').get(...pair)) return refuse('once', 'this inbox takes one message from each sender')
+    if (inbox.once && this.storage.hasOnce(m.to, m.from)) return refuse('once', 'this inbox takes one message from each sender')
     const bytes = Buffer.byteLength(line)
     if (inbox.maxBytes !== undefined && bytes > inbox.maxBytes) return refuse('too_big', `this inbox takes messages of at most ${inbox.maxBytes} bytes`)
     if (this.messagePolicy) {
-      const stored = this.db.prepare('SELECT COUNT(*) AS messages, COALESCE(SUM(bytes), 0) AS bytes FROM messages WHERE recipient = ?').get(m.to) as { messages: number; bytes: number }
-      const refused = await this.messagePolicy(m, stored)
+      const refused = await this.messagePolicy(m, this.storage.messageTotals(m.to))
       if (refused) return refuse('policy', refused)
     }
     // Checked again here, with no wait in between: another request may have taken the same id or
     // pair during a lookup or the policy.
-    if (inbox.once && !this.db.prepare('INSERT OR IGNORE INTO once_pairs (sender, recipient) VALUES (?, ?)').run(...pair).changes) return refuse('once', 'this inbox takes one message from each sender')
-    if (!this.db.prepare('INSERT OR IGNORE INTO messages (id, recipient, text, bytes, arrived) VALUES (?, ?, ?, ?, ?)').run(id, m.to, line, bytes, now).changes) return refuse('duplicate', 'this message is already here')
+    if (inbox.once && !this.storage.addOnce(m.to, m.from)) return refuse('once', 'this inbox takes one message from each sender')
+    if (!this.storage.addMessage(m.to, id, line, now)) return refuse('duplicate', 'this message is already here')
     return { id, ok: true }
   }
 
@@ -394,8 +329,7 @@ export class Host {
     if (request.key !== undefined && !this.view(request.profile, now).access.some((k) => k.key === request.key && k.scope === 'message')) {
       throw new RecordError('permission', 'the profile’s permissions record here does not list key with scope message')
     }
-    const rows = this.db.prepare('SELECT seq, text, bytes FROM messages WHERE recipient = ? AND seq > ? ORDER BY seq LIMIT ?').all(request.profile, request.after, this.maxPageRecords) as Row[]
-    return this.page(rows, request.after)
+    return this.page(this.storage.messagesAfter(request.profile, request.after), request.after)
   }
 
   // ------------------------------------------------------------------------------------------
@@ -407,22 +341,17 @@ export class Host {
    */
   async putBlob(name: string, type: string, bytes: Uint8Array): Promise<Answer> {
     if (hex.encode(sha256(bytes)) !== name) return { ok: false, error: 'hash', message: 'the bytes do not hash to their name' }
-    if (!this.named(name, type)) return { ok: false, error: 'unnamed', message: 'no current record here names these bytes as this type' }
-    if (this.db.prepare('SELECT 1 FROM blobs WHERE sha256 = ?').get(name)) return { ok: true, message: 'already here' }
+    if (!this.storage.named(name, type)) return { ok: false, error: 'unnamed', message: 'no current record here names these bytes as this type' }
+    if (this.storage.holdsBlob(name)) return { ok: true, message: 'already here' }
     const refused = bytes.length > this.maxBlobBytes ? `at most ${this.maxBlobBytes} bytes` : await this.blobPolicy({ sha256: name, type, size: bytes.length })
     if (refused) return { ok: false, error: 'policy', message: refused }
-    this.db.prepare('INSERT OR IGNORE INTO blobs (sha256, type, data) VALUES (?, ?, ?)').run(name, type, bytes)
+    await this.storage.putBlob(name, type, bytes, this.now())
     return { ok: true }
   }
 
   /** Held bytes and their type, or undefined. */
-  getBlob(name: string): { type: string; bytes: Uint8Array } | undefined {
-    const row = this.db.prepare('SELECT type, data FROM blobs WHERE sha256 = ?').get(name) as { type: string; data: Uint8Array } | undefined
-    return row && { type: row.type, bytes: row.data }
-  }
-
-  private named(name: string, type: string): boolean {
-    return this.db.prepare('SELECT 1 FROM blob_names n JOIN records r ON r.id = n.record WHERE n.sha256 = ? AND n.type = ? AND r.older_since IS NULL').get(name, type) !== undefined
+  getBlob(name: string): Promise<{ type: string; bytes: Uint8Array } | undefined> {
+    return this.storage.getBlob(name)
   }
 
   // ------------------------------------------------------------------------------------------
@@ -437,7 +366,7 @@ export class Host {
       })
     })
     await new Promise<void>((resolve) => this.server!.listen(port, hostname, resolve))
-    this.pruning = setInterval(() => this.prune(), DAY / 24).unref()
+    this.pruning = setInterval(() => void this.prune().catch(() => {}), DAY / 24).unref()
     this.url = `http://${hostname.includes(':') ? `[${hostname}]` : hostname}:${(this.server.address() as AddressInfo).port}`
     return this.url
   }
@@ -445,7 +374,7 @@ export class Host {
   async close(): Promise<void> {
     clearInterval(this.pruning)
     if (this.server) await new Promise<void>((resolve) => this.server!.close(() => resolve()))
-    this.db.close()
+    this.storage.close()
   }
 
   private async handle(req: IncomingMessage, res: ServerResponse) {
@@ -467,7 +396,7 @@ export class Host {
     }
 
     if (blob && req.method === 'GET') {
-      const held = this.getBlob(blob)
+      const held = await this.getBlob(blob)
       if (!held) res.writeHead(404).end()
       else res.writeHead(200, { 'content-type': held.type, 'content-length': held.bytes.length }).end(held.bytes)
       return
@@ -516,20 +445,6 @@ export class Host {
     res.writeHead(200, { 'content-type': 'application/x-ndjson' })
     res.end(results.map((r) => JSON.stringify(r) + '\n').join(''))
   }
-}
-
-type Row = { seq: number; text: string; bytes: number }
-
-/** The bytes a record's body names: its photo, and each of its media. */
-function blobNames(body: Body | null): Array<{ sha256: string; type: string }> {
-  if (!body) return []
-  const refs = [body.photo, ...(Array.isArray(body.media) ? body.media : [])]
-  const names: Array<{ sha256: string; type: string }> = []
-  for (const ref of refs) {
-    if (ref === null || typeof ref !== 'object' || Array.isArray(ref)) continue
-    if (typeof ref.sha256 === 'string' && HASH.test(ref.sha256) && typeof ref.mimeType === 'string') names.push({ sha256: ref.sha256, type: ref.mimeType })
-  }
-  return names
 }
 
 function sendJson(res: ServerResponse, status: number, value: object) {

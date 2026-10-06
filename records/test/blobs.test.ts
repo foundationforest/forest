@@ -108,19 +108,19 @@ describe('blobs', () => {
 
       // The card goes; the offer still names the photo.
       await publish([h.url], [ownerRecord(alice, 'profile', null, clock.advance(DAY))])
-      h.prune(clock.t + 31 * DAY)
-      assert.ok(h.getBlob(nameOf(photo)))
+      await h.prune(clock.t + 31 * DAY)
+      assert.ok(await h.getBlob(nameOf(photo)))
 
       // The offer goes: nothing names either any more. The other is named again before its keep days end.
       const gone = clock.advance(DAY)
       await publish([h.url], [ownerRecord(alice, 'offer/a', null, gone)])
       await publish([h.url], [ownerRecord(alice, 'offer/b', withMedia([other, 'image/png']), clock.advance(DAY))])
-      h.prune(gone + 29 * DAY)
-      assert.ok(h.getBlob(nameOf(photo)), 'within keep days')
-      h.prune(gone + 31 * DAY)
-      assert.equal(h.getBlob(nameOf(photo)), undefined)
+      await h.prune(gone + 29 * DAY)
+      assert.ok(await h.getBlob(nameOf(photo)), 'within keep days')
+      await h.prune(gone + 31 * DAY)
+      assert.equal(await h.getBlob(nameOf(photo)), undefined)
       assert.equal((await fetch(`${h.url}/v1/blobs/${nameOf(photo)}`)).status, 404)
-      assert.ok(h.getBlob(nameOf(other)), 'named again')
+      assert.ok(await h.getBlob(nameOf(other)), 'named again')
     } finally {
       await h.close()
     }
@@ -144,7 +144,7 @@ describe('blobs', () => {
     try {
       for (const h of [good, bad]) await publish([h.url], [ownerRecord(alice, 'profile', withPhoto(photo), T0)])
       assert.deepEqual((await putBlob([good.url, bad.url], photo, 'image/jpeg')).map((o) => o.ok), [true, true])
-      bad.getBlob = () => ({ type: 'image/jpeg', bytes: clip })
+      bad.getBlob = async () => ({ type: 'image/jpeg', bytes: clip })
       assert.equal(await getBlob([bad.url], nameOf(photo)), null)
       assert.equal((await getBlob([bad.url, good.url], nameOf(photo)))!.host, good.url)
       assert.equal(await getBlob([good.url], nameOf(photo), { maxBytes: 100 }), null)
