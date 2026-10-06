@@ -145,19 +145,20 @@ describe('schemas', () => {
     assert.throws(() => ownerRecord(alice, 'profile', edit('profile', ['addresses', 'arbitrum-one'], 'x'), T0), /key/, 'a hyphen is not')
   })
 
-  test('a profile’s read is its reading key, an age post-quantum hybrid recipient', async () => {
-    assert.ok(fits('profile', edit('profile', ['read'], (await readingKey(alice.privateKey)).recipient)))
-    assert.ok(fits('profile', edit('profile', ['read'], undefined)), 'optional')
-    for (const bad of ['age1pq1' + 'q'.repeat(60), alice.address, 'AGE1' + 'Q'.repeat(58), 'age1' + 'b'.repeat(58)]) assert.ok(!fits('profile', edit('profile', ['read'], bad)), bad)
+  test('a profile’s inboxKey is its inbox key, an age post-quantum hybrid recipient', async () => {
+    assert.ok(fits('profile', edit('profile', ['inboxKey'], (await readingKey(alice.privateKey)).recipient)))
+    assert.ok(fits('profile', edit('profile', ['inboxKey'], undefined)), 'optional')
+    for (const bad of ['age1pq1' + 'q'.repeat(60), alice.address, 'AGE1' + 'Q'.repeat(58), 'age1' + 'b'.repeat(58)]) assert.ok(!fits('profile', edit('profile', ['inboxKey'], bad)), bad)
   })
 
-  test('a profile’s inbox: open to anyone or to an issuer’s rows, once, a size; nothing else', () => {
-    for (const inbox of [{ senders: 'anyone' }, { senders: { issuer: alice.address } }, { senders: 'anyone', once: true, maxBytes: 4000 }]) {
+  test('a profile’s inbox: open to anyone or to an issuer’s rows, once, a size, readers; nothing else', async () => {
+    const reader = (await readingKey(new Uint8Array(32).fill(5))).recipient
+    for (const inbox of [{ senders: 'anyone' }, { senders: { issuer: alice.address } }, { senders: 'anyone', once: true, maxBytes: 4000 }, { senders: 'anyone', readers: [reader] }, { senders: 'anyone', readers: [] }]) {
       assert.ok(fits('profile', edit('profile', ['inbox'], inbox)), JSON.stringify(inbox))
       assert.ok(inboxOf(edit('profile', ['inbox'], inbox)) !== 'unsupported', 'and a host reads it')
     }
     assert.ok(fits('profile', edit('profile', ['inbox'], undefined)), 'optional: no field, no inbox')
-    for (const inbox of [{}, 'anyone', { senders: 'everyone' }, { senders: { issuer: 'x' } }, { senders: { issuer: alice.address, label: 'x' } }, { senders: { deposit: '5' } }, { senders: 'anyone', once: false }, { senders: 'anyone', maxBytes: -1 }, { senders: 'anyone', deposit: '5' }]) {
+    for (const inbox of [{}, 'anyone', { senders: 'everyone' }, { senders: { issuer: 'x' } }, { senders: { issuer: alice.address, label: 'x' } }, { senders: { deposit: '5' } }, { senders: 'anyone', once: false }, { senders: 'anyone', maxBytes: -1 }, { senders: 'anyone', deposit: '5' }, { senders: 'anyone', readers: reader }, { senders: 'anyone', readers: [alice.address] }, { senders: 'anyone', readers: [reader.toUpperCase()] }]) {
       assert.ok(!fits('profile', edit('profile', ['inbox'], inbox)), JSON.stringify(inbox))
       assert.equal(inboxOf(edit('profile', ['inbox'], inbox)), 'unsupported', 'and a host refuses deliveries to it')
     }

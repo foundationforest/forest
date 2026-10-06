@@ -40,7 +40,7 @@ describe('host policy', () => {
       assert.deepEqual(await results([ownerRecord(alice, 'profile', profileBody('A'), T0), ownerRecord(alice, 'offer/a', offerBody('1'), T0), ownerRecord(alice, 'offer/b', offerBody('1'), T0)]), ['ok', 'ok', 'ok'])
       assert.deepEqual(await results([ownerRecord(alice, 'offer/c', offerBody('1'), T0)]), ['policy'])
       // An access key went bad and floods: the person can always remove it, and always move.
-      assert.deepEqual(await results([permissionsRecord(alice, [allow(accessKey, ['offer'], T0 + DAY)], T0)]), ['ok'])
+      assert.deepEqual(await results([permissionsRecord(alice, [allow(accessKey, ['offer'])], T0)]), ['ok'])
       assert.deepEqual(await results([accessRecord(accessKey, alice.address, 'offer/w', offerBody('1'), T0)]), ['policy'])
       assert.deepEqual(await results([permissionsRecord(alice, [], T0 + 1), hostsRecord(alice, ['https://elsewhere.example'], T0)]), ['ok', 'ok'])
     } finally {

@@ -1,21 +1,21 @@
 // The spec's test vectors. The keys are keys/'s: its test seed (bytes 00 01 … 1f), its
-// tutoring/seller and tutoring/buyer profiles and the seller's reading key, pinned in
-// keys/test/vectors.json and not repeated here. Ed25519 is deterministic, and the one sealed body is
-// pinned as made, so these never change unless the protocol does.
+// tutoring/seller and tutoring/buyer profiles and their inbox keys, pinned in keys/test/vectors.json
+// and not repeated here. Ed25519 is deterministic, and the two sealed bodies are pinned as made, so
+// these never change unless the protocol does.
 // `node test/vectors.ts` prints them; vectors.test.ts checks them against test/vectors.json, each
 // with a second implementation.
 
 import { hex } from '../src/bytes.ts'
 import { canonical } from '../src/canonical.ts'
-import { type SignedMessage, messageId, messageSigningInput, pullRequest, pullSigningInput, signMessage, unsignedMessageOf } from '../src/message.ts'
+import { type SignedMessage, type SignedPull, messageId, messageSigningInput, pullRequest, pullSigningInput, signMessage, unsignedMessageOf } from '../src/message.ts'
 import { type SignedRecord, recordId, signingInput, unsignedOf } from '../src/record.ts'
 import { accessRecord, hostsRecord, ownerRecord, permissionsRecord } from '../src/write.ts'
-import { KEYS, accessKey, alice, aliceBuyer } from './fixtures.ts'
+import { KEYS, accessKey, alice, aliceBuyer, messageKey } from './fixtures.ts'
 
 const TIME = 1_790_000_000_000 // 2026-09-21T13:33:20Z
 
 /**
- * The message vector's body: { text: 'Is Tuesday at six free?' } sealed to tutoring/seller's reading
+ * The message vector's body: { text: 'Is Tuesday at six free?' } sealed to tutoring/seller's inbox
  * key, made once with makePrivate. age's sealing is random, so it is pinned as made.
  */
 const SEALED = [
@@ -46,6 +46,34 @@ const SEALED = [
   'FPrTfPVvbgweNd-_g4Gd4X5ON7Rn4GL4ieIWKf5-eubguN49MQ',
 ].join('')
 
+/** The delegated vector's body: { text: 'Tuesday at six, yes.' } sealed to tutoring/buyer's inbox key, pinned as made. */
+const SEALED_TO_BUYER = [
+  'YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0-IG1sa2VtNzY4eDI1NTE5IHJvN1FtZ2gybHBxMXpSc0p0blVCdVQ0b0pwMENnSG',
+  't2SENLd1V2SHY4RXNCM0QwL2lNQXl6SWN1S3dFaXBQbGphaWxiQS9wYmQwNks1anpTaHBzSmVoRXlKOHAxeGlqcmozT0Zk',
+  'ZW9uTm1ZRThQcVpqWVhGU1JaclpPNm5oRlNGcW55SXl3SzJvdXltNEMvaVBYZEpsTmNyTStLcHJWQjlDY2tlZ2hKYUcrdU',
+  '5aaTBOVnoySVBVZFdtNDRQNG1XaXdLdFBYN3JwVUtka1RaNXJNUTRxVHN0UE55NmJMNk5WUDdMZjd5bTJ2NHVGNjlIR0Rw',
+  'VWdrK3p5bVh5WlpDS1BiYnZlUDNyOVRFQlRidmZ0UjYyTWhLZXZibHY1ZmFhak5qanZ5dXdTckQ1elNaSDRXdDluZ0hlb2',
+  'pKQVNpT1JWcnptR1J4Ums4RnRWdFBUaUxnYy84UEFISUNBNXBqb0UxeDA3SDYxVkluajh3UHBzNTdCalF2RFRKTWE1cGpD',
+  'ZEQ3M2JWdHF3Uk5nMldLYWYzRG1WanozbkFxcUVubk5iSm5HZkFHQ1Arb3plOUlZU0xja1d5d00wNmFLVC9xOXVRTTJnSz',
+  'ErT1A2a25tMkpqR1FVQy92bEwzODFpYUpPRjFTZnBnUWtYVThlUGdSdlB2Z003Uk5ROTNveEpJWTRockl0TzlCU0xtekxR',
+  'NEJrbktVVG1oN1dkM3hiSjFxaThWazVDSnlSREJDQ2ZSUWlSc1B0RTl5ZUJHTjkxU3laSlJmVkJGTktCL2FSR25ub1VyWU',
+  'ZOdmVkTkNFdk1sVmdncDJmT244RU9tUWgyVXdGdWhtZDg4akhwazNMVFlBNDREWmlmL0U4SU16eTRJT05lVjI1MzRVWVp0',
+  'T0FnWnpxdys2RFRoVmFjUUFDOWdOc1pjVnlaVWpkeXppMlpyV0NtblI4U1A3QUo2dUVDVFg3ZGhqS20yQksvNk5ZTHk5dV',
+  'd2bDRLZGl4UFVOT0FNdjUzRmpPUHoxYkhhWEdGUE5COElac0h1cUJ0MnMxd2JkK0k5WXkxakZWTHIyN0NibzBLSFhIUCtV',
+  'TlVoSllXVDZXRVVPUVhpYXBMdWtCQkVCV0JaWnN6UHBtWmI1WXFBM3VCbFRram5xaEE0SkhrQXhvNXZsNm8veEsvVmhNRV',
+  'NIeFc4OFFKRVlhM29mb0pwMTRGWWR1elRlaGtEdktvckhiaTdEcnBPRGNiVGV6ZTh1RHZnYW85WlhQOStuaUZMZ1dKR29Q',
+  'NnRKVEF1U0s0L2pqVmFBQXpXK1d4MnU3WEl6bEZRNkRoNk5MaU1ma3hnMWtMM1FnVzR2NUxIbFgvaFVXS1dQRG40K0c5Ym',
+  '5mOENzZjFKbGtSTnY3VWp1cmRUWC9KbUtoVVB0REFGRXJEaUZWQjJVOUphakk1Y3oxZ2hEYnEwRVcwTnRBLzhsL3VHaXBX',
+  'cDhTZFcwMXJURFRPWiswK3NSb1BHMkpwdlRrT0VhRGRtMWF6M2JUNHgxZ09aTXdEVnpPN1JzSDZYQ3FCdmU1V09pRHVycG',
+  '8yeDlha0hnRkFSZ252d3ZaUnZLYXV3c3BiZEFoOVpLZURlaHNseENKTHk1NmhQaW9EMTNSUEJoQm54V2ZYbG41cU5scVVp',
+  'dTU1UzBQaXAycENEM21NcXVYRWgrTWh3ZjRIYUJLZUlkQUpIdVB1SlZxU2VLaDF3WXh0OEk4Q0tjVGJwaWZlNEhXaHduZV',
+  'p5b09BNmNTeFJwUGtJaFJQUDU3NDN2THUyTWVZNitXSVgxb2xOSVdhbkVIZnk2MFJZTzgxczNaakpXYTM1dGNPU0xzMkpG',
+  'V1hmUFFRaUNxckUrSE9ONi9BSjhJdzEycVcwejljR3RFWWEzSUtPWXJteHBnckh0enNzOFA5SStDd21LYktZTy93d0kyNF',
+  'dUMHllT2NmZlVqK1pMTE9DWW5HdFBJTVZvQ0paN3dvVnl0THR4Wjk4Z2VHWjRuSy9Vc05hQQpzYWJGekU1Q0JMUWExKy96',
+  'anVBbVZXRXkvSU9NV0piUjkwZWYySFF4VG1ZCi0tLSBWQWcxbWtJRFJlVkYrWm9ZNzdlQk1FbHFTZFpyaWZVYjdDZTJ1YT',
+  'lrZWlVCnK9JqGWN4Ek5Sg4rxookqabPpk0nEFoSWdCfHpY8s1_mvq0xiNgBa5gbdVw6RPNtrY3FRMMqNIMyG_xZ0vdAw',
+].join('')
+
 const describe = (record: SignedRecord) => ({
   wire: canonical(record),
   signingInputHex: hex.encode(signingInput(unsignedOf(record))),
@@ -58,23 +86,30 @@ const describeMessage = (message: SignedMessage) => ({
   id: messageId(unsignedMessageOf(message)),
 })
 
+const describePull = (pull: SignedPull) => {
+  const { sig: _sig, ...unsigned } = pull
+  return { wire: canonical(pull), signingInputHex: hex.encode(pullSigningInput(unsigned)) }
+}
+
 export async function vectors() {
-  const reading = KEYS.mainKeys[0].reading
-  const pull = pullRequest(alice, 0, TIME + 240_000)
-  const { sig: _sig, ...unsignedPull } = pull
+  const inbox = KEYS.mainKeys[0].reading
+  const hostA = 'https://host-a.example'
   const offer = { direction: 'offer', description: 'One hour of maths tutoring, online.', price: { amount: '30', mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', per: 'hour' }, createdAt: '2026-09-21T13:33:20Z' }
   return {
-    about: "Forest records vectors. The profile is keys/'s tutoring/seller profile, from its test seed, and the profile record's read field is that profile's reading key: both are pinned in keys/test/vectors.json. The access key is the ed25519 key whose private key is 32 bytes of 0x2a. The message is from keys/'s tutoring/buyer profile, from the same seed, to tutoring/seller; its body is sealed to tutoring/seller's reading key, made once and pinned as made, since age's sealing is random. The pull is tutoring/seller's, for everything.",
+    about: "Forest records vectors. The profile is keys/'s tutoring/seller profile, from its test seed, and the profile record's inboxKey field is that profile's inbox key: both are pinned in keys/test/vectors.json (keys/ names the inbox key reading). The access key is the ed25519 key whose private key is 32 bytes of 0x2a, listed with scope write; the message key is the one whose private key is 32 bytes of 0x2b, listed with scope message. The message is from keys/'s tutoring/buyer profile, from the same seed, to tutoring/seller; its body is sealed to tutoring/seller's inbox key. The delegated message is from tutoring/seller, signed by its message key and naming host-a, to tutoring/buyer; its body is sealed to tutoring/buyer's inbox key. Both bodies were made once and are pinned as made, since age's sealing is random. The pull is tutoring/seller's, for everything; keyPull is the same pull signed by its message key.",
     profile: alice.address,
     accessKey: accessKey.address,
-    hosts: describe(hostsRecord(alice, ['https://host-a.example', 'https://host-b.example'], TIME)),
-    profileCard: describe(ownerRecord(alice, 'profile', { market: 'tutoring', role: 'seller', name: 'Ana', read: reading.recipient, createdAt: '2026-09-21T13:33:20Z' }, TIME)),
+    messageKey: messageKey.address,
+    hosts: describe(hostsRecord(alice, [hostA, 'https://host-b.example'], TIME)),
+    profileCard: describe(ownerRecord(alice, 'profile', { market: 'tutoring', role: 'seller', name: 'Ana', inboxKey: inbox.recipient, createdAt: '2026-09-21T13:33:20Z' }, TIME)),
     offer: describe(ownerRecord(alice, 'offer/maths', offer, TIME)),
-    permissions: describe(permissionsRecord(alice, [{ key: accessKey.address, paths: ['offer'], until: TIME + 7 * 86_400_000 }], TIME)),
+    permissions: describe(permissionsRecord(alice, [{ key: accessKey.address, scope: 'write', paths: ['offer'] }, { key: messageKey.address, scope: 'message' }], TIME)),
     written: describe(accessRecord(accessKey, alice.address, 'offer/physics', { direction: 'offer', description: 'Physics, one hour.', createdAt: '2026-09-21T13:34:20Z' }, TIME + 60_000)),
     deleted: describe(ownerRecord(alice, 'offer/maths', null, TIME + 120_000)),
     message: describeMessage(signMessage(aliceBuyer, alice.address, { private: SEALED }, TIME + 180_000)),
-    pull: { wire: canonical(pull), signingInputHex: hex.encode(pullSigningInput(unsignedPull)) },
+    delegated: describeMessage(signMessage({ key: messageKey, from: alice.address, host: hostA }, aliceBuyer.address, { private: SEALED_TO_BUYER }, TIME + 300_000)),
+    pull: describePull(pullRequest(alice, 0, TIME + 240_000)),
+    keyPull: describePull(pullRequest({ key: messageKey, profile: alice.address }, 0, TIME + 360_000)),
   }
 }
 

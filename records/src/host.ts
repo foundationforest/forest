@@ -1,10 +1,11 @@
 // A host: plain HTTP and one SQLite file. It holds no keys, has no accounts and asks for no
-// login: a record's signature is its only credential, and a pull's is the recipient's. It is open:
-// it takes signed records for any profile and serves them to anyone; it takes messages for any
-// profile whose card here declares an inbox, and serves them only to that profile's main key; it
-// takes the bytes a current record names, and serves them to anyone. It keeps the newest version
-// at each path; versions that stop being newest, messages, and bytes no current record names any
-// more go after `keepDays`.
+// login: a record's signature is its only credential, and a pull's is the recipient's main key's
+// or message key's. It is open: it takes signed records for any profile and serves them to anyone;
+// it takes messages for any profile whose card here declares an inbox, and serves them only to
+// that profile's main key and message keys; it takes the bytes a current record names, and serves
+// them to anyone. Given readSender, it reads a sender's records from one of the sender's hosts to
+// take a message a message key signed. It keeps the newest version at each path; versions that
+// stop being newest, messages, and bytes no current record names any more go after `keepDays`.
 //
 //   POST /v1/records                      NDJSON of canonical records; one NDJSON result each
 //   GET  /v1/records?profile=&after=      NDJSON of stored records in the order taken;
@@ -79,6 +80,13 @@ export type HostOptions = {
    * RPC the host chooses. Without one, the host takes messages only for inboxes open to anyone.
    */
   rowLookup?: (from: string, issuer: string) => Promise<boolean>
+  /**
+   * A profile's records, each checked, as one of its hosts serves them: what readAll gives. Used to
+   * take a message a message key signed: the sender's hosts and permissions records come from the
+   * host the message names, never from the message. Without it, the host takes no such message. It
+   * is read again for each request; keeping it longer is the operator's choice, made here.
+   */
+  readSender?: (host: string, profile: string) => Promise<Iterable<Checked>>
   messagePolicy?: MessagePolicy
   /** The largest blob it reads; DEFAULT_MAX_BLOB_BYTES when omitted. */
   maxBlobBytes?: number
@@ -104,6 +112,7 @@ export class Host {
   private readonly messagePolicy?: MessagePolicy
   private readonly blobPolicy: BlobPolicy
   private readonly rowLookup?: HostOptions['rowLookup']
+  private readonly readSender?: HostOptions['readSender']
   private readonly timeout: number
   private server?: Server
   private pruning?: NodeJS.Timeout
@@ -119,6 +128,7 @@ export class Host {
     this.messagePolicy = options.messagePolicy
     this.blobPolicy = options.blobPolicy ?? defaultBlobPolicy
     this.rowLookup = options.rowLookup
+    this.readSender = options.readSender
     this.timeout = options.timeout ?? READ_TIMEOUT_MS
     this.db = new DatabaseSync(options.file ?? ':memory:')
     this.db.exec(`
@@ -204,9 +214,8 @@ export class Host {
       if (reason === 'not-allowed') return { ok: false, error: 'permission', message: 'the permissions record does not allow this access key here' }
       return { ok: false, error: 'older', message: 'a newer version is already here' }
     }
-    // An access key's record also needs the key listed for its path now, and its until not passed
-    // by this host's clock: a reader checks only the record's own date.
-    if (record.by !== undefined && !allowsArrival(view.access, record, now)) return { ok: false, error: 'permission', message: 'this access key is past its until' }
+    // A reader counts a revoked key's records, since it is still listed; a host takes none.
+    if (record.by !== undefined && !allowsArrival(view.access, record)) return { ok: false, error: 'permission', message: 'this access key is revoked' }
     if (this.policy && !isControlPath(record.path)) {
       const stored = this.db.prepare('SELECT COUNT(*) AS records, COALESCE(SUM(bytes), 0) AS bytes FROM records WHERE profile = ?').get(record.profile) as { records: number; bytes: number }
       const refused = await this.policy(record, stored)
@@ -311,12 +320,13 @@ export class Host {
     if (lines.length > this.maxBatch) return [{ i: 0, ok: false, error: 'batch', message: `at most ${this.maxBatch} messages a request` }]
     const now = this.now()
     const inboxes = new Map<string, Inbox | null | 'unsupported'>()
+    const senders = new Map<string, View>()
     const results: Result[] = []
-    for (const [i, line] of lines.entries()) results.push({ i, ...(await this.deliverOne(line, now, inboxes)) })
+    for (const [i, line] of lines.entries()) results.push({ i, ...(await this.deliverOne(line, now, inboxes, senders)) })
     return results
   }
 
-  private async deliverOne(line: string, now: number, inboxes: Map<string, Inbox | null | 'unsupported'>): Promise<Answer> {
+  private async deliverOne(line: string, now: number, inboxes: Map<string, Inbox | null | 'unsupported'>, senders: Map<string, View>): Promise<Answer> {
     let c: CheckedMessage
     try {
       c = readMessage(line)
@@ -331,6 +341,21 @@ export class Host {
     if (inbox === undefined) inboxes.set(m.to, (inbox = inboxOf(this.view(m.to, now).current.get('profile')?.record.body)))
     if (inbox === null) return refuse('no_inbox', 'the profile record here declares no inbox')
     if (!verifyMessage(c)) return refuse('signature', 'the signature does not verify')
+    if (m.key !== undefined) {
+      // A message key: from's own hosts and permissions records, read from the host it names.
+      if (!this.readSender) return refuse('rule_unsupported', 'this host does not read senders’ records, so it takes no message a message key signed')
+      const at = `${m.from} ${m.host}`
+      let sender = senders.get(at)
+      if (!sender) {
+        try {
+          senders.set(at, (sender = viewProfile(m.from, await this.readSender(m.host!, m.from), now)))
+        } catch (err) {
+          return refuse('lookup', `could not read the sender’s records, try again: ${(err as Error).message}`)
+        }
+      }
+      if (!sender.hosts.includes(m.host!)) return refuse('permission', 'host is not one of the hosts from’s hosts record names')
+      if (!sender.access.some((k) => k.key === m.key && k.scope === 'message')) return refuse('permission', 'from’s permissions record does not list key with scope message')
+    }
     if (inbox === 'unsupported') return refuse('rule_unsupported', 'this host does not know the inbox’s rule')
     if (inbox.senders !== 'anyone') {
       if (!this.rowLookup) return refuse('rule_unsupported', 'this host has no registry lookup')
@@ -359,11 +384,16 @@ export class Host {
   }
 
   /**
-   * A pull (wire text): checked at this host's clock, then a page of that profile's messages after
-   * the cursor, in arrival order, paged as records are. Throws RecordError.
+   * A pull (wire text): checked at this host's clock; one a message key signed also needs this
+   * host's current permissions record for the profile to list it with scope message [permission].
+   * Then a page of that profile's messages after the cursor, in arrival order, paged as records
+   * are. Throws RecordError.
    */
   pull(text: string, now = this.now()): { lines: string[]; cursor: number } {
     const request = checkPull(text, now)
+    if (request.key !== undefined && !this.view(request.profile, now).access.some((k) => k.key === request.key && k.scope === 'message')) {
+      throw new RecordError('permission', 'the profile’s permissions record here does not list key with scope message')
+    }
     const rows = this.db.prepare('SELECT seq, text, bytes FROM messages WHERE recipient = ? AND seq > ? ORDER BY seq LIMIT ?').all(request.profile, request.after, this.maxPageRecords) as Row[]
     return this.page(rows, request.after)
   }

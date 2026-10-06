@@ -188,26 +188,42 @@ export type HostsBody = {
   urls: string[]
 }
 
+/**
+ * What an access key is for. write: signing records where its paths allow. message: signing
+ * messages for the main key, and pulling its inbox. read: opening what is sealed to it. pay: the
+ * chain's own allowance to it, which lives on chain. revoked: a write or message key removed: it
+ * adds nothing more, and what it wrote still counts.
+ */
+export type Scope = 'write' | 'message' | 'read' | 'pay' | 'revoked'
+export const SCOPES: readonly Scope[] = ['write', 'message', 'read', 'pay', 'revoked']
+
 export type AccessKey = {
-  /** The access key's address. */
+  /** Its public half: an address, or a read key's age post-quantum hybrid recipient (age1pq1…). */
   key: string
-  /** Path prefixes it may write under, segment by segment. Never a control path. */
-  paths: string[]
+  scope: Scope
   /**
-   * Optional. Milliseconds since 1970. A record it signs counts only if dated before it; a host
-   * also refuses one that arrives once it has passed, by the host's own clock. Removing an access
-   * key is setting it to now.
+   * Content path prefixes it works under, segment by segment: where a write key writes, and which
+   * private records the owner's devices seal to a read key. Without it, every content path but
+   * those `profile` and `grants` cover. Never on a message or pay key.
    */
-  until?: number
+  paths?: string[]
 }
 export type PermissionsBody = { access: AccessKey[] }
 
 export const MAX_HOSTS = 8
 export const MAX_ACCESS_KEYS = 16
 export const MAX_ACCESS_PATHS = 16
+/** An age post-quantum hybrid recipient (mlkem768x25519): an inbox key's or a read key's public half. */
+export const RECIPIENT = /^age1pq1[02-9ac-hj-np-z]{1952}$/
 
 const only = (body: object, fields: string[], code: string, what: string) => {
   for (const key of Object.keys(body)) if (!fields.includes(key)) fail(code, `unknown ${what} field ${key}`)
+}
+
+/** An access key's paths: at most MAX_ACCESS_PATHS content path prefixes. Throws RecordError with `code`. */
+export function checkAccessPaths(paths: unknown, code: string): asserts paths is string[] {
+  if (!Array.isArray(paths) || paths.length > MAX_ACCESS_PATHS) fail(code, `paths is at most ${MAX_ACCESS_PATHS} prefixes`)
+  for (const p of paths as unknown[]) if (typeof p !== 'string' || !PATH.test(p) || isControlPath(p)) fail(code, 'an access path is a content path prefix')
 }
 
 export function checkControlBody(path: string, body: Body): void {
@@ -224,12 +240,16 @@ export function checkControlBody(path: string, body: Body): void {
   if (!Array.isArray(access) || access.length > MAX_ACCESS_KEYS) fail('permissions', `access is at most ${MAX_ACCESS_KEYS} keys`)
   for (const k of access as unknown[]) {
     if (k === null || typeof k !== 'object' || Array.isArray(k)) fail('permissions', 'an access entry is an object')
-    only(k, ['key', 'paths', 'until'], 'permissions', 'access')
-    const { key, paths, until } = k as { [key: string]: unknown }
-    if (!publicKeyFromAddress(key)) fail('permissions', 'an access key is a usable ed25519 address')
-    if (!Array.isArray(paths) || paths.length > MAX_ACCESS_PATHS) fail('permissions', `paths is at most ${MAX_ACCESS_PATHS} prefixes`)
-    for (const p of paths as unknown[]) if (typeof p !== 'string' || !PATH.test(p) || isControlPath(p)) fail('permissions', 'an access path is a content path prefix')
-    if ('until' in (k as object) && (!Number.isSafeInteger(until) || (until as number) < 0)) fail('permissions', 'until is whole milliseconds since 1970')
+    only(k, ['key', 'scope', 'paths'], 'permissions', 'access')
+    const { key, scope, paths } = k as { [key: string]: unknown }
+    if (!SCOPES.includes(scope as Scope)) fail('permissions', `scope is one of ${SCOPES.join(', ')}`)
+    if (scope === 'read') {
+      if (typeof key !== 'string' || !RECIPIENT.test(key)) fail('permissions', 'a read key is an age post-quantum hybrid recipient, age1pq1…')
+    } else if (!publicKeyFromAddress(key)) fail('permissions', 'an access key is a usable ed25519 address')
+    if ('paths' in (k as object)) {
+      if (scope === 'message' || scope === 'pay') fail('permissions', `a ${scope} key has no paths`)
+      checkAccessPaths(paths, 'permissions')
+    }
   }
 }
 

@@ -9,13 +9,14 @@ import { ed25519 } from '@noble/curves/ed25519.js'
 import { sha512 } from '@noble/hashes/sha2.js'
 import { getCompiledTransactionMessageDecoder } from '@solana/transaction-messages'
 import { b64u, base58, concat, hex, utf8 } from '../src/bytes.ts'
-import { publish, readAll, readProfile } from '../src/client.ts'
+import { deliver, publish, readAll, readProfile } from '../src/client.ts'
 import type { Host } from '../src/host.ts'
 import { readingKey } from '../../keys/src/index.ts'
+import { message } from '../src/private.ts'
 import { checkRecord, encodeRecord, signingInput, unsignedOf, verifySignature } from '../src/record.ts'
 import { viewProfile } from '../src/view.ts'
 import { accessRecord, hostsRecord, ownerRecord, permissionsRecord } from '../src/write.ts'
-import { DAY, MINUTE, SEED, T0, accessKey, alice, aliceBuyer, allow, bob, offerBody, profileBody } from './fixtures.ts'
+import { DAY, MINUTE, SEED, T0, accessKey, alice, aliceBuyer, allow, bob, messageKey, offerBody, profileBody } from './fixtures.ts'
 import { startHost } from './helpers.ts'
 
 const L = 2n ** 252n + 27742317777372353535851937790883648493n
@@ -68,7 +69,7 @@ describe('nobody forges; a signature means one thing everywhere', () => {
       t.diagnostic(`node:crypto (OpenSSL) accepts the universal signature for small-order key ${hex.encode(weak).slice(0, 8)}…: ${nodeAccepts(universal, message, weak)}`)
     }
     // A permissions record naming a small-order access key cannot even be written.
-    assert.throws(() => permissionsRecord(alice, [{ key: base58.encode(identity), paths: ['offer'], until: T0 + MINUTE }], T0), /usable/)
+    assert.throws(() => permissionsRecord(alice, [{ key: base58.encode(identity), scope: 'write', paths: ['offer'] }], T0), /usable/)
   })
 
   test('a mixed-order key (the owner’s key plus a small-order point): verifiers could disagree; Forest refuses it', (t) => {
@@ -117,8 +118,7 @@ describe('nobody forges; a signature means one thing everywhere', () => {
 })
 
 describe('a stolen access key', () => {
-  const until = T0 + 7 * DAY
-  const permissions = permissionsRecord(alice, [allow(accessKey, ['offer'], until)], T0)
+  const permissions = permissionsRecord(alice, [allow(accessKey, ['offer'])], T0)
   const mine = ownerRecord(alice, 'offer/maths', offerBody('30'), T0)
   const view = (...records: Parameters<typeof checkRecord>[0][]) => viewProfile(alice.address, records.map((r) => checkRecord(r)), T0 + DAY)
 
@@ -131,24 +131,57 @@ describe('a stolen access key', () => {
     assert.throws(() => accessRecord(accessKey, alice.address, 'hosts', { urls: ['https://evil.example'] }, T0 + DAY), /only the owner/)
   })
 
-  test('once removed, nothing dated from then on counts, on any host or none', () => {
-    const removedAt = T0 + MINUTE
-    const removed = permissionsRecord(alice, [allow(accessKey, ['offer'], removedAt)], removedAt)
-    const after = accessRecord(accessKey, alice.address, 'offer/after', offerBody('1'), removedAt + 1)
-    assert.equal(view(removed, after).current.has('offer/after'), false)
+  test('with no paths, it still cannot write the card or the grants record', () => {
+    const anywhere = permissionsRecord(alice, [allow(accessKey)], T0)
+    const card = accessRecord(accessKey, alice.address, 'profile', profileBody('Not Alice'), T0 + DAY)
+    const grants = accessRecord(accessKey, alice.address, 'grants', { private: 'x' }, T0 + DAY)
+    const v = view(anywhere, card, grants)
+    assert.deepEqual([v.current.has('profile'), v.current.has('grants')], [false, false])
   })
 
-  test('FINDING: once removed, a stolen key can backdate a record before its until, and it counts for readers of a host that skips the check', () => {
-    // An honest host refuses it by its own clock (host.test.ts). A reader checks only the record's
-    // own date, so whoever holds a host that takes it can show it. The owner's record wins at that
-    // path, so the owner deletes it there.
-    const removedAt = T0 + MINUTE
-    const removed = permissionsRecord(alice, [allow(accessKey, ['offer'], removedAt)], removedAt)
-    const backdated = accessRecord(accessKey, alice.address, 'offer/old', offerBody('1'), removedAt - 1)
+  test('once its entry is deleted, nothing it signed counts, however it is dated, on any host or none', () => {
+    const removed = permissionsRecord(alice, [], T0 + MINUTE)
+    const before = accessRecord(accessKey, alice.address, 'offer/before', offerBody('1'), T0)
+    const after = accessRecord(accessKey, alice.address, 'offer/after', offerBody('1'), T0 + 2 * MINUTE)
+    const v = view(removed, before, after)
+    assert.deepEqual([v.current.has('offer/before'), v.current.has('offer/after')], [false, false])
+  })
+
+  test('FINDING: once revoked, a stolen key can still write to a host that skips the check, and that host’s readers count it', () => {
+    // An honest host refuses it (host.test.ts). A reader counts every record a revoked key wrote,
+    // since it is still listed and no date is checked, so whoever holds a host that takes one can
+    // show it. The owner's record wins at that path, so the owner deletes it there.
+    const revoked = permissionsRecord(alice, [allow(accessKey, ['offer'], 'revoked')], T0 + MINUTE)
+    const sneaked = accessRecord(accessKey, alice.address, 'offer/new', offerBody('1'), T0 + 2 * MINUTE)
     const later = T0 + 365 * DAY
-    assert.equal(viewProfile(alice.address, [removed, backdated].map((r) => checkRecord(r)), later).current.has('offer/old'), true)
-    const deleted = ownerRecord(alice, 'offer/old', null, removedAt + 1)
-    assert.equal(viewProfile(alice.address, [removed, backdated, deleted].map((r) => checkRecord(r)), later).current.get('offer/old')!.record.body, null)
+    assert.equal(viewProfile(alice.address, [revoked, sneaked].map((r) => checkRecord(r)), later).current.has('offer/new'), true)
+    const deleted = ownerRecord(alice, 'offer/new', null, T0 + 3 * MINUTE)
+    assert.equal(viewProfile(alice.address, [revoked, sneaked, deleted].map((r) => checkRecord(r)), later).current.get('offer/new')!.record.body, null)
+  })
+})
+
+describe('a stolen message key', () => {
+  test('once revoked, it cannot send through a host that serves the sender’s old permissions record: the sender’s hosts record does not name that host', async () => {
+    const readSender = async (url: string, profile: string) => (await readAll(url, { profile })).records
+    const home = await startHost({ now: () => T0 })
+    const thief = await startHost({ now: () => T0 }) // keeps copies of Alice's old records: they are public
+    const inbox = await startHost({ now: () => T0, readSender })
+    try {
+      const listed = permissionsRecord(alice, [allow(messageKey, undefined, 'message')], T0)
+      await publish([home.url], [hostsRecord(alice, [home.url], T0), listed, permissionsRecord(alice, [allow(messageKey, undefined, 'revoked')], T0 + 1)])
+      await publish([thief.url], [hostsRecord(alice, [home.url], T0), listed])
+      const bobInbox = await readingKey(bob.privateKey)
+      const bobCard = { ...profileBody('Bob'), inboxKey: bobInbox.recipient, inbox: { senders: 'anyone' } }
+      await publish([inbox.url], [ownerRecord(bob, 'profile', bobCard, T0)])
+      const send = (host: string) => message({ key: messageKey, from: alice.address, host }, bob.address, { text: 'Send me the money.' }, T0 + 2, bobCard)
+      const results = async (host: string) => (await deliver([inbox.url], [await send(host)]))[0]!.results[0]!.error
+      assert.equal(await results(thief.url), 'permission', 'the old record, from a host she does not name')
+      assert.equal(await results(home.url), 'permission', 'her current record says revoked')
+    } finally {
+      await home.close()
+      await thief.close()
+      await inbox.close()
+    }
   })
 })
 
@@ -173,12 +206,12 @@ describe('over real hosts', () => {
   })
 
   test('a host holds no key: its whole database holds no secret of the person', async () => {
-    const reading = await readingKey(alice.privateKey)
+    const inbox = await readingKey(alice.privateKey)
     const disk = [...h1.dump(), ...h2.dump()].join('\n')
     for (const secret of [alice.privateKey, SEED]) {
       for (const form of [hex.encode(secret), b64u.encode(secret), Buffer.from(secret).toString('base64'), base58.encode(secret)]) assert.ok(!disk.includes(form))
     }
-    assert.ok(!disk.includes(reading.identity))
+    assert.ok(!disk.includes(inbox.identity))
   })
 
   test('a hosts record signed by someone else, naming other hosts, is refused by hosts and readers', async () => {
@@ -197,17 +230,17 @@ describe('over real hosts', () => {
 })
 
 describe('linking two profiles of one person', () => {
-  test('addresses, reading keys and access keys: nothing public repeats across the two profiles', async () => {
-    const [read0, read1] = await Promise.all([readingKey(alice.privateKey), readingKey(aliceBuyer.privateKey)])
-    const accessFor = (n: number) => ({ key: base58.encode(ed25519.getPublicKey(sha512(utf8(`access ${n}`)).subarray(0, 32))), paths: ['offer'], until: T0 + 1 })
+  test('addresses, inbox keys and access keys: nothing public repeats across the two profiles', async () => {
+    const [inbox0, inbox1] = await Promise.all([readingKey(alice.privateKey), readingKey(aliceBuyer.privateKey)])
+    const accessFor = (n: number) => ({ key: base58.encode(ed25519.getPublicKey(sha512(utf8(`access ${n}`)).subarray(0, 32))), scope: 'write' as const, paths: ['offer'] })
     const one = [
       hostsRecord(alice, ['https://big-host.example'], T0),
-      ownerRecord(alice, 'profile', { ...profileBody('Alice teaches'), read: read0.recipient }, T0),
+      ownerRecord(alice, 'profile', { ...profileBody('Alice teaches'), inboxKey: inbox0.recipient }, T0),
       permissionsRecord(alice, [accessFor(1)], T0),
     ]
     const two = [
       hostsRecord(aliceBuyer, ['https://big-host.example'], T0),
-      ownerRecord(aliceBuyer, 'profile', { ...profileBody('A. buys'), role: 'buyer', read: read1.recipient }, T0),
+      ownerRecord(aliceBuyer, 'profile', { ...profileBody('A. buys'), role: 'buyer', inboxKey: inbox1.recipient }, T0),
       permissionsRecord(aliceBuyer, [accessFor(2)], T0),
     ]
     const tokens = (records: object[]) => {

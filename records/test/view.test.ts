@@ -52,7 +52,7 @@ describe('versions', () => {
 
   test('any set of records, in any order, with duplicates, gives the same view', () => {
     const records = [
-      permissionsRecord(alice, [allow(accessKey, ['offer'], T0 + DAY)], T0),
+      permissionsRecord(alice, [allow(accessKey, ['offer'])], T0),
       ownerRecord(alice, 'profile', profileBody('A'), T0),
       ownerRecord(alice, 'profile', profileBody('B'), T0), // same time: the larger id wins
       ownerRecord(alice, 'offer/a', offerBody('1'), T0),
@@ -76,14 +76,13 @@ describe('versions', () => {
 })
 
 describe('access keys and permissions', () => {
-  const until = T0 + 7 * DAY
-  const permissions = permissionsRecord(alice, [allow(accessKey, ['offer'], until)], T0)
+  const permissions = permissionsRecord(alice, [allow(accessKey, ['offer'])], T0)
   const written = accessRecord(accessKey, alice.address, 'offer/physics', offerBody('40'), T0 + MINUTE)
 
-  test('an access key the permissions record lists writes at the paths it allows', () => {
+  test('a key the permissions record lists with scope write writes at the paths it allows', () => {
     const v = view([permissions, written], T0 + 2 * MINUTE)
     assert.equal(v.current.get('offer/physics')!.id, idOf(written))
-    assert.deepEqual(v.access, [allow(accessKey, ['offer'], until)])
+    assert.deepEqual(v.access, [{ key: accessKey.address, scope: 'write', paths: ['offer'] }])
   })
 
   test('without a permissions record, or outside its paths, an access key’s record counts for nothing', () => {
@@ -93,6 +92,23 @@ describe('access keys and permissions', () => {
     const v = view([permissions, review, sneaky], T0 + 2 * MINUTE)
     assert.equal(v.ignored.get(idOf(review)), 'not-allowed')
     assert.equal(v.ignored.get(idOf(sneaky)), 'not-allowed')
+  })
+
+  test('with no paths, a write key covers every content path but those profile and grants cover; with paths, only those', () => {
+    const anywhere = permissionsRecord(alice, [allow(accessKey)], T0)
+    const at = (path: string) => accessRecord(accessKey, alice.address, path, { text: path }, T0 + MINUTE)
+    const v = view([anywhere, ...['offer/x', 'review/1', 'note/a/b', 'profiles', 'grantsx', 'profile', 'profile/x', 'grants', 'grants/x'].map(at)], T0 + 2 * MINUTE)
+    assert.deepEqual([...liveContent(v).keys()].sort(), ['grantsx', 'note/a/b', 'offer/x', 'profiles', 'review/1'])
+    const named = view([permissionsRecord(alice, [allow(accessKey, ['profile', 'grants'])], T0), at('profile'), at('grants'), at('offer/x')], T0 + 2 * MINUTE)
+    assert.deepEqual([...liveContent(named).keys()].sort(), ['grants', 'profile'], 'paths can name them; then only those')
+    assert.equal(liveContent(view([permissionsRecord(alice, [allow(accessKey, [])], T0), at('offer/x')])).size, 0, 'an empty list covers nothing')
+  })
+
+  test('only a write key writes: a record by a key listed as message or pay counts for nothing', () => {
+    for (const scope of ['message', 'pay'] as const) {
+      const v = view([permissionsRecord(alice, [allow(accessKey, undefined, scope)], T0), written], T0 + 2 * MINUTE)
+      assert.equal(v.ignored.get(idOf(written)), 'not-allowed', scope)
+    }
   })
 
   test('a key the permissions record does not list counts for nothing', () => {
@@ -114,26 +130,15 @@ describe('access keys and permissions', () => {
     assert.equal(v.current.get('offer/physics')!.id, idOf(fix))
   })
 
-  test('removing an access key is setting its until to now: what it already wrote still counts, nothing dated from then on does', () => {
-    const removedAt = T0 + 10 * MINUTE
-    const removed = permissionsRecord(alice, [allow(accessKey, ['offer'], removedAt)], removedAt)
-    const atRemoval = accessRecord(accessKey, alice.address, 'offer/at', offerBody('1'), removedAt)
-    const later = accessRecord(accessKey, alice.address, 'offer/later', offerBody('1'), removedAt + DAY)
-    const v = view([permissions, written, removed, atRemoval, later], T0 + 30 * DAY)
-    assert.equal(v.current.get('offer/physics')!.id, idOf(written), 'written before removal: still counts a month later')
-    assert.equal(v.ignored.get(idOf(atRemoval)), 'not-allowed', 'dated at until is not before it')
-    assert.equal(v.ignored.get(idOf(later)), 'not-allowed')
+  test('removing a write key is setting its scope to revoked: it is still listed, so what it wrote still counts, whatever the date', () => {
+    const revoked = permissionsRecord(alice, [allow(accessKey, ['offer'], 'revoked')], T0 + 10 * MINUTE)
+    const v = view([permissions, written, revoked], T0 + 365 * DAY)
+    assert.equal(v.current.get('offer/physics')!.id, idOf(written), 'a year later')
+    const outside = accessRecord(accessKey, alice.address, 'review/1', { subject: bob.address }, T0 + MINUTE)
+    assert.equal(view([revoked, outside]).ignored.get(idOf(outside)), 'not-allowed', 'a revoked key keeps its paths')
   })
 
-  test('an access key with no until has no end', () => {
-    const open = permissionsRecord(alice, [allow(accessKey, ['offer'])], T0)
-    const years = accessRecord(accessKey, alice.address, 'offer/years', offerBody('1'), T0 + 3 * 365 * DAY)
-    const v = view([open, written, years], T0 + 3 * 365 * DAY)
-    assert.equal(v.current.get('offer/physics')!.id, idOf(written))
-    assert.equal(v.current.get('offer/years')!.id, idOf(years))
-  })
-
-  test('a key left out of the permissions record, or a deleted permissions record, counts for nothing: what it wrote stops counting', () => {
+  test('deleting a key’s entry, or the permissions record, disowns what it wrote: it stops counting', () => {
     const dropped = permissionsRecord(alice, [], T0 + 10 * MINUTE)
     const v = view([permissions, written, dropped], T0 + 30 * DAY)
     assert.equal(v.current.has('offer/physics'), false)
@@ -143,9 +148,9 @@ describe('access keys and permissions', () => {
 
   test('narrowing its paths ends what it wrote outside them; another access key is untouched', () => {
     const other = accessRecord(stranger, alice.address, 'review/1', { subject: bob.address }, T0 + MINUTE)
-    const both = permissionsRecord(alice, [allow(accessKey, ['offer', 'note'], until), allow(stranger, ['review'], until)], T0 + 1)
+    const both = permissionsRecord(alice, [allow(accessKey, ['offer', 'note']), allow(stranger, ['review'])], T0 + 1)
     const note = accessRecord(accessKey, alice.address, 'note/a', { text: 'x' }, T0 + MINUTE)
-    const narrowed = permissionsRecord(alice, [allow(accessKey, ['note'], until), allow(stranger, ['review'], until)], T0 + 5 * MINUTE)
+    const narrowed = permissionsRecord(alice, [allow(accessKey, ['note']), allow(stranger, ['review'])], T0 + 5 * MINUTE)
     const v = view([both, written, note, other, narrowed], T0 + 6 * MINUTE)
     assert.equal(v.current.has('offer/physics'), false)
     assert.equal(v.current.get('note/a')!.id, idOf(note))
@@ -154,19 +159,12 @@ describe('access keys and permissions', () => {
 
   test('an access key back in the permissions record brings its records back: the view is only what is current', () => {
     const dropped = permissionsRecord(alice, [], T0 + 10 * MINUTE)
-    const back = permissionsRecord(alice, [allow(accessKey, ['offer'], until)], T0 + 20 * MINUTE)
+    const back = permissionsRecord(alice, [allow(accessKey, ['offer'])], T0 + 20 * MINUTE)
     assert.equal(view([permissions, written, dropped, back], T0 + DAY).current.get('offer/physics')!.id, idOf(written))
   })
 
-  test('until is checked against the record’s own time: no reader’s clock ends anything', () => {
-    const late = accessRecord(accessKey, alice.address, 'offer/late', offerBody('1'), until)
-    const v = view([permissions, written, late], until + 365 * DAY)
-    assert.equal(v.current.get('offer/physics')!.id, idOf(written), 'dated before until: still counts a year later')
-    assert.equal(v.ignored.get(idOf(late)), 'not-allowed', 'dated at until or after: never counts')
-  })
-
   test('only the owner’s permissions count: an access key cannot list itself, or use one profile’s permissions in another', () => {
-    assert.throws(() => accessRecord(accessKey, alice.address, 'permissions', { access: [allow(accessKey, ['review'], until)] }, T0), /only the owner/)
+    assert.throws(() => accessRecord(accessKey, alice.address, 'permissions', { access: [allow(accessKey, ['review'])] }, T0), /only the owner/)
     const intoBob = accessRecord(accessKey, bob.address, 'offer/x', offerBody('1'), T0 + 1)
     const v = viewProfile(bob.address, checked(permissions, intoBob), T0 + MINUTE)
     assert.equal(v.ignored.get(idOf(intoBob)), 'not-allowed')

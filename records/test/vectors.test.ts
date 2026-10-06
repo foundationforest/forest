@@ -21,12 +21,21 @@ test('the vectors are what this implementation computes', async () => {
   assert.deepEqual(await vectors(), pinned)
 })
 
-test("the keys are keys/'s pinned ones; the access key, recomputed with node:crypto", () => {
+test("the keys are keys/'s pinned ones; the access key and the message key, recomputed with node:crypto", () => {
   assert.equal(pinned.profile, KEYS.mainKeys[0].address)
-  assert.equal(decodeRecord(pinned.profileCard.wire).record.body!.read, KEYS.mainKeys[0].reading.recipient)
-  const der = Buffer.concat([Buffer.from('302e020100300506032b657004220420', 'hex'), Buffer.alloc(32, 0x2a)]) // Ed25519 PKCS#8
-  const publicKey = createPublicKey(createPrivateKey({ key: der, format: 'der', type: 'pkcs8' })).export({ format: 'der', type: 'spki' }).subarray(-32)
-  assert.equal(base58.encode(new Uint8Array(publicKey)), pinned.accessKey)
+  assert.equal(decodeRecord(pinned.profileCard.wire).record.body!.inboxKey, KEYS.mainKeys[0].reading.recipient)
+  const address = (byte: number) => {
+    const der = Buffer.concat([Buffer.from('302e020100300506032b657004220420', 'hex'), Buffer.alloc(32, byte)]) // Ed25519 PKCS#8
+    return base58.encode(new Uint8Array(createPublicKey(createPrivateKey({ key: der, format: 'der', type: 'pkcs8' })).export({ format: 'der', type: 'spki' }).subarray(-32)))
+  }
+  assert.equal(address(0x2a), pinned.accessKey)
+  assert.equal(address(0x2b), pinned.messageKey)
+  assert.deepEqual(decodeRecord(pinned.permissions.wire).record.body, {
+    access: [
+      { key: pinned.accessKey, scope: 'write', paths: ['offer'] },
+      { key: pinned.messageKey, scope: 'message' },
+    ],
+  })
 })
 
 /** Ed25519 by node:crypto (OpenSSL). */
@@ -46,7 +55,7 @@ test('each record checks with a second Ed25519 and a second SHA-256', () => {
   }
 })
 
-test("the message checks with a second Ed25519 and a second SHA-256, is from keys/'s tutoring/buyer, and opens with tutoring/seller's pinned reading key", async () => {
+test("the message checks with a second Ed25519 and a second SHA-256, is from keys/'s tutoring/buyer, and opens with tutoring/seller's pinned inbox key", async () => {
   const v = pinned.message as { wire: string; signingInputHex: string; id: string }
   const { message, id } = decodeMessage(v.wire)
   assert.equal(id, v.id)
@@ -58,11 +67,28 @@ test("the message checks with a second Ed25519 and a second SHA-256, is from key
   assert.deepEqual((await openMessage(v.wire, KEYS.mainKeys[0].reading.identity)).body, { text: 'Is Tuesday at six free?' })
 })
 
-test('the pull checks with a second Ed25519, by the profile it pulls', () => {
-  const v = pinned.pull as { wire: string; signingInputHex: string }
-  const pull = checkPull(v.wire, JSON.parse(v.wire).time)
+test("the delegated message checks with a second Ed25519 by the message key, is for keys/'s tutoring/seller on host-a, and opens with tutoring/buyer's pinned inbox key", async () => {
+  const v = pinned.delegated as { wire: string; signingInputHex: string; id: string }
+  const { message, id } = decodeMessage(v.wire)
+  assert.equal(id, v.id)
   const input = hex.decode(v.signingInputHex)
-  startsWith(input, 'forest/v1/pull\n')
-  assert.equal(pull.profile, KEYS.mainKeys[0].address)
-  assert.ok(nodeVerifies(input, pull.profile, pull.sig))
+  startsWith(input, 'forest/v1/message\n')
+  assert.equal(createHash('sha256').update(input).digest('hex'), v.id)
+  assert.deepEqual([message.from, message.key, message.host, message.to], [KEYS.mainKeys[0].address, pinned.messageKey, 'https://host-a.example', KEYS.mainKeys[1].address])
+  assert.ok(nodeVerifies(input, message.key!, message.sig))
+  assert.ok(!nodeVerifies(input, message.from, message.sig), 'the main key did not sign it')
+  const opened = await openMessage(v.wire, KEYS.mainKeys[1].reading.identity)
+  assert.deepEqual([opened.body, opened.key], [{ text: 'Tuesday at six, yes.' }, pinned.messageKey])
+})
+
+test('each pull checks with a second Ed25519: by the profile it pulls, and by its message key', () => {
+  for (const [name, signer] of [['pull', pinned.profile], ['keyPull', pinned.messageKey]] as const) {
+    const v = pinned[name] as { wire: string; signingInputHex: string }
+    const pull = checkPull(v.wire, JSON.parse(v.wire).time)
+    const input = hex.decode(v.signingInputHex)
+    startsWith(input, 'forest/v1/pull\n')
+    assert.equal(pull.profile, KEYS.mainKeys[0].address)
+    assert.equal(pull.key ?? pull.profile, signer)
+    assert.ok(nodeVerifies(input, signer, pull.sig), name)
+  }
 })

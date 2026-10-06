@@ -8,14 +8,17 @@
 //      there). The newest is current.
 //   3. At a content path, if the owner ever wrote there, the owner's newest version is current and
 //      no access key's record counts. Otherwise the newest access key's record the current
-//      permissions record allows, by the access rule: its key is listed, one of its paths covers
-//      the record's path, and, if the key has an `until`, the record is dated before it. The
-//      record's own date is all a reader checks: not when it arrived, and no reader's clock. When
-//      it arrived is the host's check. So removing an access key, by setting its `until` to now,
-//      erases nothing it already wrote.
+//      permissions record allows: its key is listed with scope write or revoked, and its paths
+//      cover the record's path (with no paths, every content path but those `profile` and
+//      `grants` cover). A revoked key is still listed, so what it wrote still counts; a key whose
+//      entry is gone counts for nothing. No date is checked: when a record arrived is the host's
+//      check, and a host takes nothing from a revoked key.
 //   4. Newest: the later time, then the larger id. A null body is a delete.
 
 import { type AccessKey, type Checked, type HostsBody, MAX_FUTURE_MS, type PermissionsBody, type SignedRecord, isControlPath, pathCovers } from './record.ts'
+
+/** Content prefixes an access key with no `paths` does not cover: the card, and the grants a person keeps. */
+export const NOT_WITHOUT_PATHS = ['profile', 'grants']
 
 export type View = {
   profile: string
@@ -36,20 +39,25 @@ export function isNewer(a: Checked, b: Checked): boolean {
 }
 
 /**
- * The access rule, as a reader checks it: whether the access keys listed allow a record one of
- * them signed: its key, a path that covers it, and, if that key has an `until`, a record dated
- * before it.
+ * Whether an access key's entry covers a content path: one of its paths does, or, with no paths,
+ * any content path but those NOT_WITHOUT_PATHS cover.
  */
-export function allows(access: readonly AccessKey[], record: SignedRecord): boolean {
-  return access.some((k) => k.key === record.by && k.paths.some((p) => pathCovers(p, record.path)) && (k.until === undefined || record.time < k.until))
+export function covers(entry: AccessKey, path: string): boolean {
+  if (isControlPath(path)) return false
+  return entry.paths ? entry.paths.some((p) => pathCovers(p, path)) : !NOT_WITHOUT_PATHS.some((p) => pathCovers(p, path))
 }
 
 /**
- * Whether a host takes an access key's record arriving at `now`: the key is listed for its path,
- * and its `until`, if it has one, has not passed by the host's clock.
+ * The access rule, as a reader checks it: whether the access keys listed allow a record one of
+ * them signed: its key, listed with scope write or revoked, covering the record's path.
  */
-export function allowsArrival(access: readonly AccessKey[], record: SignedRecord, now: number): boolean {
-  return access.some((k) => k.key === record.by && k.paths.some((p) => pathCovers(p, record.path)) && (k.until === undefined || now < k.until))
+export function allows(access: readonly AccessKey[], record: SignedRecord): boolean {
+  return access.some((k) => k.key === record.by && (k.scope === 'write' || k.scope === 'revoked') && covers(k, record.path))
+}
+
+/** Whether a host takes an access key's record now: its key is listed with scope write, covering the record's path. */
+export function allowsArrival(access: readonly AccessKey[], record: SignedRecord): boolean {
+  return access.some((k) => k.key === record.by && k.scope === 'write' && covers(k, record.path))
 }
 
 export function viewProfile(profile: string, records: Iterable<Checked>, now: number): View {

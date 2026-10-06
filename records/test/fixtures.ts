@@ -7,9 +7,9 @@ import { mainKey } from '../../keys/src/index.ts'
 import { b64u, hex } from '../src/bytes.ts'
 import { canonical } from '../src/canonical.ts'
 import { keyFromPrivate, type Key } from '../src/keys.ts'
-import { type AccessKey, type Body, type SignedRecord, type UnsignedRecord, signingInput } from '../src/record.ts'
+import { type AccessKey, type Body, type Scope, type SignedRecord, type UnsignedRecord, signingInput } from '../src/record.ts'
 
-/** keys/'s pinned vectors: its test seed (bytes 00 01 … 1f), its profiles and their reading keys. */
+/** keys/'s pinned vectors: its test seed (bytes 00 01 … 1f), its profiles and their inbox keys. */
 export const KEYS = JSON.parse(readFileSync(new URL('../../keys/test/vectors.json', import.meta.url), 'utf8'))
 export const SEED = hex.decode(KEYS.seed)
 /** A second person. */
@@ -20,6 +20,8 @@ export const aliceBuyer = await mainKey(SEED, 'tutoring/buyer') // the same pers
 export const bob = await mainKey(OTHER_SEED, 'tutoring/buyer') // someone else
 /** An access key an app made: never the main key. */
 export const accessKey = keyFromPrivate(new Uint8Array(32).fill(42))
+/** A message key an app made: it signs messages and pulls for a main key whose permissions list it. */
+export const messageKey = keyFromPrivate(new Uint8Array(32).fill(43))
 export const stranger = keyFromPrivate(new Uint8Array(32).fill(99))
 
 export const T0 = Date.UTC(2026, 9, 2, 12, 0, 0)
@@ -50,8 +52,8 @@ export const reviewBody = (subject: string): Body => ({
   createdAt: '2026-10-02T12:00:00Z',
 })
 
-/** One access key in a permissions record: this key, these paths, and until then if given. */
-export const allow = (key: Key, paths: string[], until?: number): AccessKey => (until === undefined ? { key: key.address, paths } : { key: key.address, paths, until })
+/** One entry in a permissions record: this key, with this scope (write unless given), under these paths if given. */
+export const allow = (key: Key, paths?: string[], scope: Scope = 'write'): AccessKey => (paths === undefined ? { key: key.address, scope } : { key: key.address, scope, paths })
 
 /**
  * A signed owner record whose canonical text is exactly `bytes` long, `wide` of its characters

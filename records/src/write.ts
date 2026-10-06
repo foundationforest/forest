@@ -29,9 +29,9 @@ export function hostsRecord(owner: Key, urls: string[] | null, time: number): Si
 }
 
 /**
- * Which access keys may write, where, and until when. To remove one, set its `until` to now: what
- * it wrote before then still counts. Apps never delete an entry from the list: a key not on it
- * counts for nothing, so its past records would stop counting.
+ * The access keys this folder lists, each with its scope. To remove a write or message key, set
+ * its scope to `revoked`: it adds nothing more, and what it wrote still counts. Deleting its entry
+ * instead disowns what it wrote. A read or pay key is removed by deleting its entry.
  */
 export function permissionsRecord(owner: Key, access: AccessKey[] | null, time: number): SignedRecord {
   return ownerRecord(owner, 'permissions', access && { access }, time)
