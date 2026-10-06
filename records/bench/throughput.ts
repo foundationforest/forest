@@ -57,7 +57,7 @@ for (let p = 0; p < 500; p++) {
 let start = performance.now()
 for (let i = 0; i < lines.length; i += 100) await host.accept(lines.slice(i, i + 100))
 const ingest = lines.length / ((performance.now() - start) / 1000)
-console.log(`${'host: check and store (SQLite, in memory), 2,500 records'.padEnd(58)} ${Math.round(ingest).toLocaleString('en-US').padStart(10)} /s`)
+console.log(`${'host: check and store, a file per folder, 2,500 records'.padEnd(58)} ${Math.round(ingest).toLocaleString('en-US').padStart(10)} /s`)
 
 start = performance.now()
 let served = 0

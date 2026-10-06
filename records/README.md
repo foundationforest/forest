@@ -418,7 +418,7 @@ says it doesn't:
 | Import | What it gives |
 |---|---|
 | `@forest/records` | Keys as addresses (`keyFromPrivate`, `publicKeyFromAddress`); canonical text; signing, checking and encoding records; the view (`viewProfile`, `liveContent`, `allows`, `covers`); writing (`ownerRecord`, `accessRecord`, `hostsRecord`, `permissionsRecord`, `nextTime`); messages and pulls (`signMessage`, `decodeMessage`, `messageId`, `pullRequest`, `checkPull`, `inboxOf`, `sealedTo`); grants (`checkGrant`, `GRANTS_PATH`); talking to hosts (`publish`, `readPage`, `readAll`, `readProfile`, `deliver`, `pull`, `putBlob`, `getBlob`). No server, database or encryption library in it |
-| `@forest/records/host` | `Host`, the reference host: one SQLite file and the six requests. Unless told otherwise, it takes 100 records or messages a request; serves 1,000 a page, at most 4,194,304 bytes; keeps a replaced record, a message, and bytes no current record names any more for 30 days; and takes png, jpeg and mp4 blobs up to 50,000,000 bytes. Give it `rowLookup` to take messages for inboxes with an issuer's rule, and `readSender` to take messages a message key signed: it reads the sender's records again for each request |
+| `@forest/records/host` | `Host`, the reference host: a SQLite file per folder and the six requests. Unless told otherwise, it takes 100 records or messages a request; serves 1,000 a page, at most 4,194,304 bytes; keeps a replaced record, a message, and bytes no current record names any more for 30 days; and takes png, jpeg and mp4 blobs up to 50,000,000 bytes. Give it `rowLookup` to take messages for inboxes with an issuer's rule, and `readSender` to take messages a message key signed: it reads the sender's records again for each request |
 | `@forest/records/private` | `makePrivate`, `openPrivate`, `readerCount`; `message` (seal to a card's inbox key and readers, and sign) and `openMessage`; `grantsRecord` and `openGrants`. The inbox key itself is keys/'s `readingKey` |
 | `@forest/records/schemas/<kind>.json` | The three shapes, as JSON Schemas |
 
@@ -491,6 +491,23 @@ Node 22.18 or later. Built from existing pieces, unchanged: `@noble/curves`, `@n
 `@scure/base` and `canonicalize` for the core; `age-encryption` for private records and messages;
 Node's built-in `node:sqlite` for the host.
 
+The reference host keeps everything in its data directory, `dir` (a temporary one, removed on
+close, when none is given):
+
+- `folders/<address>.sqlite`: one file per folder, with its records, the messages to its inbox and
+  its once pairs. With the host stopped, deleting a folder's file removes that folder.
+- `host.sqlite`: the log, which numbers every folder's records in the order taken, and which
+  folders name which blobs. It holds nothing that exists only there: `rebuild(dir)` makes it again.
+- The blobs: in `blobs/`, or with `blobs: { kind: 's3', … }` in a bucket of any S3-compatible
+  service.
+
+`node scripts/import-single-file.ts <old file> <dir>` moves a host from the single SQLite file it
+kept before. Every record and message keeps its number, so the cursors readers hold still work.
+
+**When it grows.** Today the reference host is one machine with a file per folder. When one machine
+is not enough, the options are more machines, a managed per-folder store, or Postgres. Each is a
+change to its storage layer, `src/storage.ts`, which is one module.
+
 ### Test vectors
 
 `test/vectors.json`: a hosts, profile, offer, permissions, access key's offer and delete record,
@@ -532,9 +549,9 @@ other vector is unchanged, byte for byte.
 
 ## Limits
 
-- **The reference host is a reference.** One process, one SQLite file, listening on `127.0.0.1`
-  unless told otherwise; TLS is the operator's. It checks each record against everything it stores
-  for that profile, which is slow for a busy one.
+- **The reference host is a reference.** One process on one machine, a SQLite file per folder,
+  listening on `127.0.0.1` unless told otherwise; TLS is the operator's. It checks each record
+  against everything it stores for that profile, which is slow for a busy one.
 - **Checking signatures is slow here.** Pure JavaScript checks about 150 a second on one core of the
   machine these tests ran on, against about 7,800 for OpenSSL. A busy host or index should verify
   in native code with the same strict rules (see Hosts).

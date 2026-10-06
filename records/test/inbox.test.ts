@@ -266,7 +266,7 @@ describe('deliver and pull', () => {
       assert.deepEqual(await errors(h, [await note(bob, 'x'.repeat(3000))]), ['too_big'])
       assert.deepEqual(await errors(h, [await note(bob), await note(bob, 'And Wednesday?')]), ['ok', 'once'])
       assert.deepEqual(await errors(h, [await note(aliceBuyer)]), ['ok'], 'another sender')
-      h.prune(T0 + 31 * DAY)
+      await h.prune(T0 + 31 * DAY)
       assert.equal((await pulled(h)).messages.length, 0, 'the messages went after keep days')
       assert.deepEqual(await errors(h, [await note(bob, 'Still there?')]), ['once'], 'the pair did not')
 

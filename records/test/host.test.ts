@@ -61,11 +61,11 @@ describe('two hosts, readers', () => {
 
     // Host 2 keeps the replaced offer for its keep days (30 by default), then forgets it.
     const was = h2.count(alice.address)
-    assert.equal(h2.prune(clock.t + 29 * DAY), 0)
-    assert.equal(h2.prune(clock.t + 31 * DAY), 1)
+    assert.equal(await h2.prune(clock.t + 29 * DAY), 0)
+    assert.equal(await h2.prune(clock.t + 31 * DAY), 1)
     assert.equal(h2.count(alice.address), was - 1)
     // A delete is current: it is never pruned, so the card stays deleted.
-    h1.prune(clock.t + 31 * DAY)
+    await h1.prune(clock.t + 31 * DAY)
     assert.ok((await readAll(h1.url, { profile: alice.address })).records.some((c) => c.record.path === 'profile' && c.record.body === null))
   })
 
@@ -80,7 +80,7 @@ describe('keep days are the host’s', () => {
     const h = await startHost({ now: () => T0, keepDays: 0 })
     try {
       await publish([h.url], [ownerRecord(alice, 'offer/a', offerBody('1'), T0), ownerRecord(alice, 'offer/a', offerBody('2'), T0 + 1)])
-      assert.equal(h.prune(T0), 1)
+      assert.equal(await h.prune(T0), 1)
       assert.deepEqual((await readAll(h.url)).records.map((c) => c.record.time), [T0 + 1])
     } finally {
       await h.close()
@@ -172,7 +172,7 @@ describe('access keys, checked as they arrive', () => {
       assert.equal((await readProfile([h.url], alice.address, clock.t + 30 * DAY)).current.get('offer/w')!.record.by, accessKey.address, 'what it wrote stays')
       const refused = (await publish([h.url], [accessRecord(accessKey, alice.address, 'offer/again', offerBody('1'), T0 + 1)]))[0]!.results[0]!
       assert.deepEqual([refused.error, refused.message], ['permission', 'this access key is revoked'], 'nor anything backdated')
-      h.prune(clock.t + 31 * DAY)
+      await h.prune(clock.t + 31 * DAY)
       assert.deepEqual((await readAll(h.url)).records.map((c) => c.record.path).sort(), ['offer/w', 'permissions'])
     } finally {
       await h.close()
@@ -189,7 +189,7 @@ describe('access keys, checked as they arrive', () => {
       await publish([h.url], [permissionsRecord(alice, [], clock.t)])
       assert.equal((await readProfile([h.url], alice.address, clock.t)).current.has('offer/w'), false)
       assert.deepEqual(await errors(h, [accessRecord(accessKey, alice.address, 'offer/again', offerBody('1'), T0)]), ['permission'], 'nor anything backdated')
-      h.prune(clock.t + 31 * DAY)
+      await h.prune(clock.t + 31 * DAY)
       assert.deepEqual((await readAll(h.url)).records.map((c) => c.record.path), ['permissions'])
     } finally {
       await h.close()
@@ -238,7 +238,7 @@ describe('a host that closes, or blocks a reader', () => {
     try {
       await publish([h.url], [hostsRecord(alice, [h.url], T0), ownerRecord(alice, 'profile', profileBody('A'), T0), ownerRecord(alice, 'offer/a', offerBody('1'), T0)])
       await publish([h.url], [hostsRecord(alice, null, T0 + 1), ownerRecord(alice, 'profile', null, T0 + 1), ownerRecord(alice, 'offer/a', null, T0 + 1)])
-      h.prune(T0 + 31 * DAY)
+      await h.prune(T0 + 31 * DAY)
       assert.deepEqual((await readAll(h.url)).records.map((c) => [c.record.path, c.record.body]), [['hosts', null], ['profile', null], ['offer/a', null]])
     } finally {
       await h.close()
