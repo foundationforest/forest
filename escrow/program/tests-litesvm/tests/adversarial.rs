@@ -837,6 +837,40 @@ fn finding_a_reused_deposit_address_adopts_a_stranger_buyers_money() {
 }
 
 #[test]
+fn a_payment_to_an_address_lands_only_in_a_deal_with_its_terms() {
+    // The seller invoices with one arbiter, closes it unpaid, and reopens the same id with another
+    // it picked. The buyer read the first deal and pays its address. That money must never count
+    // toward the second deal: another arbiter is another address.
+    let mut h = Harness::new();
+    let buyer = h.buyer.insecure_clone();
+    let seller = h.seller.insecure_clone();
+    let fair = h.arbiter.pubkey();
+    let picked = h.someone();
+    let first_terms = Terms { arbiter: Some(fair), ..h.terms(1) };
+    let (first, _) = h.invoice(&first_terms).expect("the first invoice");
+    h.close_unfunded(&first, &seller).expect("closed unpaid");
+    let second_terms = Terms { arbiter: Some(picked.pubkey()), ..h.terms(1) };
+    let (second, _) = h.invoice(&second_terms).expect("the same id, another arbiter");
+
+    // The buyer pays the address it read, making its deposit account as a wallet app would.
+    let (make, first_vault) = create_ata_idempotent_ix(buyer.pubkey(), first, h.mint);
+    h.send(&[make, spl_transfer_ix(h.buyer_tokens, first_vault, buyer.pubkey(), AMOUNT)], &[&buyer]).expect("the buyer pays");
+
+    assert_ne!(second, first, "another arbiter is another address");
+    assert_eq!(h.vault_balance(&second), 0, "the second deal holds none of it");
+    let s = h.accounts(&second);
+    let err = h.send(&[arbitrate_ix(&s, picked.pubkey(), 10_000)], &[&picked]).expect_err("the picked arbiter");
+    assert!(err.contains("NotFunded"), "{err}");
+    assert_eq!(h.balance(&first_vault), AMOUNT, "the money waits at the address it was sent to");
+
+    // Only the first terms take it: reopened, they hold it, with the arbiter the buyer read.
+    let (again, _) = h.invoice(&first_terms).expect("the first terms, reopened");
+    assert_eq!(again, first);
+    assert_eq!((h.escrow(&first).arbiter, h.vault_balance(&first)), (fair, AMOUNT));
+    println!("rejected as expected: a payment to one deal's address never counts toward another deal's terms");
+}
+
+#[test]
 fn finding_a_frozen_deposit_account_blocks_every_way_out() {
     // The checklist reasons that freezing the deposit account stops every way out, since each moves
     // tokens out of it; only the buyer's account had been frozen in a test. Here the deposit

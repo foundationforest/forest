@@ -484,6 +484,48 @@ fn rent_goes_back_to_the_creator_and_a_sweep_to_the_payer() {
     println!("rent: the deposit account's to the creator at every ending; the sweep to the payer, never to the creator");
 }
 
+#[test]
+fn every_rent_goes_back_to_the_payer() {
+    // Whoever fronts the rent gets it back: here a sponsor that is neither party and not the
+    // transaction's fee payer, as a fee payer service fronts it. None goes to the creator.
+    let mut h = Harness::new();
+    let buyer = h.buyer.insecure_clone();
+    let seller = h.seller.insecure_clone();
+    let sponsor = h.someone();
+    let a = CreateAccounts { payer: sponsor.pubkey(), ..h.create_accounts() };
+
+    // Closed unpaid: both rents to the sponsor, none to the buyer who opened it or the seller who
+    // closed it.
+    h.send(&[create_ix(&h.terms(1), &a)], &[&buyer, &sponsor]).expect("create, the sponsor paying");
+    let escrow = escrow_address(&buyer.pubkey(), 1);
+    let rents = h.lamports(&escrow) + h.lamports(&vault_address(&escrow, &h.mint));
+    let before = (h.lamports(&sponsor.pubkey()), h.lamports(&buyer.pubkey()), h.lamports(&seller.pubkey()));
+    let meta = h.close_unfunded(&escrow, &seller).expect("closed unpaid");
+    let Some(Event::Closed { rent_recipient, .. }) = events(&meta.logs).pop() else { panic!("no Closed") };
+    assert_eq!(rent_recipient, sponsor.pubkey());
+    assert_eq!(
+        (h.lamports(&sponsor.pubkey()), h.lamports(&buyer.pubkey()), h.lamports(&seller.pubkey())),
+        (before.0 + rents, before.1, before.2),
+        "both rents to the sponsor, none to the creator or the closer"
+    );
+
+    // An invoice, ended: the deposit account's rent to the sponsor, none to the seller who opened it.
+    h.send(&[invoice_ix(&h.terms(2), &a)], &[&seller, &sponsor]).expect("invoice, the sponsor paying");
+    let invoice = escrow_address(&seller.pubkey(), 2);
+    let e = h.escrow(&invoice);
+    assert_eq!((e.rent_recipient, e.payer), (sponsor.pubkey(), sponsor.pubkey()));
+    h.fund(&invoice, AMOUNT);
+    let vault_rent = h.lamports(&vault_address(&invoice, &h.mint));
+    let before = (h.lamports(&sponsor.pubkey()), h.lamports(&seller.pubkey()));
+    h.release_to_seller(&invoice).expect("the buyer releases");
+    assert_eq!(
+        (h.lamports(&sponsor.pubkey()), h.lamports(&seller.pubkey())),
+        (before.0 + vault_rent, before.1),
+        "the deposit account's rent to the sponsor, none to the creator"
+    );
+    println!("rent: every rent back to whoever fronted it, at a close and at an ending");
+}
+
 // ---------------------------------------------------------------------------------------------
 // Rejections
 // ---------------------------------------------------------------------------------------------
@@ -788,6 +830,23 @@ fn bad_terms_are_refused_at_creation() {
     t.timer = Some(Timer { days: u16::MAX, to: Side::Buyer });
     h.create(&t).expect("the buyer as arbiter, a 65,535-day timer");
     println!("seven bad term sets refused at create; the buyer as arbiter and the longest timer accepted");
+}
+
+#[test]
+fn the_arbiter_cannot_be_the_buyer_or_the_seller() {
+    // A party as arbiter could decide any split alone, so it could take everything. Refused, from
+    // either creator; a third key is still fine.
+    let mut h = Harness::new();
+    let (buyer, seller, arbiter) = (h.buyer.pubkey(), h.seller.pubkey(), h.arbiter.pubkey());
+    for (id, party) in [(1, buyer), (2, seller)] {
+        let t = Terms { arbiter: Some(party), ..h.terms(id) };
+        let err = h.create(&t).expect_err("opened by the buyer");
+        assert!(err.contains("ArbiterIsAParty"), "{err}");
+        let err = h.invoice(&t).expect_err("opened by the seller");
+        assert!(err.contains("ArbiterIsAParty"), "{err}");
+    }
+    h.create(&Terms { arbiter: Some(arbiter), ..h.terms(3) }).expect("a third key");
+    println!("rejected as expected: the buyer or the seller as arbiter, from either creator");
 }
 
 #[test]
