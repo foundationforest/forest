@@ -12,21 +12,24 @@
 // The person proves on the device, from the secret and the note: "this issuer signed a note for my
 // note number; my stamp for this label is Poseidon(scope, secret); this proof is for this main
 // key". Public: the issuer's key, the label, the main key, the stamp and the tier. The stamp is the
-// number a registry row sits at.
-//
-// The program still takes the membership proof (`proof.ts`); it switches to this one next.
+// number a registry row sits at, and the program checks this proof before it writes the row.
 
 import type { PublicKey } from '@solana/web3.js'
-import { derivePublicKey, deriveSecretScalar, signMessage, verifySignature } from '@zk-kit/eddsa-poseidon'
+import { derivePublicKey, signMessage, verifySignature } from '@zk-kit/eddsa-poseidon'
 import { poseidon1 } from 'poseidon-lite/poseidon1'
-import { poseidon2 } from 'poseidon-lite/poseidon2'
 import { poseidon5 } from 'poseidon-lite/poseidon5'
 import { groth16 } from 'snarkjs'
 
 import type { SnarkjsProof } from './compress.ts'
 import { fieldHash, fromBytes32, isFieldElement, messageOf, scopeOf } from './field.ts'
 import { PERSON_KEY } from './person-key.ts'
-import type { Artifacts } from './proof.ts'
+import { scalarOf, stampOf } from './stamp.ts'
+
+/** The setup's proving files (`registry/circuit/devnet/`): paths on Node, or the bytes in a browser. */
+export type Artifacts = {
+  wasm: string | Uint8Array
+  zkey: string | Uint8Array
+}
 
 /** The text whose field value starts every note an issuer signs. The circuit has it as a constant. */
 export const NOTE_TAG_TEXT = 'forest/v1/note'
@@ -64,12 +67,6 @@ export type PersonProof = {
   proof: SnarkjsProof
   /** In the circuit's order: stamp, issuer x, issuer y, scope, message, tier. */
   publicSignals: string[]
-}
-
-/** The secret as the circuit takes it, from the 32 bytes `keys/`'s `issuerSecret` returns. */
-function scalarOf(secret: Uint8Array): bigint {
-  if (!(secret instanceof Uint8Array) || secret.length !== 32) throw new Error('an issuer secret is 32 bytes')
-  return deriveSecretScalar(secret)
 }
 
 /** The person's note number for one issuer: Poseidon of the secret. What the issuer signs in the note. */
@@ -122,7 +119,7 @@ export function personInput(input: {
   const secret = scalarOf(input.secret)
   const scope = scopeOf(input.label)
   const message = messageOf(input.profile)
-  const stamp = poseidon2([scope, secret])
+  const stamp = stampOf(input.secret, input.label)
   return {
     input: {
       secret,
