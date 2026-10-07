@@ -1,11 +1,12 @@
 // The client against a real validator: start one, load the program, and make rows end to end, from
-// the keys recipe's seed and an issuer's signed list to rows on the chain.
+// the keys recipe's seed and a note an issuer signed to rows on the chain, and a tier checked
+// against one.
 //
 //   npm run test:validator
 //
-// Needs `solana-test-validator` on the PATH, the program built (`cargo build-sbf` in
-// ../program) and the artifacts fetched (`npm run fetch` in ../artifacts). If any of the three
-// is missing the test says which and skips, rather than failing for the wrong reason.
+// Needs `solana-test-validator` on the PATH and the program built (`cargo build-sbf` in
+// ../program); the person circuit's proving files are committed in ../circuit/devnet. If either is
+// missing the test says which and skips, rather than failing for the wrong reason.
 //
 // Everything here polls `getSignatureStatuses` rather than calling `confirmTransaction`, which
 // opens a websocket subscription that keeps Node alive long after the test has passed.
@@ -18,7 +19,6 @@ import { dirname, join } from 'node:path'
 import { after, before, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 
-import { ed25519 } from '@noble/curves/ed25519.js'
 import {
   ComputeBudgetProgram,
   Connection,
@@ -36,27 +36,26 @@ import {
   buildRegistration,
   fetchRow,
   fetchRows,
-  issuerSigned,
-  listRoot,
+  issuerKeyOf,
+  noteNumberOf,
   refundIx,
-  rootBytes,
   rowSpace,
-  stampOf,
-  toBytes32,
+  signNote,
+  verifyTier,
 } from '../src/index.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const soPath = join(here, '../../program/target/deploy/forest_registry.so')
 const artifacts = {
-  wasm: join(here, '../../artifacts/semaphore-32.wasm'),
-  zkey: join(here, '../../artifacts/semaphore-32.zkey'),
+  wasm: join(here, '../../circuit/devnet/person.wasm'),
+  zkey: join(here, '../../circuit/devnet/person.zkey'),
 }
 const RPC = 'http://127.0.0.1:8899'
 const LABEL = 'tutoring/seller'
 
 function missing(): string | null {
   if (!existsSync(soPath)) return `no program at ${soPath}; run \`cargo build-sbf\` in registry/program`
-  if (!existsSync(artifacts.zkey)) return 'no artifacts; run `npm run fetch` in registry/artifacts'
+  if (!existsSync(artifacts.zkey)) return `no proving key at ${artifacts.zkey}`
   return null
 }
 
@@ -125,7 +124,7 @@ after(() => {
   if (ledger) rmSync(ledger, { recursive: true, force: true })
 })
 
-test('rows go through a real validator: the main key signs, a fee payer pays, one row per issuer per label', { timeout: 300_000 }, async (t) => {
+test('rows go through a real validator: the main key signs, a fee payer pays, one row per stamp, a tier checked', { timeout: 300_000 }, async (t) => {
   const why = missing()
   if (why) return t.skip(why)
   if (!validator) return t.skip('solana-test-validator did not start (is it on the PATH?)')
@@ -136,63 +135,66 @@ test('rows go through a real validator: the main key signs, a fee payer pays, on
   const profile = Keypair.fromSeed((await mainKey(seed, LABEL)).privateKey)
   const second = Keypair.fromSeed((await mainKey(seed, 'tutoring/buyer')).privateKey)
 
-  // Two issuers. Each publishes its list, the person's stamp for that issuer among strangers', and
-  // signs the list's root.
-  const issuers = [Keypair.generate(), Keypair.generate()]
-  const lists = await Promise.all(
-    issuers.map(async (k, i) => {
+  // Two issuers. Each signs a note for the person's note number with its own key: tier 2 and 1.
+  const issuers = [new Uint8Array(32).fill(21), new Uint8Array(32).fill(22)]
+  const notes = await Promise.all(
+    issuers.map(async (key, i) => {
       const { secret } = await issuerSecret(seed, `issuer-${i}.example`)
-      const stamps = [stampOf(Buffer.from(`stranger ${i} 1`)), stampOf(secret), stampOf(Buffer.from(`stranger ${i} 2`))]
-      return { issuer: k, secret, stamps, signature: ed25519.sign(rootBytes(listRoot(stamps)), k.secretKey.subarray(0, 32)) }
+      const note = signNote(key, { noteNumber: noteNumberOf(secret), embedding: new Uint8Array(16).fill(i), model: 'example-face-model/1', tier: BigInt(2 - i) })
+      return { secret, note }
     }),
   )
 
   // A fee payer pays for everything; the main key signs its own row.
   const feePayer = Keypair.generate()
   await fund(feePayer.publicKey)
-  const build = async (who: Keypair, list: (typeof lists)[number]) =>
+  const build = async (who: Keypair, n: (typeof notes)[number]) =>
     buildRegistration({
-      secret: list.secret,
+      secret: n.secret,
+      note: n.note,
       label: LABEL,
       profile: who.publicKey,
-      issuer: list.issuer.publicKey,
-      stamps: list.stamps,
-      issuerSignature: list.signature,
       artifacts,
       payer: feePayer.publicKey,
       recentBlockhash: (await connection.getLatestBlockhash('confirmed')).blockhash,
     })
 
-  const reg = await build(profile, lists[0])
+  const reg = await build(profile, notes[0])
   const tx = reg.transaction
   assert.equal(tx.message.header.numRequiredSignatures, 2, 'the fee payer and the main key sign')
   assert.ok(!tx.message.staticAccountKeys.some((k) => k.equals(ComputeBudgetProgram.programId)), 'no compute-budget instruction')
+  const sentAt = Math.floor(Date.now() / 1000)
   const { signature, err } = await sendVersioned(tx, [feePayer, profile])
   assert.equal(err, null, signature)
   const meta = await connection.getTransaction(signature, { commitment: 'confirmed', maxSupportedTransactionVersion: 0 })
   const units = meta?.meta?.computeUnitsConsumed ?? 0
 
-  const row = await fetchRow(connection, reg.marketStamp)
+  const row = await fetchRow(connection, reg.stamp)
   assert.ok(row)
   assert.equal(row.profile.toBase58(), profile.publicKey.toBase58())
-  assert.equal(row.issuer.toBase58(), issuers[0].publicKey.toBase58())
+  assert.equal(row.stamp, reg.stamp)
+  assert.deepEqual(row.issuer, issuerKeyOf(issuers[0]))
   assert.equal(row.label, LABEL)
   assert.equal(row.payer.toBase58(), feePayer.publicKey.toBase58())
-  assert.equal(Buffer.from(row.root).toString('hex'), Buffer.from(toBytes32(listRoot(lists[0].stamps))).toString('hex'))
-  assert.equal(issuerSigned(row), true, "a reader checks the issuer's signature")
+  assert.ok(Math.abs(row.made - sentAt) < 120, `the validator's clock: ${row.made}, sent at ${sentAt}`)
   const written = (await connection.getAccountInfo(reg.row))!.data
   assert.equal(written.length, rowSpace(Buffer.byteLength(LABEL)))
 
-  // Refused on chain: the same issuer and label for the person's second profile, the same market
-  // stamp. Through the second issuer, it is another market stamp, and lands.
-  const again = await build(second, lists[0])
+  // A reader checks the tier the profile shows: the proof, against the row.
+  const shown = { profile: profile.publicKey, stamp: reg.stamp, tier: 2n, proof: reg.proof }
+  assert.ok(await verifyTier(connection, shown), 'tier 2 holds')
+  assert.equal(await verifyTier(connection, { ...shown, tier: 3n }), null, 'tier 3 does not')
+
+  // Refused on chain: the same issuer and label for the person's second profile, the same stamp.
+  // Through the second issuer, it is another stamp, and lands.
+  const again = await build(second, notes[0])
   assert.equal(again.row.toBase58(), reg.row.toBase58())
-  assert.notEqual((await sendVersioned(again.transaction, [feePayer, second], true)).err, null, 'a second row for the market stamp')
-  const other = await build(second, lists[1])
+  assert.notEqual((await sendVersioned(again.transaction, [feePayer, second], true)).err, null, 'a second row for the stamp')
+  const other = await build(second, notes[1])
   assert.equal((await sendVersioned(other.transaction, [feePayer, second])).err, null, 'the second profile, through the second issuer')
   const rows = await fetchRows(connection, { label: LABEL })
   assert.deepEqual(rows.map((r) => r.row.profile.toBase58()).sort(), [profile.publicKey.toBase58(), second.publicKey.toBase58()].sort())
-  assert.equal((await fetchRows(connection, { issuer: issuers[1].publicKey })).length, 1)
+  assert.equal((await fetchRows(connection, { issuer: issuerKeyOf(issuers[1]) })).length, 1)
 
   // Refund: someone sends the row lamports; anyone sends refund; the fee payer, its recorded payer,
   // gets exactly them back, and the row is byte for byte what register wrote.
@@ -205,5 +207,5 @@ test('rows go through a real validator: the main key signs, a fee payer pays, on
   assert.equal((await connection.getBalance(feePayer.publicKey)) - before, 1_000_000)
   assert.deepEqual((await connection.getAccountInfo(reg.row))!.data, written)
 
-  console.log(`register ${units} compute units on a local validator; two rows through two issuers, one refused, a refund to the fee payer`)
+  console.log(`register ${units} compute units on a local validator; two rows through two issuers, one refused, a tier checked, a refund to the fee payer`)
 })

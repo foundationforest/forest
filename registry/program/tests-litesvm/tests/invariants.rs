@@ -2,15 +2,15 @@
 //! generator.
 //!
 //! Random flows by four payers, any of them sending anything: register (the real proofs, sometimes
-//! bent: another main key signing, the main key not signing, another label, another market stamp, a
-//! root nobody has, one flipped bit), refund (of any row or any address, to the recorded payer or
-//! anyone else), lamports sent to a row's address before or after it exists, and the rent rate
-//! moving between the three rates refund exists for. A model says whether each must land; after
-//! each, the invariants:
+//! bent: another main key signing, the main key not signing, another label, another stamp, another
+//! issuer's key, another tier, one flipped bit), refund (of any row or any address, to the recorded
+//! payer or anyone else), lamports sent to a row's address before or after it exists, the rent
+//! rate moving between the three rates refund exists for, and the clock moving. A model says
+//! whether each must land; after each, the invariants:
 //!   I1 the program accepts exactly what the rules allow and refuses everything else;
-//!   I2 at most one row per market stamp, and a row never changes: its bytes and its size are
-//!      exactly what register wrote, whatever lands after;
-//!   I3 every market stamp without a row has no account of the program's at its address;
+//!   I2 at most one row per stamp, and a row never changes: its bytes and its size are exactly what
+//!      register wrote, with the time the clock read then, whatever lands after;
+//!   I3 every stamp without a row has no account of the program's at its address;
 //!   I4 a refund pays exactly the excess over the current minimum, to the recorded payer only, and
 //!      leaves the row holding exactly the minimum;
 //!   I5 no payer loses a lamport in a transaction it did not sign.
@@ -22,7 +22,6 @@ use std::collections::HashMap;
 
 use forest_registry_tests::*;
 use solana_account::Account;
-use solana_address::Address;
 use solana_keypair::Keypair;
 use solana_signer::Signer;
 
@@ -74,7 +73,7 @@ fn registry_invariants_hold_under_random_flows() {
     let mut h = Harness::new();
     let payers: Vec<Keypair> = (0..4).map(|_| h.funded(1_000_000_000_000)).collect();
     let stamps: Vec<[u8; 32]> = {
-        let mut s: Vec<[u8; 32]> = f.proofs.iter().map(|p| p.market_stamp()).collect();
+        let mut s: Vec<[u8; 32]> = f.proofs.iter().map(|p| p.stamp()).collect();
         s.sort();
         s.dedup();
         s
@@ -83,6 +82,8 @@ fn registry_invariants_hold_under_random_flows() {
     let mut rows: HashMap<[u8; 32], (RowView, Vec<u8>)> = HashMap::new();
     // LiteSVM's starting rate, read rather than assumed.
     let mut rate = h.svm.get_sysvar::<solana_rent::Rent>().lamports_per_byte;
+    let mut now: i64 = 1_791_331_200;
+    h.set_time(now);
     let mut landed: HashMap<&str, u64> = HashMap::new();
     let mut refused_count: HashMap<&str, u64> = HashMap::new();
 
@@ -103,19 +104,20 @@ fn registry_invariants_hold_under_random_flows() {
                 let mut profile_signs = true;
                 let bent = rng.chance(40);
                 if bent {
-                    match rng.below(6) {
+                    match rng.below(7) {
                         0 => profile = Keypair::new(),
                         1 => profile_signs = false,
                         2 => args.label.push('x'),
                         3 => {
-                            let at = stamps.iter().position(|s| *s == args.market_stamp).unwrap();
-                            args.market_stamp = stamps[(at + 1 + rng.below(stamps.len() - 1)) % stamps.len()];
+                            let at = stamps.iter().position(|s| *s == args.stamp).unwrap();
+                            args.stamp = stamps[(at + 1 + rng.below(stamps.len() - 1)) % stamps.len()];
                         }
-                        4 => args.root = [7u8; 32],
+                        4 => args.issuer = f.issuer(if p.issuer == "A" { "B" } else { "A" }),
+                        5 => args.tier[31] ^= 1 + rng.below(255) as u8,
                         _ => flip(&mut args.proof, &mut rng),
                     }
                 }
-                expected = !bent && !rows.contains_key(&args.market_stamp);
+                expected = !bent && !rows.contains_key(&args.stamp);
                 let k = &payers[sender];
                 let mut ix = register_ix(k.pubkey(), profile.pubkey(), &args);
                 result = if profile_signs {
@@ -127,19 +129,18 @@ fn registry_invariants_hold_under_random_flows() {
                 if result.is_ok() {
                     let view = RowView {
                         profile: profile.pubkey(),
+                        stamp: args.stamp,
                         issuer: args.issuer,
-                        root: args.root,
-                        issuer_signature: args.issuer_signature,
                         payer: k.pubkey(),
-                        bump: Address::find_program_address(&[b"row", &args.market_stamp], &PROGRAM_ID).1,
+                        made: now,
                         label: args.label.clone(),
                     };
-                    let bytes = h.account(&row_address(&args.market_stamp)).data;
+                    let bytes = h.account(&row_address(&args.stamp)).data;
                     assert_eq!(bytes.len(), row_space(view.label.len()));
-                    rows.insert(args.market_stamp, (view, bytes));
+                    rows.insert(args.stamp, (view, bytes));
                 }
             }
-            // refund, of any market stamp's address, to the recorded payer or to anyone
+            // refund, of any stamp's address, to the recorded payer or to anyone
             4..=5 => {
                 what = "refund";
                 let stamp = stamps[rng.below(stamps.len())];
@@ -174,11 +175,17 @@ fn registry_invariants_hold_under_random_flows() {
                 let k = &payers[sender];
                 result = h.send_as(k, &[solana_system_interface::instruction::transfer(&k.pubkey(), &address, amount)]);
             }
-            // the rent rate moves
+            // the rent rate moves, or the clock does
             _ => {
-                what = "rate";
-                rate = [RENT_HIGH, RENT_TODAY, RENT_FINAL][rng.below(3)];
-                h.set_rent(rate);
+                if rng.chance(50) {
+                    what = "rate";
+                    rate = [RENT_HIGH, RENT_TODAY, RENT_FINAL][rng.below(3)];
+                    h.set_rent(rate);
+                } else {
+                    what = "time";
+                    now += 1 + rng.below(86_400) as i64;
+                    h.set_time(now);
+                }
                 expected = true;
                 result = Ok(Default::default());
             }

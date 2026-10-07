@@ -1,230 +1,24 @@
 {
-  "note": "The devnet deploy of the registry: one row per market stamp. Public keys, addresses and signatures only. Every key comes from the devnet phrase by the recipe in registry/devnet/deploy.sh, which writes the keypairs outside the repo and checks them against `keys`; the program id's label is registry-rows-program. Written by registry/devnet/deploy.sh and registry/client/scripts/devnet.ts; read by registry/client/test/devnet.test.ts. `earlier` names the closed registries before this one.",
+  "note": "The devnet deploy of the registry: one row per stamp, from the person proof. Public keys, addresses and signatures only. Every key comes from the devnet phrase by the recipe in registry/devnet/deploy.sh, which writes the keypairs outside the repo and checks them against `keys`; the program id's label is registry-person-program. Written by registry/devnet/deploy.sh and registry/client/scripts/devnet.ts; read by registry/client/test/devnet.test.ts. Until the deploy, `registry` and `row` are missing. `earlier` names the registries before this one.",
   "cluster": "devnet",
   "rpc": "https://api.devnet.solana.com",
   "keys": {
     "deploy": "2mz33wBK7FKRXoAi7LptGGTwVQJDbrSyrVwbYRCqwP3A",
     "payer": "9CKUm2s7nwT7HrCpjtaffNH3PnUUVyQr2gELjHrWYBUd"
   },
-  "registry": {
-    "programId": "5zTPm1bGY8ANLcJd12fPiKSTd71bvnq38LAUDT4ToeoC",
-    "programData": "8GcbCkBaeurcprsApALLJYR7eh3Rp4ZJQ4ZULhwSBDsk",
-    "upgradeAuthority": "2mz33wBK7FKRXoAi7LptGGTwVQJDbrSyrVwbYRCqwP3A",
-    "lastDeploySlot": 507437633,
-    "soSha256": "eaa7f65236550600fba71373046420672e4e5d872ec66ce17401f788ea15c023",
-    "soBytes": 164288,
-    "sbpfVersion": "v3",
-    "deploySignature": "4m5TmthNkn9jGqFfrkKVabBxEpkGGJn7pNB6spAy528HFaqjaxAWtMgP6eRqGfGPKSbMCnEAnWhhBoK8nuUyxMHc",
-    "deployCost": {
-      "bytes": 164288,
-      "programDataRent": 835461880,
-      "programRent": 833120,
-      "writes": 163,
-      "fees": 835000,
-      "total": 837130000,
-      "balanceBefore": 4812992720,
-      "balanceAfter": 3975862720,
-      "spent": 837130000
-    },
-    "upgrades": [
-      {
-        "slot": 507437633,
-        "signature": "4P35fN14XKaC1N36H56LtU1yeTN3PQxXySpYyGeXvdVMB15jWwyW3eBiDUJf7hyvLSJudBn3rueCtW2jVxg7FDta",
+  "earlier": [
+    {
+      "note": "The registry before this one: rows from Semaphore's membership proof against an issuer's signed list, key label registry-rows-program. Left behind on 2026-10-07 when the row changed: still on devnet, still upgradable by the deploy key, nothing closes it, and its rows stay. Its full record, with its rows and transactions, is registry/devnet/devnet.json at commit cad2831.",
+      "registry": {
+        "programId": "5zTPm1bGY8ANLcJd12fPiKSTd71bvnq38LAUDT4ToeoC",
+        "programData": "8GcbCkBaeurcprsApALLJYR7eh3Rp4ZJQ4ZULhwSBDsk",
+        "upgradeAuthority": "2mz33wBK7FKRXoAi7LptGGTwVQJDbrSyrVwbYRCqwP3A",
+        "lastDeploySlot": 507437633,
         "soSha256": "eaa7f65236550600fba71373046420672e4e5d872ec66ce17401f788ea15c023",
         "soBytes": 164288,
-        "cost": {
-          "bytes": 164288,
-          "previousBytes": 164288,
-          "extendBytes": 0,
-          "bufferRent": 835421240,
-          "extendRent": 0,
-          "writes": 163,
-          "fees": 830000,
-          "total": 836251240,
-          "spend": 830000,
-          "balanceBefore": 6246948280,
-          "balanceAfter": 6246118280,
-          "spent": 830000
-        }
+        "sbpfVersion": "v3"
       }
-    ]
-  },
-  "transactions": [
-    {
-      "what": "deploy: the registry (SBPF v3), upgrade authority kept on the deploy key",
-      "signature": "4m5TmthNkn9jGqFfrkKVabBxEpkGGJn7pNB6spAy528HFaqjaxAWtMgP6eRqGfGPKSbMCnEAnWhhBoK8nuUyxMHc"
     },
-    {
-      "what": "register: a row under \"freelance/seller\", the main key signing, the fee payer paying",
-      "signature": "FFUrgkJoe6xuArGTLW67rsLbPrjnxjvhmArLsGUJc1KyEBrJXaQKgn9oB1N5ZiSoKNCAB2CvgrQQndkdAv5bJCu"
-    },
-    {
-      "what": "register again for the same market stamp, for the person's second profile: refused, the row already exists",
-      "signature": "3qTLUCHWMF2j59s5Ev5kXrgSeV7mZd49s2bUMfh4Sw5Usk75r27CwJj7NjGLTVeCZaPRmGZZR1o5EQYQ8RvxujgU"
-    },
-    {
-      "what": "0.001 SOL sent to the row, above its minimum",
-      "signature": "HsGu7WnnPUkB7GQy6Tbac3DF1oyGYb4Qjs279MHBbeyM97R1W7W1qaeq3wGMUve8np7t6rJzTSwUQXW1AG1ggpf"
-    },
-    {
-      "what": "refund: exactly the 0.001 SOL above the minimum, back to the payer the row records",
-      "signature": "5TfyH1jexj74SNmSz9ipZhDnvEqHRB9EFA4eYqMV2BtwJnQP5dJx2RoyRLxeNrxKZcxPmF4sC4Nygh1Q6dyWooTg"
-    },
-    {
-      "what": "register: a row under \"freelance/seller\", the main key signing, the fee payer paying",
-      "signature": "2CCCbgJsaKHcsQq4FGZyBReaeGdaHAjDwZ8zQSdkabtQKAhWLKFW6BRgsgGLKvvKQbj6i9v8UoKUNmoUTgSMcuWN"
-    },
-    {
-      "what": "register again for the same market stamp, for the person's second profile: refused, the row already exists",
-      "signature": "2yJ7tvDHLmHwzVeYw1md9FTxS2QPTppkV9vq7d7D1qNms7NHe9HTzk8qizVsjfL9URw4ycBPbx1WztdwwkSqzZw8"
-    },
-    {
-      "what": "0.001 SOL sent to the row, above its minimum",
-      "signature": "3br6XDAEPW3H4VfkxHawf9pMu3xbULwaPuDznrE1MXeJR2DnBvG2NDMhQt95DRQ5WMWQv7PNnfTuJxycXAFW9qdJ"
-    },
-    {
-      "what": "refund: exactly the 0.001 SOL above the minimum, back to the payer the row records",
-      "signature": "8N4kUoP3UbiDEpXFEX7X6QNmJBuLCgthSqjieGsh8Z4XMMQtHct8bKWiFVUersEwdxRjN9oewWigmSsiPLDbPqg"
-    },
-    {
-      "what": "upgrade in place: the registry, now 164288 bytes (sha256 eaa7f65236550600…), same address",
-      "signature": "4P35fN14XKaC1N36H56LtU1yeTN3PQxXySpYyGeXvdVMB15jWwyW3eBiDUJf7hyvLSJudBn3rueCtW2jVxg7FDta"
-    }
-  ],
-  "earlierRows": [
-    {
-      "what": "one row: the keys recipe's test seed, on a stand-in issuer's list, under freelance/seller, for a stand-in profile; the main key signs, a fee payer pays",
-      "label": "freelance/seller",
-      "profile": "c6Nd6Y3NX1yyt6gWdPa23V9TNvkGXVtq4gtLmjBjxLs",
-      "issuer": "5tUPxWGKqNbFctBXKS8LgnkM8A1Jfn5qVrUGxKjFXozB",
-      "list": {
-        "standIn": true,
-        "stamps": [
-          "14068935072511089923511292505687573849261528248458821040462980657940127196603",
-          "17345030848540796704634822249290901754830353767723022262886058602977818141212",
-          "10694249757422601743480420404932755555722433096006791568508873502373209984562",
-          "4383624340734824265930566872361702388861252719174052541223342045253792251577",
-          "15358735913213598388622218463426325445944709616833779840023445291983688240143"
-        ],
-        "root": "12672909e4a5ad908967ca4bdca3270e1f6a1775ffcbe194914c2ca5a52edbc5",
-        "issuerSignature": "7477f1d481180afcd844261cca1672d1dfb420f45c25756a1d75600cc2ef17466af3118c67ead4c359829fbc24f146e5bb2e51dbe8af92094f1871e28d8ead01"
-      },
-      "marketStamp": "243d6e9983876a58f190e988ad294983b7e27c3be9cf233c8c31f63254cf1fca",
-      "address": "9UDuRdcKnuYPKeafnW4C29WdpDnFKtYLhqdwvFRKfhkr",
-      "standInKeys": "each stand-in key's private seed is sha256 of `forest devnet stand-in: <name>`, the names `keeper`, `profile freelance/seller` and `second profile freelance/seller`",
-      "register": {
-        "signature": "FFUrgkJoe6xuArGTLW67rsLbPrjnxjvhmArLsGUJc1KyEBrJXaQKgn9oB1N5ZiSoKNCAB2CvgrQQndkdAv5bJCu",
-        "provingMs": 1424,
-        "bytes": 652,
-        "computeUnits": 124158,
-        "fee": 10000
-      },
-      "refused": {
-        "secondProfile": "G7mahzDMnPsHnQR7ofnGpPoRQgXReY3dY2xExiE54kn6",
-        "signature": "3qTLUCHWMF2j59s5Ev5kXrgSeV7mZd49s2bUMfh4Sw5Usk75r27CwJj7NjGLTVeCZaPRmGZZR1o5EQYQ8RvxujgU",
-        "err": {
-          "InstructionError": [
-            0,
-            {
-              "Custom": 0
-            }
-          ]
-        },
-        "log": [
-          "Allocate: account Address { address: 9UDuRdcKnuYPKeafnW4C29WdpDnFKtYLhqdwvFRKfhkr, base: None } already in use",
-          "Program 11111111111111111111111111111111 failed: custom program error: 0x0",
-          "Program 5zTPm1bGY8ANLcJd12fPiKSTd71bvnq38LAUDT4ToeoC failed: custom program error: 0x0"
-        ]
-      },
-      "refund": {
-        "gift": "HsGu7WnnPUkB7GQy6Tbac3DF1oyGYb4Qjs279MHBbeyM97R1W7W1qaeq3wGMUve8np7t6rJzTSwUQXW1AG1ggpf",
-        "signature": "5TfyH1jexj74SNmSz9ipZhDnvEqHRB9EFA4eYqMV2BtwJnQP5dJx2RoyRLxeNrxKZcxPmF4sC4Nygh1Q6dyWooTg",
-        "lamports": 1000000,
-        "computeUnits": 3194
-      },
-      "onChain": {
-        "readBy": "getProgramAccounts, filtered by profile",
-        "rowsOfThisProfile": 1,
-        "profile": "c6Nd6Y3NX1yyt6gWdPa23V9TNvkGXVtq4gtLmjBjxLs",
-        "issuer": "5tUPxWGKqNbFctBXKS8LgnkM8A1Jfn5qVrUGxKjFXozB",
-        "payer": "9CKUm2s7nwT7HrCpjtaffNH3PnUUVyQr2gELjHrWYBUd",
-        "label": "freelance/seller",
-        "root": "12672909e4a5ad908967ca4bdca3270e1f6a1775ffcbe194914c2ca5a52edbc5",
-        "issuerSigned": true,
-        "bytes": 221,
-        "lamports": 1772920
-      },
-      "left": "the test person before keys/ moved to its 00 01 … 1f test seed. A row never closes, so it stays, at its rent minimum.",
-      "lastRefund": {
-        "lamports": 0,
-        "why": "it held 1772920 lamports, exactly its minimum: nothing above it to refund"
-      }
-    }
-  ],
-  "row": {
-    "what": "one row: keys/'s test person (its test seed), on a stand-in issuer's list, under freelance/seller, for their freelance/seller profile; the main key signs, a fee payer pays",
-    "label": "freelance/seller",
-    "profile": "5RWsXwx9Urx8d9sUv1i4viMJZ9pQufyNA76o7sCdLysx",
-    "issuer": "5tUPxWGKqNbFctBXKS8LgnkM8A1Jfn5qVrUGxKjFXozB",
-    "list": {
-      "standIn": true,
-      "stamps": [
-        "14068935072511089923511292505687573849261528248458821040462980657940127196603",
-        "17345030848540796704634822249290901754830353767723022262886058602977818141212",
-        "16200250572674308607087413753469174851387117119303888077908914705284613054960",
-        "4383624340734824265930566872361702388861252719174052541223342045253792251577",
-        "15358735913213598388622218463426325445944709616833779840023445291983688240143"
-      ],
-      "root": "2de9fb6e8994df1c80f9e5cb1257e1e874e9ab8cc551af7a431d4ea6dee05e4e",
-      "issuerSignature": "e54b99e4340106a70b52a50c823378f0c01cc9db81396e1f36333be52c966248870a394817a4a7fd3b5fdf3ca297618b1d0e4a08421e70dbaf4c60f88fdd9c03"
-    },
-    "marketStamp": "1d8e617c4079ea08d3067b77d65bc14d7e6ba87b48cf07fc73edcbaba86e2b50",
-    "address": "LhQV7M3m63r4WWFYbgVhr9C3fo5ouFyb6PLjpHZAAPF",
-    "keys": "the profiles are keys/'s mainKey(test seed, 'freelance/seller') and (test seed, 'freelance/buyer'); the issuer's private seed is sha256 of `forest devnet stand-in: keeper`",
-    "register": {
-      "signature": "2CCCbgJsaKHcsQq4FGZyBReaeGdaHAjDwZ8zQSdkabtQKAhWLKFW6BRgsgGLKvvKQbj6i9v8UoKUNmoUTgSMcuWN",
-      "provingMs": 2249,
-      "bytes": 652,
-      "computeUnits": 121158,
-      "fee": 10000
-    },
-    "refused": {
-      "secondProfile": "61WQjHjYBLHQNaLY1xYbrqHcqHRrrgbDHyyTvKsk7sDr",
-      "signature": "2yJ7tvDHLmHwzVeYw1md9FTxS2QPTppkV9vq7d7D1qNms7NHe9HTzk8qizVsjfL9URw4ycBPbx1WztdwwkSqzZw8",
-      "err": {
-        "InstructionError": [
-          0,
-          {
-            "Custom": 0
-          }
-        ]
-      },
-      "log": [
-        "Allocate: account Address { address: LhQV7M3m63r4WWFYbgVhr9C3fo5ouFyb6PLjpHZAAPF, base: None } already in use",
-        "Program 11111111111111111111111111111111 failed: custom program error: 0x0",
-        "Program 5zTPm1bGY8ANLcJd12fPiKSTd71bvnq38LAUDT4ToeoC failed: custom program error: 0x0"
-      ]
-    },
-    "refund": {
-      "gift": "3br6XDAEPW3H4VfkxHawf9pMu3xbULwaPuDznrE1MXeJR2DnBvG2NDMhQt95DRQ5WMWQv7PNnfTuJxycXAFW9qdJ",
-      "signature": "8N4kUoP3UbiDEpXFEX7X6QNmJBuLCgthSqjieGsh8Z4XMMQtHct8bKWiFVUersEwdxRjN9oewWigmSsiPLDbPqg",
-      "lamports": 1000000,
-      "computeUnits": 3194
-    },
-    "onChain": {
-      "readBy": "getProgramAccounts, filtered by profile",
-      "rowsOfThisProfile": 1,
-      "profile": "5RWsXwx9Urx8d9sUv1i4viMJZ9pQufyNA76o7sCdLysx",
-      "issuer": "5tUPxWGKqNbFctBXKS8LgnkM8A1Jfn5qVrUGxKjFXozB",
-      "payer": "9CKUm2s7nwT7HrCpjtaffNH3PnUUVyQr2gELjHrWYBUd",
-      "label": "freelance/seller",
-      "root": "2de9fb6e8994df1c80f9e5cb1257e1e874e9ab8cc551af7a431d4ea6dee05e4e",
-      "issuerSigned": true,
-      "bytes": 221,
-      "lamports": 1772920
-    }
-  },
-  "earlier": [
     {
       "note": "The first registry: lists, a code tree, a fee. Closed on 2026-09-30 (`registry.closed`). Its full record, with its transactions and registration, is devnet/devnet.json at commit 419837b.",
       "registry": {

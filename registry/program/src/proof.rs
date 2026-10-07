@@ -1,8 +1,9 @@
-//! The Groth16 side: Semaphore's circuit, verified with `groth16-solana` and the sealed key.
+//! The Groth16 side: the person circuit, verified with `groth16-solana` and the sealed key.
 //!
 //! The verification key in `verifying_key.rs` was written by `groth16-solana`'s own converter
-//! from `semaphore-32.json`, the depth-32 verification key of Semaphore 4.13.0's public 2025
-//! setup, for the circuit whose path bits are each 0 or 1. Baked in; see `registry/README.md`.
+//! (`registry/circuit/scripts/parse_vk_to_rust.cjs`) from `registry/circuit/devnet/
+//! verification-key.json`, the person circuit's key from its single-party devnet setup. Baked in;
+//! see `registry/README.md`.
 //!
 //! Two wire-format steps:
 //!
@@ -62,17 +63,20 @@ fn negate_g1(g1: &[u8; 64]) -> [u8; 64] {
     out
 }
 
-/// Verify one Semaphore proof against the sealed key.
+/// The person circuit's public inputs, in its order.
+pub const PUBLIC_INPUTS: usize = 6;
+
+/// Verify one person proof against the sealed key.
 ///
-/// `public_inputs` are in the order snarkjs and the Semaphore library use them:
-/// `[merkleTreeRoot, nullifier, message, scope]`. The caller supplies the root and the nullifier
-/// (the market stamp); the program derives the message and the scope itself, so a proof made for
-/// another label or another profile simply does not verify.
+/// `public_inputs` are in the circuit's order, `[stamp, issuerX, issuerY, scope, message, tier]`.
+/// The caller supplies the stamp, the issuer's key and the tier; the program derives the scope and
+/// the message itself, so a proof made for another label or another profile simply does not
+/// verify.
 pub fn verify(
     proof_a: &[u8; 32],
     proof_b: &[u8; 64],
     proof_c: &[u8; 32],
-    public_inputs: &[[u8; 32]; 4],
+    public_inputs: &[[u8; 32]; PUBLIC_INPUTS],
 ) -> Result<()> {
     for input in public_inputs {
         require!(is_field_element(input), RegistryError::NotAFieldElement);

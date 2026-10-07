@@ -10,7 +10,8 @@
 # circuit's. Phase 2 is one contribution: 64 random bytes drawn inside Node, never on a command
 # line, to which snarkjs adds 64 more of its own. The script writes here person.zkey,
 # person.wasm and verification-key.json, all committed, and setup.json, which pins every file by
-# SHA-256. Running it again makes a new key, and every hash in setup.json changes.
+# SHA-256, and rewrites the program's key, ../program/src/verifying_key.rs, from the new one.
+# Running it again makes a new key, every hash in setup.json changes, and so does the program.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -38,6 +39,7 @@ rm build/person_0000.zkey
 
 npx snarkjs zkey verify build/person.r1cs "$PTAU" devnet/person.zkey
 npx snarkjs zkey export verificationkey devnet/person.zkey devnet/verification-key.json
+node scripts/parse_vk_to_rust.cjs devnet/verification-key.json ../program/src
 cp build/person_js/person.wasm devnet/person.wasm
 
 CONTRIBUTION="$CONTRIBUTION" PTAU_URL="$PTAU_URL" PTAU_SHA256="$PTAU_SHA256" \
