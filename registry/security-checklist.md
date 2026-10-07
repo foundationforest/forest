@@ -8,9 +8,9 @@ apply, and every limit known today. The program is `program/src/`; the tests nam
 
 | | |
 |---|---|
-| Program | `forest_registry`, `FoRRegistryRowsFreeNoFeeNoAdmin1111111111111` in the source (a placeholder nobody holds a key for); not deployed yet: `devnet/deploy.sh` deploys it at a fresh devnet address |
+| Program | `forest_registry`, `FoRRegistryRowsFreeNoFeeNoAdmin1111111111111` in the source (a placeholder nobody holds a key for); devnet `J4ES52YohsZhknYbsgmZwHpyNw14EjrrGZxHpcmcBmq4` |
 | Framework | Anchor 1.2, `cargo build-sbf --arch v3` (Solana CLI 4.2.2, platform-tools v1.54), no IDL, no warnings |
-| Testing | LiteSVM, 33 tests: `registry.rs` 19, `adversarial.rs` 13, `invariants.rs` the property test (1,000 steps in CI's nightly job); the client's unit tests (20), the person circuit's (8), a local validator (`test:validator`), and the devnet run with its read-only smoke tests (5), rehearsed on a local validator until the deploy |
+| Testing | LiteSVM, 33 tests: `registry.rs` 19, `adversarial.rs` 13, `invariants.rs` the property test (1,000 steps in CI's nightly job); the client's unit tests (20), the person circuit's (8), a local validator (`test:validator`), and the devnet run with its read-only smoke tests (5) |
 | Risk level | 🟢 Low by the skill's table: no token, no CPI but the system program's, no admin, no custody beyond each row's own rent deposit. Treated as sealed, so this checklist carries a High-risk decisions section. |
 | Upgrade authority | Removed at mainnet deploy (`README.md`). On devnet it stays on the devnet deploy key. No pause, no admin, no override of a row. |
 
