@@ -79,8 +79,10 @@ export async function serveHttp(start: Context, hostname: string, port: number):
     refuse('a hosted copy takes keys only in each call: unset FOREST_WRITE_KEY, FOREST_MESSAGE_KEY and FOREST_READ_KEY')
   }
   const http = createServer((req: IncomingMessage, res: ServerResponse) => {
-    if (new URL(req.url ?? '/', 'http://localhost').pathname !== '/mcp') {
-      res.writeHead(404).end()
+    // Parsed without throwing: a target that is no path, such as //, would end the process.
+    const url = URL.parse(req.url ?? '/', 'http://localhost')
+    if (url?.pathname !== '/mcp') {
+      res.writeHead(url ? 404 : 400).end()
       return
     }
     const server = mcpServer({ ...start, keys: {} })

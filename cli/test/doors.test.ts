@@ -5,7 +5,7 @@
 
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
-import type { AddressInfo } from 'node:net'
+import { type AddressInfo, connect } from 'node:net'
 import { after, before, describe, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
@@ -117,6 +117,24 @@ describe('the MCP door', () => {
       assert.equal(JSON.parse(text(wrote)).path, 'offer/hosted')
     } finally {
       await client.close()
+      await new Promise((resolve) => http.close(resolve))
+    }
+  })
+
+  test('a hosted copy answers a request target that is no path, such as //, with 400, and goes on', async () => {
+    const http = await serveHttp({ hosts: [w.host.url], keys: {} }, '127.0.0.1', 0)
+    try {
+      const { port } = http.address() as AddressInfo
+      const socket = connect(port, '127.0.0.1')
+      socket.write('GET // HTTP/1.1\r\nhost: x\r\nconnection: close\r\n\r\n')
+      const answer = await new Promise<string>((resolve) => {
+        let got = ''
+        socket.on('data', (d) => (got += d))
+        socket.on('close', () => resolve(got))
+      })
+      assert.match(answer, /^HTTP\/1\.1 400/)
+      assert.equal((await fetch(`http://127.0.0.1:${port}/elsewhere`)).status, 404)
+    } finally {
       await new Promise((resolve) => http.close(resolve))
     }
   })
