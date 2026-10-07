@@ -8,7 +8,7 @@ How a Forest profile says things, and how anyone reads them. Everything a profil
 its offers, its reviews of others) is a record: a small signed JSON value at a path in the
 profile's folder. Hosts keep folders and serve them to anyone. Any app, index or AI reads them and
 checks every signature itself, so a host can withhold a record but never forge one. Beside each
-folder a host keeps the profile's inbox, where anyone may leave a sealed message, and the photos
+folder a host keeps the profile's inbox, where anyone may leave an encrypted message, and the photos
 and videos its records name.
 
 This README is the standard. The library in `src/` does every MUST in it, and `test/` checks it;
@@ -21,7 +21,7 @@ record shapes as JSON Schemas, and test vectors.
 
 A profile is one main key, mixed from the person's seed and a label such as `tutoring/seller`
 ([keys/](../keys/README.md)). Its name is its address: the main key's public key in base58, which
-is also its Solana address. Its inbox key, mixed from the main key, opens what is sealed to it.
+is also its Solana address. Its inbox key, mixed from the main key, opens what is encrypted to it.
 Nothing else is needed: no account, no sign-up, no directory.
 
 Its folder is everything signed for it, one current record per path:
@@ -114,7 +114,7 @@ whoever it is for in a grant (Grants).
 |---|---|
 | `write` | sign records into the folder, by the access rule below |
 | `message` | sign messages for the main key, and pull its inbox (Inbox) |
-| `read` | open the private records and messages sealed to it (Private records) |
+| `read` | open the private records and messages encrypted to it (Private records) |
 | `pay` | spend the token allowance the chain gives it; Forest has no format for it |
 | `past` | nothing more: a write or message key the owner removed, whose work still counts |
 
@@ -122,7 +122,7 @@ whoever it is for in a grant (Grants).
   twice makes the record invalid.
 - `paths`: at most 16 content-path prefixes, on a write, read or past key, never on a message or
   pay key. With `paths`, the key works only under them: where a write key writes, and which
-  private records the owner's devices seal to a read key. Without, it works at every content path
+  private records the owner's devices encrypt to a read key. Without, it works at every content path
   but those `profile` and `grants` cover.
 - In the hosts and the permissions record, a field not named here, at any level, makes the record
   invalid, so a later limit is never ignored.
@@ -146,7 +146,7 @@ it again with the main key. A read or pay key is removed by deleting its entry: 
 needs to count.
 
 **Notes.** `notes` holds the owner's notes on its keys (who holds each, until when, why), as one
-envelope, a body only chosen keys open (Private records), sealed to the owner's own inbox key
+envelope, a body only chosen keys open (Private records), encrypted to the owner's own inbox key
 alone, holding `{ "notes": [<note>, …] }`. A note is a grant (Grants) whose `key` is the public
 half, as `access` lists it: who holds a key needs nothing private. Hosts and readers ignore
 `notes`; only the owner's apps open it. The public part stays `key`, `scope` and `paths`: no
@@ -156,23 +156,23 @@ names, dates or reasons.
 
 A private record's body is `{ "private": <base64url of an age file> }` and nothing else. The age
 file is the envelope: the canonical text of an object under a random key made for that record,
-and that key sealed once to each reader.
+and that key encrypted once to each reader.
 
 - The readers are read keys the owner's app makes at random, one for each reader, and hands over
   in a grant. The permissions record lists each read key's public half, so the owner's other
-  devices can seal to it too. The owner usually adds its own inbox key, to open its copy; the
+  devices can encrypt to it too. The owner usually adds its own inbox key, to open its copy; the
   profile record's `inboxKey` is its public half.
-- Each key an envelope is sealed to is an age post-quantum hybrid recipient (`age1pq1…`, stanza
-  `mlkem768x25519`); an app MUST NOT seal an envelope to any other kind, since one classic key
+- Each key an envelope is encrypted to is an age post-quantum hybrid recipient (`age1pq1…`, stanza
+  `mlkem768x25519`); an app MUST NOT encrypt an envelope to any other kind, since one classic key
   among them would let a quantum computer open it for all. Each adds about 2 KB.
 - A host checks a private record like any other and cannot open it. Anyone can see that it
-  exists, its path, time and size, and how many keys it is sealed to.
+  exists, its path, time and size, and how many keys it is encrypted to.
 - To remove a reader, the owner writes a new version for the rest; a reader keeps what it already
   opened.
 
 ### Inbox
 
-A message is a sealed note anyone delivers to a profile's hosts, and only its main key or its
+A message is an encrypted note anyone delivers to a profile's hosts, and only its main key or its
 message keys pull. It is not a record: it has no path and no versions, and it is in no one's
 folder.
 
@@ -184,19 +184,19 @@ folder.
 ```
 
 - No `inbox` field means no inbox: hosts refuse deliveries. A profile with an inbox gives
-  `inboxKey`, since senders seal to it.
+  `inboxKey`, since senders encrypt to it.
 - `senders` is `"anyone"`, or `{ "issuer" }`: the sender's key must hold a registry row from that
   issuer, under any label ([registry/](../registry/README.md)). The issuer is named by its key as
   a row holds it: x then y of its point on Baby Jubjub, each 32 bytes big-endian, as 128
   characters of lowercase hex.
 - `once`: one message from each sender, ever.
 - `maxBytes`: the largest message it takes, as canonical text in bytes.
-- `readers`: read keys' public halves. Senders seal every message to them too, so a reader that
+- `readers`: read keys' public halves. Senders encrypt every message to them too, so a reader that
   also holds a message key pulls, opens and answers while the person's devices are off.
 - A host refuses deliveries to an inbox it cannot read: a field, a rule or a value it does not
   know. So a new rule can be added later without an old host taking what it should refuse. A
   sender's app does not deliver to one either: a field it does not know could name more keys to
-  seal to.
+  encrypt to.
 
 **Messages.**
 
@@ -208,7 +208,7 @@ folder.
 
 - `v` is 1. No other field is allowed, in the message or in its body.
 - `to` is the recipient profile. `from` is the sender's key: a main key, or any other ed25519 key.
-- `body` is one envelope sealed to `to`'s inbox key and its inbox's readers, or, when it holds a
+- `body` is one envelope encrypted to `to`'s inbox key and its inbox's readers, or, when it holds a
   grant, to the inbox key alone (Grants).
 - `key` and `host` come together, when a message key signs for `from`, a main key: `key` is the
   message key's address, other than `from`, and `host` is one of `from`'s hosts, an origin as its
@@ -219,7 +219,7 @@ folder.
 - The id is lowercase hex of SHA-256(signing input), as a record's.
 
 **Deliver.** The sender reads the recipient's profile record for its `inbox` and `inboxKey`, and
-its hosts record. It seals the body, signs, and posts the message to each host the hosts record
+its hosts record. It encrypts the body, signs, and posts the message to each host the hosts record
 names (`POST /v1/inbox`). Anyone may deliver, with no login; each host checks the message on its
 own (Hosts).
 
@@ -243,9 +243,9 @@ and `once` apply to `from`, as for any message.
   key pulls.
 - `after` is the `forest-cursor` of the last page; 0 for everything.
 - `time` is within 600,000 ms of the host's clock, either way.
-- It is signed because each body is sealed but `from`, `to` and the time are not: unsigned, anyone
-  could list who wrote to whom. It is a POST and not a GET because hosting platforms log URLs,
-  and a signed URL would be a log of pulls.
+- It is signed because each body is encrypted but `from`, `to` and the time are not: unsigned,
+  anyone could list who wrote to whom. It is a POST and not a GET because hosting platforms log
+  URLs, and a signed URL would be a log of pulls.
 
 **Requests.** A message body may be `{ "request": <action>, … }`: an action the sender was not
 allowed to do itself, for the recipient's app to do with its main key. `request` names one of
@@ -277,12 +277,12 @@ A grant is how an access key reaches whoever it is for: its private half, and wh
   remember. A grant is private, so it can hold the names and reasons the permissions record never
   does.
 - No other field is allowed.
-- Handed over by message, a grant is the body `{ "grant": <grant> }`, sealed to the recipient's
+- Handed over by message, a grant is the body `{ "grant": <grant> }`, encrypted to the recipient's
   inbox key alone, never to its inbox's readers: a reader acts on the inbox, and a grant is a key.
-  The library's `message` seals it so.
+  The library's `message` encrypts it so.
 - A person keeps the grants they received as the private record at `grants`, body
-  `{ "grants": [<grant>, …] }`, sealed to the profile's own inbox key. The app's local copy is the
-  working copy; the record on the hosts is why losing the phone loses nothing.
+  `{ "grants": [<grant>, …] }`, encrypted to the profile's own inbox key. The app's local copy is
+  the working copy; the record on the hosts is why losing the phone loses nothing.
 
 ### Proofs
 
@@ -434,7 +434,7 @@ its policy.
   `pull`, `putBlob`, `getBlob`). A read asks by POST with `post: true`, goes through the caller's
   own `fetch` if given, and refuses a host that redirects with `redirect: 'error'`. No server,
   database or encryption library is in it.
-- `@forest/records/private`: `makePrivate`, `openPrivate`, `readerCount`; `message` (seal to a
+- `@forest/records/private`: `makePrivate`, `openPrivate`, `readerCount`; `message` (encrypt to a
   card's inbox key and readers, a grant to the inbox key alone, and sign) and `openMessage`;
   `grantsRecord` and `openGrants`; `makeNotes` and `openNotes`. The inbox key itself is keys/'s
   `readingKey`.
@@ -556,12 +556,13 @@ to `tutoring/seller`, and a message from `tutoring/seller` signed by its message
 `https://host-a.example`, to `tutoring/buyer`, each with its wire text, signing input and id; a
 pull request by `tutoring/seller`, and the same pull signed by its message key; and `past`, a
 later permissions record in which the access key is past and the message key still listed, with
-notes on both sealed to `tutoring/seller`'s inbox key. Each message's body is sealed to its
-recipient's inbox key; age's sealing is random, so the sealed bodies and the notes are pinned as
-they were made. `test/vectors.test.ts` recomputes the records, the messages and the pulls, checks
-each with node:crypto (Ed25519, SHA-256), and opens each message, and the notes, with the pinned
-inbox key they were sealed to. The profile is `EofQN9U3MiKVmAo3Pyvuw19WjyYbpddfN52E1Q1uBwhu`;
-every signing input begins `ff 66 6f 72 65 73 74 2f` (`0xff`, then `forest/`).
+notes on both encrypted to `tutoring/seller`'s inbox key. Each message's body is encrypted to its
+recipient's inbox key; age's encryption is random, so the encrypted bodies and the notes are
+pinned as they were made. `test/vectors.test.ts` recomputes the records, the messages and the
+pulls, checks each with node:crypto (Ed25519, SHA-256), and opens each message, and the notes,
+with the pinned inbox key they were encrypted to. The profile is
+`EofQN9U3MiKVmAo3Pyvuw19WjyYbpddfN52E1Q1uBwhu`; every signing input begins
+`ff 66 6f 72 65 73 74 2f` (`0xff`, then `forest/`).
 
 ## Promises
 
@@ -605,7 +606,7 @@ every signing input begins `ff 66 6f 72 65 73 74 2f` (`0xff`, then `forest/`).
 - **A blob is only as true as its hash.** The record says what it is, and the bytes say what they
   are. A host checks the hash, never that the bytes are the type or size the record gives.
 - **No forward secrecy.** An inbox key or a read key that leaks opens every message and private
-  record sealed to it, from any host or copy that still holds them, and a reader removed keeps
+  record encrypted to it, from any host or copy that still holds them, and a reader removed keeps
   what it already opened.
 - **An envelope holds about 30 keys on the reference host.** Each key adds about 2 KB, and the
   reference host takes records and messages of up to 64 KB; another host chooses its own. Each
@@ -626,7 +627,7 @@ every signing input begins `ff 66 6f 72 65 73 74 2f` (`0xff`, then `forest/`).
   batch and page sizes; which blob types it takes; which inbox rules it supports; whether it reads
   senders' records to take a message key's message, and how long it keeps what it read; rate
   limits; logging; storage.
-- **An app, with the person:** the copies it keeps; which hosts; which private records it seals
+- **An app, with the person:** the copies it keeps; which hosts; which private records it encrypts
   to a read key; how a grant reaches its holder; whether to forward a message to email or a
   notification; dropping a message that arrives twice; what it finds too big to read; and what
   asks for the person's face.
@@ -649,14 +650,14 @@ wrote, and you can always overwrite or delete those by writing at the same path.
 
 **Why does the owner make the readers' keys?**
 So a reader needs no profile and no key of its own: the owner's app makes a read key for it and
-hands it over. A read key that leaks opens only what one owner sealed to it, never everything ever
-sealed to the reader's own inbox key. And one relationship can be ended without the reader
+hands it over. A read key that leaks opens only what one owner encrypted to it, never everything
+ever encrypted to the reader's own inbox key. And one relationship can be ended without the reader
 rotating its own key.
 
 **Why is a message not a record in the sender's folder?**
 Anyone reads a folder. A message there would need a field naming its recipient so hosts could
 route it, and that field would make every inquiry a public fact: who asked whom, and when. A
-message goes to the recipient's hosts instead, sealed, and only the recipient pulls it.
+message goes to the recipient's hosts instead, encrypted, and only the recipient pulls it.
 
 **How do I hear that a message arrived?**
 By default the app checks your inboxes itself, pulling from your hosts. A push service would see

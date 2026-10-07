@@ -178,4 +178,4 @@ any deal.
 
 **Why does it refuse the inbox key?**
 The inbox key opens every message and grant sent to the profile, and grants hold keys. It is mixed
-from the main key, and stays on the device with it. A read key opens only what is sealed to it.
+from the main key, and stays on the device with it. A read key opens only what is encrypted to it.
