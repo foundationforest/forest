@@ -50,7 +50,7 @@ const ASKED: Array<[string, Body]> = [
   ['remove-offer', { id: 'owned' }],
   ['post-review', { review: { subject: seller.address, text: 'Kind and clear.' } }],
   ['send', { to: seller.address, text: 'Thank you.' }],
-  ['pay', { offer: PAY_LINK }],
+  ['pay', { offer: PAY_LINK, units: 2, note: 'Tuesday and Thursday, at six.' }],
 ]
 
 describe('no key', () => {
@@ -174,6 +174,10 @@ describe('a message key', () => {
     await refused(ask('request', {}), `a request names one of ${names}; not request`)
     await refused(ask('fly'), `a request names one of ${names}; not fly`)
     await refused(ask('pay'), 'pay needs offer')
+    await refused(ask('pay', { offer: PAY_LINK, units: 0 }), 'units is a whole number, from 1')
+    await refused(ask('pay', { offer: PAY_LINK, units: 1.5 }), 'units is a whole number, from 1')
+    await refused(ask('pay', { offer: PAY_LINK, units: '2' }), 'units is a whole number, from 1')
+    await refused(ask('pay', { offer: PAY_LINK, note: 3 }), 'note is text')
     await refused(ask('post-offer', { offer: 'cheap' }), 'offer is an object')
     await refused(ask('post-offer', { offer: offer('x'), writeKey: KEYS.write }), 'post-offer takes no writeKey')
     await refused(run('request', { action: 'pay', params: { offer: PAY_LINK } }, w.ctx({ write: KEYS.write })), NO_KEY)
@@ -191,6 +195,7 @@ describe('a message key', () => {
     // The profile's own message key, with bodies that ask for no action this tool knows, or leave out what it needs.
     await run('send', { to: buyer.address, body: { request: 'fly' } }, w.ctx({ message: KEYS.message }))
     await run('send', { to: buyer.address, body: { request: 'pay' } }, w.ctx({ message: KEYS.message }))
+    await run('send', { to: buyer.address, body: { request: 'pay', offer: PAY_LINK, units: 'two' } }, w.ctx({ message: KEYS.message }))
 
     const all = await run('inbox', {}, w.ctx({ message: KEYS.message, read: KEYS.read }))
     assert.deepEqual(
@@ -202,6 +207,7 @@ describe('a message key', () => {
         [buyer.address, null, { request: 'remove-offer', id: 'past' }],
         [buyer.address, null, { request: 'fly' }],
         [buyer.address, null, { request: 'pay' }],
+        [buyer.address, null, { request: 'pay', offer: PAY_LINK, units: 'two' }],
       ],
     )
   })

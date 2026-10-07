@@ -67,7 +67,8 @@ profile's own inbox as `{ "request": <action>, … }` ([records](../records/READ
 Requests):
 - `{ "request": "post-offer", "offer": { … } }`
 - `{ "request": "send", "to": <address>, "text": … }`
-- `{ "request": "pay", "offer": <pay link> }`
+- `{ "request": "pay", "offer": <pay link>, "units": 2, "note": … }`: `units`, how many hours or days
+  for an offer priced per hour or per day, and `note` may be left out
 
 Typed: `forest request post-offer --params '{"offer": {…}}'`. Over MCP: `action` and `params`. The
 parameters are checked against that action's own, so a request never carries a key. The person's
