@@ -259,9 +259,10 @@ everything public in [`devnet/devnet.json`](devnet/devnet.json); its header hold
 every devnet key it needs. `client/scripts/devnet.ts` runs five deals there, recorded in the same
 file: in the classic test dollar, an invoice paid in one tap and an escrow with a timer the buyer
 objected to, then split; the same two in a Token-2022 dollar made with Open USD's extensions, and
-one more invoice in it. The record names the test dollar (`testDollar`), and keeps the escrow's
-earlier programs on devnet under `earlier`: the first deploy of this program, closed, and v1, still
-deployed and to be closed. There is no smoke test: read a receipt with `solana account <address>
+one more invoice in it. The record names the test dollar (`testDollar`), keeps the escrow's
+earlier programs on devnet under `earlier` (the first deploy of this program, closed, and v1, still
+deployed and to be closed), and keeps the deals made before each escrow's address held its terms
+under `beforeTermsInTheAddress`. There is no smoke test: read a receipt with `solana account <address>
 --url devnet`, and decode it with `decodeEscrow`.
 
 ## Promises
