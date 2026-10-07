@@ -201,6 +201,40 @@ describe('schemas', () => {
     assert.ok(fits('profile', set('time', 2 ** 53 - 1)), 'the latest time')
   })
 
+  test('a profile’s person proof: exactly what verifyTier takes, and the example is a proof the registry program took', () => {
+    const at = example('profile').proofs.findIndex((p: { circuit: string }) => p.circuit === 'person')
+    const shown = example('profile').proofs[at]
+    const set = (field: string, value: unknown) => edit('profile', ['proofs', at, field], value)
+
+    // The registry's fixture (registry/client checks verifyTier takes this entry against its row).
+    const fixtures = read('../../registry/program/tests-litesvm/fixtures/proofs.json')
+    const taken = fixtures.proofs.find((p: { name: string }) => p.name === 'alice-tutoring-A')
+    const { a, b, c } = taken.uncompressed
+    assert.deepEqual(shown, {
+      circuit: 'person',
+      issuer: taken.issuerKey,
+      label: taken.label,
+      stamp: taken.stamp,
+      tier: BigInt('0x' + taken.tier).toString(),
+      proof: Buffer.from(a + b + c, 'hex').toString('base64url'),
+    })
+    assert.equal(`${example('profile').market}/${example('profile').role}`, shown.label, 'the profile’s own label')
+
+    for (const field of ['issuer', 'label', 'stamp', 'tier', 'proof']) assert.ok(!fits('profile', set(field, undefined)), field)
+    assert.ok(!fits('profile', set('extra', 1)), 'nothing verifyTier does not take')
+    const bad: { [field: string]: unknown[] } = {
+      issuer: [shown.issuer.toUpperCase(), shown.issuer.slice(1), shown.issuer + '0', taken.profile],
+      label: ['', 'x'.repeat(129), 1],
+      stamp: [shown.stamp.toUpperCase(), shown.stamp.slice(1), shown.stamp + '0', '0x' + shown.stamp.slice(2)],
+      tier: [2, '02', '-1', '1.0', '', ' 2', '1'.repeat(78)],
+      proof: [shown.proof.slice(1), shown.proof + 'A', shown.proof.replace(/^./, '+')],
+    }
+    for (const [field, values] of Object.entries(bad)) {
+      for (const value of values) assert.ok(!fits('profile', set(field, value)), `${field} ${JSON.stringify(value)}`)
+    }
+    for (const tier of ['0', '1', '9'.repeat(77)]) assert.ok(fits('profile', set('tier', tier)), tier)
+  })
+
   test('a deal id is an escrow address or 32 bytes of lowercase hex', () => {
     assert.ok(fits('review', edit('review', ['dealId'], 'a1'.repeat(32))))
     assert.ok(fits('review', edit('review', ['dealId'], alice.address)))

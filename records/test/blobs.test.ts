@@ -12,7 +12,7 @@ import { getBlob, publish, putBlob, readProfile } from '../src/client.ts'
 import type { Host } from '../src/host.ts'
 import type { Body } from '../src/record.ts'
 import { accessRecord, hostsRecord, ownerRecord, permissionsRecord } from '../src/write.ts'
-import { DAY, T0, accessKey, alice, allow, offerBody, profileBody } from './fixtures.ts'
+import { DAY, T0, accessKey, alice, allow, bob, offerBody, profileBody } from './fixtures.ts'
 import { Clock, startHost } from './helpers.ts'
 
 const bytesOf = (seed: number, length = 2000) => Uint8Array.from({ length }, (_, i) => (i * 7 + seed * 13) & 255)
@@ -95,6 +95,27 @@ describe('blobs', () => {
     } finally {
       await reference.close()
       await small.close()
+    }
+  })
+
+  test('a host’s policy sees the folders whose current records name the bytes, for rules by folder', async () => {
+    const seen: string[][] = []
+    const h = await startHost({
+      now: () => T0,
+      blobPolicy: ({ folders }) => {
+        seen.push(folders)
+        return folders.includes(alice.address) ? null : 'only Alice’s folder here'
+      },
+    })
+    try {
+      const both = bytesOf(7)
+      const bobs = bytesOf(8)
+      await publish([h.url], [ownerRecord(alice, 'profile', withPhoto(both), T0), ownerRecord(bob, 'profile', withPhoto(both), T0), ownerRecord(bob, 'offer/a', withMedia([bobs, 'image/png']), T0)])
+      assert.equal(await put(h, both, 'image/jpeg'), 'ok')
+      assert.equal(await put(h, bobs, 'image/png'), 'policy')
+      assert.deepEqual(seen, [[alice.address, bob.address].sort(), [bob.address]])
+    } finally {
+      await h.close()
     }
   })
 
