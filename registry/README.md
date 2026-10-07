@@ -1,9 +1,8 @@
 # registry
 
-Devnet only: this version of the program is not deployed yet; `devnet/deploy.sh` deploys it at a
-fresh address. The version before it, which took Semaphore's membership proof, still runs on devnet
-at `5zTPm1bGY8ANLcJd12fPiKSTd71bvnq38LAUDT4ToeoC`, left behind ([record](devnet/devnet.json)).
-Nothing is on mainnet.
+Devnet only: the program runs on devnet at `J4ES52YohsZhknYbsgmZwHpyNw14EjrrGZxHpcmcBmq4`, still
+upgradable ([record](devnet/devnet.json)). The version before it, which took Semaphore's membership
+proof, is left behind at `5zTPm1bGY8ANLcJd12fPiKSTd71bvnq38LAUDT4ToeoC`. Nothing is on mainnet.
 
 Up: [the repo](../README.md). Down: the [security checklist](security-checklist.md).
 
@@ -138,18 +137,17 @@ row; the record keeps that proof. The registries before this one are under `earl
 
 ### What one row costs
 
-Measured in LiteSVM (`what_a_row_costs`), until the deploy: two signatures, no compute-budget
-instruction.
+Measured on devnet, from the row in `devnet/devnet.json` (`row`): a v0 transaction, two
+signatures, no compute-budget instruction.
 
 | | Bytes of 1,232 | Compute units of 200,000 |
 |---|---|---|
-| `register`, a 15-byte label | 617 | 132,809 |
-| `register`, a 128-byte label | 730 | 134,191 |
-| `refund` | 211 | 3,316 |
+| `register`, a 16-byte label | 620 | 132,511 |
+| `refund` | | 3,164 |
 
-One proof is about 130,000 compute units to verify, and under a second to make in Node. The deposit
-is the rent-exempt minimum for the row's size: 1,640,840 lamports for that 195-byte row at today's
-rate of 5,080 lamports a byte, and 224,808 once the rate reaches 696. The network fee is 5,000
+One proof is about 130,000 compute units to verify, and about a second to make in Node. The deposit
+is the rent-exempt minimum for the row's size: 1,645,920 lamports for that 196-byte row at today's
+rate of 5,080 lamports a byte, and 225,504 once the rate reaches 696. The network fee is 5,000
 lamports a signature. The program is 163,136 bytes.
 
 ### The note and the person proof
