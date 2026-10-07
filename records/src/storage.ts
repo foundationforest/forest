@@ -172,6 +172,17 @@ function folderFile(dir: string, address: string): string {
   return join(dir, 'folders', `${address}.sqlite`)
 }
 
+/**
+ * A new number in `table`: the larger of the last it gave plus 1, and the clock in microseconds.
+ * So a rebuilt host.sqlite, or a folder's file made again, never gives a number a reader or an
+ * inbox's cursor may already hold, unless the clock is set back, or numbers ran ahead of it by the
+ * host taking more than one a microsecond.
+ */
+function nextNumber(db: Db, table: string, now: number): number {
+  const last = (db.q('SELECT seq FROM sqlite_sequence WHERE name = ?').get(table) as { seq: number } | undefined)?.seq ?? 0
+  return Math.max(last + 1, now * 1000)
+}
+
 function openFolder(file: string): Db {
   const folder = new Db(file)
   if ((folder.db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version === 0) folder.db.exec(FOLDER_SCHEMA)
@@ -268,12 +279,13 @@ export class Storage {
 
   /**
    * Store a record, then mark which of the folder's records are current: those in `current`.
-   * What stopped being current gets a date, and goes keep days later. The log takes it first, so a
-   * crash in between leaves a number that points to nothing, which reads skip; never a record the
-   * log does not list.
+   * What stopped being current gets a date, and goes keep days later. The log takes it first, under
+   * a number from the clock, so a crash in between leaves a number that points to nothing, which
+   * reads skip; never a record the log does not list.
    */
   addRecord(address: string, id: string, text: string, now: number, current: Set<string>) {
-    const { seq } = this.host.q('INSERT INTO log (folder, id, arrived) VALUES (?, ?, ?) RETURNING seq').get(address, id, now) as { seq: number }
+    const seq = nextNumber(this.host, 'log', now)
+    this.host.q('INSERT INTO log (seq, folder, id, arrived) VALUES (?, ?, ?, ?)').run(seq, address, id, now)
     const folder = this.folder(address, true)!
     folder.tx(() => {
       folder.q('INSERT INTO records (seq, id, text, bytes, arrived) VALUES (?, ?, ?, ?, ?)').run(seq, id, text, Buffer.byteLength(text), now)
@@ -321,9 +333,10 @@ export class Storage {
     return (this.folder(folder)?.q('SELECT COUNT(*) AS messages, COALESCE(SUM(bytes), 0) AS bytes FROM messages').get() ?? { messages: 0, bytes: 0 }) as { messages: number; bytes: number }
   }
 
-  /** False when that id is here already. */
+  /** False when that id is here already. Its number comes from the clock, as a record's does. */
   addMessage(folder: string, id: string, text: string, now: number): boolean {
-    return this.folder(folder, true)!.q('INSERT OR IGNORE INTO messages (id, text, bytes, arrived) VALUES (?, ?, ?, ?)').run(id, text, Buffer.byteLength(text), now).changes > 0
+    const db = this.folder(folder, true)!
+    return db.q('INSERT OR IGNORE INTO messages (seq, id, text, bytes, arrived) VALUES (?, ?, ?, ?, ?)').run(nextNumber(db, 'messages', now), id, text, Buffer.byteLength(text), now).changes > 0
   }
 
   /** A folder's messages after a cursor, in arrival order. */
@@ -443,7 +456,8 @@ export class Storage {
  * Make host.sqlite again from what is outside it: the log from each folder's records and their
  * numbers, the names from its current records, the blobs from the store. Bytes no current record
  * names are dated `now`, which only keeps them longer. The log goes on from the highest number any
- * folder file ever took; numbers held only by a folder whose file was deleted can be given again.
+ * folder file ever took, and a new number is never below the clock (nextNumber), so one held only
+ * by a folder whose file was deleted is not given again.
  */
 export async function rebuild(dir: string, driver: BlobDriver = { kind: 'disk' }, now = Date.now()): Promise<void> {
   for (const suffix of ['', '-wal', '-shm']) rmSync(join(dir, `host.sqlite${suffix}`), { force: true })

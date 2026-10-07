@@ -9,13 +9,13 @@ import { test } from 'node:test'
 import { b64u, base58, hex } from '../src/bytes.ts'
 import { publicKeyFromAddress } from '../src/keys.ts'
 import { checkPull, decodeMessage } from '../src/message.ts'
-import { openMessage } from '../src/private.ts'
+import { openMessage, openNotes } from '../src/private.ts'
 import { decodeRecord } from '../src/record.ts'
 import { KEYS } from './fixtures.ts'
 import { vectors } from './vectors.ts'
 
 const pinned = JSON.parse(readFileSync(new URL('./vectors.json', import.meta.url), 'utf8'))
-const RECORDS = ['hosts', 'profileCard', 'offer', 'permissions', 'written', 'deleted'] as const
+const RECORDS = ['hosts', 'profileCard', 'offer', 'permissions', 'written', 'deleted', 'past'] as const
 
 test('the vectors are what this implementation computes', async () => {
   assert.deepEqual(await vectors(), pinned)
@@ -36,6 +36,20 @@ test("the keys are keys/'s pinned ones; the access key and the message key, reco
       { key: pinned.messageKey, scope: 'message' },
     ],
   })
+})
+
+test("the past permissions record keeps the access key, now past, and carries notes only tutoring/seller's pinned inbox key opens", async () => {
+  const { body } = decodeRecord(pinned.past.wire).record
+  assert.deepEqual(body!.access, [
+    { key: pinned.accessKey, scope: 'past', paths: ['offer'] },
+    { key: pinned.messageKey, scope: 'message' },
+  ])
+  const notes = await openNotes(body!, KEYS.mainKeys[0].reading.identity)
+  assert.deepEqual(notes.map((n) => [n.key, n.scope, n.folder, n.from]), [
+    [pinned.accessKey, 'write', pinned.profile, pinned.profile],
+    [pinned.messageKey, 'message', pinned.profile, pinned.profile],
+  ])
+  await assert.rejects(openNotes(body!, KEYS.mainKeys[1].reading.identity))
 })
 
 /** Ed25519 by node:crypto (OpenSSL). */

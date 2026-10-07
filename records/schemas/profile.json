@@ -97,7 +97,7 @@
         },
         "maxBytes": {
           "type": "integer",
-          "description": "Optional. The largest message it takes, as canonical text in bytes. A message is at most 65,536 bytes anyway.",
+          "description": "Optional. The largest message it takes, as canonical text in bytes. A host also takes messages only up to its own size.",
           "minimum": 0
         },
         "readers": {
@@ -199,9 +199,8 @@
         },
         "size": {
           "type": "integer",
-          "description": "Bytes.",
-          "minimum": 0,
-          "maximum": 1000000
+          "description": "Bytes. How large a blob to take is each host's policy, and each reader's.",
+          "minimum": 0
         }
       }
     }

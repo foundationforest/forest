@@ -130,12 +130,12 @@ describe('access keys and permissions', () => {
     assert.equal(v.current.get('offer/physics')!.id, idOf(fix))
   })
 
-  test('removing a write key is setting its scope to revoked: it is still listed, so what it wrote still counts, whatever the date', () => {
-    const revoked = permissionsRecord(alice, [allow(accessKey, ['offer'], 'revoked')], T0 + 10 * MINUTE)
-    const v = view([permissions, written, revoked], T0 + 365 * DAY)
+  test('removing a write key is setting its scope to past: it is still listed, so what it wrote still counts, whatever the date', () => {
+    const past = permissionsRecord(alice, [allow(accessKey, ['offer'], 'past')], T0 + 10 * MINUTE)
+    const v = view([permissions, written, past], T0 + 365 * DAY)
     assert.equal(v.current.get('offer/physics')!.id, idOf(written), 'a year later')
     const outside = accessRecord(accessKey, alice.address, 'review/1', { subject: bob.address }, T0 + MINUTE)
-    assert.equal(view([revoked, outside]).ignored.get(idOf(outside)), 'not-allowed', 'a revoked key keeps its paths')
+    assert.equal(view([past, outside]).ignored.get(idOf(outside)), 'not-allowed', 'a past key keeps its paths')
   })
 
   test('deleting a key’s entry, or the permissions record, disowns what it wrote: it stops counting', () => {

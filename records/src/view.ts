@@ -8,11 +8,11 @@
 //      there). The newest is current.
 //   3. At a content path, if the owner ever wrote there, the owner's newest version is current and
 //      no access key's record counts. Otherwise the newest access key's record the current
-//      permissions record allows: its key is listed with scope write or revoked, and its paths
+//      permissions record allows: its key is listed with scope write or past, and its paths
 //      cover the record's path (with no paths, every content path but those `profile` and
-//      `grants` cover). A revoked key is still listed, so what it wrote still counts; a key whose
+//      `grants` cover). A past key is still listed, so what it wrote still counts; a key whose
 //      entry is gone counts for nothing. No date is checked: when a record arrived is the host's
-//      check, and a host takes nothing from a revoked key.
+//      check, and a host takes nothing from a past key.
 //   4. Newest: the later time, then the larger id. A null body is a delete.
 
 import { type AccessKey, type Checked, type HostsBody, MAX_FUTURE_MS, type PermissionsBody, type SignedRecord, isControlPath, pathCovers } from './record.ts'
@@ -49,10 +49,10 @@ export function covers(entry: AccessKey, path: string): boolean {
 
 /**
  * The access rule, as a reader checks it: whether the access keys listed allow a record one of
- * them signed: its key, listed with scope write or revoked, covering the record's path.
+ * them signed: its key, listed with scope write or past, covering the record's path.
  */
 export function allows(access: readonly AccessKey[], record: SignedRecord): boolean {
-  return access.some((k) => k.key === record.by && (k.scope === 'write' || k.scope === 'revoked') && covers(k, record.path))
+  return access.some((k) => k.key === record.by && (k.scope === 'write' || k.scope === 'past') && covers(k, record.path))
 }
 
 /** Whether a host takes an access key's record now: its key is listed with scope write, covering the record's path. */
