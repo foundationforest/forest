@@ -5,9 +5,10 @@ pragma circom 2.1.5;
 // proof is for this main key" (../README.md, The note and the person proof).
 //
 // The note is { note number, face embedding, model name, tier }. The issuer signs
-// Poseidon(note number, embedding's hash, model's hash, tier) with its EdDSA key on Baby Jubjub,
-// over Poseidon: circomlib's verifier, unchanged. The embedding and the model enter only as their
-// hashes; the circuit never reads them.
+// Poseidon(tag, note number, embedding's hash, model's hash, tier) with its EdDSA key on Baby
+// Jubjub, over Poseidon: circomlib's verifier, unchanged. The tag is fixed, so nothing the issuer
+// signs for another purpose can be turned into a note. The embedding and the model enter only as
+// their hashes; the circuit never reads them.
 
 include "poseidon.circom";
 include "eddsaposeidon.circom";
@@ -28,9 +29,13 @@ template Person() {
     signal input tier;              // the tier the issuer signed in the note
     signal output stamp;
 
+    // The note's tag: keccak256("forest/v1/note") >> 8, the registry's rule for turning text into a
+    // field element, as for the scope and the message.
+    var NOTE_TAG = 400167441388126881061687584776181816477671862726675254297469311886243976537;
+
     // The note the issuer signed, with the note number the secret gives.
     var noteNumber = Poseidon(1)([secret]);
-    var note = Poseidon(4)([noteNumber, embedding, model, tier]);
+    var note = Poseidon(5)([NOTE_TAG, noteNumber, embedding, model, tier]);
 
     component signed = EdDSAPoseidonVerifier();
     signed.enabled <== 1;

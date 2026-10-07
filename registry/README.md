@@ -208,9 +208,11 @@ now, off chain.
     the secret.
   - The embedding is the bytes the issuer's model gives for the face, the model name says which
     model, and the tier is a number whose meaning is the issuer's.
-  - The issuer signs `Poseidon(note number, keccak256(embedding) >> 8, keccak256(model) >> 8,
-    tier)` with its EdDSA key on Baby Jubjub, over Poseidon (circomlib's). The embedding and the
-    model enter the signed message only as their hashes. The person keeps the note.
+  - The issuer signs `Poseidon(tag, note number, keccak256(embedding) >> 8, keccak256(model) >> 8,
+    tier)` with its EdDSA key on Baby Jubjub, over Poseidon (circomlib's). The tag is
+    `keccak256("forest/v1/note") >> 8`, always the same, so nothing an issuer signs for another
+    purpose can be turned into a note. The embedding and the model enter the signed message only
+    as their hashes. The person keeps the note.
 - **The person proof.** To register, the device proves, showing neither the secret nor the note:
   *I know an issuer secret and a note this issuer signed whose note number is the hash of that
   secret; my stamp for this label is the hash of that secret and the label; this proof is for this
@@ -222,8 +224,9 @@ now, off chain.
     a new tier or under a new key, keeps the same stamp.
   - The same proof, attached to a profile later, shows that profile's tier.
 - **The issuer's key is the issuer's to keep.** Whoever holds it can sign notes for people who do
-  not exist. Rows name the issuer, so readers can stop trusting a key. The person's secret comes
-  from the issuer's name, not its key, so a new key changes no one's stamps.
+  not exist, and so can anyone it signs a number for without knowing what that number is. Rows name
+  the issuer, so readers can stop trusting a key. The person's secret comes from the issuer's name,
+  not its key, so a new key changes no one's stamps.
 - **The setup is single-party.** One party made it, so until a public setup ceremony, whoever ran
   `circuit/devnet/setup.sh` could forge a proof. Devnet only.
 
@@ -235,9 +238,10 @@ now, off chain.
 | Public, in this order | `stamp`, the output; `issuerX`, `issuerY`; `scope`; `message`; `tier` |
 
 Inside the proof: the note number is `Poseidon(secret)`; circomlib's `EdDSAPoseidonVerifier`,
-unchanged, checks that the issuer's key signed `Poseidon(note number, embedding, model, tier)`; the
-stamp is `Poseidon(scope, secret)`; and the message is squared, as Semaphore does, so it cannot be
-changed in a proof. The scope and the message are the ones `register` derives.
+unchanged, checks that the issuer's key signed `Poseidon(tag, note number, embedding, model, tier)`,
+with the tag fixed in the circuit; the stamp is `Poseidon(scope, secret)`; and the message is
+squared, as Semaphore does, so it cannot be changed in a proof. The scope and the message are the
+ones `register` derives.
 
 The setup's phase 1 is the reputation circuit's: PSE's Perpetual Powers of Tau,
 `ppot_0080_16.ptau`, pinned by SHA-256 in `circuit/devnet/setup.sh`. Phase 2 is one contribution.
@@ -247,9 +251,9 @@ Every file is small, so all are committed in `circuit/devnet/`, pinned in `setup
 
 | File | Bytes | SHA-256 |
 |---|---|---|
-| `verification-key.json` | 3,838 | `9181ed18077cade090d457ba1881e0a1dff68d40ee019bfaa7437c4241637436` |
-| `person.zkey` | 3,372,339 | `1c95d5c0a740e6e94fcb22461576948a2c2ae1b621171b8291ff5e8bbb81048a` |
-| `person.wasm` | 3,427,571 | `0c19dc3309e8a256e24846b2e95e567c56975fd3c076891b65b6bf512fc9509c` |
+| `verification-key.json` | 3,838 | `5d0f0b9c62e6b0013e8c19e86bb00628dbe3bcb39d35bebaac8ac64c5faaaaa4` |
+| `person.zkey` | 3,396,483 | `90632ee12c389127007c2c5e29a1974fad42bc080e47b127a1f6426ad6c94dd3` |
+| `person.wasm` | 2,815,205 | `063882b8f5a8208d16485c609494b53b1b0fd84da234f5207b63f80bd8e56c99` |
 
 | Function | Gives |
 |---|---|
@@ -269,11 +273,11 @@ devnet/setup.sh                   # a new setup: new files, every hash new
 ```
 
 The tests make a proof for `keys/`'s test person and check that a wrong issuer key, a forged
-signature, a tier the issuer did not sign, another person's secret, a stamp for another label and
-a proof replayed for another main key all fail.
+signature, the issuer's signature without the tag, a tier the issuer did not sign, another person's
+secret, a stamp for another label and a proof replayed for another main key all fail.
 
-Measured in Node 22 on a 4-core machine: 4,958 constraints; a proof takes about 0.55 s to make and
-40 ms to check, and is 720 bytes as snarkjs writes it. It trusts circom 2.2.3, snarkjs 0.7.5,
+Measured in Node 22 on a 4-core machine: 4,979 constraints; a proof takes about 0.7 s to make and
+50 ms to check, and is 725 bytes as snarkjs writes it. It trusts circom 2.2.3, snarkjs 0.7.5,
 circomlib 2.0.5's EdDSA verifier and Poseidon, and zk-kit's `@zk-kit/eddsa-poseidon` 1.0.4 to sign,
 used unchanged.
 

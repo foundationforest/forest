@@ -2,11 +2,12 @@
 //
 // An issuer signs a note for each person: { note number, face embedding, model name, tier }. The
 // note number is Poseidon of the person's secret for that issuer (`keys/`'s `issuerSecret`), so
-// the issuer never learns the secret. The issuer signs Poseidon(note number, the embedding's hash,
-// the model's hash, tier) with its EdDSA key on Baby Jubjub over Poseidon: zk-kit's signer,
-// unchanged, which circomlib's verifier checks inside the circuit. The embedding and the model
-// enter the signed message only as their hashes, `keccak256 >> 8` like the scope and the message,
-// so the circuit never reads them.
+// the issuer never learns the secret. The issuer signs Poseidon(tag, note number, the embedding's
+// hash, the model's hash, tier) with its EdDSA key on Baby Jubjub over Poseidon: zk-kit's signer,
+// unchanged, which circomlib's verifier checks inside the circuit. The tag is fixed, so nothing the
+// issuer signs for another purpose can be turned into a note. The tag, the embedding and the model
+// enter as `keccak256 >> 8` of their bytes, like the scope and the message; the circuit never reads
+// the embedding or the model.
 //
 // The person proves on the device, from the secret and the note: "this issuer signed a note for my
 // note number; my stamp for this label is Poseidon(scope, secret); this proof is for this main
@@ -19,13 +20,18 @@ import type { PublicKey } from '@solana/web3.js'
 import { derivePublicKey, deriveSecretScalar, signMessage, verifySignature } from '@zk-kit/eddsa-poseidon'
 import { poseidon1 } from 'poseidon-lite/poseidon1'
 import { poseidon2 } from 'poseidon-lite/poseidon2'
-import { poseidon4 } from 'poseidon-lite/poseidon4'
+import { poseidon5 } from 'poseidon-lite/poseidon5'
 import { groth16 } from 'snarkjs'
 
 import type { SnarkjsProof } from './compress.ts'
 import { fieldHash, fromBytes32, isFieldElement, messageOf, scopeOf } from './field.ts'
 import { PERSON_KEY } from './person-key.ts'
 import type { Artifacts } from './proof.ts'
+
+/** The text whose field value starts every note an issuer signs. The circuit has it as a constant. */
+export const NOTE_TAG_TEXT = 'forest/v1/note'
+/** `keccak256("forest/v1/note") >> 8`: the first input of every signed note. */
+export const NOTE_TAG = fieldHash(NOTE_TAG_TEXT)
 
 /** An issuer's key: its EdDSA public key, a point on Baby Jubjub, as two field elements. */
 export type IssuerKey = [bigint, bigint]
@@ -71,12 +77,12 @@ export function noteNumberOf(secret: Uint8Array): bigint {
   return poseidon1([scalarOf(secret)])
 }
 
-/** What an issuer signs: Poseidon(note number, keccak256(embedding) >> 8, keccak256(model) >> 8, tier). */
+/** What an issuer signs: Poseidon(tag, note number, keccak256(embedding) >> 8, keccak256(model) >> 8, tier). */
 export function noteHash(note: Note): bigint {
   if (!isFieldElement(note.noteNumber) || !isFieldElement(note.tier)) throw new RangeError('a note number and a tier are field elements')
   if (!(note.embedding instanceof Uint8Array) || typeof note.model !== 'string') throw new TypeError('an embedding is bytes and a model is text')
   // The registry's hash with no namespace: the place in the note keeps the two apart.
-  return poseidon4([note.noteNumber, fieldHash('', note.embedding), fieldHash('', note.model), note.tier])
+  return poseidon5([NOTE_TAG, note.noteNumber, fieldHash('', note.embedding), fieldHash('', note.model), note.tier])
 }
 
 /** The issuer's key, from its 32-byte private key. */

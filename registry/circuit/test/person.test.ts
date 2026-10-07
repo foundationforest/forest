@@ -10,11 +10,14 @@ import { dirname, join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 
+import { signMessage } from '@zk-kit/eddsa-poseidon'
+import { poseidon4 } from 'poseidon-lite/poseidon4'
 import { groth16 } from 'snarkjs'
 
 import { issuerSecret, mainKey } from '../../../keys/src/index.ts'
 import {
   BN254_R,
+  fieldHash,
   issuerKeyOf,
   marketStampOf,
   noteSigned,
@@ -83,7 +86,7 @@ test('a wrong issuer key fails', async () => {
   await assert.rejects(prove({ ...inputOf(theirNote), issuerX: issuer[0], issuerY: issuer[1] }), NO_WITNESS)
 })
 
-test('a forged signature fails, and so does a tier the issuer did not sign', async () => {
+test('a forged signature fails, and so do a signature without the tag and a tier the issuer did not sign', async () => {
   // A key that is not the issuer's signs a note, which then claims the issuer's key.
   const forged = { ...noteFor(mine.noteNumber, strangerPrivate), issuer }
   assert.equal(noteSigned(forged), false)
@@ -93,6 +96,9 @@ test('a forged signature fails, and so does a tier the issuer did not sign', asy
   await assert.rejects(prove(inputOf({ ...note, signature: { ...note.signature, S: note.signature.S + 1n } })), NO_WITNESS)
   const l = 2736030358979909402780800718157159386076813972158567259200215660948447373041n
   await assert.rejects(prove(inputOf({ ...note, signature: { ...note.signature, S: note.signature.S + l } })), NO_WITNESS)
+  // The issuer's own signature over the same fields without the tag: no witness.
+  const untagged = poseidon4([note.noteNumber, fieldHash('', note.embedding), fieldHash('', note.model), note.tier])
+  await assert.rejects(prove(inputOf({ ...note, signature: signMessage(issuerPrivate, untagged) })), NO_WITNESS)
   // The signed note with another tier, in the proof or in the check.
   await assert.rejects(prove(inputOf({ ...note, tier: 3n })), NO_WITNESS)
   assert.equal(await verifyPerson({ ...good, tier: 3n }), false)

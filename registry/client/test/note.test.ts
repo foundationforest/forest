@@ -8,11 +8,14 @@ import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 
 import { keccak_256 } from '@noble/hashes/sha3.js'
+import { signMessage } from '@zk-kit/eddsa-poseidon'
 import { poseidon4 } from 'poseidon-lite/poseidon4'
+import { poseidon5 } from 'poseidon-lite/poseidon5'
 
 import { issuerSecret } from '../../../keys/src/index.ts'
 import {
   BN254_R,
+  NOTE_TAG,
   fromBytes32,
   issuerKeyOf,
   marketStampOf,
@@ -58,10 +61,17 @@ test("the note number is keys/'s, from the same 32 bytes", async () => {
   assert.throws(() => noteNumberOf(secret.subarray(1)), /32 bytes/)
 })
 
-test('an issuer signs Poseidon(note number, keccak256(embedding) >> 8, keccak256(model) >> 8, tier)', () => {
-  const hash = (bytes: Uint8Array) => fromBytes32(keccak_256(bytes)) >> 8n
-  const want = poseidon4([note.noteNumber, hash(note.embedding), hash(new TextEncoder().encode(note.model)), note.tier])
-  assert.equal(noteHash(note), want)
+const hash = (bytes: Uint8Array) => fromBytes32(keccak_256(bytes)) >> 8n
+const fields = (n: Note) => [n.noteNumber, hash(n.embedding), hash(new TextEncoder().encode(n.model)), n.tier]
+
+test('the tag is keccak256("forest/v1/note") >> 8, the constant the circuit has', () => {
+  assert.equal(NOTE_TAG, hash(new TextEncoder().encode('forest/v1/note')))
+  const circuit = readFileSync(join(here, '../../circuit/person.circom'), 'utf8')
+  assert.ok(circuit.includes(`var NOTE_TAG = ${NOTE_TAG};`), 'person.circom carries the same tag')
+})
+
+test('an issuer signs Poseidon(tag, note number, keccak256(embedding) >> 8, keccak256(model) >> 8, tier)', () => {
+  assert.equal(noteHash(note), poseidon5([NOTE_TAG, ...fields(note)]))
   assert.throws(() => noteHash({ ...note, tier: BN254_R }), /field elements/)
   assert.throws(() => noteHash({ ...note, noteNumber: -1n }), /field elements/)
 })
@@ -82,6 +92,9 @@ test('a signed note checks; any change to it, its issuer or its signature does n
     ['a tier out of the field', { ...signed, tier: BN254_R + 2n }],
   ]
   for (const [what, n] of cases) assert.equal(noteSigned(n), false, what)
+  // The issuer's signature over the same fields without the tag is no note.
+  const untagged = { ...signed, signature: signMessage(issuerKey, poseidon4(fields(note))) }
+  assert.equal(noteSigned(untagged), false, 'no tag')
   assert.throws(() => signNote(new Uint8Array(31), note), /32 bytes/)
 })
 
