@@ -5,9 +5,9 @@ import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { connect } from 'node:net'
 import { after, before, describe, test } from 'node:test'
-import { publish, readAll, readPage, readProfile } from '../src/client.ts'
-import { DAY, DEFAULT_MAX_PAGE_BYTES, type Host } from '../src/host.ts'
-import { MAX_RECORD_BYTES, type SignedRecord, checkRecord, encodeRecord } from '../src/record.ts'
+import { MAX_LINE_READ, publish, readAll, readPage, readProfile } from '../src/client.ts'
+import { DAY, DEFAULT_MAX_LINE_BYTES, DEFAULT_MAX_PAGE_BYTES, type Host } from '../src/host.ts'
+import { type AccessKey, type SignedRecord, checkRecord, encodeRecord } from '../src/record.ts'
 import { liveContent } from '../src/view.ts'
 import { accessRecord, hostsRecord, nextTime, ownerRecord, permissionsRecord } from '../src/write.ts'
 import { MINUTE, T0, accessKey, alice, aliceBuyer, allow, bob, offerBody, profileBody, reviewBody, sizedRecord, stranger } from './fixtures.ts'
@@ -97,10 +97,45 @@ describe('the socket', () => {
       await publish([h.url], [ownerRecord(alice, 'offer/a', offerBody('1'), T0)])
       assert.deepEqual((await readAll(h.url)).records.map((c) => c.record.profile), [alice.address, alice.address, bob.address, bob.address, alice.address])
       assert.deepEqual((await readAll(h.url, { profile: alice.address })).records.map((c) => c.record.path), ['hosts', 'profile', 'offer/a'])
-      const since = await readPage(h.url, { after: 2 })
+      // Numbers come from the clock, in microseconds: the second record taken at T0 is T0 × 1000 + 1.
+      const second = T0 * 1000 + 1
+      const since = await readPage(h.url, { after: second })
       assert.deepEqual(since.records.map((c) => c.record.path), ['hosts', 'profile', 'offer/a'])
-      assert.deepEqual((await readPage(h.url, { after: 2, profile: alice.address })).records.map((c) => c.record.path), ['offer/a'])
+      assert.deepEqual((await readPage(h.url, { after: second, profile: alice.address })).records.map((c) => c.record.path), ['offer/a'])
       assert.equal((await readPage(h.url, { after: since.cursor })).records.length, 0, 'nothing new since the cursor')
+    } finally {
+      await h.close()
+    }
+  })
+
+  test('POST /v1/records/read: the profile and the cursor in the body, the same answer as the GET', async () => {
+    const h = await startHost({ now: () => T0 })
+    try {
+      await publish([h.url], [hostsRecord(alice, [h.url], T0), ownerRecord(alice, 'profile', profileBody('Alice'), T0), ownerRecord(bob, 'profile', profileBody('Bob'), T0)])
+      const answer = async (res: Response) => [res.status, res.headers.get('forest-cursor'), await res.text()]
+      const posted = async (body: string) => answer(await fetch(`${h.url}/v1/records/read`, { method: 'POST', body }))
+      const got = async (query: string) => answer(await fetch(`${h.url}/v1/records?${query}`))
+      assert.deepEqual(await posted('{}'), await got(''))
+      assert.deepEqual(await posted(JSON.stringify({ profile: alice.address })), await got(`profile=${alice.address}`))
+      assert.deepEqual(await posted(JSON.stringify({ profile: alice.address, after: T0 * 1000 })), await got(`profile=${alice.address}&after=${T0 * 1000}`))
+      assert.deepEqual(await posted(JSON.stringify({ profile: 'not-an-address' })), await got('profile=not-an-address'))
+      for (const bad of ['', 'nope', '[]', '{"after":-1}', '{"after":1.5}', '{"after":"1"}', '{"profile":5}', '{"more":1}']) assert.equal((await posted(bad))[0], 400, bad)
+      assert.equal((await posted(JSON.stringify({ profile: 'x'.repeat(2000) })))[0], 413)
+      assert.equal((await fetch(`${h.url}/v1/records/read`)).status, 405, 'the GET form is /v1/records')
+
+      // The library reads the same records with post: true, and no URL it asks names the profile.
+      const urls: string[] = []
+      const real = globalThis.fetch
+      globalThis.fetch = (input, init) => (urls.push(String(input)), real(input, init))
+      let inBody: Awaited<ReturnType<typeof readAll>>
+      try {
+        inBody = await readAll(h.url, { profile: alice.address, post: true })
+        assert.deepEqual((await readProfile([h.url], alice.address, T0, { post: true })).hosts, [h.url])
+      } finally {
+        globalThis.fetch = real
+      }
+      assert.deepEqual(inBody.records, (await readAll(h.url, { profile: alice.address })).records)
+      assert.ok(urls.length && urls.every((u) => !u.includes(alice.address)), urls.join(' '))
     } finally {
       await h.close()
     }
@@ -168,10 +203,10 @@ describe('access keys, checked as they arrive', () => {
     try {
       await publish([h.url], [permissionsRecord(alice, [allow(accessKey, ['offer'])], T0), accessRecord(accessKey, alice.address, 'offer/w', offerBody('9'), T0)])
       clock.advance(MINUTE)
-      await publish([h.url], [permissionsRecord(alice, [allow(accessKey, ['offer'], 'revoked')], clock.t)])
+      await publish([h.url], [permissionsRecord(alice, [allow(accessKey, ['offer'], 'past')], clock.t)])
       assert.equal((await readProfile([h.url], alice.address, clock.t + 30 * DAY)).current.get('offer/w')!.record.by, accessKey.address, 'what it wrote stays')
       const refused = (await publish([h.url], [accessRecord(accessKey, alice.address, 'offer/again', offerBody('1'), T0 + 1)]))[0]!.results[0]!
-      assert.deepEqual([refused.error, refused.message], ['permission', 'this access key is revoked'], 'nor anything backdated')
+      assert.deepEqual([refused.error, refused.message], ['permission', 'this access key is past'], 'nor anything backdated')
       await h.prune(clock.t + 31 * DAY)
       assert.deepEqual((await readAll(h.url)).records.map((c) => c.record.path).sort(), ['offer/w', 'permissions'])
     } finally {
@@ -289,18 +324,18 @@ describe('hosts that misbehave', () => {
   })
 })
 
-describe('limits: the standard’s size a record; each host’s own batch and page; 60 seconds a read', () => {
+describe('limits: each host’s own size, batch and page; each reader’s own size; 60 seconds a read', () => {
   const bytes = (lines: string[]) => lines.reduce((n, l) => n + Buffer.byteLength(l) + 1, 0)
 
   test('the reference host ends a page before 4 MB; a reader still gets every record, page by page', async () => {
     const h = await startHost({ now: () => T0 })
     try {
-      const full = Array.from({ length: 66 }, (_, i) => sizedRecord(alice, `note/${i}`, MAX_RECORD_BYTES))
+      const full = Array.from({ length: 66 }, (_, i) => sizedRecord(alice, `note/${i}`, DEFAULT_MAX_LINE_BYTES))
       const [outcome] = await publish([h.url], full)
       assert.ok(outcome!.results.every((r) => r.ok), JSON.stringify(outcome!.results.filter((r) => !r.ok)))
       const first = h.read()
       assert.ok(bytes(first.lines) <= DEFAULT_MAX_PAGE_BYTES)
-      assert.ok(bytes(first.lines) + MAX_RECORD_BYTES + 1 > DEFAULT_MAX_PAGE_BYTES, 'the next record would not have fit')
+      assert.ok(bytes(first.lines) + DEFAULT_MAX_LINE_BYTES + 1 > DEFAULT_MAX_PAGE_BYTES, 'the next record would not have fit')
       assert.ok(first.lines.length < 66)
       assert.equal((await readAll(h.url)).records.length, 66)
     } finally {
@@ -336,10 +371,10 @@ describe('limits: the standard’s size a record; each host’s own batch and pa
     }
   })
 
-  test('a reader takes a page of any length, and refuses a line longer than a record without holding it', async () => {
+  test('a reader takes a page of any length, and refuses a line longer than it takes without holding it', async () => {
     const h = await startHost({ now: () => T0 })
     try {
-      const atCap = encodeRecord(sizedRecord(alice, 'note/a', MAX_RECORD_BYTES))
+      const atCap = encodeRecord(sizedRecord(alice, 'note/a', MAX_LINE_READ))
       h.read = () => ({ lines: Array(100).fill(atCap), cursor: 1 })
       const page = await readPage(h.url)
       assert.ok(bytes(Array(100).fill(atCap)) > 6_000_000)
@@ -352,16 +387,38 @@ describe('limits: the standard’s size a record; each host’s own batch and pa
     }
   })
 
-  test('a reader refuses a record over the size cap in bytes, and takes one at it', async () => {
+  test('size is a host’s policy: the reference host takes records of up to 65,536 bytes in UTF-8, unless its operator says otherwise', async () => {
+    const atCap = sizedRecord(alice, 'note/a', DEFAULT_MAX_LINE_BYTES)
+    // One more byte, from one two-byte character: still 65,536 characters, now 65,537 bytes.
+    const over = sizedRecord(alice, 'note/b', DEFAULT_MAX_LINE_BYTES + 1, 1)
+    assert.deepEqual([encodeRecord(over).length, Buffer.byteLength(encodeRecord(over))], [DEFAULT_MAX_LINE_BYTES, DEFAULT_MAX_LINE_BYTES + 1])
     const h = await startHost({ now: () => T0 })
+    const roomy = await startHost({ now: () => T0, maxLineBytes: 200_000 })
     try {
-      const atCap = sizedRecord(alice, 'note/a', MAX_RECORD_BYTES)
-      const over = sizedRecord(alice, 'note/b', MAX_RECORD_BYTES + 1, 1)
-      h.read = () => ({ lines: [encodeRecord(atCap), encodeRecord(over)], cursor: 2 })
+      assert.deepEqual(await errors(h, [atCap, over]), ['ok', 'size'])
+      assert.deepEqual(await errors(roomy, [over]), ['ok'])
+      // Size is the one policy a host refuses a permissions record by, and one that only removes a
+      // key is never larger: a past key's entry is shorter than a write key's, a deleted one gone.
+      const sized = (access: AccessKey[]) => Buffer.byteLength(encodeRecord(permissionsRecord(alice, access, T0)))
+      const listed = sized([allow(accessKey, ['offer']), allow(stranger, undefined, 'message')])
+      assert.ok(sized([allow(accessKey, ['offer'], 'past'), allow(stranger, undefined, 'past')]) < listed, 'each made past')
+      assert.ok(sized([allow(accessKey, ['offer'])]) < listed, 'one deleted')
+    } finally {
+      await h.close()
+      await roomy.close()
+    }
+  })
+
+  test('a reader ignores a line longer than it takes: 65,536 bytes unless told otherwise', async () => {
+    const h = await startHost({ now: () => T0, maxLineBytes: 200_000 })
+    try {
+      const atCap = sizedRecord(alice, 'note/a', MAX_LINE_READ)
+      const over = sizedRecord(alice, 'note/b', MAX_LINE_READ + 1, 1)
+      await publish([h.url], [atCap, over])
       const page = await readPage(h.url)
       assert.deepEqual(page.records.map((c) => c.id), [checkRecord(atCap).id])
       assert.deepEqual(page.refused.map((r) => r.reason), ['size'])
-      assert.deepEqual(await errors(h, [over]), ['size'], 'and a host refuses it')
+      assert.equal((await readPage(h.url, { maxBytes: 200_000 })).records.length, 2)
     } finally {
       await h.close()
     }

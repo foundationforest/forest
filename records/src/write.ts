@@ -29,10 +29,11 @@ export function hostsRecord(owner: Key, urls: string[] | null, time: number): Si
 }
 
 /**
- * The access keys this folder lists, each with its scope. To remove a write or message key, set
- * its scope to `revoked`: it adds nothing more, and what it wrote still counts. Deleting its entry
- * instead disowns what it wrote. A read or pay key is removed by deleting its entry.
+ * The access keys this folder lists, each with its scope, and the owner's notes on them if given
+ * (makeNotes in private.ts). To remove a write or message key, set its scope to `past`: it can no
+ * longer act, and what it wrote still counts. Deleting its entry instead disowns what it wrote. A
+ * read or pay key is removed by deleting its entry.
  */
-export function permissionsRecord(owner: Key, access: AccessKey[] | null, time: number): SignedRecord {
-  return ownerRecord(owner, 'permissions', access && { access }, time)
+export function permissionsRecord(owner: Key, access: AccessKey[] | null, time: number, notes?: string): SignedRecord {
+  return ownerRecord(owner, 'permissions', access && { access, ...(notes !== undefined && { notes }) }, time)
 }

@@ -150,9 +150,8 @@
         },
         "size": {
           "type": "integer",
-          "description": "Bytes.",
-          "minimum": 0,
-          "maximum": 50000000
+          "description": "Bytes. How large a blob to take is each host's policy, and each reader's.",
+          "minimum": 0
         }
       }
     }

@@ -55,10 +55,7 @@ export const reviewBody = (subject: string): Body => ({
 /** One entry in a permissions record: this key, with this scope (write unless given), under these paths if given. */
 export const allow = (key: Key, paths?: string[], scope: Scope = 'write'): AccessKey => (paths === undefined ? { key: key.address, scope } : { key: key.address, scope, paths })
 
-/**
- * A signed owner record whose canonical text is exactly `bytes` long, `wide` of its characters
- * two-byte (é). Signed directly, since signRecord refuses anything over the cap.
- */
+/** A signed owner record whose canonical text is exactly `bytes` long, `wide` of its characters two-byte (é). */
 export function sizedRecord(key: Key, path: string, bytes: number, wide = 0): SignedRecord {
   const unsigned = (about: string): UnsignedRecord => ({ v: 1, profile: key.address, path, time: T0, body: { about } })
   const rest = bytes - canonical({ ...unsigned(''), sig: 'x'.repeat(86) }).length - 2 * wide

@@ -75,16 +75,18 @@ describe('schemas', () => {
     assert.ok(!fits('offer', { ...located, location: { ...located.location, lat: 38.72 } }))
   })
 
-  test('blobs are SHA-256 references with their types and sizes', () => {
+  test('blobs are SHA-256 references with their types and sizes; how large is each host’s policy, not the shape’s', () => {
     assert.ok(fits('profile', edit('profile', ['photo', 'mimeType'], 'image/png')))
     assert.ok(!fits('profile', edit('profile', ['photo', 'mimeType'], 'image/gif')))
-    assert.ok(!fits('profile', edit('profile', ['photo', 'size'], 1_000_001)))
+    assert.ok(fits('profile', edit('profile', ['photo', 'size'], 1_000_001)))
+    assert.ok(!fits('profile', edit('profile', ['photo', 'size'], -1)))
     assert.ok(!fits('profile', edit('profile', ['photo', 'sha256'], 'A'.repeat(64))))
     assert.ok(!fits('profile', edit('profile', ['photo', 'ref'], 'bafkrei…')), 'a reference is nothing but its hash, type and size')
     const clip = { sha256: 'b'.repeat(64), mimeType: 'video/mp4', size: 50_000_000 }
     assert.ok(fits('review', edit('review', ['media'], Array(10).fill(clip))))
     assert.ok(!fits('review', edit('review', ['media'], Array(11).fill(clip))))
-    assert.ok(!fits('review', edit('review', ['media'], [{ ...clip, size: 50_000_001 }])))
+    assert.ok(fits('review', edit('review', ['media'], [{ ...clip, size: 50_000_001 }])))
+    assert.ok(fits('offer', edit('offer', ['media'], [{ ...clip, size: 50_000_001 }])))
     assert.ok(fits('offer', edit('offer', ['media'], Array(10).fill(clip))), 'an offer carries the same media as a review')
     assert.ok(!fits('offer', edit('offer', ['media'], Array(11).fill(clip))))
     assert.ok(!fits('offer', edit('offer', ['media'], [{ ...clip, mimeType: 'image/gif' }])))

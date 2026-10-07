@@ -93,10 +93,12 @@ describe('a file per folder', () => {
       const order = [[alice, 'offer/1'], [bob, 'offer/1'], [alice, 'offer/2'], [bob, 'offer/2'], [alice, 'offer/3']] as const
       for (const [key, path] of order) await publish([h.url], [ownerRecord(key, path, offerBody('1'), clock.advance(1))])
       assert.deepEqual((await readAll(h.url)).records.map((c) => [c.record.profile, c.record.path]), order.map(([key, path]) => [key.address, path]))
-      assert.deepEqual((await pages(h.url)).map(([cursor, ids]) => [cursor, ids.length]), [[2, 2], [4, 2], [5, 1]])
+      // Each number is the clock in microseconds, the record at T0 + i ms numbered (T0 + i) × 1000.
+      const n = (i: number) => (T0 + i) * 1000
+      assert.deepEqual((await pages(h.url)).map(([cursor, ids]) => [cursor, ids.length]), [[n(2), 2], [n(4), 2], [n(5), 1]])
       // A cursor from the feed works for one folder too.
-      assert.deepEqual((await readPage(h.url, { after: 2, profile: alice.address })).records.map((c) => c.record.path), ['offer/2', 'offer/3'])
-      assert.deepEqual((await readPage(h.url, { after: 2, profile: bob.address })).cursor, 4)
+      assert.deepEqual((await readPage(h.url, { after: n(2), profile: alice.address })).records.map((c) => c.record.path), ['offer/2', 'offer/3'])
+      assert.deepEqual((await readPage(h.url, { after: n(2), profile: bob.address })).cursor, n(4))
     } finally {
       await h.close()
     }
@@ -167,6 +169,41 @@ describe('a file per folder', () => {
 })
 
 describe('host.sqlite holds nothing that exists only there', () => {
+  test('numbers come from the clock: a rebuilt host.sqlite, or a folder’s file made again, never gives one again', async () => {
+    const dir = scratch()
+    const clock = new Clock(T0)
+    const options = { dir, now: clock.now }
+    let h = await startHost(options)
+    let given: number
+    let inboxCursor: number
+    try {
+      await publish([h.url], [ownerRecord(bob, 'profile', bobCard, T0), ownerRecord(alice, 'profile', aliceCard, T0)])
+      await deliver([h.url], [await message(bob, alice.address, { text: 'Tuesday?' }, T0, aliceCard)])
+      given = (await readPage(h.url)).cursor
+      inboxCursor = (await pull(h.url, pullRequest(alice, 0, T0))).cursor
+      assert.deepEqual([given, inboxCursor], [T0 * 1000 + 1, T0 * 1000], 'the clock in microseconds, then one more')
+    } finally {
+      await h.close()
+    }
+
+    // Alice's folder goes, and host.sqlite with it: rebuilt from Bob's folder alone, the highest
+    // number the log knows is Bob's. A millisecond later is enough to give no number twice.
+    rmSync(join(dir, 'folders', `${alice.address}.sqlite`))
+    for (const suffix of ['', '-wal', '-shm']) rmSync(join(dir, `host.sqlite${suffix}`), { force: true })
+    clock.advance(1)
+    await rebuild(dir, { kind: 'disk' }, clock.t)
+    h = await startHost(options)
+    try {
+      await publish([h.url], [ownerRecord(alice, 'profile', aliceCard, clock.t)])
+      await deliver([h.url], [await message(bob, alice.address, { text: 'Still Tuesday?' }, clock.t, aliceCard)])
+      const page = await readPage(h.url, { after: given })
+      assert.deepEqual([page.records.length, page.cursor], [1, clock.t * 1000], 'a reader holding the old cursor still gets the new record')
+      assert.equal((await pull(h.url, pullRequest(alice, inboxCursor, clock.t))).messages.length, 1, 'and the inbox’s old cursor, the new message')
+    } finally {
+      await h.close()
+    }
+  })
+
   test('delete it and rebuild: the same feed, the same numbers, the same blobs', async () => {
     const dir = scratch()
     const clock = new Clock(T0)
@@ -192,10 +229,11 @@ describe('host.sqlite holds nothing that exists only there', () => {
       assert.deepEqual(await pages(h.url), was)
       assert.deepEqual(await getBlob([h.url], sha256Hex(photo)).then((g) => [g!.type, g!.bytes]), ['image/jpeg', photo])
       assert.deepEqual((await putBlob([h.url], photo, 'image/jpeg'))[0]!.message, 'already here')
-      // New records go on from the numbers given before.
+      // New records go on past the numbers given before, from the clock.
       const last = was.at(-1)![0]
       await publish([h.url], [ownerRecord(bob, 'offer/b', offerBody('3'), clock.t)])
-      assert.equal((await readPage(h.url, { after: last })).cursor, last + 1)
+      assert.equal((await readPage(h.url, { after: last })).cursor, clock.t * 1000)
+      assert.ok(clock.t * 1000 > last)
       // The photo is named: kept. The clip was not: dated at the rebuild, which only keeps it longer.
       await h.prune(rebuilt + 30 * DAY - 1)
       assert.ok(await h.getBlob(sha256Hex(clip)))

@@ -8,11 +8,11 @@ import { describe, test } from 'node:test'
 import { readingKey } from '../../keys/src/index.ts'
 import { canonical } from '../src/canonical.ts'
 import { deliver, publish, pull, readAll, readProfile } from '../src/client.ts'
-import type { Host, HostOptions } from '../src/host.ts'
+import { DEFAULT_MAX_LINE_BYTES, type Host, type HostOptions } from '../src/host.ts'
 import type { Key } from '../src/keys.ts'
 import { type SignedMessage, encodeMessage, inboxOf, pullRequest, readMessage, sealedTo, signMessage, verifyMessage } from '../src/message.ts'
 import { makePrivate, message, openMessage, readerCount } from '../src/private.ts'
-import { type AccessKey, type Body, MAX_RECORD_BYTES, RecordError } from '../src/record.ts'
+import { type AccessKey, type Body, RecordError } from '../src/record.ts'
 import { hostsRecord, ownerRecord, permissionsRecord } from '../src/write.ts'
 import { DAY, MINUTE, T0, accessKey, alice, aliceBuyer, allow, bob, messageKey, profileBody, stranger } from './fixtures.ts'
 import { Clock, startHost } from './helpers.ts'
@@ -76,13 +76,12 @@ describe('messages', () => {
     await assert.rejects(openMessage(m, aliceBuyerInbox.identity), 'the same person’s other profile cannot open it')
   })
 
-  test('a body is { private } and nothing else; a message is at most 65,536 bytes; the key must be from’s', async () => {
+  test('a body is { private } and nothing else; the key must be from’s', async () => {
     const sealed = await makePrivate({ text: 'hi' }, [aliceInbox.recipient])
     assert.throws(() => signMessage(bob, alice.address, { text: 'hi' } as never, T0), /body/)
     assert.throws(() => signMessage(bob, alice.address, { ...sealed, extra: 'x' } as never, T0), /body/)
     assert.throws(() => signMessage(bob, 'not an address', sealed, T0), /to is not/)
     assert.throws(() => signMessage({ ...bob, address: alice.address }, alice.address, sealed, T0), /private key/)
-    assert.throws(() => signMessage(bob, alice.address, { private: 'A'.repeat(MAX_RECORD_BYTES) }, T0), /at most 65536/)
     const m = signMessage(bob, alice.address, sealed, T0)
     for (const [text, code] of [
       [JSON.stringify(m, null, 1), 'canonical'],
@@ -188,6 +187,39 @@ describe('deliver and pull', () => {
       assert.deepEqual(await errors(h, [m]), ['duplicate'], 'in a later request too')
       // Cheap checks first: a forged message to a profile with no inbox is refused before its signature is checked.
       assert.deepEqual(await errors(h, [{ ...forged, to: aliceBuyer.address }]), ['no_inbox'])
+    } finally {
+      await h.close()
+    }
+  })
+
+  test('size is the host’s policy, checked first: 65,536 bytes here unless its operator says otherwise', async () => {
+    const big = signMessage(bob, alice.address, { private: 'A'.repeat(DEFAULT_MAX_LINE_BYTES) }, T0)
+    const h = await hostWith(ANYONE)
+    const roomy = await hostWith(ANYONE, { maxLineBytes: 2 * DEFAULT_MAX_LINE_BYTES })
+    try {
+      assert.deepEqual(await errors(h, [big]), ['size'])
+      assert.deepEqual(await h.deliver(['x'.repeat(DEFAULT_MAX_LINE_BYTES + 1)]).then((r) => r.map((x) => x.error)), ['size'], 'before its shape')
+      assert.deepEqual(await errors(roomy, [big]), ['ok'])
+    } finally {
+      await h.close()
+      await roomy.close()
+    }
+  })
+
+  test('a message whose sender is the recipient skips the inbox’s rules: its issuer rule, an inbox the host cannot read, once and maxBytes', async () => {
+    const toSelf = async (text: string) => signMessage(alice, alice.address, await makePrivate({ text }, [aliceInbox.recipient]), T0)
+    for (const inbox of [{ senders: { issuer: ISSUER }, once: true, maxBytes: 100 }, { ...ANYONE, deposit: '5' }] as Body[]) {
+      const h = await hostWith(inbox)
+      try {
+        assert.deepEqual(await errors(h, [await toSelf('From my phone'), await toSelf('From my laptop')]), ['ok', 'ok'], JSON.stringify(inbox))
+        assert.deepEqual(await errors(h, [await note(bob)]), ['rule_unsupported'], 'anyone else still meets them')
+      } finally {
+        await h.close()
+      }
+    }
+    const h = await hostWith(undefined)
+    try {
+      assert.deepEqual(await errors(h, [await toSelf('hi')]), ['no_inbox'], 'with no inbox there is still none')
     } finally {
       await h.close()
     }
@@ -359,7 +391,7 @@ describe('message keys', () => {
     }
   })
 
-  test('refused: a key not listed, listed as write, or revoked, a host from does not name, a profile that lists no such key [permission]; a forged signature [signature]; a host that does not answer [lookup]; a host that reads no senders [rule_unsupported]', async () => {
+  test('refused: a key not listed, listed as write, or past, a host from does not name, a profile that lists no such key [permission]; a forged signature [signature]; a host that does not answer [lookup]; a host that reads no senders [rule_unsupported]', async () => {
     const { home, inbox, close } = await twoHosts([allow(messageKey, undefined, 'message'), allow(accessKey)])
     const other = await startHost({ now: () => T0 })
     try {
@@ -377,8 +409,8 @@ describe('message keys', () => {
       assert.deepEqual(results, ['permission', 'permission', 'permission', 'permission', 'signature', 'lookup'])
       assert.deepEqual(await errors(other, [await toBob(viaKey(home.url))]), ['rule_unsupported'], 'a host without readSender')
 
-      // Revoked: the next request reads her permissions record again.
-      await publish([home.url], [permissionsRecord(alice, [allow(messageKey, undefined, 'revoked')], T0 + 1)])
+      // Past: the next request reads her permissions record again.
+      await publish([home.url], [permissionsRecord(alice, [allow(messageKey, undefined, 'past')], T0 + 1)])
       assert.deepEqual(await errors(inbox, [await toBob(viaKey(home.url), 'after revoking')]), ['permission'])
     } finally {
       await close()
@@ -414,7 +446,7 @@ describe('message keys', () => {
 })
 
 describe('pulling', () => {
-  test('a message key the permissions record here lists pulls; a revoked one, a write key or a key not listed is refused as permission', async () => {
+  test('a message key the permissions record here lists pulls; a past one, a write key or a key not listed is refused as permission', async () => {
     const h = await hostWith(ANYONE)
     try {
       await deliver([h.url], [await note()])
@@ -427,8 +459,8 @@ describe('pulling', () => {
       assert.equal(await refusal(pull(h.url, { ...byKey(messageKey), key: stranger.address })), 'signature')
       assert.equal(await refusal(pull(h.url, { ...byKey(messageKey), profile: bob.address })), 'signature')
       assert.throws(() => pullRequest({ key: alice, profile: alice.address }, 0, T0), code('shape'), 'the main key signs without key')
-      await publish([h.url], [permissionsRecord(alice, [allow(messageKey, undefined, 'revoked')], T0 + 1)])
-      assert.equal(await refusal(pull(h.url, byKey(messageKey))), 'permission', 'revoked')
+      await publish([h.url], [permissionsRecord(alice, [allow(messageKey, undefined, 'past')], T0 + 1)])
+      assert.equal(await refusal(pull(h.url, byKey(messageKey))), 'permission', 'past')
     } finally {
       await h.close()
     }
