@@ -21,8 +21,9 @@
 //
 // A payer key pays every network fee and fronts every rent, the way a fee payer would, and is
 // recorded as the escrow's payer. <dir> holds payer.json, buyer.json and seller.json, as
-// escrow/devnet/deploy.sh writes them, read and never printed, and open-usd-shaped-mint.json, the
-// Token-2022 mint's key, made there on the first run. The keys must be the ones
+// escrow/devnet/deploy.sh writes them, read and never printed, and on the first run
+// open-usd-shaped-mint.json, the Token-2022 mint's key, made there; from then on the record names
+// the mint, and its key is not needed. The keys must be the ones
 // escrow/devnet/devnet.json names in `keys`, and the classic mint is its `testDollar`.
 // Everything public goes into escrow/devnet/devnet.json. Each step checks the chain first, so
 // the script can be run again after a failure. FOREST_DEVNET_RPC points it at another devnet RPC.
@@ -307,19 +308,24 @@ const OPEN_USD_EXTENSIONS = [3, 12, 6, 4, 14, 18, 26, 19]
 
 /** Deal 3's mint: made once with Open USD's extensions, the payer holding every role of the dollar's maker; three of it for the buyer. */
 async function openUsdShaped(): Promise<Token> {
-  const file = join(keysDir!, 'open-usd-shaped-mint.json')
-  if (!existsSync(file)) writeFileSync(file, JSON.stringify([...Keypair.generate().secretKey]), { mode: 0o600 })
-  const mintKey = key('open-usd-shaped-mint')
-  const mint = mintKey.publicKey
   const issuer = payer.publicKey
-  record.openUsdShaped ??= {
-    what: "A Token-2022 mint with every extension Open USD (ousd2mJsPEckLHcSCDxyKD7NDGARZcfLbDZkKiatYHB) has on mainnet, in its order, six decimals, the devnet payer key holding every role of the dollar's maker; three of it minted to the buyer.",
-    mint: mint.toBase58(),
-    issuer: issuer.toBase58(),
-    signatures: {},
+  // Once made, the mint is the record's; its key is needed only to make it, so any machine holding
+  // the phrase can run the deals again.
+  if (!record.openUsdShaped) {
+    const file = join(keysDir!, 'open-usd-shaped-mint.json')
+    if (!existsSync(file)) writeFileSync(file, JSON.stringify([...Keypair.generate().secretKey]), { mode: 0o600 })
+    record.openUsdShaped = {
+      what: "A Token-2022 mint with every extension Open USD (ousd2mJsPEckLHcSCDxyKD7NDGARZcfLbDZkKiatYHB) has on mainnet, in its order, six decimals, the devnet payer key holding every role of the dollar's maker; three of it minted to the buyer.",
+      mint: key('open-usd-shaped-mint').publicKey.toBase58(),
+      issuer: issuer.toBase58(),
+      signatures: {},
+    }
+    save()
   }
-  save()
+  const mint = new PublicKey(record.openUsdShaped.mint)
   if (!(await connection.getAccountInfo(mint))) {
+    const mintKey = key('open-usd-shaped-mint')
+    if (!mintKey.publicKey.equals(mint)) throw new Error('the record names an Open USD-shaped mint that this keys directory cannot make')
     const fixed = getMintLen([
       ExtensionType.MintCloseAuthority,
       ExtensionType.PermanentDelegate,
