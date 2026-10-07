@@ -38,7 +38,7 @@ Every piece of Forest is sorted by that question.
 | **Core** | two of you | the recipe that mixes keys from the seed; the registry | [`keys/`](keys/README.md), [`registry/`](registry/README.md) |
 | **Standards Forest offers** | anyone can offer another | records, the host socket (the six requests every host answers, for records, the inbox and blobs), the permissions record (which access keys may write in a folder), envelopes (how a record is made private), the inbox, the three shapes (profile, offer and review), the reputation proof and the tree an index publishes for it | [`records/`](records/README.md), [`circuits/`](circuits/README.md); market names in [foundationforest/markets](https://github.com/foundationforest/markets) |
 | **Services** | the foundation runs the first; anyone can run another | hosts, issuers, indexes, fee payers (who pay Solana's fee for someone else), escrows, connections (how an AI reads and drafts for a person), key holders (who hold access keys for assistants that can log in but cannot keep a key) | [`escrow/`](escrow/README.md) and a reference host in `records/` here; the rest, and who runs which, in [foundationforest/services](https://github.com/foundationforest/services) |
-| **Apps** | the person picks one | the secure slot that holds the seed, and the screens | the first, the Forest app, by the foundation, in [foundationforest/app](https://github.com/foundationforest/app), its own repo; anyone can make another |
+| **Apps** | the person picks one | the secure slot that holds the seed, and the screens | the first, the Forest app, by the foundation, in [foundationforest/app](https://github.com/foundationforest/app), its own repo; anyone can make another; the CLI: a small open client for scripts and AI assistants, in [`cli/`](cli/README.md) |
 | **The person** | up to them | the words, where they keep them, what they post | with them, in no repo |
 
 - **The core does not change.** The registry is to be sealed the day it deploys on mainnet. The
@@ -58,7 +58,7 @@ service's policy, an app's choice, or the person's.
 - **An app** makes its choices with the person.
 - **The person** decides the rest.
 
-## The five pieces
+## The six pieces
 
 | Where | What it is | In the sort | Runs |
 |---|---|---|---|
@@ -67,6 +67,7 @@ service's policy, an app's choice, or the person's.
 | [`registry/`](registry/README.md) | A program and its client: one row per stamp, free | core | on devnet |
 | [`escrow/`](escrow/README.md) | A program and its client: money out when both sides agree, or by an arbiter or timer set at the start | a service; use any | on devnet |
 | [`circuits/`](circuits/README.md) | The proofs Forest offers: reputation, and the tree an index publishes | a standard | on the person's device; the reputation circuit's setup is devnet only |
+| [`cli/`](cli/README.md) | One program, `forest`: Forest actions given an address and an access key, as typed commands and as MCP tools for AI chats | an app | on the person's device, or hosted |
 
 Each piece's README is its standard: what it is, how it works, its promises, its limits, who
 decides what, and an FAQ.

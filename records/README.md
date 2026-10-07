@@ -258,6 +258,16 @@ host reads them again. The inbox's rule and `once` apply to `from`, as for any m
 - It is a POST and not a GET because hosting platforms log URLs, and a signed URL would be a log of
   pulls.
 
+**Requests.** A message body may be `{ "request": <action>, … }`: an action the sender was not
+allowed to do itself, for the recipient's app to do with its main key. `request` names one of
+[cli/](../cli/README.md)'s actions that need a key, or `pay`, and the other fields are that action's
+parameters: `{ "request": "post-offer", "offer": { … } }`, `{ "request": "send", "to": <address>,
+"text": … }`, `{ "request": "pay", "offer": <pay link> }`. An app acts on a request only when it was
+sent to the profile's own inbox by the profile's main key or by a message key its permissions record
+lists, and shows any other `request` body as a plain message. So whoever holds only a message key
+can ask for anything and do nothing alone. The app shows a request, and does it only if the person
+agrees.
+
 ### Grants
 
 A grant is how an access key reaches whoever it is for: its private half, and what it is for.
