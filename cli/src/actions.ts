@@ -21,7 +21,8 @@ export type Scope = 'write' | 'message' | 'read'
 
 export type Param = {
   name: string
-  type: 'string' | 'object'
+  /** integer: a whole number, from 1. */
+  type: 'string' | 'object' | 'integer'
   description: string
   required?: boolean
   /** Given first, without its flag, at the typed door. */
@@ -134,7 +135,11 @@ const DOING: Action[] = [
 ]
 
 /** Paying, which this tool never does: it is only ever asked for, with the offer's pay link (escrow/README.md). */
-const PAY: Param[] = [{ name: 'offer', type: 'string', required: true, description: "The offer's pay link." }]
+const PAY: Param[] = [
+  { name: 'offer', type: 'string', required: true, description: "The offer's pay link." },
+  { name: 'units', type: 'integer', description: 'How many hours or days, for an offer priced per hour or per day: a whole number, from 1.' },
+  { name: 'note', type: 'string', description: 'A note for the person.' },
+]
 
 /** What a request may name: each action that needs a key, and pay, with the parameters each takes. */
 export const REQUESTS = new Map<string, Param[]>([...DOING.filter((a) => a.keys.length).map((a) => [a.name, a.params] as const), ['pay', PAY]])
@@ -160,7 +165,7 @@ export const ACTIONS: Action[] = [
     keys: ['message'],
     params: [
       { name: 'action', type: 'string', required: true, positional: true, description: `The action asked for: ${[...REQUESTS.keys()].join(', ')}.` },
-      { name: 'params', type: 'object', description: 'Its parameters, as that action takes them, such as { "offer": { … } } for post-offer, { "to": "<address>", "text": "…" } for send, or { "offer": "<pay link>" } for pay. Never a key.' },
+      { name: 'params', type: 'object', description: 'Its parameters, as that action takes them, such as { "offer": { … } } for post-offer, { "to": "<address>", "text": "…" } for send, or { "offer": "<pay link>", "units": 2, "note": "…" } for pay, where units (how many hours or days) and note may be left out. Never a key.' },
     ],
     run: async (args, ctx) => {
       const name = str(args, 'action')
@@ -183,6 +188,8 @@ export function keyNeeded(action: Action): string {
 /** The name a key goes by in a call: writeKey, messageKey, readKey. */
 export const keyParam = (scope: Scope) => `${scope}Key`
 
+const KINDS: { [type in Param['type']]: string } = { string: 'text', object: 'an object', integer: 'a whole number, from 1' }
+
 /** An action's parameters, checked: every required one there, each of its type, and nothing else. */
 export function checkArgs(action: Pick<Action, 'name' | 'params'>, args: Args): Args {
   for (const name of Object.keys(args)) if (!action.params.some((p) => p.name === name)) refuse(`${action.name} takes no ${name}`)
@@ -192,8 +199,9 @@ export function checkArgs(action: Pick<Action, 'name' | 'params'>, args: Args): 
       if (p.required) refuse(`${action.name} needs ${p.name}`)
       continue
     }
-    const ok = p.type === 'string' ? typeof value === 'string' : value !== null && typeof value === 'object' && !Array.isArray(value)
-    if (!ok) refuse(`${p.name} is ${p.type === 'string' ? 'text' : 'an object'}`)
+    const ok =
+      p.type === 'string' ? typeof value === 'string' : p.type === 'integer' ? Number.isSafeInteger(value) && (value as number) >= 1 : value !== null && typeof value === 'object' && !Array.isArray(value)
+    if (!ok) refuse(`${p.name} is ${KINDS[p.type]}`)
   }
   return args
 }
