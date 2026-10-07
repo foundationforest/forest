@@ -63,8 +63,11 @@ const BLOB_PATH = /^\/v1\/blobs\/([0-9a-f]{64})$/
 export type Policy = (record: SignedRecord, stored: { records: number; bytes: number }) => string | null | Promise<string | null>
 /** A host's own policy for messages, from the message and what it holds for that recipient. */
 export type MessagePolicy = (message: SignedMessage, stored: { messages: number; bytes: number }) => string | null | Promise<string | null>
-/** A host's own policy for blobs, past its size cap. */
-export type BlobPolicy = (blob: { sha256: string; type: string; size: number }) => string | null | Promise<string | null>
+/**
+ * A host's own policy for blobs, past its size cap. `folders` are the folders whose current records
+ * here name the bytes as that type, so a rule may go by folder: a quota, say.
+ */
+export type BlobPolicy = (blob: { sha256: string; type: string; size: number; folders: string[] }) => string | null | Promise<string | null>
 
 export const defaultBlobPolicy: BlobPolicy = (blob) => (DEFAULT_BLOB_TYPES.includes(blob.type) ? null : `this host takes ${DEFAULT_BLOB_TYPES.join(', ')}`)
 
@@ -358,9 +361,10 @@ export class Host {
    */
   async putBlob(name: string, type: string, bytes: Uint8Array): Promise<Answer> {
     if (hex.encode(sha256(bytes)) !== name) return { ok: false, error: 'hash', message: 'the bytes do not hash to their name' }
-    if (!this.storage.named(name, type)) return { ok: false, error: 'unnamed', message: 'no current record here names these bytes as this type' }
+    const folders = this.storage.namedBy(name, type)
+    if (!folders.length) return { ok: false, error: 'unnamed', message: 'no current record here names these bytes as this type' }
     if (this.storage.holdsBlob(name)) return { ok: true, message: 'already here' }
-    const refused = bytes.length > this.maxBlobBytes ? `at most ${this.maxBlobBytes} bytes` : await this.blobPolicy({ sha256: name, type, size: bytes.length })
+    const refused = bytes.length > this.maxBlobBytes ? `at most ${this.maxBlobBytes} bytes` : await this.blobPolicy({ sha256: name, type, size: bytes.length, folders })
     if (refused) return { ok: false, error: 'policy', message: refused }
     await this.storage.putBlob(name, type, bytes, this.now())
     return { ok: true }
@@ -395,8 +399,13 @@ export class Host {
   }
 
   private async handle(req: IncomingMessage, res: ServerResponse) {
-    const url = new URL(req.url ?? '/', 'http://host.invalid')
     res.setHeader('access-control-allow-origin', '*')
+    // A target that is no path, such as //, is the asker's mistake.
+    const url = URL.parse(req.url ?? '/', 'http://host.invalid')
+    if (!url) {
+      res.writeHead(400).end()
+      return
+    }
     if (req.method === 'OPTIONS') {
       res.writeHead(204, { 'access-control-allow-methods': 'GET, POST, PUT', 'access-control-allow-headers': 'content-type' }).end()
       return

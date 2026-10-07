@@ -67,9 +67,11 @@ export type Page = { records: Checked[]; cursor: number; refused: Array<{ line: 
 /**
  * How to read: `post` puts the profile and the cursor in the body (POST /v1/records/read) rather
  * than the URL, for reading your own profiles; `maxBytes` is the longest line taken (MAX_LINE_READ
- * when omitted); `timeout` is in ms (READ_TIMEOUT_MS when omitted).
+ * when omitted); `timeout` is in ms (READ_TIMEOUT_MS when omitted). `fetch` is the caller's own
+ * (one that refuses private addresses, say), and `redirect` goes to it as fetch takes it: `error`
+ * refuses a host that redirects. The global fetch, following redirects, when omitted.
  */
-export type ReadHow = { post?: boolean; maxBytes?: number; timeout?: number }
+export type ReadHow = { post?: boolean; maxBytes?: number; timeout?: number; fetch?: typeof fetch; redirect?: RequestRedirect }
 
 /**
  * One page of what a host stores, after a cursor, in the order it took them, each record checked.
@@ -77,11 +79,12 @@ export type ReadHow = { post?: boolean; maxBytes?: number; timeout?: number }
  * not read within `timeout` ms.
  */
 export async function readPage(host: string, options: ReadOptions & ReadHow = {}): Promise<Page> {
-  const signal = AbortSignal.timeout(options.timeout ?? READ_TIMEOUT_MS)
+  const how = { signal: AbortSignal.timeout(options.timeout ?? READ_TIMEOUT_MS), ...(options.redirect && { redirect: options.redirect }) }
+  const get = options.fetch ?? fetch
   const asked = { ...(options.profile !== undefined && { profile: options.profile }), ...(options.after !== undefined && { after: options.after }) }
   const res = options.post
-    ? await fetch(`${host}/v1/records/read`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(asked), signal })
-    : await fetch(`${host}/v1/records?${new URLSearchParams(Object.entries(asked).map(([k, v]) => [k, String(v)]))}`, { signal })
+    ? await get(`${host}/v1/records/read`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(asked), ...how })
+    : await get(`${host}/v1/records?${new URLSearchParams(Object.entries(asked).map(([k, v]) => [k, String(v)]))}`, how)
   if (!res.ok) throw new Error(`${host} answered ${res.status}`)
   const cursor = Number.parseInt(res.headers.get('forest-cursor') ?? '0', 10)
   const records: Checked[] = []

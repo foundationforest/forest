@@ -20,7 +20,7 @@ import { poseidon1 } from 'poseidon-lite/poseidon1'
 import { poseidon5 } from 'poseidon-lite/poseidon5'
 import { groth16 } from 'snarkjs'
 
-import type { SnarkjsProof } from './compress.ts'
+import { type SnarkjsProof, proofFromBytes } from './compress.ts'
 import { fieldHash, fromBytes32, isFieldElement, messageOf, scopeOf } from './field.ts'
 import { PERSON_KEY } from './person-key.ts'
 import { scalarOf, stampOf } from './stamp.ts'
@@ -167,8 +167,8 @@ export async function provePerson(input: Parameters<typeof personInput>[0] & { a
  * that is not a good proof for these inputs is false.
  */
 export async function verifyPerson(input: {
-  /** The proof as snarkjs writes it: `provePerson`'s `proof`. */
-  proof: SnarkjsProof
+  /** The proof as snarkjs writes it, `provePerson`'s `proof`, or its 256 bytes (`proofBytes`). */
+  proof: SnarkjsProof | Uint8Array
   issuer: IssuerKey
   label: string
   /** The main key the proof is for. */
@@ -181,7 +181,8 @@ export async function verifyPerson(input: {
     const values = [stamp, input.issuer[0], input.issuer[1], input.tier]
     if (input.issuer.length !== 2 || !values.every((v) => typeof v === 'bigint' && isFieldElement(v))) return false
     const publicSignals = [stamp, input.issuer[0], input.issuer[1], scopeOf(input.label), messageOf(input.profile), input.tier].map(String)
-    return await groth16.verify(PERSON_KEY, publicSignals, input.proof)
+    const proof = input.proof instanceof Uint8Array ? proofFromBytes(input.proof) : input.proof
+    return await groth16.verify(PERSON_KEY, publicSignals, proof)
   } catch {
     return false
   }

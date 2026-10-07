@@ -307,14 +307,23 @@ a review. Each name gives the hash, the type (`mimeType`) and the size.
 ### Proofs
 
 A proof is data anyone checks with its circuit's verifier. The profile record's optional `proofs`
-field carries up to four, each named by its circuit. Today the one circuit is `reputation`, and a
-reputation proof carries the index's key, the root and time it signed and its signature, the
-score, the label when the proof shows one market, and the proof's bytes (`schemas/profile.json`).
-A reader ignores a proof whose circuit it does not know, so a newer kind never makes a profile
-invalid for an older app. A proof counts for one main key, the circuit's message: a reader checks
-it for the main key of the profile that carries it, so a proof copied to another profile fails.
-Each reader decides which indexes it trusts and how old a time it accepts. What a proof shows and
-how it is made are [circuits/](../circuits/README.md)'s business.
+field carries up to four, each named by its circuit. Today there are two circuits. A reputation
+proof carries the index's key, the root and time it signed and its signature, the score, the label
+when the proof shows one market, and the proof's bytes (`schemas/profile.json`). A reader ignores a
+proof whose circuit it does not know, so a newer kind never makes a profile invalid for an older
+app. A proof counts for one main key, the circuit's message: a reader checks it for the main key of
+the profile that carries it, so a proof copied to another profile fails. Each reader decides which
+indexes it trusts and how old a time it accepts. What a reputation proof shows and how it is made
+are [circuits/](../circuits/README.md)'s business.
+
+A person proof (`person`) shows the profile's tier: the
+[registry's person proof](../registry/README.md#the-note-and-the-person-proof), that an issuer
+signed the person a note at that tier. It carries the issuer's key, the label and the stamp as the
+profile's registry row holds them, the tier in decimal (a tier can be any field element, and a
+record's numbers stop at 2^53 − 1), and the proof's 256 bytes, in the reputation proof's order. A
+reader checks it with registry/client's `verifyTier` and the profile's main key: it holds only when
+the row at that stamp names this main key, this issuer and this label, and the proof holds for them
+and the tier. Each reader decides which issuers it trusts.
 
 ### Indexes
 
@@ -414,7 +423,8 @@ A message whose `from` is its `to` skips steps 6 to 8: an inbox's rules are for 
 1. The bytes' SHA-256 is the name in the path [`hash`].
 2. A current record on this host names that hash, with the `content-type` sent as its type
    [`unnamed`]. So the record comes first.
-3. The host's own policy allows the size and the type [`policy`].
+3. The host's own policy allows them, by their size, their type or the folders whose current
+   records name them [`policy`].
 
 **Keeping** is the host's policy; a host that drops a current record withholds it.
 
@@ -450,7 +460,7 @@ says it doesn't:
 
 | Import | What it gives |
 |---|---|
-| `@forest/records` | Keys as addresses (`keyFromPrivate`, `publicKeyFromAddress`); canonical text; signing, checking and encoding records; the view (`viewProfile`, `liveContent`, `allows`, `covers`); writing (`ownerRecord`, `accessRecord`, `hostsRecord`, `permissionsRecord`, `nextTime`); messages and pulls (`signMessage`, `decodeMessage`, `messageId`, `pullRequest`, `checkPull`, `inboxOf`, `sealedTo`); grants and notes (`checkGrant`, `checkNote`, `GRANTS_PATH`); talking to hosts (`publish`; `readPage`, `readAll` and `readProfile`, by POST with `post: true`; `deliver`, `pull`, `putBlob`, `getBlob`). No server, database or encryption library in it |
+| `@forest/records` | Keys as addresses (`keyFromPrivate`, `publicKeyFromAddress`); canonical text; signing, checking and encoding records; the view (`viewProfile`, `liveContent`, `allows`, `covers`); writing (`ownerRecord`, `accessRecord`, `hostsRecord`, `permissionsRecord`, `nextTime`); messages and pulls (`signMessage`, `decodeMessage`, `messageId`, `pullRequest`, `checkPull`, `inboxOf`, `sealedTo`); grants and notes (`checkGrant`, `checkNote`, `GRANTS_PATH`); talking to hosts (`publish`; `readPage`, `readAll` and `readProfile`, by POST with `post: true`, through the caller's own `fetch` if given, refusing redirects with `redirect: 'error'`; `deliver`, `pull`, `putBlob`, `getBlob`). No server, database or encryption library in it |
 | `@forest/records/host` | `Host`, the reference host: a SQLite file per folder and the six requests. Its policy, unless told otherwise: it takes records and messages of up to 65,536 bytes, and 100 a request; serves 1,000 a page, at most 4,194,304 bytes; keeps a replaced record, a message, and bytes no current record names any more for 30 days; and takes png, jpeg and mp4 blobs up to 50,000,000 bytes. Give it `rowLookup` to take messages for inboxes with an issuer's rule, and `readSender` to take messages a message key signed: it reads the sender's records again for each request |
 | `@forest/records/private` | `makePrivate`, `openPrivate`, `readerCount`; `message` (seal to a card's inbox key and readers, a grant to the inbox key alone, and sign) and `openMessage`; `grantsRecord` and `openGrants`; `makeNotes` and `openNotes`. The inbox key itself is keys/'s `readingKey` |
 | `@forest/records/schemas/<kind>.json` | The three shapes, as JSON Schemas |

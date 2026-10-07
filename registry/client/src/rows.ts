@@ -67,29 +67,37 @@ export async function fetchRows(
 }
 
 /**
- * The tier a profile shows, checked: the person proof attached to it, against its row. The row at
- * the proof's stamp must name this main key, and the proof must hold for the row's issuer and
- * label, this main key, the stamp and the tier. Gives the row, so the reader can weigh its issuer
- * and when it was made; null when anything fails. Which issuers count, and from when, is the
- * reader's choice.
+ * The tier a profile shows, checked: the person proof attached to it (records/'s `proofs`, circuit
+ * `person`), against its row. The row at the proof's stamp must name this main key, and the issuer
+ * and label the profile shows, when given, so a reader that trusts the issuer a profile shows never
+ * compares it with the row itself; the proof must hold for the row's issuer and label, this main
+ * key, the stamp and the tier. Gives the row, so the reader can weigh its issuer and when it was
+ * made; null when anything fails. Which issuers count, and from when, is the reader's choice.
  */
 export async function verifyTier(
   connection: Pick<Connection, 'getAccountInfo'>,
   input: {
     /** The main key of the profile that shows the proof. */
     profile: PublicKey | Uint8Array
+    /** The issuer the profile shows: its key, or its 64 bytes as a row holds them. */
+    issuer?: IssuerKey | Uint8Array
+    /** The label the profile shows. */
+    label?: string
     stamp: bigint | Uint8Array
     tier: bigint
-    /** The proof as snarkjs writes it: `provePerson`'s `proof`. */
-    proof: SnarkjsProof
+    /** The proof as snarkjs writes it, `provePerson`'s `proof`, or its 256 bytes as a profile shows it (`proofBytes`). */
+    proof: SnarkjsProof | Uint8Array
   },
   options: { programId?: PublicKey; commitment?: Commitment } = {},
 ): Promise<Row | null> {
   const stamp = typeof input.stamp === 'bigint' ? input.stamp : fromBytes32(input.stamp)
   const row = await fetchRow(connection, stamp, options)
   if (!row || row.stamp !== stamp) return null
+  const same = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((x, i) => x === b[i])
   const profile = keyBytes(input.profile)
-  if (!keyBytes(row.profile).every((b, i) => b === profile[i])) return null
+  if (!same(keyBytes(row.profile), profile)) return null
+  if (input.label !== undefined && input.label !== row.label) return null
+  if (input.issuer !== undefined && !same(input.issuer instanceof Uint8Array ? input.issuer : issuerKeyBytes(input.issuer), issuerKeyBytes(row.issuer))) return null
   const holds = await verifyPerson({ proof: input.proof, issuer: row.issuer, label: row.label, profile, stamp, tier: input.tier })
   return holds ? row : null
 }

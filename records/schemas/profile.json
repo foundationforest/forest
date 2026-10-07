@@ -111,25 +111,41 @@
     },
     "proof": {
       "type": "object",
-      "description": "One proof, named by its circuit. A reader ignores a proof whose circuit it does not know, so a profile carrying a newer kind stays valid for an older app. A reputation proof has the shape below; another circuit's fields are its own.",
+      "description": "One proof, named by its circuit. A reader ignores a proof whose circuit it does not know, so a profile carrying a newer kind stays valid for an older app. A reputation proof and a person proof have the shapes below; another circuit's fields are its own.",
       "required": ["circuit"],
       "properties": {
         "circuit": {
           "type": "string",
-          "description": "The circuit that checks it, as circuits/ names it. Today only reputation.",
+          "description": "The circuit that checks it. Today reputation (circuits/) and person (registry/).",
           "pattern": "^[a-z][a-z0-9-]{0,31}$"
         }
       },
-      "if": {
-        "properties": {
-          "circuit": {
-            "const": "reputation"
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "circuit": {
+                "const": "reputation"
+              }
+            }
+          },
+          "then": {
+            "$ref": "#/$defs/reputation"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "circuit": {
+                "const": "person"
+              }
+            }
+          },
+          "then": {
+            "$ref": "#/$defs/person"
           }
         }
-      },
-      "then": {
-        "$ref": "#/$defs/reputation"
-      }
+      ]
     },
     "reputation": {
       "type": "object",
@@ -178,6 +194,43 @@
         "proof": {
           "type": "string",
           "description": "The proof's three points, uncompressed: 256 bytes in base64url without padding. Eight numbers of 32 bytes big-endian, in snarkjs's names pi_a[0], pi_a[1], pi_b[0][1], pi_b[0][0], pi_b[1][1], pi_b[1][0], pi_c[0], pi_c[1]: the order Ethereum's and Solana's BN254 precompiles read.",
+          "pattern": "^[A-Za-z0-9_-]{342}$"
+        }
+      }
+    },
+    "person": {
+      "type": "object",
+      "description": "A person proof (registry/), showing the profile's tier: this issuer signed a note at this tier for the person whose registry row, for this main key and this label, sits at this stamp. Everything registry/client's verifyTier takes but the main key, which is the profile's own.",
+      "required": ["circuit", "issuer", "label", "stamp", "tier", "proof"],
+      "additionalProperties": false,
+      "properties": {
+        "circuit": {
+          "const": "person"
+        },
+        "issuer": {
+          "type": "string",
+          "description": "The issuer's key as the row holds it: x then y of its point on Baby Jubjub, each 32 bytes big-endian, as 128 characters of lowercase hex.",
+          "pattern": "^[0-9a-f]{128}$"
+        },
+        "label": {
+          "type": "string",
+          "description": "The row's label, exactly as registered.",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "stamp": {
+          "type": "string",
+          "description": "The stamp the row sits at, as the row holds it: 32 bytes big-endian, lowercase hex.",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "tier": {
+          "type": "string",
+          "description": "The tier the issuer signed, in decimal: it can be any number below BN254's scalar order, and a record's numbers stop at 2^53 - 1. What it means is the issuer's.",
+          "pattern": "^(0|[1-9][0-9]{0,76})$"
+        },
+        "proof": {
+          "type": "string",
+          "description": "The proof's three points, uncompressed: 256 bytes in base64url without padding, in the reputation proof's order.",
           "pattern": "^[A-Za-z0-9_-]{342}$"
         }
       }

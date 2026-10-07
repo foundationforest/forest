@@ -37,6 +37,8 @@ import {
   issuerKeyOf,
   messageOf,
   noteNumberOf,
+  proofBytes,
+  proofFromBytes,
   refundIx,
   registerIx,
   rowAddress,
@@ -347,4 +349,46 @@ test('verifyTier: the tier a profile shows, its proof checked against its row', 
     ["another issuer's key in the row", shown, connectionWith(otherIssuer)],
   ]
   for (const [what, input, c] of cases) assert.equal(await verifyTier((c ?? connection) as never, input), null, what)
+})
+
+test('a person proof as a profile shows it (records/schemas/examples/profile.json): verifyTier takes it as it is', async () => {
+  // The example card's person proof, read as any reader reads a profile's `proofs`.
+  const card = JSON.parse(readFileSync(join(here, '../../../records/schemas/examples/profile.json'), 'utf8'))
+  const shown = card.proofs.find((p: { circuit: string }) => p.circuit === 'person')
+  const a = proofNamed('alice-tutoring-A')
+  const input = {
+    profile: new PublicKey(a.profile),
+    issuer: bytes(shown.issuer),
+    label: shown.label,
+    stamp: bytes(shown.stamp),
+    tier: BigInt(shown.tier),
+    proof: new Uint8Array(Buffer.from(shown.proof, 'base64url')),
+  }
+  assert.deepEqual(input.proof, proofBytes(snarkjsOf(a)), 'the 256 bytes of the proof the program took')
+  assert.deepEqual(proofFromBytes(input.proof), snarkjsOf(a), 'and back')
+
+  const w = fixtures.wire
+  const connection = {
+    async getAccountInfo(at: PublicKey) {
+      return at.toBase58() === w.rowAddress ? { data: Buffer.from(bytes(w.row)), owner: PROGRAM_ID, lamports: 1, executable: false } : null
+    },
+  }
+  const row = await verifyTier(connection as never, input)
+  assert.ok(row, 'her tier holds, from the card as it is')
+  assert.equal(hex(issuerKeyBytes(row.issuer)), shown.issuer)
+  assert.ok(await verifyTier(connection as never, { ...input, issuer: issuerOf(shown.issuer) }), 'the issuer as its key, too')
+  assert.ok(await verifyTier(connection as never, { ...input, issuer: undefined, label: undefined }), 'or not shown')
+
+  const bent = input.proof.slice()
+  bent[255] ^= 1
+  const cases: [string, Parameters<typeof verifyTier>[1]][] = [
+    ['another issuer shown than the row’s', { ...input, issuer: bytes(fixtures.issuers.B) }],
+    ['another label shown than the row’s', { ...input, label: 'cleaning/seller' }],
+    ['another tier', { ...input, tier: 3n }],
+    ['a bent byte', { ...input, proof: bent }],
+    ['not 256 bytes', { ...input, proof: input.proof.subarray(0, 255) }],
+  ]
+  for (const [what, c] of cases) assert.equal(await verifyTier(connection as never, c), null, what)
+  assert.equal(await verifyPerson({ ...input, issuer: issuerOf(shown.issuer), proof: input.proof.subarray(0, 255) }), false, 'verifyPerson says false, and never throws')
+  assert.ok(await verifyPerson({ ...input, issuer: issuerOf(shown.issuer) }), 'and takes the bytes too')
 })

@@ -377,10 +377,10 @@ export class Storage {
     })
   }
 
-  /** Whether a current record in a folder that still has its file names these bytes as this type. */
-  named(sha256: string, type: string): boolean {
-    const folders = this.host.q('SELECT folder FROM names WHERE sha256 = ? AND type = ?').all(sha256, type) as Array<{ folder: string }>
-    return folders.some((f) => this.folder(f.folder) !== undefined)
+  /** The folders, each still with its file, whose current records name these bytes as this type, in order. */
+  namedBy(sha256: string, type: string): string[] {
+    const folders = this.host.q('SELECT folder FROM names WHERE sha256 = ? AND type = ? ORDER BY folder').all(sha256, type) as Array<{ folder: string }>
+    return folders.map((f) => f.folder).filter((f) => this.folder(f) !== undefined)
   }
 
   holdsBlob(sha256: string): boolean {
