@@ -1,8 +1,8 @@
 // What the client computes, checked against the proofs the program accepted and the wire vectors
-// the program wrote.
+// the program wrote, and one registration made from a real note with the committed devnet setup.
 //
-// These need no chain and no artifacts: they run against the committed fixtures, which the
-// LiteSVM tests then run against the real program. If either side drifted, one of the two fails.
+// No chain: the fixtures are the ones the LiteSVM tests run against the real program, so if either
+// side drifted, one of the two fails.
 
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -10,9 +10,10 @@ import { dirname, join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 
-import { Keypair, PublicKey, SystemProgram } from '@solana/web3.js'
+import { sha256 } from '@noble/hashes/sha2.js'
+import { ComputeBudgetProgram, Keypair, PublicKey, SystemProgram } from '@solana/web3.js'
 
-import { hkdf } from '../../../keys/src/index.ts'
+import { issuerSecret } from '../../../keys/src/index.ts'
 import {
   BN254_R,
   MAX_LABEL,
@@ -32,44 +33,62 @@ import {
   fetchRows,
   fromBytes32,
   isFieldElement,
-  issuerSigned,
-  listRoot,
-  marketStampBytesOf,
-  marketStampOf,
+  issuerKeyBytes,
+  issuerKeyOf,
   messageOf,
+  noteNumberOf,
   refundIx,
   registerIx,
-  rootBytes,
   rowAddress,
   rowSpace,
+  scalarOf,
   scopeOf,
+  signNote,
   stampOf,
   toBytes32,
-  verifyStamp,
+  verifyPerson,
+  verifyTier,
+  type IssuerKey,
+  type SnarkjsProof,
 } from '../src/index.ts'
-import { VERIFICATION_KEY } from '../src/verification-key.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const fixtures = JSON.parse(readFileSync(join(here, '../../program/tests-litesvm/fixtures/proofs.json'), 'utf8'))
 const lib = readFileSync(join(here, '../../program/src/lib.rs'), 'utf8')
 const keysVectors = JSON.parse(readFileSync(join(here, '../../../keys/test/vectors.json'), 'utf8'))
 const seed = Buffer.from(keysVectors.seed, 'hex')
+const [nameA, nameB] = keysVectors.issuers.map((i: { name: string }) => i.name)
+const artifacts = { wasm: join(here, '../../circuit/devnet/person.wasm'), zkey: join(here, '../../circuit/devnet/person.zkey') }
 const hex = (b: Uint8Array) => Buffer.from(b).toString('hex')
 const bytes = (h: string) => new Uint8Array(Buffer.from(h, 'hex'))
-// The fixtures were made with the list secret, mixed from the seed and the issuer's address, before
-// keys/ mixed the issuer secret from a name. They go with the membership proof.
-const listSecret = (issuer: string) => hkdf(seed, `forest/v1/list/${issuer}`)
-const proofNamed = (name: string) => fixtures.proofs.find((p: { name: string }) => p.name === name)
-const argsOf = (p: Record<string, string>, payer: PublicKey) => ({
+/** The fixtures' rule for a fixed secret or key: sha256 of a name. */
+const seedOf = (name: string) => sha256(new TextEncoder().encode(`forest registry fixture: ${name}`))
+
+type Fixture = Record<'name' | 'issuer' | 'issuerKey' | 'label' | 'profile' | 'stamp' | 'tier' | 'scope' | 'message' | 'a' | 'b' | 'c', string> & {
+  uncompressed: { a: string; b: string; c: string }
+}
+const proofNamed = (name: string): Fixture => fixtures.proofs.find((p: Fixture) => p.name === name)
+const issuerOf = (h: string): IssuerKey => [fromBytes32(bytes(h.slice(0, 64))), fromBytes32(bytes(h.slice(64)))]
+const argsOf = (p: Fixture, payer: PublicKey) => ({
   profile: new PublicKey(p.profile),
   label: p.label,
-  marketStamp: bytes(p.marketStamp),
-  issuer: new PublicKey(p.issuer),
-  root: bytes(p.root),
-  issuerSignature: bytes(p.issuerSignature),
+  stamp: bytes(p.stamp),
+  issuer: issuerOf(p.issuerKey),
+  tier: bytes(p.tier),
   proof: { a: bytes(p.a), b: bytes(p.b), c: bytes(p.c) },
   payer,
 })
+/** A fixture's proof as snarkjs writes it, from the points the program decompressed. G2 arrives
+ * as x.c1, x.c0, y.c1, y.c0; snarkjs writes each pair c0 first. */
+const snarkjsOf = (p: Fixture): SnarkjsProof => {
+  const u = p.uncompressed
+  const n = (h: string, i: number) => fromBytes32(bytes(h.slice(i * 64, i * 64 + 64))).toString()
+  return {
+    pi_a: [n(u.a, 0), n(u.a, 1), '1'],
+    pi_b: [[n(u.b, 1), n(u.b, 0)], [n(u.b, 3), n(u.b, 2)], ['1', '0']],
+    pi_c: [n(u.c, 0), n(u.c, 1), '1'],
+  }
+}
 
 test("the namespaces, the program id, the seed and the limits are the program's own", () => {
   assert.ok(lib.includes(`b"${SCOPE_NS}"`), 'the scope namespace must match the program')
@@ -78,13 +97,14 @@ test("the namespaces, the program id, the seed and the limits are the program's 
   assert.ok(lib.includes(`declare_id!("${PROGRAM_ID.toBase58()}")`), 'the program id')
   assert.ok(lib.includes(`pub const ROW_SEED: &[u8] = b"${new TextDecoder().decode(ROW_SEED)}";`), 'the seed')
   assert.ok(lib.includes(`pub const MAX_LABEL: usize = ${MAX_LABEL};`), 'the longest label')
+  assert.ok(lib.includes(`assert!(Row::space(0) == ${rowSpace(0)});`), "the row's size")
   assert.ok(!lib.includes('realloc') && !lib.includes('close ='), 'a row is written once: nothing grows or closes it')
   assert.equal(fixtures.scopeNamespace, SCOPE_NS)
   assert.equal(fixtures.messageNamespace, MESSAGE_NS)
 })
 
 test('the scope and the message are what the accepted proofs carry', () => {
-  for (const p of fixtures.proofs) {
+  for (const p of fixtures.proofs as Fixture[]) {
     assert.equal(hex(toBytes32(scopeOf(p.label))), p.scope, `${p.name}: scope`)
     assert.equal(hex(toBytes32(messageOf(new PublicKey(p.profile)))), p.message, `${p.name}: message`)
   }
@@ -107,42 +127,37 @@ test('a label of any text gives a scope, every scope is a field element, and nam
   assert.notEqual(scopeOf(new TextDecoder().decode(key)), messageOf(key))
 })
 
-test("Alice is keys/'s test person: her stamps from her seed and each issuer's address, her profiles its pinned ones", async () => {
+test("the stamp is Poseidon(scope, scalar), keys/'s scalar: one per person, per issuer, per label", async () => {
+  for (const issuer of keysVectors.issuers) {
+    const s = await issuerSecret(seed, issuer.name)
+    assert.equal(scalarOf(s.secret), s.scalar)
+  }
+  assert.throws(() => scalarOf(new Uint8Array(31)), /32 bytes/)
+
+  // Alice is keys/'s test person: the fixtures' stamps are hers, from her seed and each issuer's
+  // name, and her profiles are keys/'s pinned ones.
+  const atA = (await issuerSecret(seed, nameA)).secret
+  const atB = (await issuerSecret(seed, nameB)).secret
   assert.equal(proofNamed('alice-tutoring-A').profile, keysVectors.mainKeys[0].address, 'her tutoring/seller profile')
   assert.equal(proofNamed('alice-tutoring-A-second-profile').profile, keysVectors.mainKeys[1].address, 'her tutoring/buyer profile')
-  for (const list of ['A', 'B'] as const) {
-    const issuer = fixtures.issuers[list]
-    const stamp = stampOf(await listSecret(issuer))
-    assert.ok(fixtures.lists[list].includes(stamp.toString()), `her stamp is on list ${list}`)
-    assert.equal(hex(toBytes32(listRoot(fixtures.lists[list].map(BigInt)))), fixtures.proofs.find((p: { list: string }) => p.list === list).root)
-  }
-  const a = stampOf(await listSecret(fixtures.issuers.A))
-  const b = stampOf(await listSecret(fixtures.issuers.B))
-  assert.notEqual(a, b, 'two lists, two stamps nobody can match')
-})
-
-test('the market stamp is the nullifier the proof carries: one per issuer per label per person', async () => {
-  const onA = await listSecret(fixtures.issuers.A)
-  const onB = await listSecret(fixtures.issuers.B)
   for (const [name, secret] of [
-    ['alice-tutoring-A', onA],
-    ['alice-tutoring-A-second-profile', onA],
-    ['alice-tutoring-B', onB],
-    ['alice-cleaning-A', onA],
-    ['alice-longest-A', onA],
+    ['alice-tutoring-A', atA],
+    ['alice-tutoring-A-second-profile', atA],
+    ['alice-tutoring-B', atB],
+    ['alice-cleaning-A', atA],
+    ['alice-longest-A', atA],
   ] as const) {
     const p = proofNamed(name)
-    assert.equal(hex(marketStampBytesOf(secret, p.label)), p.marketStamp, name)
+    assert.equal(hex(toBytes32(stampOf(secret, p.label))), p.stamp, name)
   }
-  const stampOfCase = (name: string) => proofNamed(name).marketStamp
-  assert.equal(stampOfCase('alice-tutoring-A'), stampOfCase('alice-tutoring-A-second-profile'), 'one list, one label, two profiles: one market stamp')
-  assert.notEqual(stampOfCase('alice-tutoring-A'), stampOfCase('alice-tutoring-B'), 'another issuer, another market stamp')
-  assert.notEqual(stampOfCase('alice-tutoring-A'), stampOfCase('alice-cleaning-A'), 'another label, another market stamp')
-  assert.equal(marketStampOf(onA, 'tutoring/seller'), fromBytes32(bytes(stampOfCase('alice-tutoring-A'))))
+  const stamp = (name: string) => proofNamed(name).stamp
+  assert.equal(stamp('alice-tutoring-A'), stamp('alice-tutoring-A-second-profile'), 'one issuer, one label, two profiles: one stamp')
+  assert.notEqual(stamp('alice-tutoring-A'), stamp('alice-tutoring-B'), 'another issuer, another stamp')
+  assert.notEqual(stamp('alice-tutoring-A'), stamp('alice-cleaning-A'), 'another label, another stamp')
 })
 
-test("a row's address is a hash of its market stamp and nothing else", () => {
-  const stamp = bytes(proofNamed('alice-tutoring-A').marketStamp)
+test("a row's address is a hash of its stamp and nothing else", () => {
+  const stamp = bytes(proofNamed('alice-tutoring-A').stamp)
   const [expected] = PublicKey.findProgramAddressSync([Buffer.from('row'), Buffer.from(stamp)], PROGRAM_ID)
   assert.equal(rowAddress(stamp).toBase58(), expected.toBase58())
   assert.equal(rowAddress(fromBytes32(stamp)).toBase58(), expected.toBase58(), 'as bytes or as a number')
@@ -150,7 +165,7 @@ test("a row's address is a hash of its market stamp and nothing else", () => {
 })
 
 test('the compressed points are the ones the program decompressed', () => {
-  for (const p of fixtures.proofs) {
+  for (const p of fixtures.proofs as Fixture[]) {
     const u = p.uncompressed
     const n = (h: string, i: number) => fromBytes32(bytes(h.slice(i * 64, i * 64 + 64)))
     assert.equal(hex(compressG1(n(u.a, 0), n(u.a, 1))), p.a, `${p.name}: A`)
@@ -160,44 +175,13 @@ test('the compressed points are the ones the program decompressed', () => {
   }
 })
 
-test('verifyStamp checks a proof without the chain, with the key baked into the program', async () => {
-  const committed = JSON.parse(readFileSync(join(here, '../../artifacts/semaphore-32.json'), 'utf8'))
-  assert.deepEqual(VERIFICATION_KEY, committed, "the client's key is artifacts/semaphore-32.json, value for value")
-
-  // Each fixture's proof as snarkjs writes it, from the points the program decompressed. G2 arrives
-  // as x.c1, x.c0, y.c1, y.c0; snarkjs writes each pair c0 first.
-  const snarkjsOf = (p: { uncompressed: { a: string; b: string; c: string } }) => {
-    const u = p.uncompressed
-    const n = (h: string, i: number) => fromBytes32(bytes(h.slice(i * 64, i * 64 + 64))).toString()
-    return {
-      pi_a: [n(u.a, 0), n(u.a, 1), '1'] as [string, string, string],
-      pi_b: [[n(u.b, 1), n(u.b, 0)], [n(u.b, 3), n(u.b, 2)], ['1', '0']] as [[string, string], [string, string], [string, string]],
-      pi_c: [n(u.c, 0), n(u.c, 1), '1'] as [string, string, string],
-    }
+test('every proof the program accepted holds off chain too, for its issuer, label, main key, stamp and tier', async () => {
+  for (const p of fixtures.proofs as Fixture[]) {
+    const input = { proof: snarkjsOf(p), issuer: issuerOf(p.issuerKey), label: p.label, profile: new PublicKey(p.profile), stamp: bytes(p.stamp), tier: fromBytes32(bytes(p.tier)) }
+    assert.equal(await verifyPerson(input), true, p.name)
+    assert.equal(hex(issuerKeyBytes(input.issuer)), fixtures.issuers[p.issuer], `${p.name}: its issuer's key`)
   }
-  type Fixture = { root: string; marketStamp: string; label: string; profile: string; uncompressed: { a: string; b: string; c: string } }
-  const inputOf = (p: Fixture) => ({
-    proof: snarkjsOf(p),
-    root: bytes(p.root),
-    marketStamp: bytes(p.marketStamp),
-    label: p.label,
-    profile: new PublicKey(p.profile),
-  })
-  for (const p of fixtures.proofs) assert.equal(await verifyStamp(inputOf(p)), true, p.name)
-
-  const a = inputOf(proofNamed('alice-tutoring-A'))
-  const bob = proofNamed('bob-tutoring-A')
-  const cases: [string, Parameters<typeof verifyStamp>[0]][] = [
-    ['another label', { ...a, label: 'cleaning/seller' }],
-    ['another main key', { ...a, profile: new PublicKey(bob.profile) }],
-    ['another root', { ...a, root: bytes(proofNamed('alice-tutoring-B').root) }],
-    ['another market stamp', { ...a, marketStamp: bytes(bob.marketStamp) }],
-    ['the root plus the field order, refused as the program refuses it', { ...a, root: fromBytes32(a.root) + BN254_R }],
-    ["another person's proof", { ...a, proof: snarkjsOf(bob) }],
-    ['a root of 31 bytes', { ...a, root: a.root.subarray(1) }],
-    ['a proof that is not a proof', { ...a, proof: { ...a.proof, pi_a: ['1', '1', '1'] } }],
-  ]
-  for (const [what, input] of cases) assert.equal(await verifyStamp(input), false, what)
+  assert.equal(fixtures.issuers.A, hex(issuerKeyBytes(issuerKeyOf(seedOf('issuer A')))), "issuer A's key is the fixtures' rule")
 })
 
 test('the wire format written twice still matches', () => {
@@ -209,12 +193,12 @@ test('the wire format written twice still matches', () => {
   assert.equal(PROGRAM_ID.toBase58(), w.programId)
 
   const register = registerIx(argsOf(a, payer))
-  const row = rowAddress(bytes(a.marketStamp))
+  const row = rowAddress(bytes(a.stamp))
   const refund = refundIx({ row, payer })
   assert.equal(hex(register.data), w.register, 'register')
   assert.equal(hex(refund.data), w.refund, 'refund')
   assert.deepEqual([...register.data.subarray(0, 8)], [...discriminator('global', 'register')])
-  assert.equal(register.data.length, 8 + 32 + 32 + 32 + 64 + 128 + 4 + a.label.length)
+  assert.equal(register.data.length, 8 + 32 + 64 + 32 + 128 + 4 + a.label.length, 'no time: the program sets it')
 
   // Accounts: the row, the profile (a signer), the payer (a signer), the system program; refund
   // signs nothing.
@@ -235,14 +219,13 @@ test('the wire format written twice still matches', () => {
   // The row the program wrote, decoded: every fixed field at its fixed offset, the label last.
   const decoded = decodeRow(bytes(w.row))
   assert.equal(decoded.profile.toBase58(), a.profile)
-  assert.equal(decoded.issuer.toBase58(), fixtures.issuers.A)
-  assert.equal(hex(decoded.root), a.root)
-  assert.equal(hex(decoded.issuerSignature), a.issuerSignature)
+  assert.equal(hex(toBytes32(decoded.stamp)), a.stamp)
+  assert.equal(hex(issuerKeyBytes(decoded.issuer)), fixtures.issuers.A)
   assert.equal(decoded.payer.toBase58(), w.payer)
-  assert.equal(decoded.bump, PublicKey.findProgramAddressSync([Buffer.from('row'), Buffer.from(bytes(a.marketStamp))], PROGRAM_ID)[1])
+  assert.equal(decoded.made, w.made)
   assert.equal(decoded.label, a.label)
   assert.equal(bytes(w.row).length, rowSpace(a.label.length))
-  assert.equal(rowSpace(a.label.length), 220, 'a 15-byte label: 220 bytes, forever')
+  assert.equal(rowSpace(a.label.length), 195, 'a 15-byte label: 195 bytes, forever')
   assert.deepEqual([...bytes(w.row).subarray(0, 8)], [...ROW_DISCRIMINATOR])
 })
 
@@ -258,59 +241,46 @@ test('decodeRow refuses anything that is not exactly a row', () => {
   assert.throws(() => decodeRow(longLabel), /not a row/, 'a label over 128 bytes')
 })
 
-test("an issuer's signature is checked strictly, over the root's 32 big-endian bytes", () => {
-  for (const p of fixtures.proofs) {
-    assert.equal(issuerSigned({ issuer: new PublicKey(p.issuer), root: bytes(p.root), issuerSignature: bytes(p.issuerSignature) }), true, p.name)
-  }
-  const a = proofNamed('alice-tutoring-A')
-  const b = proofNamed('alice-tutoring-B')
-  const good = { issuer: new PublicKey(a.issuer), root: fromBytes32(bytes(a.root)), issuerSignature: bytes(a.issuerSignature) }
-  assert.equal(issuerSigned(good), true, 'a root as a number')
-  assert.equal(issuerSigned(decodeRow(bytes(fixtures.wire.row))), true, 'a row as it is read back')
-  assert.deepEqual([...rootBytes(good.root)], [...bytes(a.root)])
-  const flipped = good.issuerSignature.slice()
-  flipped[10] ^= 1
-  // The same signature with S + L, the group order: the same point, a second spelling.
-  const L = 2n ** 252n + 27742317777372353535851937790883648493n
-  const s = good.issuerSignature.slice(32).reverse().reduce((n, x) => (n << 8n) | BigInt(x), 0n) + L
-  const malleable = good.issuerSignature.slice()
-  for (let i = 0; i < 32; i++) malleable[32 + i] = Number((s >> BigInt(8 * i)) & 0xffn)
-  const cases: [string, Parameters<typeof issuerSigned>[0]][] = [
-    ['another issuer', { ...good, issuer: new PublicKey(b.issuer) }],
-    ['another root', { ...good, root: bytes(b.root) }],
-    ['a changed signature', { ...good, issuerSignature: flipped }],
-    ['a signature plus the group order', { ...good, issuerSignature: malleable }],
-    ['63 bytes', { ...good, issuerSignature: good.issuerSignature.subarray(1) }],
-    ['all zeros', { ...good, issuerSignature: new Uint8Array(64) }],
-    ['the zero issuer', { ...good, issuer: new Uint8Array(32) }],
-  ]
-  for (const [what, input] of cases) assert.equal(issuerSigned(input), false, what)
-})
-
-test('the builders refuse what the program or a reader would refuse, before any proof is made', async () => {
+test('the builders refuse what the program would refuse, before any proof is made', async () => {
   const a = proofNamed('alice-tutoring-A')
   const payer = Keypair.generate().publicKey
   assert.throws(() => registerIx({ ...argsOf(a, payer), label: 'x'.repeat(MAX_LABEL + 1) }), /at most 128 bytes/)
-  assert.throws(() => registerIx({ ...argsOf(a, payer), issuerSignature: new Uint8Array(63) }), /64 bytes/)
-  assert.throws(() => registerIx({ ...argsOf(a, payer), issuer: new Uint8Array(31) }), /32 bytes/)
+  assert.throws(() => registerIx({ ...argsOf(a, payer), issuer: [1n] as unknown as IssuerKey }), /two numbers/)
+  assert.throws(() => registerIx({ ...argsOf(a, payer), stamp: new Uint8Array(31) }), /32 bytes/)
   assert.throws(() => registerIx({ ...argsOf(a, payer), proof: { a: new Uint8Array(32), b: new Uint8Array(32), c: new Uint8Array(32) } }), /32, 64 and 32/)
 
-  const stamps = fixtures.lists.A.map(BigInt)
-  const base = {
-    secret: await listSecret(fixtures.issuers.A),
-    label: 'tutoring/seller',
-    profile: payer,
-    issuer: new PublicKey(fixtures.issuers.A),
-    stamps,
-    issuerSignature: bytes(a.issuerSignature),
-    artifacts: { wasm: '', zkey: '' },
-    payer,
-    recentBlockhash: PublicKey.default.toBase58(),
-  }
+  const secret = (await issuerSecret(seed, nameA)).secret
+  const note = signNote(seedOf('issuer A'), { noteNumber: noteNumberOf(secret), embedding: new Uint8Array(4), model: 'm', tier: 1n })
+  const base = { secret, note, label: 'tutoring/seller', profile: payer, artifacts: { wasm: '', zkey: '' }, payer, recentBlockhash: PublicKey.default.toBase58() }
   await assert.rejects(buildRegistration({ ...base, label: 'x'.repeat(129) }), /at most 128 bytes/)
-  await assert.rejects(buildRegistration({ ...base, issuer: new PublicKey(fixtures.issuers.B) }), /issuer's signature is not on this list's root/)
-  await assert.rejects(buildRegistration({ ...base, stamps: [...stamps, 1n] }), /issuer's signature is not on this list's root/, 'another snapshot')
-  await assert.rejects(buildRegistration({ ...base, secret: await listSecret(fixtures.issuers.B) }), /not on the list/)
+  await assert.rejects(buildRegistration({ ...base, secret: (await issuerSecret(seed, nameB)).secret }), /not for this secret/)
+  await assert.rejects(buildRegistration({ ...base, note: { ...note, tier: 2n } }), /signature is not on this note/)
+})
+
+test('buildRegistration: a real proof from a signed note, and the register the program takes', async () => {
+  // Alice's note at issuer A, signed again with the fixtures' key: the stamp depends on her secret
+  // and the label only, so it is the fixture's, and the row's address too.
+  const secret = (await issuerSecret(seed, nameA)).secret
+  const note = signNote(seedOf('issuer A'), {
+    noteNumber: noteNumberOf(secret),
+    embedding: new Uint8Array(Float32Array.from([0.25, -0.5, 0.125]).buffer),
+    model: 'example-face-model/1',
+    tier: 2n,
+  })
+  const a = proofNamed('alice-tutoring-A')
+  const profile = new PublicKey(a.profile)
+  const payer = Keypair.generate().publicKey
+  const r = await buildRegistration({ secret, note, label: a.label, profile, artifacts, payer, recentBlockhash: PublicKey.default.toBase58() })
+
+  assert.equal(hex(toBytes32(r.stamp)), a.stamp, "the fixture's stamp")
+  assert.equal(r.row.toBase58(), fixtures.wire.rowAddress)
+  assert.equal(hex(issuerKeyBytes(r.issuer)), fixtures.issuers.A)
+  assert.equal(r.tier, 2n)
+  assert.equal(await verifyPerson({ proof: r.proof, issuer: r.issuer, label: a.label, profile, stamp: r.stamp, tier: r.tier }), true)
+  assert.equal(hex(r.instruction.data), hex(registerIx({ profile, label: a.label, stamp: r.stamp, issuer: r.issuer, tier: r.tier, proof: r.compressed, payer }).data))
+  const tx = r.transaction
+  assert.equal(tx.message.header.numRequiredSignatures, 2, 'the payer and the main key sign')
+  assert.ok(!tx.message.staticAccountKeys.some((k) => k.equals(ComputeBudgetProgram.programId)), 'no compute-budget instruction')
 })
 
 test('rows read back through any connection, filtered at fixed offsets', async () => {
@@ -329,22 +299,52 @@ test('rows read back through any connection, filtered at fixed offsets', async (
   }
   const a = proofNamed('alice-tutoring-A')
   const profile = new PublicKey(a.profile)
-  const issuer = new PublicKey(fixtures.issuers.A)
+  const issuer = issuerOf(fixtures.issuers.A)
   const rows = await fetchRows(connection as never, { profile, issuer, label: 'tutoring/seller' })
   assert.equal(rows.length, 1)
   assert.equal(rows[0].row.label, 'tutoring/seller')
   assert.equal(rows[0].address.toBase58(), address.toBase58())
   const [[programId, config]] = seen as [[string, { filters: { memcmp: { offset: number; bytes: string } }[] }]]
   assert.equal(programId, PROGRAM_ID.toBase58())
-  assert.deepEqual(config.filters.map((f) => f.memcmp.offset), [0, 8, 40, 201], 'the discriminator, the profile, the issuer, the label')
+  assert.deepEqual(config.filters.map((f) => f.memcmp.offset), [0, 8, 72, 176], 'the discriminator, the profile, the issuer, the label')
   assert.equal(config.filters[0].memcmp.bytes, base58(ROW_DISCRIMINATOR))
   assert.equal(config.filters[1].memcmp.bytes, profile.toBase58())
-  assert.equal(config.filters[2].memcmp.bytes, issuer.toBase58())
+  assert.equal(config.filters[2].memcmp.bytes, base58(bytes(fixtures.issuers.A)), "the issuer's key, x then y")
   assert.equal(config.filters[3].memcmp.bytes, base58(new Uint8Array([15, 0, 0, 0, ...new TextEncoder().encode('tutoring/seller')])), 'the length, then the label')
   assert.deepEqual(await fetchRows(connection as never, { label: 'tutoring/sellers' }), [], 'checked exactly too')
 
-  assert.equal((await fetchRow(connection as never, bytes(a.marketStamp)))?.label, 'tutoring/seller')
-  assert.equal(await fetchRow(connection as never, bytes(proofNamed('bob-tutoring-A').marketStamp)), null, 'no row')
+  assert.equal((await fetchRow(connection as never, bytes(a.stamp)))?.label, 'tutoring/seller')
+  assert.equal(await fetchRow(connection as never, bytes(proofNamed('bob-tutoring-A').stamp)), null, 'no row')
   const foreign = { getAccountInfo: async () => ({ data, owner: Keypair.generate().publicKey, lamports: 1, executable: false }) }
-  await assert.rejects(fetchRow(foreign as never, bytes(a.marketStamp)), /not the registry's/)
+  await assert.rejects(fetchRow(foreign as never, bytes(a.stamp)), /not the registry's/)
+})
+
+test('verifyTier: the tier a profile shows, its proof checked against its row', async () => {
+  // Alice's row as the program wrote it, and the proof it took, attached to her profile.
+  const w = fixtures.wire
+  const connectionWith = (data: Uint8Array) => ({
+    async getAccountInfo(at: PublicKey) {
+      return at.toBase58() === w.rowAddress ? { data: Buffer.from(data), owner: PROGRAM_ID, lamports: 1, executable: false } : null
+    },
+  })
+  const connection = connectionWith(bytes(w.row))
+  const a = proofNamed('alice-tutoring-A')
+  const shown = { profile: new PublicKey(a.profile), stamp: bytes(a.stamp), tier: 2n, proof: snarkjsOf(a) }
+
+  const row = await verifyTier(connection as never, shown)
+  assert.ok(row, 'her tier holds')
+  assert.equal(hex(issuerKeyBytes(row.issuer)), fixtures.issuers.A, 'the row gives the issuer to weigh')
+  assert.equal(row.made, w.made, 'and when the row was made')
+
+  // The issuer's key in the row replaced by another: the proof no longer holds for it.
+  const otherIssuer = bytes(w.row)
+  otherIssuer.set(bytes(fixtures.issuers.B), ROW_OFFSET.issuer)
+  const cases: [string, Parameters<typeof verifyTier>[1], ReturnType<typeof connectionWith>?][] = [
+    ['another tier', { ...shown, tier: 3n }],
+    ['the proof on her other profile', { ...shown, profile: new PublicKey(proofNamed('alice-tutoring-A-second-profile').profile) }],
+    ["a stamp with no row: Bob's", { ...shown, stamp: bytes(proofNamed('bob-tutoring-A').stamp) }],
+    ['her proof for another label', { ...shown, proof: snarkjsOf(proofNamed('alice-cleaning-A')) }],
+    ["another issuer's key in the row", shown, connectionWith(otherIssuer)],
+  ]
+  for (const [what, input, c] of cases) assert.equal(await verifyTier((c ?? connection) as never, input), null, what)
 })

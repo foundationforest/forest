@@ -63,6 +63,8 @@ const only = (value: object, fields: string[], what: string) => {
   for (const key of Object.keys(value)) if (!fields.includes(key)) fail('shape', `unknown ${what} field ${key}`)
 }
 const SIG = /^[A-Za-z0-9_-]{86}$/
+/** An issuer's key as a registry row holds it: x then y of its point on Baby Jubjub, each 32 bytes big-endian, in lowercase hex. */
+const ISSUER_KEY = /^[0-9a-f]{128}$/
 const B64U = /^[A-Za-z0-9_-]+$/
 
 function checkSig(value: { [key: string]: unknown }, signed: boolean) {
@@ -220,7 +222,10 @@ export function checkPull(text: string, now: number): SignedPull {
 // The inbox a profile declares
 
 export type Inbox = {
-  /** Who may deliver: anyone, or a key holding a registry row from this issuer, under any label. */
+  /**
+   * Who may deliver: anyone, or a key holding a registry row from this issuer, under any label. The
+   * issuer is named by its key as a row holds it: 128 characters of lowercase hex.
+   */
   senders: 'anyone' | { issuer: string }
   /** One message from each sender, ever. */
   once?: true
@@ -244,7 +249,7 @@ export function inboxOf(body: Body | null | undefined): Inbox | null | 'unsuppor
   const { senders, once, maxBytes, readers } = inbox
   let rule: Inbox['senders']
   if (senders === 'anyone') rule = 'anyone'
-  else if (isObject(senders) && Object.keys(senders).length === 1 && publicKeyFromAddress(senders.issuer)) rule = { issuer: senders.issuer as string }
+  else if (isObject(senders) && Object.keys(senders).length === 1 && typeof senders.issuer === 'string' && ISSUER_KEY.test(senders.issuer)) rule = { issuer: senders.issuer }
   else return 'unsupported'
   if ('once' in inbox && once !== true) return 'unsupported'
   if ('maxBytes' in inbox && (!Number.isSafeInteger(maxBytes) || (maxBytes as number) < 0)) return 'unsupported'

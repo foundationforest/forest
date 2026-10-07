@@ -92,7 +92,8 @@ export type HostOptions = {
   maxPageBytes?: number
   /**
    * Whether `from` holds a registry row from `issuer`, under any label: a registry lookup, over an
-   * RPC the host chooses. Without one, the host takes messages only for inboxes open to anyone.
+   * RPC the host chooses. `issuer` is the issuer's key as the row holds it, in lowercase hex. Without
+   * one, the host takes messages only for inboxes open to anyone.
    */
   rowLookup?: (from: string, issuer: string) => Promise<boolean>
   /**

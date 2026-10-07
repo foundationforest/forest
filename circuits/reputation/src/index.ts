@@ -16,10 +16,10 @@ import { groth16 } from 'snarkjs'
 import verificationKey from '../devnet/verification-key.json' with { type: 'json' }
 import type { SnarkjsProof } from '../../../registry/client/src/compress.ts'
 import { BN254_P, fromBytes32, isFieldElement, messageOf, scopeOf, toBytes32 } from '../../../registry/client/src/field.ts'
-import { identityFrom, marketStampOf } from '../../../registry/client/src/stamp.ts'
+import { scalarOf, stampOf } from '../../../registry/client/src/stamp.ts'
 
-/** An issuer secret: the 32 bytes `keys/`'s `issuerSecret(seed, name)` returns, or its identity. */
-type Secret = Parameters<typeof identityFrom>[0]
+/** An issuer secret: the 32 bytes `keys/`'s `issuerSecret(seed, name)` returns. */
+type Secret = Uint8Array
 /** A 32-byte ed25519 key: a main key or an index's key. */
 type Key = Parameters<typeof messageOf>[0]
 
@@ -141,12 +141,12 @@ export function circuitInput(input: {
   if (new Set(labels).size !== labels.length) throw new Error('a label twice')
   if (input.show && labels.length !== 1) throw new Error('a label is shown only when it is the only one')
 
-  const identity = identityFrom(input.secret)
+  const scalar = scalarOf(input.secret)
   const tree = buildTree(input.leaves)
   const byStamp = new Map(input.leaves.map((leaf) => [leaf.stamp, leaf]))
 
   const slots = labels.map((label) => {
-    const stamp = marketStampOf(identity, label)
+    const stamp = stampOf(input.secret, label)
     const leaf = byStamp.get(stamp)
     const path = tree.pathOf(stamp)
     if (leaf === undefined || path === undefined) throw new Error(`the tree has no leaf for ${label}`)
@@ -164,7 +164,7 @@ export function circuitInput(input: {
 
   return {
     input: {
-      secret: identity.secretScalar,
+      secret: scalar,
       used: all.map((_, i) => (i < slots.length ? 1 : 0)),
       stamps: all.map((s) => s.leaf.stamp),
       scopes: all.map((s) => s.leaf.scope),

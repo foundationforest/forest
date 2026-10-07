@@ -5,7 +5,9 @@
 // first. A missing file fails; nothing skips.
 
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
@@ -19,11 +21,11 @@ import {
   BN254_R,
   fieldHash,
   issuerKeyOf,
-  marketStampOf,
   noteSigned,
   personInput,
   provePerson,
   signNote,
+  stampOf,
   toBytes32,
   verifyPerson,
   type SignedNote,
@@ -73,8 +75,8 @@ test('a valid proof: the issuer signed a note for my note number; my stamp for t
   assert.equal(noteSigned(note), true)
   assert.equal(await verifyPerson(good), true)
   assert.equal(await verifyPerson({ ...good, stamp: toBytes32(valid.stamp) }), true, 'the stamp as 32 bytes')
-  // The stamp is the market stamp a registry row sits at: the same derivation, from the same secret.
-  assert.equal(valid.stamp, marketStampOf(mine.secret, LABEL))
+  // The stamp is the one a registry row sits at: the same derivation, from the same secret.
+  assert.equal(valid.stamp, stampOf(mine.secret, LABEL))
   assert.deepEqual(valid.issuer, issuer)
   assert.equal(valid.tier, 2n)
 })
@@ -109,13 +111,13 @@ test("another person's secret fails", async () => {
   // Their secret with my note, straight to the circuit: their note number is not the signed one.
   await assert.rejects(prove(inputOf(note, theirs.secret)), NO_WITNESS)
   // My proof does not hold for their stamp either.
-  assert.equal(await verifyPerson({ ...good, stamp: marketStampOf(theirs.secret, LABEL) }), false)
+  assert.equal(await verifyPerson({ ...good, stamp: stampOf(theirs.secret, LABEL) }), false)
 })
 
 test('a stamp for another label fails', async () => {
   assert.equal(await verifyPerson({ ...good, label: OTHER_LABEL }), false)
-  assert.equal(await verifyPerson({ ...good, stamp: marketStampOf(mine.secret, OTHER_LABEL) }), false)
-  assert.equal(await verifyPerson({ ...good, label: OTHER_LABEL, stamp: marketStampOf(mine.secret, OTHER_LABEL) }), false)
+  assert.equal(await verifyPerson({ ...good, stamp: stampOf(mine.secret, OTHER_LABEL) }), false)
+  assert.equal(await verifyPerson({ ...good, label: OTHER_LABEL, stamp: stampOf(mine.secret, OTHER_LABEL) }), false)
 })
 
 test('a proof replayed for another main key fails', async () => {
@@ -128,4 +130,14 @@ test('a public value outside the field, or a proof changed, fails', async () => 
   assert.equal(await verifyPerson({ ...good, issuer: [issuer[0] + BN254_R, issuer[1]] }), false)
   const changed = { ...valid.proof, pi_a: [valid.proof.pi_c[0], valid.proof.pi_c[1], '1'] as typeof valid.proof.pi_a }
   assert.equal(await verifyPerson({ ...good, proof: changed }), false)
+})
+
+test("the program's key is this setup's: groth16-solana's converter on the committed key gives verifying_key.rs byte for byte", () => {
+  const out = mkdtempSync(join(tmpdir(), 'forest-person-vk-'))
+  try {
+    execFileSync(process.execPath, [join(here, '../scripts/parse_vk_to_rust.cjs'), join(here, '../devnet/verification-key.json'), out])
+    assert.equal(readFileSync(join(out, 'verifying_key.rs'), 'utf8'), readFileSync(join(here, '../../program/src/verifying_key.rs'), 'utf8'))
+  } finally {
+    rmSync(out, { recursive: true, force: true })
+  }
 })

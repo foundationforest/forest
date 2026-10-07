@@ -185,10 +185,8 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           name: programs
-      - name: Install, and the registry's proving files
-        run: |
-          for dir in keys registry/artifacts registry/client; do (cd "$dir" && npm ci --no-audit --no-fund); done
-          (cd registry/artifacts && npm run fetch)
+      - name: Install
+        run: for dir in keys registry/client; do (cd "$dir" && npm ci --no-audit --no-fund); done
       - name: Registry client
         working-directory: registry/client
         run: |
