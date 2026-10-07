@@ -1,54 +1,58 @@
-// The registry on devnet, used for real: a fee payer pays for one row, which the main key signs,
-// for a person on a stand-in issuer's list; then the refusal of a second row for the same market
-// stamp, and a refund. A row an earlier test person left is moved to `earlierRows` in the record,
-// with whatever it holds above its minimum refunded: rows never close, so it stays on chain.
+// The registry on devnet, used for real: a stand-in issuer signs a note for a person, and a fee
+// payer pays for one row, which the main key signs; then the refusal of a second row for the same
+// stamp, a refund, and the tier the profile shows checked against its row the way any reader would.
 //
 //   FOREST_DEVNET_KEYS=<dir> node scripts/devnet.ts        (after registry/devnet/deploy.sh)
 //
 // <dir> holds payer.json, as registry/devnet/deploy.sh writes it: the fee payer, which pays every
 // fee and every deposit. It is read, never printed and never written anywhere. Everything public
-// (addresses, signatures, what each did) goes into registry/devnet/devnet.json
-// (FOREST_DEVNET_RECORD overrides the path; FOREST_DEVNET_RPC the endpoint). Each step checks the
-// chain first and is skipped if it is done, so the script can be run again after a failure.
+// (addresses, signatures, what each did, and the proof the profile shows) goes into
+// registry/devnet/devnet.json (FOREST_DEVNET_RECORD overrides the path; FOREST_DEVNET_RPC the
+// endpoint). Each step checks the chain first and is skipped if it is done, so the script can be run
+// again after a failure.
 //
-// The person is keys/'s pinned test seed (`keys/test/vectors.json`): their secret for the issuer's
-// list and their two profiles (freelance/seller, which the row names, and freelance/buyer, which
-// tries for the same market stamp) come from it through `keys/` itself. The issuer and its list
-// are stand-ins this script makes, the issuer's key from a fixed text, and are recorded as such: no
-// issuer publishes a list yet.
+// The person is keys/'s pinned test seed (`keys/test/vectors.json`): their secret for the stand-in
+// issuer, and their two profiles (freelance/seller, which the row names, and freelance/buyer, which
+// tries for the same stamp), come from it through `keys/` itself. The issuer is a stand-in this
+// script makes, its key from a fixed text, and is recorded as such: no issuer signs notes yet.
 
 import { readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { ed25519 } from '@noble/curves/ed25519.js'
 import { sha256 } from '@noble/hashes/sha2.js'
 import { Connection, Keypair, PublicKey, SystemProgram, Transaction, VersionedTransaction } from '@solana/web3.js'
 
-import { hkdf, mainKey } from '../../../keys/src/index.ts'
+import { issuerSecret, mainKey } from '../../../keys/src/index.ts'
 import {
   buildRegistration,
   fetchRow,
   fetchRows,
-  issuerSigned,
-  listRoot,
-  marketStampOf,
+  issuerKeyBytes,
+  issuerKeyOf,
+  noteNumberOf,
   refundIx,
-  rootBytes,
   rowAddress,
   rowSpace,
+  signNote,
   stampOf,
   toBytes32,
+  verifyTier,
+  type SnarkjsProof,
 } from '../src/index.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 /** A label as `market/role`, the recommended shape: this profile sells in `freelance`. */
 const LABEL = 'freelance/seller'
+/** The stand-in issuer's name: what the person's secret for it is mixed from. */
+const ISSUER_NAME = 'stand-in.devnet.forest.example'
+const TIER = 1n
 
 const keysDir = process.env.FOREST_DEVNET_KEYS
 if (!keysDir) throw new Error('set FOREST_DEVNET_KEYS to the directory holding the devnet keypairs')
 const recordPath = resolve(process.env.FOREST_DEVNET_RECORD ?? join(here, '../../devnet/devnet.json'))
 const record = JSON.parse(readFileSync(recordPath, 'utf8'))
+if (!record.registry?.programId) throw new Error('no registry in the record: run registry/devnet/deploy.sh first')
 const rpc = process.env.FOREST_DEVNET_RPC ?? record.rpc
 const connection = new Connection(rpc, 'confirmed')
 const programId = new PublicKey(record.registry.programId)
@@ -58,9 +62,8 @@ if (payer.publicKey.toBase58() !== record.keys.payer) throw new Error('the payer
 
 const hex = (b: Uint8Array) => Buffer.from(b).toString('hex')
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
-/** A stand-in key: its private seed is sha256 of this text. Public on purpose; devnet only. */
+/** A stand-in's private seed: sha256 of this text. Public on purpose; devnet only. */
 const standInSeed = (name: string) => sha256(new TextEncoder().encode(`forest devnet stand-in: ${name}`))
-const standIn = (name: string) => Keypair.fromSeed(standInSeed(name))
 
 function save(): void {
   writeFileSync(recordPath, JSON.stringify(record, null, 2) + '\n')
@@ -123,88 +126,49 @@ const blockhash = async () => (await connection.getLatestBlockhash('confirmed'))
 
 console.log(`registry ${programId.toBase58()} on ${rpc}`)
 
-// The person: keys/'s pinned test seed, and their secret for the stand-in issuer's list.
+// The person: keys/'s pinned test seed, and their secret for the stand-in issuer.
 const vectors = JSON.parse(readFileSync(join(here, '../../../keys/test/vectors.json'), 'utf8'))
 const seed = Buffer.from(vectors.seed, 'hex')
-// The stand-in texts still say `keeper`: each is a key's seed or a stamp's, and another text would
-// be another issuer and another list, leaving the row on devnet behind.
-const issuer = standIn('keeper')
-// The row on devnet was made with the list secret, mixed from the seed and the issuer's address,
-// before keys/ mixed the issuer secret from its name. It stays that way until the program takes the
-// person proof.
-const secret = await hkdf(seed, `forest/v1/list/${issuer.publicKey.toBase58()}`)
-const stamp = stampOf(secret)
+const { secret } = await issuerSecret(seed, ISSUER_NAME)
 
-// The issuer's list: strangers' stamps around the person's, and the issuer's signature on its root.
-const stranger = (n: number) => stampOf(Buffer.from(`forest devnet stand-in keeper: member ${n}`))
-const stamps = [stranger(1), stranger(2), stamp, stranger(3), stranger(4)]
-const root = listRoot(stamps)
-const issuerSignature = ed25519.sign(rootBytes(root), standInSeed('keeper'))
+// The stand-in issuer signs a note for the person's note number: a made-up embedding, a model
+// name, and a tier.
+const issuerPrivate = standInSeed('issuer')
+const issuer = issuerKeyOf(issuerPrivate)
+const signed = signNote(issuerPrivate, {
+  noteNumber: noteNumberOf(secret),
+  embedding: new Uint8Array(Float32Array.from({ length: 128 }, (_, i) => Math.cos(i)).buffer),
+  model: 'stand-in-face-model/1',
+  tier: TIER,
+})
 
 // Two profiles the person holds, both from keys/: the row's, and a second one the registry refuses
-// on this list.
+// for the same stamp.
 const profile = Keypair.fromSeed((await mainKey(seed, LABEL)).privateKey)
 const second = Keypair.fromSeed((await mainKey(seed, 'freelance/buyer')).privateKey)
-const marketStamp = marketStampOf(secret, LABEL)
-const address = rowAddress(marketStamp, programId)
-const artifacts = {
-  wasm: join(here, '../../artifacts/semaphore-32.wasm'),
-  zkey: join(here, '../../artifacts/semaphore-32.zkey'),
-}
+const stamp = stampOf(secret, LABEL)
+const address = rowAddress(stamp, programId)
+const artifacts = { wasm: join(here, '../../circuit/devnet/person.wasm'), zkey: join(here, '../../circuit/devnet/person.zkey') }
 
-// A row an earlier test person left: moved to earlierRows, and refunded whatever it holds above
-// its minimum. Rows never close, so the row itself stays on chain for good.
-if (record.row && record.row.marketStamp !== hex(toBytes32(marketStamp))) {
-  const old = new PublicKey(record.row.address)
-  const info = await connection.getAccountInfo(old, 'confirmed')
-  if (!info) throw new Error(`the earlier row ${old.toBase58()} is not on chain`)
-  const minimum = await connection.getMinimumBalanceForRentExemption(info.data.length, 'confirmed')
-  let refunded: { signature: string; lamports: number } | null = null
-  if (info.lamports > minimum) {
-    const r = await sendLegacy(new Transaction().add(refundIx({ row: old, payer: payer.publicKey, programId })))
-    if (r.err) throw new Error(`refund of the earlier row failed: ${JSON.stringify(r.err)}`)
-    refunded = { signature: r.signature, lamports: info.lamports - minimum }
-    note('refund: the earlier row, down to its minimum', r.signature)
-  }
-  record.earlierRows ??= []
-  record.earlierRows.push({
-    ...record.row,
-    left: 'the test person before keys/ moved to its 00 01 … 1f test seed. A row never closes, so it stays, at its rent minimum.',
-    lastRefund: refunded ?? { lamports: 0, why: `it held ${info.lamports} lamports, exactly its minimum: nothing above it to refund` },
-  })
-  delete record.row
-  save()
-}
-
+if (record.row && record.row.stamp !== hex(toBytes32(stamp))) throw new Error(`the record holds another row (${record.row.address}); move it first`)
 record.row = {
   ...(record.row ?? {}),
-  what: "one row: keys/'s test person (its test seed), on a stand-in issuer's list, under freelance/seller, for their freelance/seller profile; the main key signs, a fee payer pays",
+  what: "one row: keys/'s test person (its test seed), with a note a stand-in issuer signed, under freelance/seller, for their freelance/seller profile; the main key signs, a fee payer pays",
   label: LABEL,
   profile: profile.publicKey.toBase58(),
-  issuer: issuer.publicKey.toBase58(),
-  list: { standIn: true, stamps: stamps.map(String), root: hex(toBytes32(root)), issuerSignature: hex(issuerSignature) },
-  marketStamp: hex(toBytes32(marketStamp)),
+  issuer: { standIn: true, name: ISSUER_NAME, key: hex(issuerKeyBytes(issuer)), tier: TIER.toString() },
+  stamp: hex(toBytes32(stamp)),
   address: address.toBase58(),
-  keys: "the profiles are keys/'s mainKey(test seed, 'freelance/seller') and (test seed, 'freelance/buyer'); the issuer's private seed is sha256 of `forest devnet stand-in: keeper`",
+  keys: "the profiles are keys/'s mainKey(test seed, 'freelance/seller') and (test seed, 'freelance/buyer'); the person's secret is keys/'s issuerSecret(test seed, name); the issuer's private key is sha256 of `forest devnet stand-in: issuer`",
 }
 save()
 
 const build = async (who: Keypair) =>
-  buildRegistration({
-    secret,
-    label: LABEL,
-    profile: who.publicKey,
-    issuer: issuer.publicKey,
-    stamps,
-    issuerSignature,
-    artifacts,
-    payer: payer.publicKey,
-    recentBlockhash: await blockhash(),
-    programId,
-  })
+  buildRegistration({ secret, note: signed, label: LABEL, profile: who.publicKey, artifacts, payer: payer.publicKey, recentBlockhash: await blockhash(), programId })
 
-// register: the main key signs, the fee payer pays.
-if (!(await fetchRow(connection, marketStamp, { programId }))) {
+// register: the main key signs, the fee payer pays. The proof goes in the record: it is what the
+// profile shows for its tier.
+if (!(await fetchRow(connection, stamp, { programId }))) {
   const started = Date.now()
   const reg = await build(profile)
   const provingMs = Date.now() - started
@@ -213,20 +177,27 @@ if (!(await fetchRow(connection, marketStamp, { programId }))) {
   if (err) throw new Error(`register failed: ${JSON.stringify(err)}`)
   const m = await meta(signature)
   record.row.register = { signature, provingMs, bytes, computeUnits: m.computeUnitsConsumed ?? null, fee: m.fee }
+  record.row.shown = { what: 'the person proof the profile shows for its tier, as snarkjs writes it', tier: TIER.toString(), proof: reg.proof }
   note(`register: a row under "${LABEL}", the main key signing, the fee payer paying`, signature)
+}
+// A run stopped between register and the record keeping its proof: a new proof for the same row
+// shows the same tier.
+if (!record.row.shown) {
+  record.row.shown = { what: 'the person proof the profile shows for its tier, as snarkjs writes it', tier: TIER.toString(), proof: (await build(profile)).proof }
+  save()
 }
 const written = (await connection.getAccountInfo(address, 'confirmed'))!.data
 
-// Refused on chain, sent without a preflight so the refusal has a signature: the same person, list
-// and label for their second profile. The same market stamp, so the row already exists.
+// Refused on chain, sent without a preflight so the refusal has a signature: the same person,
+// issuer and label for their second profile. The same stamp, so the row already exists.
 if (!record.row.refused) {
   const again = await build(second)
-  if (!again.row.equals(address)) throw new Error('the second profile has another market stamp')
+  if (!again.row.equals(address)) throw new Error('the second profile has another stamp')
   const sent = await sendVersioned(again.transaction, [payer, second], true)
-  if (!sent.err) throw new Error('a second row for the market stamp landed')
+  if (!sent.err) throw new Error('a second row for the stamp landed')
   const logs = ((await meta(sent.signature)).logMessages ?? []).filter((l) => /already in use|Error Code|failed/.test(l))
   record.row.refused = { secondProfile: second.publicKey.toBase58(), signature: sent.signature, err: sent.err, log: logs }
-  note("register again for the same market stamp, for the person's second profile: refused, the row already exists", sent.signature)
+  note("register again for the same stamp, for the person's second profile: refused, the row already exists", sent.signature)
 }
 
 // Refund: 0.001 SOL sent to the row, then refund, which anyone may send, pays exactly that back to
@@ -245,30 +216,32 @@ if (!record.row.refund) {
   note('refund: exactly the 0.001 SOL above the minimum, back to the payer the row records', refund.signature)
 }
 
-// Read back the way any reader would: every row of this profile, and the issuer's signature.
+// Read back the way any reader would: every row of this profile, and the tier it shows checked
+// against its row.
 const read = await fetchRows(connection, { profile: profile.publicKey, programId }).catch((e) => {
   console.log(`  getProgramAccounts refused by this RPC (${String(e).slice(0, 80)}); read the one row directly`)
   return null
 })
-const final = await fetchRow(connection, marketStamp, { programId })
-if (!final) throw new Error('the row is gone')
+const shown = { profile: profile.publicKey, stamp, tier: BigInt(record.row.shown.tier), proof: record.row.shown.proof as SnarkjsProof }
+const final = await verifyTier(connection, shown, { programId })
+if (!final) throw new Error('the tier the profile shows does not check against its row')
 const account = (await connection.getAccountInfo(address, 'confirmed'))!
 if (!account.data.equals(written) || account.data.length !== rowSpace(Buffer.byteLength(LABEL))) throw new Error('the row changed')
-if (!issuerSigned(final)) throw new Error("the issuer's signature does not check")
 record.row.onChain = {
-  readBy: read ? 'getProgramAccounts, filtered by profile' : "getAccountInfo at the market stamp's address",
+  readBy: read ? 'getProgramAccounts, filtered by profile' : "getAccountInfo at the stamp's address",
   rowsOfThisProfile: read?.length ?? null,
   profile: final.profile.toBase58(),
-  issuer: final.issuer.toBase58(),
+  stamp: hex(toBytes32(final.stamp)),
+  issuer: hex(issuerKeyBytes(final.issuer)),
   payer: final.payer.toBase58(),
+  made: final.made,
   label: final.label,
-  root: hex(final.root),
-  issuerSigned: true,
+  tierChecked: true,
   bytes: account.data.length,
   lamports: account.lamports,
 }
 save()
-if (hex(final.root) !== record.row.list.root || !final.profile.equals(profile.publicKey) || !final.payer.equals(payer.publicKey)) {
+if (record.row.onChain.issuer !== record.row.issuer.key || !final.profile.equals(profile.publicKey) || !final.payer.equals(payer.publicKey)) {
   throw new Error('the row is not what was sent')
 }
 console.log('done')

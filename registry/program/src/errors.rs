@@ -8,7 +8,7 @@ pub enum RegistryError {
     NotAFieldElement,
     #[msg("the proof's points are not a valid compressed BN254 proof")]
     ProofMalformed,
-    #[msg("the proof does not verify for this root, market stamp, label and profile")]
+    #[msg("the proof does not verify for this stamp, issuer, label, profile and tier")]
     ProofRejected,
     #[msg("the row holds nothing above its rent-exempt minimum")]
     NothingToRefund,

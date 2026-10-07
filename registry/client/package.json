@@ -2,13 +2,13 @@
   "name": "@forest/registry-client",
   "version": "0.0.0",
   "private": true,
-  "description": "Builds a Forest registry row: the market stamp, the proof against an issuer's list, compressed points, and the transaction the main key and any payer sign; reads rows back and checks issuers' signatures, and checks proofs off chain.",
+  "description": "Builds a Forest registry row: the person proof from a note an issuer signed, compressed points, and the transaction the main key and any payer sign; reads rows back, and checks a tier a profile shows against its row.",
   "license": "Apache-2.0",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {
-    "test": "node ../artifacts/fetch.mjs && node --test --test-force-exit test/client.test.ts test/circuit.test.ts test/note.test.ts",
+    "test": "node --test --test-force-exit test/client.test.ts test/note.test.ts",
     "test:validator": "node --test --test-force-exit test/validator.test.ts",
     "test:devnet": "FOREST_DEVNET=1 node --test --test-force-exit test/devnet.test.ts",
     "check": "tsc --noEmit",
@@ -16,10 +16,7 @@
     "fixtures": "node scripts/fixtures.ts"
   },
   "dependencies": {
-    "@noble/curves": "2.4.0",
     "@noble/hashes": "2.4.0",
-    "@semaphore-protocol/group": "4.12.1",
-    "@semaphore-protocol/identity": "4.12.1",
     "@solana/web3.js": "1.99.0",
     "@zk-kit/eddsa-poseidon": "1.0.4",
     "poseidon-lite": "0.3.0",

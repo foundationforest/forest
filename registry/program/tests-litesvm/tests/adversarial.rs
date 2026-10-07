@@ -1,11 +1,10 @@
-//! Attacks on the registry: bent proofs, replays, substituted and planted accounts, a missing or
-//! borrowed signature, and the rent. Each test says what it tried and that it failed, or, for a
-//! `finding_`, what it showed that is true by design.
+//! Attacks on the registry: bent proofs and public inputs, replays, substituted and planted
+//! accounts, a missing or borrowed signature, and the rent. Each test says what it tried and that
+//! it failed, or, for a `finding_`, what it showed that is true by design.
 
 use forest_registry_tests::*;
 use num_bigint::BigUint;
 use solana_account::Account;
-use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
 use solana_keypair::Keypair;
 use solana_signer::Signer;
@@ -41,49 +40,30 @@ fn send_args(h: &mut Harness, p: &FixtureProof, args: &Args) -> Result<litesvm::
 // ---------------------------------------------------------------------------------------------
 
 #[test]
-fn proof_bound_to_its_root_market_stamp_and_field() {
+fn proof_bound_to_its_public_inputs_and_the_field() {
+    // Each public input bent, and each pushed past the field's order: the program refuses a value
+    // that is not a field element before it looks at the proof, and the proof refuses the rest.
     let (mut h, f) = ready();
     let alice = f.proof("alice-tutoring-A");
     let good = alice.args();
-    let other_root = f.proof("alice-tutoring-B").args().root;
+    let other = f.issuer("B");
 
     let cases: Vec<(&str, Args, &[&str])> = vec![
-        ("another list's root", Args { root: other_root, ..good.clone() }, &["ProofRejected"]),
-        ("a root nobody has", Args { root: [7u8; 32], ..good.clone() }, &["ProofRejected"]),
-        ("the zero root", Args { root: [0u8; 32], ..good.clone() }, &["ProofRejected"]),
-        ("the root plus the field order", Args { root: add_be(&good.root, BN254_R), ..good.clone() }, &["NotAFieldElement"]),
-        ("the market stamp plus the field order", Args { market_stamp: add_be(&good.market_stamp, BN254_R), ..good.clone() }, &["NotAFieldElement"]),
+        ("the stamp plus the field order", Args { stamp: add_be(&good.stamp, BN254_R), ..good.clone() }, &["NotAFieldElement"]),
+        ("the issuer's x plus the field order", Args { issuer: [add_be(&good.issuer[0], BN254_R), good.issuer[1]], ..good.clone() }, &["NotAFieldElement"]),
+        ("the issuer's y plus the field order", Args { issuer: [good.issuer[0], add_be(&good.issuer[1], BN254_R)], ..good.clone() }, &["NotAFieldElement"]),
+        ("the tier plus the field order", Args { tier: add_be(&good.tier, BN254_R), ..good.clone() }, &["NotAFieldElement"]),
+        ("the other issuer's x", Args { issuer: [other[0], good.issuer[1]], ..good.clone() }, &["ProofRejected"]),
+        ("a stamp nobody has", Args { stamp: [7u8; 32], ..good.clone() }, &["ProofRejected"]),
+        ("the zero stamp", Args { stamp: [0u8; 32], ..good.clone() }, &["ProofRejected"]),
         ("an empty label", Args { label: String::new(), ..good.clone() }, &["ProofRejected"]),
     ];
     for (what, args, wants) in cases {
         expect_err(send_args(&mut h, alice, &args), what, wants);
     }
     assert!(!h.exists(&alice.row_address()));
-    assert!(!h.exists(&row_address(&add_be(&good.market_stamp, BN254_R))));
-    println!("refused as expected: six ways of bending a real proof's public inputs");
-}
-
-#[test]
-fn a_proof_made_with_the_earlier_4_0_0_files_is_refused() {
-    // One row, proven twice: with Semaphore 4.0.0's files, the pin whose circuit left the path bits
-    // unconstrained, and with 4.13.0's. Every public input is the same; only the proof differs. The
-    // program's key is 4.13.0's, so the first is refused and the second lands.
-    let (mut h, f) = ready();
-    let old = Fixtures::earlier_pin();
-    let new = f.proof(&old.name);
-    let (o, n) = (old.args(), new.args());
-    assert_eq!(o.market_stamp, n.market_stamp, "the same market stamp");
-    assert_eq!(o.root, n.root, "the same root");
-    assert_eq!(o.label, n.label, "the same label");
-    assert_eq!(o.issuer, n.issuer, "the same issuer");
-    assert_eq!(old.profile_address(), new.profile_address(), "the same profile");
-    assert_ne!((o.proof.a, o.proof.c), (n.proof.a, n.proof.c), "two different proofs");
-
-    expect_err(send_args(&mut h, &old, &o), "a proof made with the 4.0.0 files", &["ProofRejected"]);
-    assert!(!h.exists(&new.row_address()));
-    send_args(&mut h, new, &n).expect("the same row, proven with the 4.13.0 files");
-    assert!(h.exists(&new.row_address()));
-    println!("refused as expected: a 4.0.0 proof; the 4.13.0 proof for the same row lands");
+    assert!(!h.exists(&row_address(&add_be(&good.stamp, BN254_R))));
+    println!("refused as expected: eight ways of bending a real proof's public inputs");
 }
 
 #[test]
@@ -131,7 +111,7 @@ fn a_label_that_is_not_utf8_is_refused() {
 // ---------------------------------------------------------------------------------------------
 
 #[test]
-fn replay_one_market_stamp_twice_in_one_transaction_reverts_both() {
+fn replay_one_stamp_twice_in_one_transaction_reverts_both() {
     let (mut h, f) = ready();
     let a = f.proof("alice-tutoring-A");
     let key = a.main_key();
@@ -143,7 +123,7 @@ fn replay_one_market_stamp_twice_in_one_transaction_reverts_both() {
 
 #[test]
 fn lamports_sent_to_a_row_address_first_do_not_block_it() {
-    // Someone who saw a market stamp (in a failed transaction, say) sends lamports to its address
+    // Someone who saw a stamp (in a failed transaction, say) sends lamports to its address
     // first, hoping `init` finds the address taken.
     let (mut h, f) = ready();
     let a = f.proof("alice-tutoring-A");
@@ -153,7 +133,7 @@ fn lamports_sent_to_a_row_address_first_do_not_block_it() {
         .unwrap();
     h.register(a).expect("registers anyway");
     assert_eq!(h.account(&address).owner, PROGRAM_ID);
-    assert_eq!(h.row(&a.market_stamp()).root, a.args().root);
+    assert_eq!(h.row(&a.stamp()).stamp, a.stamp());
     assert_eq!(h.lamports_of(&address), 5_000_000.max(h.svm.minimum_balance_for_rent_exemption(row_space(a.label.len()))));
     println!("pre-funding a row's address does not block it");
 }
@@ -174,7 +154,7 @@ fn finding_a_proof_in_flight_cannot_be_stolen_and_a_whole_transaction_only_lands
     let tx = solana_transaction::Transaction::new(&[&h.payer, &key], msg, h.svm.latest_blockhash());
     h.send_tx(tx.clone()).expect("Alice's transaction");
     expect_err(h.send_tx(tx), "the same transaction again", &["AlreadyProcessed", "already in use"]);
-    let row = h.row(&a.market_stamp());
+    let row = h.row(&a.stamp());
     assert_eq!((row.profile, row.payer), (a.profile_address(), h.payer.pubkey()));
     println!("finding: a proof in flight is useless to anyone but its profile, and its transaction lands once, as sent");
 }
@@ -192,7 +172,7 @@ fn substitution_every_account() {
     let not_a_pda = Keypair::new().pubkey();
     let fake_system = Keypair::new().pubkey();
 
-    for (what, slot, to) in [("another market stamp's address", 0, wrong_row), ("a random address", 0, not_a_pda), ("a fake system program", 3, fake_system)] {
+    for (what, slot, to) in [("another stamp's address", 0, wrong_row), ("a random address", 0, not_a_pda), ("a fake system program", 3, fake_system)] {
         let mut ix = register_ix(h.payer.pubkey(), key.pubkey(), &a.args());
         ix.accounts[slot].pubkey = to;
         expect_err(h.send(&[ix], &[&key]), what, &["ConstraintSeeds", "InvalidProgramId", "2006", "3008", "ProgramAccountNotFound", "not found"]);
@@ -227,16 +207,16 @@ fn a_planted_row_owned_by_another_program_is_refused() {
 
 #[test]
 fn an_account_of_the_registry_that_is_not_a_row_is_refused() {
-    // refund takes any row without its market stamp: `Account` checks the owner and the `Row`
-    // discriminator. An account the registry owns with other bytes (an empty one, or one with the
+    // refund takes any row without deriving its address: `Account` checks the owner and the `Row`
+    // discriminator. An account the registry owns with other bytes (an empty one, or one with an
     // earlier version's `Line` discriminator and a payer where a row keeps one) is refused.
     let (mut h, f) = ready();
     let a = f.proof("alice-tutoring-A");
     h.register(a).expect("register");
-    let mut line = vec![0u8; 333];
+    let mut line = vec![0u8; 308];
     line[..8].copy_from_slice(&discriminator("account", "Line"));
-    line[168..200].copy_from_slice(h.payer.pubkey().as_ref());
-    for (what, data) in [("zeroed", vec![0u8; 220]), ("a Line", line)] {
+    line[at::PAYER..at::PAYER + 32].copy_from_slice(h.payer.pubkey().as_ref());
+    for (what, data) in [("zeroed", vec![0u8; 195]), ("a Line", line)] {
         let address = Keypair::new().pubkey();
         h.svm.set_account(address, Account { lamports: 10_000_000, data, owner: PROGRAM_ID, executable: false, rent_epoch: 0 }).unwrap();
         let result = h.send(&[refund_ix(h.payer.pubkey(), address)], &[]);
@@ -246,15 +226,16 @@ fn an_account_of_the_registry_that_is_not_a_row_is_refused() {
 }
 
 #[test]
-fn finding_the_program_takes_any_32_bytes_as_an_issuer() {
-    // The program does not check that an issuer is a usable ed25519 key, or that it signed: readers
-    // do. The all-zero issuer with an all-zero signature lands; no reader accepts it.
+fn finding_the_program_takes_any_issuer_whose_note_the_proof_shows() {
+    // The program keeps no list of issuers: the proof shows that the key in register signed a note,
+    // and any key that signs notes is an issuer. Rows from two unrelated keys both land; readers
+    // decide which keys count.
     let (mut h, f) = ready();
-    let a = f.proof("bob-tutoring-A");
-    let args = Args { issuer: Address::new_from_array([0u8; 32]), issuer_signature: [0u8; 64], ..a.args() };
-    send_args(&mut h, a, &args).expect("stored as given");
-    assert_eq!(h.row(&a.market_stamp()).issuer, Address::new_from_array([0u8; 32]));
-    println!("finding: any 32 bytes can be a row's issuer; readers check the issuer and its signature");
+    let (bob, carol) = (f.proof("bob-tutoring-A"), f.proof("carol-tutoring-B"));
+    h.register(bob).expect("issuer A's note");
+    h.register(carol).expect("issuer B's note");
+    assert_eq!((h.row(&bob.stamp()).issuer, h.row(&carol.stamp()).issuer), (f.issuer("A"), f.issuer("B")));
+    println!("finding: any key that signed a note is an issuer to the program; readers choose which count");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -275,7 +256,7 @@ fn finding_after_a_rent_rise_a_row_holds_less_than_the_minimum_and_nothing_needs
     h.set_rent(RENT_HIGH);
     expect_err(h.send(&[refund_ix(h.payer.pubkey(), address)], &[]), "refund below the new minimum", &["NothingToRefund"]);
     assert!(held < h.svm.minimum_balance_for_rent_exemption(h.account(&address).data.len()));
-    assert_eq!(h.row(&a.market_stamp()).root, a.args().root, "the row still reads");
+    assert_eq!(h.row(&a.stamp()).stamp, a.stamp(), "the row still reads");
     assert_eq!(h.lamports_of(&address), held, "and holds what it held");
     println!("finding: after a rent rise a row holds less than the new minimum, reads as before, and refund refuses");
 }

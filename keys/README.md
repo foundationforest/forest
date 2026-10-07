@@ -164,7 +164,7 @@ encryption and an opening through age, and the scalar step by step without zk-ki
 - **No rotation.** A profile's name is its key, so a leaked main key loses that profile for good
   (see the FAQ).
 - **One profile per label per seed.** The same seed and label always give the same key.
-- **Only the inbox key and read keys are post-quantum.** ed25519 and Semaphore's curves fall to a
+- **Only the inbox key and read keys are post-quantum.** ed25519 and the proofs' curves fall to a
   large quantum computer; the inbox key and read keys, age's ML-KEM-768 hybrid, do not (see the
   FAQ).
 - **No wiping of memory.** JavaScript cannot promise that bytes are erased; an app closes the
@@ -239,7 +239,7 @@ Only the inbox key and read keys are post-quantum, so that a private record copi
 private once quantum computers come. A large enough quantum computer could:
 - work out from a profile's address what signs for it, then sign as the profile and move its
   money;
-- forge Semaphore proofs, whose curves it breaks too.
+- forge person and reputation proofs, whose curves it breaks too.
 
 It could not open private records, even ones copied today to open later:
 - the inbox key is age's hybrid, so its recipient gives nothing away unless ML-KEM-768 breaks

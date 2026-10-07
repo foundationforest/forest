@@ -83,9 +83,8 @@
               "properties": {
                 "issuer": {
                   "type": "string",
-                  "description": "The issuer's address, base58.",
-                  "minLength": 32,
-                  "maxLength": 44
+                  "description": "The issuer's key as a registry row holds it: x then y of its point on Baby Jubjub, each 32 bytes big-endian, as 128 characters of lowercase hex.",
+                  "pattern": "^[0-9a-f]{128}$"
                 }
               }
             }

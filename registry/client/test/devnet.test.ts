@@ -1,11 +1,13 @@
 // Read-only smoke tests against the registry's devnet deploy, as registry/devnet/devnet.json
 // records it. They send nothing.
 //
-//   npm run test:devnet          (FOREST_DEVNET_RPC for another endpoint)
+//   npm run test:devnet          (FOREST_DEVNET_RPC for another endpoint, FOREST_DEVNET_RECORD another record)
 //
-// Skipped unless FOREST_DEVNET=1 (the npm script sets it), so `npm test` never needs a network.
+// Skipped unless FOREST_DEVNET=1 (the npm script sets it), so `npm test` never needs a network, and
+// until the record holds a deployed registry and its row.
 
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { test } from 'node:test'
@@ -13,14 +15,16 @@ import { fileURLToPath } from 'node:url'
 
 import { Connection, PublicKey } from '@solana/web3.js'
 
-import { fetchRow, fetchRows, issuerSigned, listRoot, rowAddress, rowSpace, toBytes32 } from '../src/index.ts'
+import { fetchRow, fetchRows, fromBytes32, issuerKeyBytes, rowAddress, rowSpace, toBytes32, verifyTier, type IssuerKey } from '../src/index.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
-const record = JSON.parse(readFileSync(join(here, '../../devnet/devnet.json'), 'utf8'))
-const skip = process.env.FOREST_DEVNET === '1' ? false : 'set FOREST_DEVNET=1 (npm run test:devnet)'
+const record = JSON.parse(readFileSync(process.env.FOREST_DEVNET_RECORD ?? join(here, '../../devnet/devnet.json'), 'utf8'))
+const skip =
+  process.env.FOREST_DEVNET !== '1' ? 'set FOREST_DEVNET=1 (npm run test:devnet)' : !record.registry || !record.row ? 'not deployed yet: the record holds no registry and row' : false
 const connection = new Connection(process.env.FOREST_DEVNET_RPC ?? record.rpc, 'confirmed')
-const programId = new PublicKey(record.registry.programId)
+const programId = skip ? PublicKey.default : new PublicKey(record.registry.programId)
 const hex = (b: Uint8Array) => Buffer.from(b).toString('hex')
+const issuerOf = (h: string): IssuerKey => [fromBytes32(Buffer.from(h.slice(0, 64), 'hex')), fromBytes32(Buffer.from(h.slice(64), 'hex'))]
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 /** The public RPC rate-limits; wait it out rather than fail. */
@@ -43,57 +47,45 @@ test('the registry is deployed at its recorded id, its bytes the build, its upgr
   // The program data account: 4 bytes of kind, 8 of slot, 1 + 32 of upgrade authority, then the program.
   assert.equal(new PublicKey(data.data.subarray(13, 45)).toBase58(), record.registry.upgradeAuthority)
   const so = data.data.subarray(45, 45 + record.registry.soBytes)
-  const { createHash } = await import('node:crypto')
   assert.equal(createHash('sha256').update(so).digest('hex'), record.registry.soSha256)
 })
 
-test("the row is on chain as recorded, the issuer's signature checks, never changed", { skip }, async () => {
+test('the row is on chain as recorded, never changed, exactly rent exempt after the refund', { skip }, async () => {
   const r = record.row
-  const marketStamp = Buffer.from(r.marketStamp, 'hex')
-  assert.equal(rowAddress(marketStamp, programId).toBase58(), r.address)
-  const row = await retry(() => fetchRow(connection, marketStamp, { programId }))
+  const stamp = Buffer.from(r.stamp, 'hex')
+  assert.equal(rowAddress(stamp, programId).toBase58(), r.address)
+  const row = await retry(() => fetchRow(connection, stamp, { programId }))
   assert.ok(row, 'the row exists')
   assert.equal(row.profile.toBase58(), r.profile)
-  assert.equal(row.issuer.toBase58(), r.issuer)
+  assert.equal(hex(toBytes32(row.stamp)), r.stamp)
+  assert.equal(hex(issuerKeyBytes(row.issuer)), r.issuer.key)
   assert.equal(row.label, r.label)
-  assert.equal(hex(row.root), r.list.root)
-  assert.equal(hex(row.root), hex(toBytes32(listRoot(r.list.stamps.map(BigInt)))), "the root is the list's")
-  assert.equal(hex(row.issuerSignature), r.list.issuerSignature)
-  assert.equal(issuerSigned(row), true)
   assert.equal(row.payer.toBase58(), r.onChain.payer)
+  assert.equal(row.made, r.onChain.made)
   const info = await retry(() => connection.getAccountInfo(new PublicKey(r.address)))
   assert.equal(info?.data.length, rowSpace(Buffer.byteLength(r.label)))
   assert.equal(info?.lamports, await retry(() => connection.getMinimumBalanceForRentExemption(info!.data.length)), 'exactly rent exempt after the refund')
 })
 
-test('the profile has one row and the issuer one, read the way any reader reads', { skip }, async () => {
-  const byProfile = await retry(() => fetchRows(connection, { profile: new PublicKey(record.row.profile), programId }))
-  assert.equal(byProfile.length, 1)
-  assert.equal(byProfile[0].address.toBase58(), record.row.address)
-  // The stand-in issuer's rows: this one, and any earlier test person's on the same issuer's list.
-  const byIssuer = await retry(() => fetchRows(connection, { issuer: new PublicKey(record.row.issuer), programId }))
-  const earlier = (record.earlierRows ?? []).filter((r: { issuer: string }) => r.issuer === record.row.issuer).map((r: { address: string }) => r.address)
-  assert.deepEqual(byIssuer.map((r) => r.address.toBase58()).sort(), [record.row.address, ...earlier].sort())
+test('the tier the profile shows checks against its row, and no other tier does', { skip }, async () => {
+  const r = record.row
+  const shown = { profile: new PublicKey(r.profile), stamp: Buffer.from(r.stamp, 'hex'), tier: BigInt(r.shown.tier), proof: r.shown.proof }
+  assert.ok(await retry(() => verifyTier(connection, shown, { programId })))
+  assert.equal(await retry(() => verifyTier(connection, { ...shown, tier: shown.tier + 1n }, { programId })), null)
 })
 
-test("an earlier test person's row is still on chain, unchanged, at its minimum: rows never close", { skip }, async () => {
-  for (const r of record.earlierRows ?? []) {
-    const row = await retry(() => fetchRow(connection, Buffer.from(r.marketStamp, 'hex'), { programId }))
-    assert.ok(row, `${r.address}: the row exists`)
-    assert.equal(row.profile.toBase58(), r.profile)
-    assert.equal(hex(row.root), r.list.root)
-    assert.equal(issuerSigned(row), true)
-    const info = await retry(() => connection.getAccountInfo(new PublicKey(r.address)))
-    assert.equal(info?.lamports, await retry(() => connection.getMinimumBalanceForRentExemption(info!.data.length)))
-  }
+test('the profile has one row and the issuer one, read the way any reader reads', { skip }, async () => {
+  const byProfile = await retry(() => fetchRows(connection, { profile: new PublicKey(record.row.profile), programId }))
+  assert.deepEqual(byProfile.map((r) => r.address.toBase58()), [record.row.address])
+  const byIssuer = await retry(() => fetchRows(connection, { issuer: issuerOf(record.row.issuer.key), programId }))
+  assert.deepEqual(byIssuer.map((r) => r.address.toBase58()), [record.row.address])
 })
 
 test('every recorded transaction landed, and only the refusal failed', { skip, timeout: 300_000 }, async () => {
-  const refused = new Set([record.row.refused.signature, ...(record.earlierRows ?? []).map((r: { refused?: { signature: string } }) => r.refused?.signature)])
   for (const { what, signature } of record.transactions.filter((t: { signature?: string }) => t.signature)) {
     const { value } = await retry(() => connection.getSignatureStatuses([signature], { searchTransactionHistory: true }))
     assert.ok(value[0], `${what}: not found`)
-    assert.equal(value[0].err !== null, refused.has(signature), `${what}: ${JSON.stringify(value[0].err)}`)
+    assert.equal(value[0].err !== null, signature === record.row.refused.signature, `${what}: ${JSON.stringify(value[0].err)}`)
     await sleep(300)
   }
 })

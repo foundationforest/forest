@@ -1,9 +1,12 @@
-// Reading rows: through whatever connection the caller passes (its own RPC, an app's, an
-// index's). Nothing here opens a network of its own.
+// Reading rows, and checking a tier a profile shows: through whatever connection the caller passes
+// (its own RPC, an app's, an index's). Nothing here opens a network of its own.
 
 import type { Commitment, Connection, PublicKey } from '@solana/web3.js'
 
-import { PROGRAM_ID, ROW_DISCRIMINATOR, ROW_OFFSET, decodeRow, keyBytes, rowAddress, type Row } from './program.ts'
+import type { SnarkjsProof } from './compress.ts'
+import { fromBytes32 } from './field.ts'
+import { verifyPerson, type IssuerKey } from './person.ts'
+import { PROGRAM_ID, ROW_DISCRIMINATOR, ROW_OFFSET, decodeRow, issuerKeyBytes, keyBytes, rowAddress, type Row } from './program.ts'
 
 const ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
 
@@ -23,16 +26,16 @@ export function base58(bytes: Uint8Array): string {
   return s
 }
 
-/** The row at `marketStamp`, or null if there is none. */
+/** The row at `stamp`, or null if there is none. */
 export async function fetchRow(
   connection: Pick<Connection, 'getAccountInfo'>,
-  marketStamp: bigint | Uint8Array,
+  stamp: bigint | Uint8Array,
   options: { programId?: PublicKey; commitment?: Commitment } = {},
 ): Promise<Row | null> {
   const programId = options.programId ?? PROGRAM_ID
-  const info = await connection.getAccountInfo(rowAddress(marketStamp, programId), options.commitment ?? 'confirmed')
+  const info = await connection.getAccountInfo(rowAddress(stamp, programId), options.commitment ?? 'confirmed')
   if (!info) return null
-  if (!info.owner.equals(programId)) throw new Error("the account at that market stamp is not the registry's")
+  if (!info.owner.equals(programId)) throw new Error("the account at that stamp is not the registry's")
   return decodeRow(new Uint8Array(info.data))
 }
 
@@ -42,12 +45,12 @@ export async function fetchRow(
  */
 export async function fetchRows(
   connection: Pick<Connection, 'getProgramAccounts'>,
-  options: { profile?: PublicKey; issuer?: PublicKey; label?: string; programId?: PublicKey; commitment?: Commitment } = {},
+  options: { profile?: PublicKey; issuer?: IssuerKey; label?: string; programId?: PublicKey; commitment?: Commitment } = {},
 ): Promise<{ address: PublicKey; row: Row }[]> {
   const programId = options.programId ?? PROGRAM_ID
   const filters: { memcmp: { offset: number; bytes: string } }[] = [{ memcmp: { offset: 0, bytes: base58(ROW_DISCRIMINATOR) } }]
   if (options.profile) filters.push({ memcmp: { offset: ROW_OFFSET.profile, bytes: base58(keyBytes(options.profile)) } })
-  if (options.issuer) filters.push({ memcmp: { offset: ROW_OFFSET.issuer, bytes: base58(keyBytes(options.issuer)) } })
+  if (options.issuer) filters.push({ memcmp: { offset: ROW_OFFSET.issuer, bytes: base58(issuerKeyBytes(options.issuer)) } })
   if (options.label !== undefined) {
     // The label's length and its bytes, so `tutoring/seller` never matches `tutoring/sellers`. An
     // RPC compares at most 128 bytes, so a longer label is cut there and checked exactly below.
@@ -61,4 +64,32 @@ export async function fetchRows(
   return accounts
     .map(({ pubkey, account }) => ({ address: pubkey, row: decodeRow(new Uint8Array(account.data)) }))
     .filter(({ row }) => options.label === undefined || row.label === options.label)
+}
+
+/**
+ * The tier a profile shows, checked: the person proof attached to it, against its row. The row at
+ * the proof's stamp must name this main key, and the proof must hold for the row's issuer and
+ * label, this main key, the stamp and the tier. Gives the row, so the reader can weigh its issuer
+ * and when it was made; null when anything fails. Which issuers count, and from when, is the
+ * reader's choice.
+ */
+export async function verifyTier(
+  connection: Pick<Connection, 'getAccountInfo'>,
+  input: {
+    /** The main key of the profile that shows the proof. */
+    profile: PublicKey | Uint8Array
+    stamp: bigint | Uint8Array
+    tier: bigint
+    /** The proof as snarkjs writes it: `provePerson`'s `proof`. */
+    proof: SnarkjsProof
+  },
+  options: { programId?: PublicKey; commitment?: Commitment } = {},
+): Promise<Row | null> {
+  const stamp = typeof input.stamp === 'bigint' ? input.stamp : fromBytes32(input.stamp)
+  const row = await fetchRow(connection, stamp, options)
+  if (!row || row.stamp !== stamp) return null
+  const profile = keyBytes(input.profile)
+  if (!keyBytes(row.profile).every((b, i) => b === profile[i])) return null
+  const holds = await verifyPerson({ proof: input.proof, issuer: row.issuer, label: row.label, profile, stamp, tier: input.tier })
+  return holds ? row : null
 }

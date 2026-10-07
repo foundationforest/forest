@@ -18,7 +18,7 @@ import {
   NOTE_TAG,
   fromBytes32,
   issuerKeyOf,
-  marketStampOf,
+  stampOf,
   messageOf,
   noteHash,
   noteNumberOf,
@@ -98,9 +98,9 @@ test('a signed note checks; any change to it, its issuer or its signature does n
   assert.throws(() => signNote(new Uint8Array(31), note), /32 bytes/)
 })
 
-test("the circuit's input: the stamp is the market stamp a row sits at, and the public signals are in order", () => {
+test("the circuit's input: the stamp is the one a row sits at, and the public signals are in order", () => {
   const { input, publicSignals } = personInput({ secret, note: signed, label: 'tutoring/seller', profile })
-  assert.equal(publicSignals[0], marketStampOf(secret, 'tutoring/seller'))
+  assert.equal(publicSignals[0], stampOf(secret, 'tutoring/seller'))
   assert.deepEqual(publicSignals.slice(1), [signed.issuer[0], signed.issuer[1], scopeOf('tutoring/seller'), messageOf(profile), 2n])
   assert.equal(input.secret, BigInt(issuerA.scalar))
   assert.notEqual(personInput({ secret, note: signed, label: 'tutoring/buyer', profile }).publicSignals[0], publicSignals[0])

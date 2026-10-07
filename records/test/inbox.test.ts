@@ -20,8 +20,8 @@ import { Clock, startHost } from './helpers.ts'
 const [aliceInbox, aliceBuyerInbox, bobInbox] = await Promise.all([readingKey(alice.privateKey), readingKey(aliceBuyer.privateKey), readingKey(bob.privateKey)])
 /** Two read keys Alice's app made, for a helper and for her other device. */
 const [helperRead, deviceRead] = await Promise.all([readingKey(new Uint8Array(32).fill(11)), readingKey(new Uint8Array(32).fill(12))])
-/** An issuer: whoever keeps a list. Here, any usable key. */
-const ISSUER = stranger.address
+/** An issuer, named by its key as a registry row holds it, x then y in hex: the registry fixtures' issuer A. */
+const ISSUER = '1f94c72d4e5d0f9f6d4ea3b1135b4af2eaec6d14ebe63a96a2f136236887c09611bfedb43d85cb0ead1845d088ba92eb5c96715cde3ccf90607eb007285c2ea6'
 
 const card = (inbox?: Body | string, name = 'Alice') => ({ ...profileBody(name), inboxKey: aliceInbox.recipient, ...(inbox !== undefined && { inbox }) })
 const ANYONE = { senders: 'anyone' }
@@ -98,7 +98,7 @@ describe('messages', () => {
     assert.deepEqual(inboxOf(card(ANYONE)), { senders: 'anyone' })
     assert.deepEqual(inboxOf(card({ senders: { issuer: ISSUER }, once: true, maxBytes: 4000 })), { senders: { issuer: ISSUER }, once: true, maxBytes: 4000 })
     assert.deepEqual(inboxOf(card({ ...ANYONE, readers: [helperRead.recipient] })), { senders: 'anyone', readers: [helperRead.recipient] })
-    for (const inbox of ['anyone', {}, { senders: 'everyone' }, { senders: { deposit: '5' } }, { senders: { issuer: 'x' } }, { senders: { issuer: ISSUER, label: 'x' } }, { ...ANYONE, once: false }, { ...ANYONE, maxBytes: -1 }, { ...ANYONE, deposit: '5' }, { ...ANYONE, readers: helperRead.recipient }, { ...ANYONE, readers: [alice.address] }]) {
+    for (const inbox of ['anyone', {}, { senders: 'everyone' }, { senders: { deposit: '5' } }, { senders: { issuer: 'x' } }, { senders: { issuer: stranger.address } }, { senders: { issuer: ISSUER.toUpperCase() } }, { senders: { issuer: ISSUER.slice(2) } }, { senders: { issuer: ISSUER + '00' } }, { senders: { issuer: ISSUER, label: 'x' } }, { ...ANYONE, once: false }, { ...ANYONE, maxBytes: -1 }, { ...ANYONE, deposit: '5' }, { ...ANYONE, readers: helperRead.recipient }, { ...ANYONE, readers: [alice.address] }]) {
       assert.equal(inboxOf(card(inbox as Body)), 'unsupported', JSON.stringify(inbox))
     }
   })

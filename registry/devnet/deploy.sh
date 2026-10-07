@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Build the registry (one row per market stamp) for devnet and deploy it at its own address, or
-# upgrade it in place. The closed registries before it, named in this record's `earlier`, are never
-# touched: their ids are only read.
+# Build the registry (one row per stamp) for devnet and deploy it at its own address, or upgrade it
+# in place. The registries before it, named in this record's `earlier`, are never touched: their ids
+# are only read.
 #
 #   FOREST_DEVNET_SEED=<the phrase> registry/devnet/deploy.sh
 #
@@ -14,7 +14,8 @@
 #
 #    One label per key: `deploy` (pays for the deploy and keeps the upgrade authority), `payer`
 #    (pays every fee and deposit in registry/client/scripts/devnet.ts, as a fee payer would), and
-#    `registry-rows-program`, the program id. The keypair files go to FOREST_DEVNET_KEYS (default
+#    `registry-person-program`, the program id (the registry before it, with Semaphore's membership
+#    proof, used `registry-rows-program`). The keypair files go to FOREST_DEVNET_KEYS (default
 #    ~/.forest-devnet/keys), never under the repo: the directory mode 700, the files 600, and a file
 #    holding another key is refused, not overwritten. Only public keys are printed, and the phrase
 #    is in no file. The public keys must be the ones registry/devnet/devnet.json names in `keys` (a
@@ -69,7 +70,7 @@ function base58(bytes) {
   return s
 }
 const pk = {}
-for (const label of ['deploy', 'payer', 'registry-rows-program']) {
+for (const label of ['deploy', 'payer', 'registry-person-program']) {
   const seed = crypto.pbkdf2Sync(Buffer.from(phrase, 'utf8'), Buffer.from(`forest-devnet:${label}`, 'utf8'), 600_000, 32, 'sha256')
   const priv = crypto.createPrivateKey({ key: Buffer.concat([PKCS8_ED25519, seed]), format: 'der', type: 'pkcs8' })
   const pub = crypto.createPublicKey(priv).export({ format: 'der', type: 'spki' }).subarray(-32)
@@ -88,19 +89,19 @@ if (record) {
   }
 } else {
   fs.writeFileSync(own, JSON.stringify({
-    note: 'The devnet deploy of the registry: one row per market stamp. Public keys, addresses and signatures only. Every key comes from the devnet phrase by the recipe in registry/devnet/deploy.sh, which writes the keypairs outside the repo and checks them against `keys`; the program id\'s label is registry-rows-program. Written by registry/devnet/deploy.sh and registry/client/scripts/devnet.ts; read by registry/client/test/devnet.test.ts.',
+    note: 'The devnet deploy of the registry: one row per stamp, from the person proof. Public keys, addresses and signatures only. Every key comes from the devnet phrase by the recipe in registry/devnet/deploy.sh, which writes the keypairs outside the repo and checks them against `keys`; the program id\'s label is registry-person-program. Written by registry/devnet/deploy.sh and registry/client/scripts/devnet.ts; read by registry/client/test/devnet.test.ts.',
     cluster: 'devnet',
     rpc: 'https://api.devnet.solana.com',
     keys,
   }, null, 2) + '\n')
 }
-const id = pk['registry-rows-program']
+const id = pk['registry-person-program']
 const other = fs.existsSync(escrow) ? JSON.parse(fs.readFileSync(escrow, 'utf8')) : {}
 const taken = [...(record?.earlier ?? []).map((e) => e.registry.programId), other.escrow?.programId, ...(other.earlier ?? []).map((e) => e.escrow.programId)]
 if (taken.includes(id)) throw new Error('the id is one another deploy already names')
 console.log(`registry program id ${id}, deploy key ${pk.deploy}, payer ${pk.payer}`)
 JS
-id=$(solana-keygen pubkey "$keys/registry-rows-program.json")
+id=$(solana-keygen pubkey "$keys/registry-person-program.json")
 cli=(--url "$rpc" --keypair "$keys/deploy.json")
 deployer=$(solana-keygen pubkey "$keys/deploy.json")
 
@@ -186,7 +187,7 @@ JS
   echo "cost $cost; the deploy key holds $have lamports"
   [ "$have" -ge "$need" ] || { echo "the deploy key holds less than the $mode needs; nothing sent" >&2; exit 3; }
   if [ "$mode" = deploy ]; then
-    solana program deploy "${cli[@]}" --upgrade-authority "$keys/deploy.json" --program-id "$keys/registry-rows-program.json" \
+    solana program deploy "${cli[@]}" --upgrade-authority "$keys/deploy.json" --program-id "$keys/registry-person-program.json" \
       --use-rpc --output json "$so" >"$out/deploy.json"
   else
     solana program deploy "${cli[@]}" --upgrade-authority "$keys/deploy.json" --program-id "$id" \

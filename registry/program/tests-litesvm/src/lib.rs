@@ -8,7 +8,6 @@
 use std::path::PathBuf;
 
 use litesvm::LiteSVM;
-use num_bigint::BigUint;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use solana_account::Account;
@@ -16,7 +15,6 @@ use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
 use solana_keypair::Keypair;
 use solana_message::Message;
-use solana_poseidon::{hashv, Endianness, Parameters};
 use solana_rent::Rent;
 use solana_signer::Signer;
 use solana_transaction::Transaction;
@@ -48,13 +46,14 @@ pub fn custom_error(result: &Result<litesvm::types::TransactionMetadata, String>
 }
 
 // ---------------------------------------------------------------------------------------------
-// Fixtures: real proofs, made by registry/client/scripts/fixtures.ts with the pinned artifacts.
+// Fixtures: real person proofs, made by registry/client/scripts/fixtures.ts with the committed
+// devnet setup.
 // ---------------------------------------------------------------------------------------------
 
 #[derive(Deserialize)]
 pub struct Fixtures {
+    /// Each issuer's key as a row holds it: x then y, 64 bytes in hex.
     pub issuers: Issuers,
-    pub lists: Lists,
     pub proofs: Vec<FixtureProof>,
     pub wire: Wire,
 }
@@ -68,29 +67,20 @@ pub struct Issuers {
 }
 
 #[derive(Deserialize)]
-pub struct Lists {
-    #[serde(rename = "A")]
-    pub a: Vec<String>,
-    #[serde(rename = "B")]
-    pub b: Vec<String>,
-}
-
-#[derive(Deserialize)]
 pub struct FixtureProof {
     pub name: String,
-    pub list: String,
-    /// The issuer's key, base58.
+    /// "A" or "B".
     pub issuer: String,
+    /// The issuer's key, x then y, in hex.
+    #[serde(rename = "issuerKey")]
+    pub issuer_key: String,
     pub label: String,
     /// The main key, base58, and its private seed: a test key, so the harness can sign as it.
     pub profile: String,
     #[serde(rename = "profileSeed")]
     pub profile_seed: String,
-    pub root: String,
-    #[serde(rename = "issuerSignature")]
-    pub issuer_signature: String,
-    #[serde(rename = "marketStamp")]
-    pub market_stamp: String,
+    pub stamp: String,
+    pub tier: String,
     pub scope: String,
     pub message: String,
     pub a: String,
@@ -114,6 +104,8 @@ pub struct Wire {
     pub payer: String,
     #[serde(rename = "payerSeed")]
     pub payer_seed: String,
+    /// What the clock reads when the row is written, Unix seconds.
+    pub made: i64,
     #[serde(rename = "rowAddress")]
     pub row_address: String,
     pub register: String,
@@ -133,22 +125,9 @@ impl Fixtures {
         self.proofs.iter().find(|p| p.name == name).unwrap_or_else(|| panic!("no fixture {name}"))
     }
 
-    /// The stamps a proof was made against: list A or list B.
-    pub fn stamps_of(&self, p: &FixtureProof) -> Vec<[u8; 32]> {
-        let list = if p.list == "A" { &self.lists.a } else { &self.lists.b };
-        list.iter().map(|s| dec_to_be32(s)).collect()
-    }
-
-    /// One proof made with the Semaphore 4.0.0 files, the pin before this one
-    /// (`fixtures/proof-4.0.0.json`), kept only to show the program refuses it.
-    pub fn earlier_pin() -> FixtureProof {
-        #[derive(Deserialize)]
-        struct File {
-            proof: FixtureProof,
-        }
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/proof-4.0.0.json");
-        let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-        serde_json::from_str::<File>(&text).unwrap().proof
+    /// An issuer's key, "A" or "B".
+    pub fn issuer(&self, which: &str) -> [[u8; 32]; 2] {
+        issuer_key(if which == "A" { &self.issuers.a } else { &self.issuers.b })
     }
 }
 
@@ -162,11 +141,11 @@ impl FixtureProof {
         assert_eq!(key.pubkey(), self.profile_address(), "{}: the profile seed is the profile's", self.name);
         key
     }
-    pub fn market_stamp(&self) -> [u8; 32] {
-        from_hex32(&self.market_stamp)
+    pub fn stamp(&self) -> [u8; 32] {
+        from_hex32(&self.stamp)
     }
     pub fn row_address(&self) -> Address {
-        row_address(&self.market_stamp())
+        row_address(&self.stamp())
     }
     pub fn proof(&self) -> Proof {
         Proof { a: from_hex32(&self.a), b: hex(&self.b).try_into().unwrap(), c: from_hex32(&self.c) }
@@ -174,10 +153,9 @@ impl FixtureProof {
     /// Everything `register` carries, as this fixture's person would send it.
     pub fn args(&self) -> Args {
         Args {
-            market_stamp: self.market_stamp(),
-            issuer: self.issuer.parse().unwrap(),
-            root: from_hex32(&self.root),
-            issuer_signature: hex(&self.issuer_signature).try_into().unwrap(),
+            stamp: self.stamp(),
+            issuer: issuer_key(&self.issuer_key),
+            tier: from_hex32(&self.tier),
             proof: self.proof(),
             label: self.label.clone(),
         }
@@ -192,31 +170,18 @@ pub fn from_hex32(s: &str) -> [u8; 32] {
     hex(s).try_into().unwrap()
 }
 
-pub fn dec_to_be32(s: &str) -> [u8; 32] {
-    let b = BigUint::parse_bytes(s.as_bytes(), 10).unwrap().to_bytes_be();
+/// An issuer's key from its 64 bytes in hex: x, then y.
+pub fn issuer_key(s: &str) -> [[u8; 32]; 2] {
+    let b = hex(s);
+    assert_eq!(b.len(), 64, "an issuer's key is 64 bytes");
+    [b[..32].try_into().unwrap(), b[32..].try_into().unwrap()]
+}
+
+/// A number as 32 big-endian bytes.
+pub fn be32(n: u64) -> [u8; 32] {
     let mut out = [0u8; 32];
-    out[32 - b.len()..].copy_from_slice(&b);
+    out[24..].copy_from_slice(&n.to_be_bytes());
     out
-}
-
-// ---------------------------------------------------------------------------------------------
-// Semaphore's tree, rebuilt the slow way, so each fixture's root can be checked against its list.
-// ---------------------------------------------------------------------------------------------
-
-pub fn poseidon2(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
-    hashv(Parameters::Bn254X5, Endianness::BigEndian, &[a, b]).unwrap().0
-}
-
-/// A full rebuild: pair left to right, copy a node with no right sibling up unhashed.
-pub fn lean_imt_root(leaves: &[[u8; 32]]) -> [u8; 32] {
-    let mut level: Vec<[u8; 32]> = leaves.to_vec();
-    while level.len() > 1 {
-        level = level
-            .chunks(2)
-            .map(|pair| if pair.len() == 2 { poseidon2(&pair[0], &pair[1]) } else { pair[0] })
-            .collect();
-    }
-    level[0]
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -251,13 +216,23 @@ pub fn message_of(profile: &Address) -> [u8; 32] {
     field_hash(b"forest.foundation/profile/v1/", &[profile.as_ref()])
 }
 
-pub fn row_address(market_stamp: &[u8; 32]) -> Address {
-    Address::find_program_address(&[b"row", market_stamp], &PROGRAM_ID).0
+pub fn row_address(stamp: &[u8; 32]) -> Address {
+    Address::find_program_address(&[b"row", stamp], &PROGRAM_ID).0
+}
+
+/// Where each field of a row starts, discriminator included. The label is last.
+pub mod at {
+    pub const PROFILE: usize = 8;
+    pub const STAMP: usize = 40;
+    pub const ISSUER: usize = 72;
+    pub const PAYER: usize = 136;
+    pub const MADE: usize = 168;
+    pub const LABEL: usize = 176;
 }
 
 /// A row's size, discriminator included. It never changes.
 pub fn row_space(label_len: usize) -> usize {
-    8 + 32 + 32 + 32 + 64 + 32 + 1 + 4 + label_len
+    8 + 32 + 32 + 64 + 32 + 8 + 4 + label_len
 }
 
 /// One proof's compressed points. 128 bytes.
@@ -271,20 +246,19 @@ pub struct Proof {
 /// What `register` carries, field by field.
 #[derive(Clone, Debug)]
 pub struct Args {
-    pub market_stamp: [u8; 32],
-    pub issuer: Address,
-    pub root: [u8; 32],
-    pub issuer_signature: [u8; 64],
+    pub stamp: [u8; 32],
+    pub issuer: [[u8; 32]; 2],
+    pub tier: [u8; 32],
     pub proof: Proof,
     pub label: String,
 }
 
 pub fn register_data(args: &Args) -> Vec<u8> {
     let mut data = discriminator("global", "register").to_vec();
-    data.extend_from_slice(&args.market_stamp);
-    data.extend_from_slice(args.issuer.as_ref());
-    data.extend_from_slice(&args.root);
-    data.extend_from_slice(&args.issuer_signature);
+    data.extend_from_slice(&args.stamp);
+    data.extend_from_slice(&args.issuer[0]);
+    data.extend_from_slice(&args.issuer[1]);
+    data.extend_from_slice(&args.tier);
     data.extend_from_slice(&args.proof.a);
     data.extend_from_slice(&args.proof.b);
     data.extend_from_slice(&args.proof.c);
@@ -295,14 +269,14 @@ pub fn register_data(args: &Args) -> Vec<u8> {
 
 /// Where the label's bytes start in `register`'s data: after the discriminator, every fixed field
 /// and the label's four-byte length.
-pub const REGISTER_LABEL_AT: usize = 8 + 32 + 32 + 32 + 64 + 128 + 4;
+pub const REGISTER_LABEL_AT: usize = 8 + 32 + 64 + 32 + 128 + 4;
 
 /// `register`: the row, the profile (a signer), the payer (a signer, writable), the system program.
 pub fn register_ix(payer: Address, profile: Address, args: &Args) -> Instruction {
     Instruction {
         program_id: PROGRAM_ID,
         accounts: vec![
-            AccountMeta::new(row_address(&args.market_stamp), false),
+            AccountMeta::new(row_address(&args.stamp), false),
             AccountMeta::new_readonly(profile, true),
             AccountMeta::new(payer, true),
             AccountMeta::new_readonly(SYSTEM_PROGRAM, false),
@@ -327,11 +301,11 @@ pub fn refund_ix(payer: Address, row: Address) -> Instruction {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RowView {
     pub profile: Address,
-    pub issuer: Address,
-    pub root: [u8; 32],
-    pub issuer_signature: [u8; 64],
+    pub stamp: [u8; 32],
+    pub issuer: [[u8; 32]; 2],
     pub payer: Address,
-    pub bump: u8,
+    /// Unix seconds, from the clock when `register` ran.
+    pub made: i64,
     pub label: String,
 }
 
@@ -339,16 +313,15 @@ pub struct RowView {
 /// label, and nothing after it.
 pub fn read_row(data: &[u8]) -> RowView {
     assert_eq!(&data[..8], &discriminator("account", "Row"), "not a row");
-    let label_len = u32::from_le_bytes(data[201..205].try_into().unwrap()) as usize;
+    let label_len = u32::from_le_bytes(data[at::LABEL..at::LABEL + 4].try_into().unwrap()) as usize;
     assert_eq!(data.len(), row_space(label_len), "a row is exactly its size");
     RowView {
-        profile: Address::try_from(&data[8..40]).unwrap(),
-        issuer: Address::try_from(&data[40..72]).unwrap(),
-        root: data[72..104].try_into().unwrap(),
-        issuer_signature: data[104..168].try_into().unwrap(),
-        payer: Address::try_from(&data[168..200]).unwrap(),
-        bump: data[200],
-        label: String::from_utf8(data[205..].to_vec()).unwrap(),
+        profile: Address::try_from(&data[at::PROFILE..at::STAMP]).unwrap(),
+        stamp: data[at::STAMP..at::ISSUER].try_into().unwrap(),
+        issuer: [data[at::ISSUER..at::ISSUER + 32].try_into().unwrap(), data[at::ISSUER + 32..at::PAYER].try_into().unwrap()],
+        payer: Address::try_from(&data[at::PAYER..at::MADE]).unwrap(),
+        made: i64::from_le_bytes(data[at::MADE..at::LABEL].try_into().unwrap()),
+        label: String::from_utf8(data[at::LABEL + 4..].to_vec()).unwrap(),
     }
 }
 
@@ -450,6 +423,13 @@ impl Harness {
         self.svm.set_sysvar(&rent_at(lamports_per_byte));
     }
 
+    /// Set the chain's clock to this Unix time, in seconds.
+    pub fn set_time(&mut self, unix_timestamp: i64) {
+        let mut clock: solana_clock::Clock = self.svm.get_sysvar();
+        clock.unix_timestamp = unix_timestamp;
+        self.svm.set_sysvar(&clock);
+    }
+
     pub fn account(&self, address: &Address) -> Account {
         self.svm.get_account(address).unwrap_or_else(|| panic!("no account at {address}"))
     }
@@ -458,8 +438,8 @@ impl Harness {
         self.svm.get_account(address).map(|a| a.lamports > 0).unwrap_or(false)
     }
 
-    pub fn row(&self, market_stamp: &[u8; 32]) -> RowView {
-        read_row(&self.account(&row_address(market_stamp)).data)
+    pub fn row(&self, stamp: &[u8; 32]) -> RowView {
+        read_row(&self.account(&row_address(stamp)).data)
     }
 
     pub fn lamports_of(&self, address: &Address) -> u64 {

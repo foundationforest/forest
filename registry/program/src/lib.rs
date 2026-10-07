@@ -7,19 +7,19 @@
 // Security: See ../security-checklist.md
 // ============================================================
 
-//! The Forest registry: one row per market stamp.
+//! The Forest registry: one row per stamp.
 //!
-//! An issuer keeps a list of stamps (one that checks faces keeps a human list) and signs each
-//! snapshot of it: an ed25519 signature over the list's root. A person's stamp on a list comes
-//! from their seed and the issuer's address. Their market stamp is the Semaphore nullifier, the
-//! label its scope: the same for one person on one list under one label, unguessable for others.
+//! An issuer signs a note for each person it checks (one that checks faces signs one per face): a
+//! note number from the person's secret, and a tier. A person's secret for an issuer comes from
+//! their seed and the issuer's name; their stamp for a label is `Poseidon(scope, secret)`, the same
+//! every time for one person at one issuer under one label, unguessable for others.
 //!
-//! A row says: this profile holds a stamp on this issuer's list, under this label, proven against
-//! this root, which the issuer signed. The row sits at the address derived from the market stamp,
-//! so one person gets at most one row per issuer per label. The program verifies the proof and
-//! requires the main key's signature. It stores the issuer's signature without checking it, and
-//! checks no root and no issuer: readers decide which issuers they trust and check their
-//! signatures.
+//! To register, the device proves in zero knowledge: "this issuer's key signed a note for my
+//! secret; my stamp for this label is this one; this proof is for this main key". The program
+//! verifies the proof, requires the main key's signature, and writes a row at the address derived
+//! from the stamp: one row per stamp. The row holds the main key, the stamp, the issuer's key, who
+//! paid, when it was made and the label. It checks no issuer: anyone can sign notes, and readers
+//! decide whose count.
 //!
 //! There is no fee, no token, no treasury, no admin and no list in the program. The only costs are
 //! Solana's own, paid by whoever sends the transaction. A row is written once and never changes.
@@ -49,11 +49,11 @@ pub const SCOPE_NS: &[u8] = b"forest.foundation/label/v1/";
 /// The message is a hash of the namespaced main key: what binds a proof to one profile.
 pub const MESSAGE_NS: &[u8] = b"forest.foundation/profile/v1/";
 
-/// A row's address: `[ROW_SEED, market stamp]`.
+/// A row's address: `[ROW_SEED, stamp]`.
 pub const ROW_SEED: &[u8] = b"row";
 
-/// `keccak256(namespace || parts...) >> 8`, the way Semaphore's proof package turns a value into a
-/// field element. The shift by one byte is what keeps the result below BN254's scalar order.
+/// `keccak256(namespace || parts...) >> 8`: text made a field element. The shift by one byte is
+/// what keeps the result below BN254's scalar order.
 pub fn field_hash(namespace: &[u8], parts: &[&[u8]]) -> [u8; 32] {
     let mut input: Vec<&[u8]> = Vec::with_capacity(parts.len() + 1);
     input.push(namespace);
@@ -78,15 +78,16 @@ pub fn message_of(profile: &Pubkey) -> [u8; 32] {
 pub mod forest_registry {
     use super::*;
 
-    /// Write one row: this profile holds a stamp on this issuer's list, under this label, proven
-    /// against this root. The row is never written again.
+    /// Write one row: this main key holds a note from the issuer with this key, under this label,
+    /// and its stamp for that label is this one. The row is never written again.
     ///
-    /// The main key signs, so nobody can put a row on it but its holder. The program derives
-    /// the scope from the label and the message from the main key, and verifies the proof with
-    /// public inputs [root, market stamp, message, scope]. So the proof counts for this label, this
-    /// main key and this market stamp and no other: a proof seen in flight cannot land under
-    /// another main key. The root, the issuer and the issuer's signature are stored as given. The
-    /// row's address is derived from the market stamp, and `init` refuses a second row for it.
+    /// The main key signs, so nobody can put a row on it but its holder. The program derives the
+    /// scope from the label and the message from the main key, and verifies the proof with public
+    /// inputs [stamp, issuer x, issuer y, scope, message, tier]. So the proof counts for this
+    /// stamp, this issuer's key, this label, this main key and this tier and no other: a proof
+    /// seen in flight cannot land under another main key. The tier is checked and not kept. The
+    /// row's address is derived from the stamp, and `init` refuses a second row for it. Its time
+    /// is the clock's, never the caller's.
     ///
     /// Anyone may pay. Whoever signs as payer pays the row's deposit and is recorded, so a refund
     /// can find them.
@@ -97,15 +98,14 @@ pub mod forest_registry {
         let scope = scope_of(&args.label);
         let message = message_of(&profile);
         let p = &args.proof;
-        proof::verify(&p.a, &p.b, &p.c, &[args.root, args.market_stamp, message, scope])?;
+        proof::verify(&p.a, &p.b, &p.c, &[args.stamp, args.issuer[0], args.issuer[1], scope, message, args.tier])?;
 
         let row = &mut ctx.accounts.row;
         row.profile = profile;
+        row.stamp = args.stamp;
         row.issuer = args.issuer;
-        row.root = args.root;
-        row.issuer_signature = args.issuer_signature;
         row.payer = ctx.accounts.payer.key();
-        row.bump = ctx.bumps.row;
+        row.made = Clock::get()?.unix_timestamp;
         row.label = args.label;
         Ok(())
     }
@@ -116,7 +116,7 @@ pub mod forest_registry {
     /// difference out of its accounts, so a sealed program without this would lock it away. Anyone
     /// may send it: the amount and the destination are read from the chain, never from the caller.
     /// The row's data is untouched and it stays exactly rent exempt. It never closes: its
-    /// existence is the one-row-per-market-stamp rule.
+    /// existence is the one-row-per-stamp rule.
     pub fn refund(ctx: Context<Refund>) -> Result<()> {
         let row = ctx.accounts.row.to_account_info();
         // The rate is read at runtime, every time: the rate changing is why this exists.
@@ -131,7 +131,7 @@ pub mod forest_registry {
     }
 }
 
-/// One Semaphore proof, its points compressed.
+/// One person proof, its points compressed.
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
 pub struct CompressedProof {
     pub a: [u8; 32],
@@ -140,17 +140,16 @@ pub struct CompressedProof {
 }
 
 /// What `register` carries. Sealed: clients build these bytes forever. Every fixed field comes
-/// first; the label, the one of variable length, is last.
+/// first; the label, the one of variable length, is last. There is no time: the program sets it.
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
 pub struct RegisterArgs {
-    /// The proof's nullifier, `Poseidon(scope, secret)`: the row's address comes from it.
-    pub market_stamp: [u8; 32],
-    /// The issuer's ed25519 key. Stored as given.
-    pub issuer: Pubkey,
-    /// The root of the issuer's list the proof was made against. Taken as given.
-    pub root: [u8; 32],
-    /// The issuer's ed25519 signature over the root's 32 big-endian bytes. Stored, never checked.
-    pub issuer_signature: [u8; 64],
+    /// The proof's output, `Poseidon(scope, secret)`: the row's address comes from it.
+    pub stamp: [u8; 32],
+    /// The issuer's key, x then y, each 32 bytes big-endian. A public input, so the proof says it
+    /// signed the note; stored.
+    pub issuer: [[u8; 32]; 2],
+    /// The tier the issuer signed in the note. A public input; not stored.
+    pub tier: [u8; 32],
     pub proof: CompressedProof,
     /// Free text. Hashed into the scope.
     pub label: String,
@@ -159,12 +158,12 @@ pub struct RegisterArgs {
 #[derive(Accounts)]
 #[instruction(args: RegisterArgs)]
 pub struct Register<'info> {
-    /// Fails if it already exists. That failure is "one row per market stamp".
+    /// Fails if it already exists. That failure is "one row per stamp".
     #[account(
         init,
         payer = payer,
         space = Row::space(args.label.len()),
-        seeds = [ROW_SEED, args.market_stamp.as_ref()],
+        seeds = [ROW_SEED, args.stamp.as_ref()],
         bump
     )]
     pub row: Account<'info, Row>,
@@ -179,7 +178,7 @@ pub struct Register<'info> {
 #[derive(Accounts)]
 pub struct Refund<'info> {
     /// Any row. `Account` checks it is this program's and a `Row`; only `register` makes those,
-    /// and only at a market stamp's address, so no seeds are needed to know it is one.
+    /// and only at a stamp's address, so no seeds are needed to know it is one.
     #[account(mut, has_one = payer @ RegistryError::NotThePayer)]
     pub row: Account<'info, Row>,
     /// CHECK: `has_one` requires it to be the payer the row records. It only ever receives lamports.
@@ -189,7 +188,7 @@ pub struct Refund<'info> {
 
 /// Compile-time proof that the sealed sizes are what this file says they are.
 const _: () = {
-    assert!(Row::FIXED == 193);
-    assert!(Row::space(0) == 205);
-    assert!(Row::space(MAX_LABEL) == 333);
+    assert!(Row::FIXED == 168);
+    assert!(Row::space(0) == 180);
+    assert!(Row::space(MAX_LABEL) == 308);
 };

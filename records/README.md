@@ -45,9 +45,9 @@ is needed: no account, no sign-up, no directory.
   address. An access key is named the same way, but for a read key: its age recipient,
   `age1pq1…`. An address has one spelling: decoding and encoding again MUST give the same text.
 - **Usable keys.** A key named by its address anywhere (`profile`, `by`, an access key's `key` but
-  a read key's, a message's `to`, `from` and `key`, a pull's `key`, an inbox's `issuer`, a grant's
-  `folder` and `from`) MUST be a canonical point in the prime-order subgroup and not of small
-  order. Anything else is refused.
+  a read key's, a message's `to`, `from` and `key`, a pull's `key`, a grant's `folder` and `from`)
+  MUST be a canonical point in the prime-order subgroup and not of small order. Anything else is
+  refused.
 - **What a main key signs:** Solana transactions, records, messages and pull requests. The signed
   bytes of the last three begin with `0xff`, which no Solana message begins with, then each with its
   own text (`forest/v1/record\n`, `forest/v1/message\n`, `forest/v1/pull\n`), so no signature is
@@ -190,13 +190,14 @@ folder.
 **Declaring it.** The profile record's optional `inbox` field (`schemas/profile.json`):
 
 ```
-"inbox": { "senders": "anyone" | { "issuer": <address> }, "once"?: true, "maxBytes"?: <integer>,
+"inbox": { "senders": "anyone" | { "issuer": <issuer key> }, "once"?: true, "maxBytes"?: <integer>,
            "readers"?: [<age1pq1…>, …] }
 ```
 
 - No `inbox` field means no inbox: hosts refuse deliveries.
 - `senders` is `"anyone"`, or `{ "issuer" }`: the sender's key must hold a registry row from that
-  issuer, under any label.
+  issuer, under any label. The issuer is named by its key as a row holds it: x then y of its point
+  on Baby Jubjub, each 32 bytes big-endian, as 128 characters of lowercase hex.
 - `once`: one message from each sender, ever.
 - `maxBytes`: the largest message it takes, as canonical text in bytes.
 - `readers`: read keys' public halves. A reader listed here can act on the inbox while the person
