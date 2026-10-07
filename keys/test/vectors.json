@@ -1,5 +1,5 @@
 {
-  "about": "Fixed test vectors for Forest keys, v1. The seed is the 32 bytes 00 01 ... 1f: public by construction, so every key here is public; for tests only. Two profiles (labels tutoring/seller and tutoring/buyer), each with its reading key; two lists, kept by the issuers whose ed25519 private keys are 32 bytes of 0x01 and 32 bytes of 0x02. Generated once by this library and pinned; test/keys.test.ts recomputes every value without it. Bytes are hex; field elements are decimal. Changing any value here changes the standard.",
+  "about": "Fixed test vectors for Forest keys, v1. The seed is the 32 bytes 00 01 ... 1f: public by construction, so every key here is public; for tests only. Two profiles (labels tutoring/seller and tutoring/buyer), each with its reading key; two issuers, named issuer-a.example and issuer-b.example, each with the person's secret, its scalar and the note number. Generated once by this library and pinned; test/keys.test.ts recomputes every value without it. Bytes are hex; field elements are decimal. Changing any value here changes the standard.",
   "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
   "words": "abandon amount liar amount expire adjust cage candy arch gather drum bullet absurd math era live bid rhythm alien crouch range attend journey unaware",
   "mainKeys": [
@@ -26,28 +26,20 @@
       }
     }
   ],
-  "lists": [
+  "issuers": [
     {
-      "issuer": "AKnL4NNf3DGWZJS6cPknBuEGnVsV4A4m5tgebLHaRSZ9",
-      "info": "forest/v1/list/AKnL4NNf3DGWZJS6cPknBuEGnVsV4A4m5tgebLHaRSZ9",
-      "secret": "ea54aedb4a8991d00fc1bbe8d7a5099c14d071451ffbc246e72281cea4e55af1",
-      "secretScalar": "665561349255238347937277730398417124790405150900355599684173241001574904436",
-      "publicKey": [
-        "13058596147137095242077878084159022781958411464829898438672541817592278401082",
-        "20922325712332872882943751798286938005653709225628179739167392380155746425243"
-      ],
-      "stamp": "6914132349450691776510716074922594152964091687921981308373825731646020123218"
+      "name": "issuer-a.example",
+      "info": "forest/v1/issuer/issuer-a.example",
+      "secret": "0c224f2de3ab05a837b6d69c65382db2079f73ffcbd8a7a21a206ac76afecac0",
+      "scalar": "803274075121663429902466391018893464172598640879878922455998250156991791818",
+      "noteNumber": "10260738844603664161504988713473359584613684870648444840530706110060385700206"
     },
     {
-      "issuer": "9hSR6S7WPtxmTojgo6GG3k4yDPecgJY292j7xrsUGWBu",
-      "info": "forest/v1/list/9hSR6S7WPtxmTojgo6GG3k4yDPecgJY292j7xrsUGWBu",
-      "secret": "27f833e3141de62cb409e62cb59bda43a641ede5b679f5a85e247c8ff4a5f448",
-      "secretScalar": "2492331428137633524285403892679743852619728568594135134196580301273452183184",
-      "publicKey": [
-        "19117259042680092088377989981509061176255708166103010035664338460014704761633",
-        "631273282437174649833387575513641669757567780789284049107050095046544037815"
-      ],
-      "stamp": "20772401070522686362617789819676029016219375112108663629720135165047952968619"
+      "name": "issuer-b.example",
+      "info": "forest/v1/issuer/issuer-b.example",
+      "secret": "17f87dee395460bdc0dc8bf40cf3cd43fff9019f5a467ba2d39394e35cb1ff86",
+      "scalar": "1519689346950852131878692477637090806728379909558971026767509071663270396380",
+      "noteNumber": "12060818474188934874565393249181582662965363592091992641141699529541802290234"
     }
   ]
 }

@@ -25,7 +25,7 @@ import { ed25519 } from '@noble/curves/ed25519.js'
 import { sha256 } from '@noble/hashes/sha2.js'
 import { Connection, Keypair, PublicKey, SystemProgram, Transaction, VersionedTransaction } from '@solana/web3.js'
 
-import { listSecret, mainKey } from '../../../keys/src/index.ts'
+import { hkdf, mainKey } from '../../../keys/src/index.ts'
 import {
   buildRegistration,
   fetchRow,
@@ -129,8 +129,11 @@ const seed = Buffer.from(vectors.seed, 'hex')
 // The stand-in texts still say `keeper`: each is a key's seed or a stamp's, and another text would
 // be another issuer and another list, leaving the row on devnet behind.
 const issuer = standIn('keeper')
-const { secret, stamp } = await listSecret(seed, issuer.publicKey.toBase58())
-if (stampOf(secret) !== stamp) throw new Error('keys/ and the client disagree on the stamp')
+// The row on devnet was made with the list secret, mixed from the seed and the issuer's address,
+// before keys/ mixed the issuer secret from its name. It stays that way until the program takes the
+// person proof.
+const secret = await hkdf(seed, `forest/v1/list/${issuer.publicKey.toBase58()}`)
+const stamp = stampOf(secret)
 
 // The issuer's list: strangers' stamps around the person's, and the issuer's signature on its root.
 const stranger = (n: number) => stampOf(Buffer.from(`forest devnet stand-in keeper: member ${n}`))

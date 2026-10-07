@@ -8,7 +8,7 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {
-    "test": "node ../artifacts/fetch.mjs && node --test --test-force-exit test/client.test.ts test/circuit.test.ts",
+    "test": "node ../artifacts/fetch.mjs && node --test --test-force-exit test/client.test.ts test/circuit.test.ts test/note.test.ts",
     "test:validator": "node --test --test-force-exit test/validator.test.ts",
     "test:devnet": "FOREST_DEVNET=1 node --test --test-force-exit test/devnet.test.ts",
     "check": "tsc --noEmit",
@@ -21,6 +21,7 @@
     "@semaphore-protocol/group": "4.12.1",
     "@semaphore-protocol/identity": "4.12.1",
     "@solana/web3.js": "1.99.0",
+    "@zk-kit/eddsa-poseidon": "1.0.4",
     "poseidon-lite": "0.3.0",
     "snarkjs": "0.7.5"
   },

@@ -17,6 +17,8 @@ the network fee and the row's deposit, paid by whoever sends the transaction.
 - `client/`: stamps, proofs and their check off chain, the two instructions, and rows read back.
   It talks to no network of its own.
 - `artifacts/`: Semaphore's setup files the program is sealed against.
+- `circuit/`: the person proof, which the program takes next: the circuit, its devnet setup and its
+  tests.
 - `devnet/`: the deploy script and the public record of what runs on devnet.
 
 ## How it works
@@ -26,7 +28,7 @@ the network fee and the row's deposit, paid by whoever sends the transaction.
   list its own way (every stamp, in the order it took them) and signs each snapshot: an ed25519
   signature over the list's root, as 32 big-endian bytes.
 - **Stamps.** A person's device derives a secret for each list from their seed and the issuer's
-  address (`keys/`: `listSecret(seed, issuer)`). Its Semaphore commitment is their stamp on that
+  name (`keys/`: `issuerSecret(seed, name)`). Its Semaphore commitment is their stamp on that
   list. The stamp is the only thing that leaves the device, once, to that issuer. Stamps on two
   lists cannot be matched to each other.
 - **Market stamps.** The proof's nullifier, with the label as its scope, is the person's market
@@ -135,11 +137,11 @@ signature, a recent blockhash and a connection.
 | `verifyStamp({ proof, root, marketStamp, label, profile })` | Whether a proof (`proveStamp`'s `raw`) holds for that root, market stamp, label and main key: check a proof without the chain. A service that sponsors rows checks a second proof this way |
 
 ```ts
-import { listSecret } from '@forest/keys'
+import { issuerSecret } from '@forest/keys'
 import { buildRegistration } from '@forest/registry-client'
 
 const r = await buildRegistration({
-  secret: (await listSecret(seed, issuer.toBase58())).secret,
+  secret: (await issuerSecret(seed, name)).secret,
   label: 'tutoring/seller',
   profile,                      // the main key; it signs
   issuer,                       // the issuer's key
@@ -164,7 +166,8 @@ cd registry/client    && npm run fixtures                # remake the real proof
 
 The LiteSVM tests run against real proofs committed in
 `program/tests-litesvm/fixtures/proofs.json`, which `npm run fixtures` makes. Their test person is
-keys/'s: list secrets and two profiles from its test seed, through `keys/`. They check the wire
+keys/'s: two profiles from its test seed, and secrets mixed from it by `keys/`'s `hkdf` under the
+string the fixtures were made with, `forest/v1/list/<issuer address>`. They check the wire
 format against a second copy written by hand in `program/tests-litesvm/src/lib.rs`. One proof made
 with the earlier 4.0.0 files is kept in `fixtures/proof-4.0.0.json`, to show the program refuses it.
 
@@ -191,6 +194,92 @@ no compute-budget instruction.
 One proof is about 120,000 compute units to verify, and a second or two to make in Node. The
 deposit is the rent-exempt minimum for the row's size: 1,772,920 lamports for that 221-byte row at
 today's rate. The network fee is 5,000 lamports a signature. The program is 164,288 bytes.
+
+### The note and the person proof
+
+This is the proof registering takes next. The program switches to it in the next pull request;
+until then `register` takes the membership proof above. The circuit, its devnet setup and the client run
+now, off chain.
+
+- **The note.** Instead of keeping a list, an issuer signs a note for each person it checks:
+  *note number, face embedding, model name, tier*.
+  - The note number is Poseidon of the person's secret for that issuer (`keys/`:
+    `issuerSecret(seed, name)`). The device sends it to the issuer once; the issuer never learns
+    the secret.
+  - The embedding is the bytes the issuer's model gives for the face, the model name says which
+    model, and the tier is a number whose meaning is the issuer's.
+  - The issuer signs `Poseidon(tag, note number, keccak256(embedding) >> 8, keccak256(model) >> 8,
+    tier)` with its EdDSA key on Baby Jubjub, over Poseidon (circomlib's). The tag is
+    `keccak256("forest/v1/note") >> 8`, always the same, so nothing an issuer signs for another
+    purpose can be turned into a note. The embedding and the model enter the signed message only
+    as their hashes. The person keeps the note.
+- **The person proof.** To register, the device proves, showing neither the secret nor the note:
+  *I know an issuer secret and a note this issuer signed whose note number is the hash of that
+  secret; my stamp for this label is the hash of that secret and the label; this proof is for this
+  main key.*
+  - Public: the issuer's key (two numbers), the label (as its scope), the main key (as its
+    message), the stamp and the tier.
+  - The stamp is `Poseidon(scope, secret)`, the number a row's address comes from today (its
+    market stamp). It depends on the secret and the label, not on the note, so a new note, with
+    a new tier or under a new key, keeps the same stamp.
+  - The same proof, attached to a profile later, shows that profile's tier.
+- **The issuer's key is the issuer's to keep.** Whoever holds it can sign notes for people who do
+  not exist, and so can anyone it signs a number for without knowing what that number is. Rows name
+  the issuer, so readers can stop trusting a key. The person's secret comes from the issuer's name,
+  not its key, so a new key changes no one's stamps.
+- **The setup is single-party.** One party made it, so until a public setup ceremony, whoever ran
+  `circuit/devnet/setup.sh` could forge a proof. Devnet only.
+
+[`circuit/person.circom`](circuit/person.circom):
+
+| | Signals |
+|---|---|
+| Private | `secret`, the scalar `keys/`'s `issuerSecret` gives; the note's embedding hash and model hash; the issuer's signature, `R8x`, `R8y` and `S` |
+| Public, in this order | `stamp`, the output; `issuerX`, `issuerY`; `scope`; `message`; `tier` |
+
+Inside the proof: the note number is `Poseidon(secret)`; circomlib's `EdDSAPoseidonVerifier`,
+unchanged, checks that the issuer's key signed `Poseidon(tag, note number, embedding, model, tier)`,
+with the tag fixed in the circuit; the stamp is `Poseidon(scope, secret)`; and the message is
+squared, as Semaphore does, so it cannot be changed in a proof. The scope and the message are the
+ones `register` derives.
+
+The setup's phase 1 is the reputation circuit's: PSE's Perpetual Powers of Tau,
+`ppot_0080_16.ptau`, pinned by SHA-256 in `circuit/devnet/setup.sh`. Phase 2 is one contribution.
+Every file is small, so all are committed in `circuit/devnet/`, pinned in `setup.json`;
+`npm run fetch` checks their hashes, and `npm run compile` checks the compiled circuit against
+`setup.json`. `person.circom` does not change after its setup: a change means a new setup.
+
+| File | Bytes | SHA-256 |
+|---|---|---|
+| `verification-key.json` | 3,838 | `5d0f0b9c62e6b0013e8c19e86bb00628dbe3bcb39d35bebaac8ac64c5faaaaa4` |
+| `person.zkey` | 3,396,483 | `90632ee12c389127007c2c5e29a1974fad42bc080e47b127a1f6426ad6c94dd3` |
+| `person.wasm` | 2,815,205 | `063882b8f5a8208d16485c609494b53b1b0fd84da234f5207b63f80bd8e56c99` |
+
+| Function | Gives |
+|---|---|
+| `signNote(privateKey, note)`, `issuerKeyOf(privateKey)` | For an issuer: the signed note, and its key |
+| `noteNumberOf(secret)`, `noteHash(note)`, `noteSigned(note)` | The note number, what an issuer signs, and whether its issuer signed it |
+| `provePerson({ secret, note, label, profile, artifacts })` | The proof, on the device. Refuses a note for another secret, or one its issuer did not sign |
+| `verifyPerson({ proof, issuer, label, profile, stamp, tier })` | Whether the proof holds for that issuer, label, main key, stamp and tier |
+| `personInput({...})` | The circuit's input, for a caller that drives snarkjs itself |
+
+```
+cd keys && npm ci && cd ../registry/client && npm ci     # the circuit's tests read both
+cd registry/circuit && npm ci
+npm run fetch                     # the committed setup files, hash-checked
+npm run compile                   # circom 2.2.3 on PATH or in CIRCOM; checks setup.json
+npm run check && npm test         # a proof, and every way one must fail
+devnet/setup.sh                   # a new setup: new files, every hash new
+```
+
+The tests make a proof for `keys/`'s test person and check that a wrong issuer key, a forged
+signature, the issuer's signature without the tag, a tier the issuer did not sign, another person's
+secret, a stamp for another label and a proof replayed for another main key all fail.
+
+Measured in Node 22 on a 4-core machine: 4,979 constraints; a proof takes about 0.7 s to make and
+50 ms to check, and is 725 bytes as snarkjs writes it. It trusts circom 2.2.3, snarkjs 0.7.5,
+circomlib 2.0.5's EdDSA verifier and Poseidon, and zk-kit's `@zk-kit/eddsa-poseidon` 1.0.4 to sign,
+used unchanged.
 
 ### Sealed on mainnet
 
@@ -299,6 +388,6 @@ destination are read from the chain, never from the caller.
 **Why does a row never change or close?** Its existence is the one-row-per-market-stamp rule:
 closing it would free the market stamp for a second row.
 
-**What if I lose my seed?** The rows stay on the chain and nobody else can use them, but your list
+**What if I lose my seed?** The rows stay on the chain and nobody else can use them, but your issuer
 secrets are gone, and the issuer's face check will not take you again. The 24 words are the only
 backup.

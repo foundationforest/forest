@@ -18,7 +18,7 @@ import type { SnarkjsProof } from '../../../registry/client/src/compress.ts'
 import { BN254_P, fromBytes32, isFieldElement, messageOf, scopeOf, toBytes32 } from '../../../registry/client/src/field.ts'
 import { identityFrom, marketStampOf } from '../../../registry/client/src/stamp.ts'
 
-/** A list secret: the 32 bytes `keys/`'s `listSecret(seed, issuer)` returns, or its identity. */
+/** An issuer secret: the 32 bytes `keys/`'s `issuerSecret(seed, name)` returns, or its identity. */
 type Secret = Parameters<typeof identityFrom>[0]
 /** A 32-byte ed25519 key: a main key or an index's key. */
 type Key = Parameters<typeof messageOf>[0]
@@ -125,9 +125,9 @@ export function signedBytes(root: bigint, time: bigint | number): Uint8Array {
  * proves it; it is exported for a caller that drives snarkjs itself.
  */
 export function circuitInput(input: {
-  /** The person's secret for one list. */
+  /** The person's secret for one issuer. */
   secret: Secret
-  /** The labels of the person's profiles on that list to count: one to eight. */
+  /** The labels of the person's profiles from that issuer to count: one to eight. */
   labels: string[]
   /** The index's published leaves, in its order. */
   leaves: Leaf[]

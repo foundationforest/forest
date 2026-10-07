@@ -15,7 +15,7 @@ import { Group } from '@semaphore-protocol/group'
 import { poseidon4 } from 'poseidon-lite/poseidon4'
 import { groth16 } from 'snarkjs'
 
-import { listSecret } from '../../../keys/src/index.ts'
+import { issuerSecret } from '../../../keys/src/index.ts'
 import { BN254_P, BN254_R, fromBytes32, scopeOf, toBytes32 } from '../../../registry/client/src/field.ts'
 import { identityFrom, marketStampOf } from '../../../registry/client/src/stamp.ts'
 import {
@@ -37,10 +37,10 @@ const here = dirname(fileURLToPath(import.meta.url))
 const artifacts = { wasm: join(here, '../devnet/reputation.wasm'), zkey: join(here, '../devnet/reputation.zkey') }
 const keysVectors = JSON.parse(readFileSync(join(here, '../../../keys/test/vectors.json'), 'utf8'))
 const seed = Buffer.from(keysVectors.seed, 'hex')
-const secret = (await listSecret(seed, keysVectors.lists[0].issuer)).secret
-const stranger = (await listSecret(seed, keysVectors.lists[1].issuer)).secret
+const secret = (await issuerSecret(seed, keysVectors.issuers[0].name)).secret
+const stranger = (await issuerSecret(seed, keysVectors.issuers[1].name)).secret
 
-// The person's three profiles on the first list, as an index scores them.
+// The person's three profiles from the first issuer, as an index scores them.
 const labels = ['tutoring/seller', 'tutoring/buyer', 'cleaning/seller']
 const mine: Leaf[] = labels.map((label, i) => ({
   stamp: marketStampOf(secret, label),

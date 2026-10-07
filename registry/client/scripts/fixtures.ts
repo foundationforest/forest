@@ -20,7 +20,7 @@ import { ed25519 } from '@noble/curves/ed25519.js'
 import { sha256 } from '@noble/hashes/sha2.js'
 import { Keypair, PublicKey } from '@solana/web3.js'
 
-import { listSecret, mainKey } from '../../../keys/src/index.ts'
+import { hkdf, mainKey } from '../../../keys/src/index.ts'
 import { MESSAGE_NS, SCOPE_NS, toBytes32 } from '../src/field.ts'
 import { rootBytes } from '../src/issuer.ts'
 import { ROW_DISCRIMINATOR, refundIx, registerIx, rowAddress, rowSpace } from '../src/program.ts'
@@ -47,14 +47,16 @@ const issuers = { A: fixtureKey('keeper A'), B: fixtureKey('keeper B') }
 type List = keyof typeof issuers
 
 // Alice is the test person: keys/'s pinned test seed (keys/test/vectors.json). Her secret for each
-// list comes from it and the issuer's address, and her two profiles are its tutoring/seller and
-// tutoring/buyer profiles, all through `keys/` itself. Bob and Carol are plain bytes, on one list
-// each, with fixed main keys: the registry does not care how a main key was made.
+// list is the list secret, mixed from it and the issuer's address with keys/'s own `hkdf`, as keys/
+// did before it mixed the issuer secret from a name; these fixtures go with the membership proof.
+// Her two profiles are its tutoring/seller and tutoring/buyer profiles, all through `keys/` itself.
+// Bob and Carol are plain bytes, on one list each, with fixed main keys: the registry does not care
+// how a main key was made.
 const keysVectors = JSON.parse(readFileSync(join(here, '../../../keys/test/vectors.json'), 'utf8'))
 const seed = Buffer.from(keysVectors.seed, 'hex')
 const secrets = {
-  'alice on A': (await listSecret(seed, issuers.A.publicKey.toBase58())).secret,
-  'alice on B': (await listSecret(seed, issuers.B.publicKey.toBase58())).secret,
+  'alice on A': await hkdf(seed, `forest/v1/list/${issuers.A.publicKey.toBase58()}`),
+  'alice on B': await hkdf(seed, `forest/v1/list/${issuers.B.publicKey.toBase58()}`),
   'bob on A': Buffer.from('forest registry fixture: bob on A'),
   'carol on B': Buffer.from('forest registry fixture: carol on B'),
 }
