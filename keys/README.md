@@ -4,83 +4,125 @@ Up: [the repo](../README.md).
 
 ## What it is
 
-The standard for a person's keys in Forest, and a small library that follows it. The standard is
-the 24 words and the recipe; the rules for apps are defaults an app adopts, or says it doesn't. A
-person owns one seed: 24 random words. Their main keys, inbox keys and issuer secrets are mixed
-from it, on their own device. Any app that follows this page gets the same keys from the same
-seed, so a person is never locked into one app. Where the app keeps the seed is its choice: by
-default the device's secure slot, with the words in the person's password manager (the vault) as
-the backup.
+A person's keys in Forest: one seed, 24 random words, and the recipe that mixes every other key
+from it, on the person's own device. Any app that follows this page gets the same keys from the
+same seed, so a person is never tied to one app.
 
-This README is the standard. The library in `src/` follows it, and `test/vectors.json` pins its
-answers.
+This README is the standard: the seed and the recipe are fixed, and the rules for apps are
+defaults an app adopts, or says it doesn't. The library in `src/` follows it, and
+`test/vectors.json` pins its answers.
 
 ## How it works
 
-### The 24 words
+### The seed
 
-- The seed is 32 random bytes, written as 24 English words: BIP39, the 32 bytes plus an 8-bit
-  checksum.
-- Where the seed lives is the app's choice. By default it lives in the app's slot of the OS
-  keychain (Apple's Keychain or Android's Keystore), unlocked by the person's biometrics, face or
-  fingerprint, and used only to derive something new. The words in the vault are the backup.
-- The words are the 32 bytes and nothing more. BIP39's own seed step (PBKDF2, with a passphrase)
-  is not used.
-- Case and spacing in the words do not matter. A wrong word, or a word out of place, fails the
-  checksum.
+- The seed is 32 random bytes, written as 24 English words (BIP39: the 32 bytes plus an 8-bit
+  checksum). The words are the 32 bytes and nothing more: BIP39's own seed step (PBKDF2, with a
+  passphrase) is not used.
+- Case and spacing in the words do not matter. A word not on BIP39's list is refused, and the
+  checksum catches all but about 1 in 256 other mistakes, such as a wrong word or two words
+  swapped.
+- Where the seed lives is the app's choice. By default it lives in the app's slot of the phone's
+  secure keychain (Apple's Keychain or Android's Keystore), opened by the person's face or
+  fingerprint and used only to mix keys, with the 24 words in the person's password manager as the
+  backup.
 
 ### The recipe
 
-Every mix is HKDF-SHA256 (RFC 5869): an empty salt, the info string's UTF-8 bytes, 32 bytes out.
+Every key below is mixed with HKDF-SHA256 (RFC 5869), a standard one-way mix of a secret and a
+text: an empty salt, the text's UTF-8 bytes as its info, 32 bytes out. Only the text changes, and
+each key is explained below, in the order it is needed:
 
-| From | Mixed with (info) | Gives | Used for |
-|---|---|---|---|
-| seed | `forest/v1/profile/<label>` | the main key (ed25519) | the profile's name and Solana address, and its signature on records and transactions |
-| the main key's 32 private bytes | `forest/v1/read` | the profile's inbox key (age's post-quantum hybrid) | opening messages and private records encrypted to the profile |
-| seed | `forest/v1/issuer/<issuer name>` | the person's secret for that issuer | the person's note number for that issuer, and their stamps |
+| From | Mixed with (info) | Gives |
+|---|---|---|
+| the seed | `forest/v1/profile/<label>` | a main key: one profile's name, Solana address and signature |
+| a main key's 32 private bytes | `forest/v1/read` | that profile's inbox key, which opens what is encrypted to it |
+| the seed | `forest/v1/issuer/<issuer name>` | the person's secret for one issuer, which their note number and stamps come from |
 
-The info strings are hashed into every key, so they stay as written, `profile` and `read`
-included: a new string is a new key for everyone. From the issuer secret on, Poseidon takes over
-(below).
+The info strings are part of every key, so they never change: a new string would give everyone
+new keys.
 
-**The main key.**
-- One profile per label. A label is free text, used exactly as given, as UTF-8:
-  `Tutoring/Seller` and `tutoring/seller` are two profiles. The recommended form is `market/role`,
-  such as `tutoring/seller`.
-- The 32 bytes are an ed25519 private key (RFC 8032), in the seed form Solana tooling accepts for
-  a keypair: the main key is a Solana address by nature.
-- The address is the public key in base58 (the Bitcoin alphabet). It is the profile's name and its
-  Solana address: one key, so a name and an address can never disagree.
-- A chain other than Solana gets an address derived from the main key and published in the
-  profile. Only Solana is used now, and no code derives another.
+### Main keys
 
-**The inbox key.**
-- Mixed from the main key, not from the seed: whoever holds a main key can read what is encrypted
-  to its profile.
-- The 32 bytes are used unchanged as age's post-quantum hybrid identity, `mlkem768x25519`
-  (ML-KEM-768 with X25519): `AGE-SECRET-KEY-PQ-1`, then bech32 of the bytes, in upper case. age
-  expands them into the two private keys.
-- Others encrypt to its recipient, `age1pq1…`, which age computes from the identity. It is long:
-  about 1,960 characters. Anyone else opens what is encrypted to it only if both ML-KEM-768 and
-  X25519 are broken.
-- The profile publishes the recipient, the key's public half; the address does not give it.
+A main key is one profile: it signs the profile's records and transactions, and its address is
+the profile's name.
 
-**The issuer secret, the note number and the stamps.**
-- An issuer is anyone who signs notes for people, such as one that checks faces
-  ([registry](../registry/README.md#the-note-and-the-person-proof)). Its name is the text it
-  publishes as its own, such as a domain, used exactly as given, as UTF-8. The secret is mixed
-  from the name, not from the issuer's key, so a new key changes no one's stamps.
-- The 32 bytes become a number the way Semaphore v4 made its secret scalar (zk-kit's
-  `deriveSecretScalar`, `@zk-kit/eddsa-poseidon` 1.0.4), restated here only so it can be checked:
+- There is one per label. A label is free text saying what the profile is for, used exactly as
+  given, as UTF-8, so `Tutoring/Seller` and `tutoring/seller` are two profiles. The recommended
+  shape is `market/role`, such as `tutoring/seller`, with market names from
+  [foundationforest/markets](https://github.com/foundationforest/markets).
+- The 32 bytes are an ed25519 private key (RFC 8032), in the form Solana tooling takes for a
+  keypair, so every main key is also a Solana account.
+- Its address is the public key in base58 (the Bitcoin alphabet): the profile's name and its
+  Solana address at once, so the two can never disagree.
+
+### Inbox keys
+
+A profile's inbox key opens what others encrypt to it: the messages in its inbox and its private
+records ([records](../records/README.md)).
+
+- It is mixed from the main key, not from the seed: whoever holds a main key can open what is
+  encrypted to its profile, and nothing more. An inbox key gives no other profile, and no main key
+  gives the seed.
+- Its 32 bytes are used unchanged as an identity for age, a widely used encryption format, of
+  age's post-quantum hybrid kind, `mlkem768x25519`: two keys at once, ML-KEM-768 and X25519, so
+  what is encrypted to it stays closed unless both are broken. It is written
+  `AGE-SECRET-KEY-PQ-1`, then bech32 of the bytes, in upper case; age expands it into the two
+  private keys.
+- Others encrypt to its public half, the recipient `age1pq1…`, which age computes from the
+  identity. It is about 1,960 characters long. The profile publishes it; the address does not give
+  it.
+- The main key cannot do this job: ed25519 only signs, so nothing is ever encrypted to a main key.
+
+### The issuer secret
+
+An issuer is anyone who signs notes for people, such as one that checks a person's face once and
+signs them a note ([registry](../registry/README.md#the-note-and-the-person-proof)). For each
+issuer, a person has one secret, mixed from their seed and the issuer's name.
+
+- The name is the text the issuer publishes as its own, such as a domain, used exactly as given,
+  as UTF-8. The secret comes from the name, not the issuer's key, so an issuer that changes its key
+  changes no one's stamps.
+- The proofs take the secret as a number, the scalar. (A zero-knowledge proof shows that something
+  is true of a secret without showing the secret.) The 32 bytes become the scalar the way Semaphore
+  v4 made its secret scalar (zk-kit's `deriveSecretScalar`, `@zk-kit/eddsa-poseidon` 1.0.4),
+  restated here only so it can be checked:
   1. `h` = the first 32 bytes of BLAKE-512 of the 32 bytes.
   2. Prune: `h[0] &= 0xf8; h[31] &= 0x7f; h[31] |= 0x40`.
   3. The scalar = (`h` read little-endian, shifted right 3) mod `l`, the Baby Jubjub subgroup
      order.
-- **The note number** = Poseidon(1) of the scalar (circomlib's Poseidon). It goes to that issuer
-  once, and the issuer signs it in the person's note. The secret is mixed again from the seed
-  whenever a proof is needed; nothing is stored.
-- **A stamp** = Poseidon(scope, scalar), one for each label, with the label as its scope. The
-  registry says how a label becomes a scope ([registry](../registry/README.md)).
+- Nothing is stored: the app mixes the secret again from the seed whenever a proof needs it.
+
+### The note number
+
+The note number is what a person gives an issuer: Poseidon of the scalar, with one input.
+Poseidon (circomlib's) is a hash made to be cheap inside a zero-knowledge proof. The device sends
+the note number to the issuer once, and the issuer signs it in the person's note. The issuer never
+learns the secret.
+
+### Stamps
+
+A stamp is the number a person's registry row sits at: `Poseidon(scope, scalar)`, one for each
+label, where the scope is the label as a number, made the way the registry makes it
+([registry](../registry/README.md#the-note-and-the-person-proof)).
+
+- The same person, issuer and label always give the same stamp, and nobody without the secret can
+  work it out.
+- Stamps for two labels, or for two issuers, cannot be matched to each other.
+
+### Access keys
+
+A person hands out access keys, never a main key. An access key is one the owner's app makes at
+random, not from the seed, and hands to an app, a server or an AI so it can act for one profile.
+Each has one scope:
+
+- **write:** signs records into the profile's folder, at the paths it is allowed;
+- **message:** sends the profile's messages and pulls its inbox;
+- **read:** opens the private records and messages encrypted to it;
+- **pay:** spends a token allowance the chain gives it, with no Forest format.
+
+The profile's permissions record lists which access keys may act, and a grant hands one to
+whoever it is for ([records](../records/README.md)).
 
 ### Rules for apps that hold keys
 
@@ -88,22 +130,13 @@ included: a new string is a new key for everyone. From the issuer secret on, Pos
 2. Every signature asks for the person's face or fingerprint and shows what is being signed; the
    person may relax this per action, and the default is never relaxed.
 3. Nothing leaves the device but access keys and signatures.
-4. Each connection gets its own access key for each folder.
+4. Each app, server or AI the person lets act for them gets its own access key for each folder.
 5. Proofs are made in the app, never delegated.
 6. The app works with any host, and its host with any app.
 7. A server that acts for you holds access keys with write, message or read scope, never a pay key.
 8. The app that holds the seed is open source.
 9. Keep a copy of every record signed; a host may drop one, and the copy puts it back.
 10. Keep each grant, an access key handed to the person, as a private record in their own folder.
-
-**Access keys.** A person hands out access keys, never a main key. An access key has one of four
-scopes. Write: a key listed in the folder's permissions record ([records](../records/README.md)).
-Message: a key that sends and pulls the profile's messages. Read: a read key, which the owner makes
-at random and hands over; nothing here mixes it, and how it reaches the reader is the app's. Pay:
-the chain's own token allowance to a key, with no Forest format. Where a holder keeps the access
-keys it is handed is its own business; the foundation's key holder is one place
-([services](https://github.com/foundationforest/services)). The profile's own inbox key is mixed
-(above), not made.
 
 ### Use it
 
@@ -151,12 +184,12 @@ encryption and an opening through age, and the scalar step by step without zk-ki
 
 ## Limits
 
-- **It trusts the device's secure slot and the vault** to keep the seed and the words, and show
-  them to no one else.
+- **It trusts the device's secure slot and the person's password manager** to keep the seed and the
+  words, and show them to no one else.
 - **It trusts its pieces, used unchanged:** Web Crypto (HKDF-SHA256, and its random source for new
-  seeds), `@noble/curves` (ed25519), `@scure/base` (base58, bech32), `@scure/bip39`,
-  `age-encryption` (whose hybrid runs on `@noble/post-quantum`), `@zk-kit/eddsa-poseidon` 1.0.4,
-  the version the registry's client uses, and `poseidon-lite` 0.3.0.
+  seeds), `@noble/curves` 2.4.0 (ed25519), `@scure/base` 2.4.0 (base58, bech32), `@scure/bip39`
+  2.4.0, `age-encryption` 0.3.1 (whose hybrid runs on `@noble/post-quantum`),
+  `@zk-kit/eddsa-poseidon` 1.0.4 and `poseidon-lite` 0.3.0.
 - **An issuer's name is its own to keep unique.** Two issuers under one name get the same note
   number from each person, so they can match their people.
 - **No recovery.** Lose the device and the words, and every profile and every stamp is gone.
@@ -165,11 +198,10 @@ encryption and an opening through age, and the scalar step by step without zk-ki
   (see the FAQ).
 - **One profile per label per seed.** The same seed and label always give the same key.
 - **Only the inbox key and read keys are post-quantum.** ed25519 and the proofs' curves fall to a
-  large quantum computer; the inbox key and read keys, age's ML-KEM-768 hybrid, do not (see the
-  FAQ).
+  large quantum computer (see the FAQ).
 - **No wiping of memory.** JavaScript cannot promise that bytes are erased; an app closes the
   page, the library cannot.
-- **Tests run in Node.**
+- **Tested in Node only,** though the library is written to run in a browser too.
 
 ## Who decides what
 
@@ -204,39 +236,20 @@ base58 address, not an identifier in some other format: one spelling names the p
 on the registry and on Solana, and it needs no directory that could refuse, withhold or misorder
 it.
 
-**Can anyone tell that two profiles are mine?**
-Not from the keys. Each main key is mixed from the seed and its own label, and each issuer secret
-from the seed and its issuer's name, so nothing public ties two of a person's profiles together,
-or their note numbers for two issuers: off chain they are private by default. How an app writes
-them can still link them ([records](../records/README.md), Limits). On chain, moving money between
-your own profiles links them until a privacy pool is used.
-
-**Why a separate inbox key and not the main key?**
-Signing and encrypting need different kinds of key: the main key is ed25519, which signs, and
-nothing is ever encrypted to a main key. The inbox key is mixed from the main key, so there is
-nothing extra to keep.
-
-**Why that kind of key?**
-Private records sit in public for years, so what they are encrypted to is post-quantum: a copy
-taken today stays closed once quantum computers come. Signing does not need that yet: a signature
-can only be forged once such a computer exists.
-
-**Why is the inbox key mixed from the main key, not from the seed?**
-So that whoever holds a profile can read what is encrypted to it, and nothing more: the inbox key
-gives no other profile, and no main key gives the seed.
-
 **Why two mixers, HKDF and Poseidon?**
 They work in different places. HKDF-SHA256 mixes every key from the seed, on the device: it is a
-standard, built into every browser's Web Crypto, and well studied. Poseidon is a hash made to be
-cheap inside a zero-knowledge proof, where SHA-256 costs far more. The registry's circuit uses it
-to turn the issuer secret into the note number and a stamp, so a proof can show that an issuer
-signed a note for the note number, and give the stamp, without showing which note. So HKDF mixes
-up to the issuer secret, outside the proof, and Poseidon takes it from there. Neither is ours;
-both are used unchanged.
+standard, built into every browser's Web Crypto, and well studied. Inside a zero-knowledge proof,
+SHA-256 costs far more than Poseidon. The registry's circuit uses Poseidon to turn the issuer
+secret into the note number and a stamp, so a proof can show that an issuer signed a note for the
+note number, and give the stamp, without showing which note. So HKDF mixes up to the issuer
+secret, outside the proof, and Poseidon takes it from there. Neither is ours; both are used
+unchanged.
 
 **What about quantum computers?**
-Only the inbox key and read keys are post-quantum, so that a private record copied today stays
-private once quantum computers come. A large enough quantum computer could:
+Private records sit in public for years, so what they are encrypted to is post-quantum: a copy
+taken today stays closed once quantum computers come. Signing does not need that yet, since a
+signature can only be forged once such a computer exists. So only the inbox key and read keys are
+post-quantum. A large enough quantum computer could:
 - work out from a profile's address what signs for it, then sign as the profile and move its
   money;
 - forge person and reputation proofs, whose curves it breaks too.

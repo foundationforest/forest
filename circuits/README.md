@@ -1,61 +1,54 @@
 # circuits
 
-Devnet only: the reputation circuit's setup was made by one party, for devnet; a public setup
-ceremony comes before mainnet. Nothing is on mainnet.
+On devnet only: the reputation circuit's setup was made by one party; a public setup ceremony
+comes before mainnet. Nothing is on mainnet.
 
-Up: [the repo](../README.md). The reputation circuit, its setup and its client:
-[reputation/](reputation/).
+Up: [the repo](../README.md). The circuit, its setup and its client: [reputation/](reputation/).
 
 ## What it is
 
-The zero-knowledge proofs Forest offers. Each one shows a single thing about a person's profiles
-and nothing else. The app makes it on the device, from the person's secret for one issuer
-(`keys/`'s `issuerSecret`), so the secret never leaves the device. Whoever it is shown to checks it.
+The reputation proof lets a person carry a score from their profiles to another one, such as a new
+profile, without naming any of them. A profile's reviews are its own, and nothing public ties a
+person's profiles together; the proof carries the score across without linking them. It has two
+uses:
 
-| Circuit | What it proves | Made by | Checked by | Engine | Status |
-|---|---|---|---|---|---|
-| **reputation** | These profiles are mine, and this is their count-weighted score in an index's tree, for one main key; which profiles stays hidden | the app, on the device | any reader, off chain | this directory: Circom 2.2.3, Groth16 on BN254, with Semaphore's Poseidon and Merkle pieces | devnet setup only, made by one party; a public setup ceremony comes before mainnet |
+- **Global:** the count-weighted score of up to eight profiles the person picks, naming none of
+  them: their average score, each weighted by its number of reviews.
+- **Single:** the score of one of their profiles, with its label shown and which profile hidden.
 
-The person proof, which registering needs, lives with the registry
-([its section](../registry/README.md#the-note-and-the-person-proof)), because the registry program
-is to be sealed with it.
-
-### What the reputation proof lets a person do
-
-A profile's reviews are its own, and nothing public ties a person's profiles together. The
-reputation proof lets a person carry a score from their profiles to another one, such as a new
-profile, without naming any of them. An index publishes its scores as a tree; the person's app
-finds their own profiles in it from their issuer secret, and proves the score on the device. It has
-two uses:
-
-- **Global:** the count-weighted score of the profiles the person picks, up to eight, naming none
-  of them.
-- **Single:** the score of one of their profiles in a named market, with its label shown and which
-  profile hidden.
+It is a zero-knowledge proof: it shows that this is true and nothing else. The person's app makes
+it on the device from their secret for one issuer ([keys](../keys/README.md#the-issuer-secret)),
+so the secret never leaves the device, and any reader checks it, off chain. It is built with
+circom 2.2.3, Groth16 on BN254, and the Poseidon and Merkle pieces Semaphore uses.
 
 ## How it works
 
 ### The tree an index publishes
 
-A standard: any index may publish one, and a proof names the root it used.
+An index, a service that reads records from hosts and scores profiles by its own policy
+([records](../records/README.md)), publishes its scores as a tree. The tree is a standard: any
+index may publish one, and a proof names the root it used.
 
 - **A leaf** is `Poseidon(stamp, scope, score, count)`, circomlib's Poseidon with four inputs:
-  - `stamp`: the profile's market stamp, its registry row's seed.
-  - `scope`: the scope of the profile's label exactly as the registry computes it,
-    `keccak256("forest.foundation/label/v1/" ‖ label) >> 8`.
-  - `score`: the index's score for the profile times ten, an integer from 0 to 2^32 - 1.
+  - `stamp`: the profile's stamp ([keys](../keys/README.md#stamps)), the number its registry row's
+    address comes from.
+  - `scope`: the profile's label as a number, exactly as the registry makes it
+    ([registry](../registry/README.md#the-note-and-the-person-proof)).
+  - `score`: the index's score for the profile times ten, as a whole number from 0 to 2^32 - 1
+    (4.7 is 47).
   - `count`: how many reviews the score comes from, from 0 to 2^32 - 1.
-- **One leaf per market stamp.**
-- **The tree** is Semaphore's: a lean incremental Merkle tree over Poseidon of pairs, with the
-  leaves in the index's order. The circuit fixes its depth at 20, so a tree holds at most 1,048,576
-  leaves.
+- **One leaf per stamp.**
+- **The tree** is Semaphore's lean incremental Merkle tree over Poseidon of pairs, with the leaves
+  in the index's order: it hashes the leaves in pairs, level by level, up to one number, the root,
+  so a short path shows that a leaf is in it. The circuit fixes its depth at 20, so a tree holds at
+  most 1,048,576 leaves.
 - **The index signs the root with a time:** ed25519 by the index's key over
   `0xff ‖ "forest/v1/reputation\n" ‖ root ‖ time`, the root as 32 big-endian bytes and the time as
   8 big-endian bytes of milliseconds since 1970. Like a record's signed bytes, they start with
   `0xff`, which starts no Solana message, then their own text, so the signature is never anything
   else.
-- An index publishes every leaf's four fields, in order, with the root, the time and the signature,
-  its own way.
+- **How it publishes them is its own:** every leaf's four fields, in order, with the root, the time
+  and the signature, in whatever format the index chooses.
 
 ### The reputation proof
 
@@ -65,18 +58,17 @@ the rest blank.
 
 | | Signals |
 |---|---|
-| Private | `secret`, the person's secret for one issuer (the scalar `keys/`'s `issuerSecret` gives); for each slot, `used`, the leaf's stamp, scope, score and count, and its path's length, position and siblings |
+| Private | `secret`, the scalar `keys/`'s `issuerSecret` gives; for each slot, `used`, the leaf's stamp, scope, score and count, and its path's length, position and siblings |
 | Public, in this order | `score`, the output; `root`; `message`; `scope`, the label shown, or 0 |
 
-`message` is the main key the proof is shown for, as in registration:
-`keccak256("forest.foundation/profile/v1/" ‖ main key) >> 8`. A proof counts for that main key
-only.
+`message` is the main key the proof is shown for, made a number as the registry makes it
+([registry](../registry/README.md#the-note-and-the-person-proof)), so a proof counts for that main
+key only.
 
 Inside the proof:
 
-1. Each used slot's stamp is `Poseidon(scope, secret)`, the registry's market stamp. Only the
-   person who holds the issuer secret can count those profiles, and all of them come from one
-   issuer.
+1. Each used slot's stamp is `Poseidon(scope, secret)`. Only the person who holds the issuer
+   secret can count those profiles, and all of them come from one issuer.
 2. Each used slot's leaf is in the tree with that root. The root is never 0.
 3. A blank slot is all zeros, and every score and count is below 2^32.
 4. No two used slots share a scope, so a profile counts once.
@@ -84,47 +76,42 @@ Inside the proof:
 6. The output is `floor(sum(score * count) / sum(count))`, over at least one review. With one
    profile, it is that profile's score.
 
-Which leaves, and how many, stays hidden.
-
-The Merkle piece is zk-kit's `binary-merkle-root` 2.0.0, the one Semaphore 4.13.0 uses: it takes the
-path's position as one number and splits it into bits itself.
+Which leaves, and how many, stays hidden. A path's position is one number: the Merkle piece,
+zk-kit's `binary-merkle-root` 2.0.0, splits it into bits itself.
 
 ### The devnet setup
 
-- **Phase 1** is public: PSE's Perpetual Powers of Tau, `ppot_0080_16.ptau`, pinned by SHA-256 in
-  `reputation/devnet/setup.sh`.
+A Groth16 proof needs a setup, made once for its circuit: whoever knows all of the setup's secret
+randomness could make false proofs, so it is made in public by many people, and one honest one is
+enough.
+
+- **Phase 1** is public: PSE's Perpetual Powers of Tau, `ppot_0080_16.ptau`, pinned by SHA-256.
 - **Phase 2** is one contribution, made once by `reputation/devnet/setup.sh`: one party. Whoever
   made it could make false proofs, so it is for devnet only. A public setup ceremony, with many
   people contributing to phase 2 on the same phase 1, comes before mainnet.
-- **What is committed:** `verification-key.json`, and `setup.json`, which records the toolchain,
-  phase 1, the contribution's hash and every file's SHA-256.
+- **What is committed:** `verification-key.json`, and
+  [`setup.json`](reputation/devnet/setup.json), which records the toolchain, phase 1, the
+  contribution's hash, and every file's size and SHA-256.
 - **What is not:** the proving key and the witness generator, used only to make a proof. They are
   in the GitHub release `reputation-devnet-1`, and `npm run fetch` refuses anything whose hash does
-  not match.
-
-| File | Bytes | SHA-256 |
-|---|---|---|
-| `verification-key.json` | 3,469 | `23710bab5211c73197c3ae149e7bd45ec01250a99195bd7db282c9838a2ea13f` |
-| `reputation.zkey` | 28,241,035 | `1b18b394ce8f19984d09259b901f3116e831525f177f11c5026344b2978863c9` |
-| `reputation.wasm` | 2,592,737 | `70b90c31b3769018ae1801431b6ac82c28e67aea3d1a6799fbbcf63665db7543` |
-
-`reputation.circom` does not change after its setup. circom gives the same bytes every time, and
-`npm run compile` checks the compiled circuit against `setup.json`. The witness generator carries
-the source's line numbers, so even a line added to a comment fails that check. A change means a
-new setup and a new release.
+  not match `setup.json`.
+- **The circuit does not change after its setup.** circom gives the same bytes every time, and
+  `npm run compile` checks the compiled circuit against `setup.json`. The witness generator carries
+  the source's line numbers, so even a line added to a comment fails that check. A change means a
+  new setup and a new release.
 
 ### Use it
 
-`reputation/src/` talks to no network of its own. The market stamp, the scope and the message come
-from the registry client, unchanged.
+`reputation/src/` talks to no network of its own. The stamp, the scope and the message come from
+the registry client, unchanged.
 
 | Function | Gives |
 |---|---|
-| `buildTree(leaves)` | For an index: the root to sign. Refuses an empty tree, more than 2^20 leaves, a field out of range, or two leaves for one market stamp |
+| `buildTree(leaves)` | For an index: the root to sign. Refuses an empty tree, more than 2^20 leaves, a field out of range, or two leaves for one stamp |
 | `signedBytes(root, time)` | The bytes an index signs |
-| `proveReputation({ secret, labels, leaves, profile, show?, artifacts })` | The proof, on the device: one to eight labels of the person's profiles from one issuer, found in the leaves by their market stamps; `show` shows the label, only with one |
+| `proveReputation({ secret, labels, leaves, profile, show?, artifacts })` | The proof, on the device: one to eight labels of the person's profiles from one issuer, found in the leaves by their stamps; `show` shows the label, only with one |
 | `verifyReputation({ proof, root, score, profile, label?, index, time, signature })` | Whether the index signed the root with that time, and the proof holds for that score, main key and shown label |
-| `proofBytes(proof)`, `proofFromBytes(bytes)` | The proof as the 256 bytes a profile record carries ([records/](../records/README.md#proofs)), and back; `verifyReputation` takes either |
+| `proofBytes(proof)`, `proofFromBytes(bytes)` | The proof as the 256 bytes a profile record carries ([records](../records/README.md)), and back; `verifyReputation` takes either |
 | `circuitInput({...})` | The circuit's input, for a caller that drives snarkjs itself |
 
 ```ts
@@ -146,13 +133,13 @@ await verifyReputation({ proof: r.proof, root: r.root, score: r.score, profile, 
 
 ### Run it
 
-The toolchain: Node 22.18 or later; circom 2.2.3, the Linux binary from its GitHub release
-(SHA-256 `85342c7ff332d948df7c0c50ecf201e6129349aef550ce873f3c811b79fe53a3`); and, from
-`package-lock.json`, snarkjs 0.7.5, circomlib 2.0.5 and `@zk-kit/binary-merkle-root.circom` 2.0.0.
+The toolchain: Node 22.18 or later; circom 2.2.3, the Linux binary from its GitHub release, whose
+SHA-256 `setup.json` records; and, from `package-lock.json`, snarkjs 0.7.5, circomlib 2.0.5 and
+`@zk-kit/binary-merkle-root.circom` 2.0.0.
 
 ```
 cd keys && npm ci                       # registry/client and the tests read it
-cd registry/client && npm ci            # the market stamp, the scope and the message
+cd registry/client && npm ci            # the stamp, the scope and the message
 cd circuits/reputation && npm ci
 npm run fetch                           # the release's files, hash-checked
 npm run compile                         # circom 2.2.3 on PATH or in CIRCOM; checks setup.json
@@ -179,7 +166,7 @@ Measured in Node 22 on a 4-core machine, with 8 slots at depth 20:
 
 ## Promises
 
-- A proof counts only profiles whose market stamps come from the prover's own issuer secret.
+- A proof counts only profiles whose stamps come from the prover's own issuer secret.
 - A profile counts at most once in a proof.
 - A proof counts for one main key: its message names it.
 - A shown label means exactly one profile, under that label.
