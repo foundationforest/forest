@@ -200,7 +200,7 @@ export type Token = { mint: PublicKey; program: PublicKey; decimals: number }
  * program's own error name where `create` would refuse it: wrapped SOL of either program, or a
  * Token-2022 mint with a transfer fee or that cannot be transferred. Whatever else the token's
  * maker can do with its mint (freeze, pause, a permanent delegate, a transfer hook) is accepted;
- * `escrow/README.md` lists it.
+ * `escrow/security-checklist.md` lists each, with the test that pins it.
  */
 export function tokenOf(mint: PublicKey, account: { owner: PublicKey; data: Uint8Array }): Token {
   const program = account.owner
