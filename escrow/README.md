@@ -27,9 +27,11 @@ Every escrow it opens carries version 2 (see the FAQ).
 ### Opening and paying in
 
 - **Opening.** Either party opens an escrow and signs, naming both keys, the token and the amount.
-  One the seller opens is an invoice. Its address is `["escrow", creator, id]`, so nobody can open
-  an escrow at an address another key will use. Whoever fronts the rent signs too, and is recorded
-  as the payer.
+  One the seller opens is an invoice. Its address is made from a hash of all its terms: the buyer,
+  the seller, the token, the amount, the arbiter, the timer and an id. So a payment sent to it
+  counts only toward a deal with exactly those terms, and only the buyer or the seller can open
+  it; who opens it is not a term, so either lands at the same address. Whoever fronts the rent
+  signs too, and is recorded as the payer: every rent goes back to it.
 - **The token.** A mint of the classic SPL Token program or of Token-2022. Refused: wrapped SOL of
   either program, and a Token-2022 mint with a transfer fee or that cannot be transferred.
 - **Paying in.** Money arrives by a plain transfer, from anywhere, to the escrow's deposit address:
@@ -38,6 +40,25 @@ Every escrow it opens carries version 2 (see the FAQ).
   the live balance; nothing needs to mark it first.
 - **Marking.** `mark_funded`, sent by anyone, records the time the amount was there. Only the timer
   needs it: the timer counts from the mark.
+
+### The pay link
+
+The one format for paying for an offer from any app. An index shows it on every live offer with a
+price. It never pays and never holds money: it links.
+
+    https://forest.foundation/pay?v=2
+      &offer=<profile address>/offer/<id>
+      &record=<the id of the record that holds the offer>
+      &price.amount=<whole units, decimal text>&price.mint=<mint>&price.per=<hour | day | job>
+      [&terms.arbiter=<key>][&terms.timer.days=<1..65535>&terms.timer.to=<seller | buyer>]
+
+Parameters come in exactly this order, so two apps write the same link. Every parameter after
+`record` is the offer record's own field, named by its path. The seller is the profile the offer
+address names, paid at its address: the link carries no other key, so a forged link cannot send
+money anywhere else. An app reads the offer at `offer` (from its hosts, or an index), shows the
+record's terms if its id is not `record`, agrees the amount, and pays with this client: `termsFor`,
+then `createAndFund` or `payInOneTap`, the buyer opening the escrow. The client builds and reads no
+link. Version 1 named profiles by did:key.
 
 ### How money leaves
 
@@ -49,7 +70,8 @@ Two ways out, and one brake.
 2. **An arbiter or a timer, set at the start.** Both are off unless the creator sets them in
    `create`. From then on they are in the escrow, for both sides to read before anyone works or
    pays, and they never change.
-   - **Arbiter:** any key, a party included, that may sign any split.
+   - **Arbiter:** any key but the buyer's or the seller's, that may sign any split. A party as
+     arbiter could take everything alone. Who holds any other key, the program cannot tell.
    - **Timer:** a number of whole days after the funding is marked, anyone may send everything to
      the side the timer names.
 
@@ -66,7 +88,7 @@ mint (its associated token account).
 Three more instructions move money that is not the deal's:
 
 - **`close_unfunded`:** an escrow that never held the amount is closed by either party, at any time.
-  Whatever arrived goes back to the buyer, and both rents to the creator. No receipt is kept: nothing
+  Whatever arrived goes back to the buyer, and both rents to the payer. No receipt is kept: nothing
   was dealt.
 - **`recover_late`:** money sent after the end goes back to the buyer. Anyone may send it.
 - **`sweep_rent`:** lamports above the receipt's rent-exempt minimum (SOL sent to the escrow's
@@ -74,7 +96,7 @@ Three more instructions move money that is not the deal's:
 
 ### Receipts
 
-When an escrow ends, its deposit account closes and its rent goes to the creator. The escrow account
+When an escrow ends, its deposit account closes and its rent goes to the payer. The escrow account
 stays at its address as the receipt: the buyer, the seller, who opened it, the token, the amount,
 the arbiter and the timer, who fronted the rent, when the money was there (the mark's time, or the
 ending's if nobody marked it), whether a side objected and when, how it ended, when, and what each
@@ -88,7 +110,7 @@ Every change is also an event, so an index can read outcomes from the log: `Crea
 
 | From | Instruction | Signs | Needs | To |
 |---|---|---|---|---|
-| nothing | `create` | the buyer or the seller as creator, and whoever fronts the rent as payer | address `["escrow", creator, id]`; buyer and seller differ; no zero keys; neither party the escrow's own address or its deposit address; amount above zero; a timer, if any, of at least one day; a mint owned by the token program named, not wrapped SOL, no transfer fee, transferable; no escrow already at the address | open; the creator and the payer recorded |
+| nothing | `create` | the buyer or the seller as creator, and whoever fronts the rent as payer | address `["escrow", sha256(terms)]`; buyer and seller differ; no zero keys; the arbiter, if any, neither party; neither party the escrow's own address or its deposit address; amount above zero; a timer, if any, of at least one day; a mint owned by the token program named, not wrapped SOL, no transfer fee, transferable; no escrow already at the address | open; the creator recorded, and the payer as rent recipient |
 | open | `mark_funded` | nobody | the deposit account holds at least the amount | funded, `funded_at` = now |
 | open, funded | `object` | the buyer or the seller | nobody objected yet; the timer, if it runs, not yet due | unchanged: the objection and its time recorded |
 | open, funded | `release_to_seller` | the buyer | the deposit account holds at least the amount | ended: the whole balance to the seller |
@@ -96,7 +118,7 @@ Every change is also an event, so an index can read outcomes from the log: `Crea
 | open, funded | `split(seller_bps)` | the buyer and the seller | the same; `seller_bps` ≤ 10,000 | ended: `⌊balance × seller_bps / 10,000⌋` to the seller, the rest to the buyer |
 | open, funded | `arbitrate(seller_bps)` | the arbiter | an arbiter was named; the same | ended: the same split |
 | funded | `timer_release` | nobody | a timer was set; nobody objected; now ≥ `funded_at` + days × 86,400 | ended: the whole balance to the side the timer names |
-| open, funded | `close_unfunded` | the buyer or the seller | the deposit account holds less than the amount | gone: what it held to the buyer, both accounts closed, both rents to the creator |
+| open, funded | `close_unfunded` | the buyer or the seller | the deposit account holds less than the amount | gone: what it held to the buyer, both accounts closed, both rents to the payer |
 | ended | `recover_late` | anyone; the sender makes the buyer's standard account if missing | a later payment made the deposit account again | unchanged: the late money to the buyer, that account's rent to the buyer |
 | anything but gone | `sweep_rent` | nobody | the escrow account holds more than its rent-exempt minimum | unchanged: the excess to the payer |
 | ended | anything else | | | refused: `Ended` |
@@ -116,9 +138,9 @@ which then changes only the receipt.
 | `createIx`, `invoiceIx`, `createAndFund`, `payInOneTap`, `payInvoiceInOneTap` | Opening; opening and funding; paying and releasing in one transaction |
 | `markFundedIx`, `objectIx`, `releaseToSellerIx`, `releaseToBuyerIx`, `splitIx`, `arbitrateIx`, `timerReleaseIx`, `closeUnfundedIx`, `recoverLateIx`, `sweepRentIx` | Every other instruction |
 | `keysFor`, `keysOf` | Every account a way out names, from the terms or from the escrow read off the chain |
-| `optionsNotAgreed`, `assertOptionsAgreed` | Every arbiter and timer a person did not set, whose key an arbiter is, and which side a timer favours |
+| `optionsNotAgreed`, `assertOptionsAgreed` | Every arbiter and timer a person did not set, and which side a timer favours |
 | `timerDueAt`, `timerDue`, `canObject` | When the timer is due, and whether an objection would land now |
-| `escrowAddress`, `vaultAddress`, `refundAddress`, `payoutAddress`, `makeDepositAddressIx`, `makeStandardAccountIx`, `makeRefundAddressIx` | Addresses, and the accounts a payment needs made first |
+| `escrowAddress`, `termsHash`, `termsOf`, `vaultAddress`, `refundAddress`, `payoutAddress`, `makeDepositAddressIx`, `makeStandardAccountIx`, `makeRefundAddressIx` | Addresses (an escrow's from its terms), and the accounts a payment needs made first |
 | `hookAccounts`, `payoutTransfers` | A transfer hook's accounts, through `@solana/spl-token`'s resolver |
 | `decodeEscrow`, `decodeEvents` | The receipt and the events. `decodeEvents` reads only events this program wrote, by the runtime's own invoke lines |
 
@@ -133,7 +155,8 @@ What the app decides, because the program does not know:
   `canObject` reads the device's clock; the chain's decides, so one sent in the last seconds may be
   refused.
 - **The amount** is the app multiplying per hour, per day or per job before creation: one escrow per
-  payment. **The id** is any 64-bit number the creator has not used (`randomId()`).
+  payment. **The id** tells apart two deals with the same terms: a fresh 64-bit number for each
+  (`randomId()`).
 - **Make the deposit address first** when paying in the same transaction as `create`
   (`createAndFund` and the one-tap builders do), so a fee payer that checks every transfer's
   destination before it signs finds it made. Make the seller's standard account first if the seller
@@ -146,11 +169,9 @@ What the app decides, because the program does not know:
   transaction (`hookAccounts`), since the dollar's maker can change the program at any time, and
   pass them to each way out and to the payment in. A payment in a Token-2022 dollar must be a
   `transfer_checked`.
-- **Who fronts the rent.** Whoever fronts the rent signs as payer and gets what Solana's rent cuts
-  free later; what a fee payer charges for fronting it is its own policy. Registry rows follow the
-  same rule.
-- **A pay link.** The client builds none. A Solana Pay recipient is the escrow's own address, and
-  an invoice's escrow is `escrowAddress(seller, id)`.
+- **Who fronts the rent.** Whoever fronts the rent signs as payer and gets every rent back, what
+  Solana's rent cuts free later included; what a fee payer charges for fronting it is its own
+  policy. Registry rows follow the same rule.
 
 ```
 cd escrow/program && cargo build-sbf --arch v3                    # Solana CLI 4.2.2 or later
@@ -180,20 +201,20 @@ about 20,000 compute units with the keys.
 
 | | Compute units | Bytes of 1,232 |
 |---|---|---|
-| `create`, classic mint | 33,631 | 595 |
+| `create`, classic mint | 32,646 | 595 |
 | `object` | 4,049 | 347 |
-| `release_to_seller`, classic | 15,633 | 480 |
-| `split`, classic | 20,214 | 612 |
-| one tap, classic | 48,712 | 702 |
-| an invoice paid in one tap, classic | 15,926 | 559 |
-| `create`, Open USD's extensions, no hook program | 42,095 | 595 |
-| one tap, the same | 64,979 | 704 |
-| one tap, a hook with two accounts | 101,111 | 872 |
+| `release_to_seller`, classic | 14,566 | 480 |
+| `split`, classic | 19,146 | 612 |
+| one tap, classic | 48,161 | 702 |
+| an invoice paid in one tap, classic | 13,140 | 527 |
+| `create`, Open USD's extensions, no hook program | 53,150 | 595 |
+| one tap, the same | 62,969 | 704 |
+| one tap, a hook with two accounts | 99,100 | 872 |
 
 Rent, at today's 5,080 lamports a byte: the escrow account is 305 bytes (2,199,640 lamports), and
 comes back whole only if it never held the amount; otherwise the receipt keeps its minimum, and
 `sweep_rent` returns what Solana's rent cuts free above it. A classic deposit account is 165 bytes;
-one for Open USD's extensions, 179 (1,559,560 lamports). It comes back at every ending.
+one for Open USD's extensions, 179 (1,559,560 lamports). It comes back to the payer at every ending.
 
 ### What is sealed
 
@@ -201,18 +222,19 @@ None of this can change after deploy; a change is a new program at a new address
 
 - **The account.** 297 bytes after the discriminator, laid out in `program/src/state.rs` (and
   written again in `program/tests-litesvm/src/lib.rs` and `client/src/program.ts`): version, id,
-  buyer, seller, arbiter, mint, deposit account, rent recipient (the creator), amount, creator,
+  buyer, seller, arbiter, mint, deposit account, rent recipient (the payer), amount, creator,
   timer days, timer side, created, funded, status, bump, ended, outcome, what the seller got, what
   the buyer got, payer, objection, objected at. `version` is 2. The zero key means no arbiter; zero
   days, no timer; a zero time, not yet.
-- **The addresses.** The escrow at `["escrow", creator, id]`; the deposit account its associated
+- **The addresses.** The escrow at `["escrow", sha256(terms)]`, the terms at fixed lengths in the
+  receipt's order (`terms_hash` in `program/src/state.rs`); the deposit account its associated
   token account for the mint, under the mint's own token program; each party paid only at its own
   associated token account, checked by address alone, so handing that account to another key
   blocks no way out.
 - **The rules,** as the table says, and the order of checks in each handler, which decides the error
   a refused instruction returns. Every handler that needs a live escrow checks that first, as an
   allowlist of the live states (open, funded).
-- **The instructions, events and errors.** Eleven instructions, seven events and 31 errors, their
+- **The instructions, events and errors.** Eleven instructions, seven events and 32 errors, their
   bytes and account lists. Every way out names the mint right after the deposit account, names only
   the accounts it pays, and forwards the accounts after its own to each transfer, for a transfer
   hook, never signing.
@@ -249,15 +271,16 @@ deployed and to be closed. There is no smoke test: read a receipt with `solana a
   objected. The one exception is a Token-2022 dollar whose maker holds a permanent delegate
   (Limits).
 - **Every way out pays the whole balance,** to the parties' standard token accounts and nowhere else.
-- **Each side alone can always give.** While an escrow is live, the buyer can release to the seller
-  and the seller back to the buyer, whatever the options and whether or not anyone objected, unless
-  the dollar's maker has frozen or paused it (Limits).
+- **An address holds only its own terms.** A payment to an escrow's address counts only toward a
+  deal with exactly the terms the address was made from.
+- **Each side alone can always give.** Nothing in the escrow stops it: while an escrow is live, the
+  buyer can release to the seller and the seller back to the buyer, whatever the options and
+  whether or not anyone objected.
 - **An objection moves no money,** lands once per escrow, and only before the timer is due; after it
   the timer never pays.
 - **A receipt never closes and never changes,** and its address never holds a second deal.
-- **Rent goes back:** the deposit account's to the creator at every ending, both to the creator at
-  `close_unfunded`, the receipt's excess to the payer, and a deposit account a late payment made
-  again to the buyer.
+- **Rent goes back to whoever fronted it:** every rent to the payer, at every ending, at
+  `close_unfunded` and by `sweep_rent`; a deposit account a late payment made again, to the buyer.
 - **Nothing inside charges anything.** No admin, no config account, no pause, no fee.
 
 ## Limits
@@ -273,18 +296,12 @@ deployed and to be closed. There is no smoke test: read a receipt with `solana a
 - **A timer is a default, not a promise.** Either side can turn it off the day before it is due.
 - **What a person accepts by choosing a dollar.** Whoever makes a dollar keeps powers over it that
   the escrow cannot take away or route around; which a dollar has is on its mint, for anyone to
-  read. Open USD (`ousd2mJsPEckLHcSCDxyKD7NDGARZcfLbDZkKiatYHB`) has every one below; USDC has the
-  first.
-  - **Freeze.** A frozen deposit account stops every way out; a frozen party account stops every
-    payment to that party.
-  - **Pause.** Every transfer of the dollar stops: nothing is paid in and no escrow ends. An
-    objection and the mark still land; they move nothing.
+  read. Open USD (`ousd2mJsPEckLHcSCDxyKD7NDGARZcfLbDZkKiatYHB`) has every one below.
   - **Take the money.** A permanent delegate can move or burn any amount from any account, a deposit
     account included. An escrow left holding less than its amount ends only by `close_unfunded`,
     what is left going back to the buyer, or once the amount is back.
   - **A check on every transfer.** A transfer hook can refuse any transfer and ask for accounts the
     app must pass. It never receives a signature through the escrow.
-  - **New accounts start frozen,** a new deposit account included, until the maker thaws it.
   - **Close the dollar.** Once nobody holds any, its maker can close the mint; an escrow in it that
     never held money then cannot be closed, and its rent stays.
   - **Rename it.** The escrow reads no name; an app knows a dollar by its mint's address.
@@ -293,15 +310,16 @@ deployed and to be closed. There is no smoke test: read a receipt with `solana a
   escrow never gives, so money arrives by plain transfer only. Interest-bearing and scaled dollars
   work: the escrow holds and pays raw base units, fixed at creation, and only what they display
   drifts.
-- **A deposit address belongs to a creator and an id, not a buyer.** Money sent to it before an
-  escrow exists there, or after a close, joins whatever deal next holds that id.
+- **Money sent to an address before its escrow opens, or after a close,** waits there, and counts
+  only toward an escrow opened with exactly those terms. Either party can open one, and close it
+  if it holds less than the amount, which sends the money back to the buyer.
 - **A party's standard account must exist to be paid;** whoever sends the way out makes it first.
   A party whose standard account requires a memo blocks its own payouts: the escrow sends none.
 - **`recover_late` checks who holds the buyer's standard account,** so a buyer who handed it away
   blocks only its own late money.
 - **SOL sent to an escrow's address** goes to the payer by `sweep_rent`. **Tokens of another mint**
   sent there are lost to everyone.
-- **Refunds arrive in SOL,** to keys that may hold none otherwise.
+- **Refunds arrive in SOL,** to the key that fronted the rent.
 - **A one-sided receipt is cheap:** a buyer can release one base unit to a seller who signed
   nothing. The receipt records who created it.
 - **Hook accounts are the client's to find;** a missing one fails the transfer and nothing moves.
@@ -326,8 +344,9 @@ each.
 the seller back to the buyer. Taking needs the other side, the arbiter, or a timer nobody objected
 to.
 
-**We disagree and there is no arbiter. What happens?** The money stays until the two of you agree,
-or one of you gives. Nobody else can move it, Forest included.
+**We disagree and there is no arbiter. Why does the money stay?** Nobody else can move it, Forest
+included: it stays until the two of you agree, or one of you gives. A timer that ended the hold
+would reward whoever waits. If you want someone to decide, choose an arbiter at the start.
 
 **Does a timer guarantee I get paid?** No. It pays the side it names only if the other side does
 not object before it is due.
@@ -350,8 +369,9 @@ way out.
 mainnet the program will be sealed the day it deploys. On devnet the deploy key can still upgrade
 it.
 
-**Who gets the rent back?** The creator gets the deposit account's at every ending, and both rents
-of an escrow that never held the money. The payer gets what the receipt holds above its minimum.
+**Who gets the rent back?** Whoever fronted it, recorded as the payer: the deposit account's at
+every ending, both rents of an escrow that never held the money, and what the receipt holds above
+its minimum. A fee payer that fronts it gets it back.
 
 **Why does a receipt never close?** A review points at it: the escrow's address is the deal's id.
 

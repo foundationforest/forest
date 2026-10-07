@@ -206,7 +206,7 @@ async function oneTapHooks(token: Token, keys: EscrowKeys) {
 async function invoiceDeal(name: string, token: Token, label: string): Promise<void> {
   const d = deal(name, `the seller invoices 1.00 ${label}; the buyer checks it, then, in one transaction, the deposit address made first, pays and releases; nobody marks it`)
   const terms = termsFor(undefined, { seller: seller.publicKey, amount: 1_000_000n, id: BigInt(d.id) })
-  const escrow = escrowAddress(seller.publicKey, terms.id, programId)
+  const escrow = escrowAddress({ buyer: buyer.publicKey, mint: token.mint, terms }, programId)
   d.escrow = escrow.toBase58()
   d.mint = token.mint.toBase58()
   save()
@@ -241,7 +241,7 @@ async function invoiceDeal(name: string, token: Token, label: string): Promise<v
 async function objectionDeal(name: string, token: Token, label: string): Promise<void> {
   const d = deal(name, `the buyer opens 2.00 ${label} with a one-day timer to the seller and funds it at once; anyone marks it; the buyer objects before the timer is due; both sign a 60/40 split`)
   const terms = termsFor({ timer: { days: 1, to: 'seller' } }, { seller: seller.publicKey, amount: 2_000_000n, id: BigInt(d.id) })
-  const k = keysFor({ buyer: buyer.publicKey, mint: token.mint, tokenProgram: token.program, terms, programId })
+  const k = keysFor({ buyer: buyer.publicKey, payer: payer.publicKey, mint: token.mint, tokenProgram: token.program, terms, programId })
   d.escrow = k.escrow.toBase58()
   d.mint = token.mint.toBase58()
   save()

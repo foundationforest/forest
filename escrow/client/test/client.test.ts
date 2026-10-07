@@ -28,7 +28,6 @@ import {
   associatedTokenAddress,
   canObject,
   closeUnfundedIx,
-  creatorKey,
   createArgsBytes,
   createAndFund,
   createIx,
@@ -62,6 +61,8 @@ import {
   splitIx,
   sweepRentIx,
   termsFor,
+  termsHash,
+  termsOf,
   tokenOf,
   transferIx,
   timerDue,
@@ -85,18 +86,25 @@ const mint = Keypair.generate().publicKey
 const payer = Keypair.generate().publicKey
 const stranger = Keypair.generate().publicKey
 
-/** An escrow account as `decodeEscrow` would return it: the buyer's, open, unfunded, every option off. */
+/** The address of the standard terms: the buyer's, 1.00, every option off. */
+function baseEscrow(): PublicKey {
+  return escrowAddress({ buyer, mint, terms: terms() })
+}
+
+/**
+ * An escrow account as `decodeEscrow` would return it: the buyer's, open, unfunded, every option
+ * off. Its deposit account is that of its own terms' address, unless named.
+ */
 function escrowAccount(over: Partial<EscrowAccount> = {}): EscrowAccount {
-  const escrow = escrowAddress(buyer, 7n)
-  return {
+  const e: EscrowAccount = {
     version: 2,
     id: 7n,
     buyer,
     seller,
     arbiter: null,
     mint,
-    vault: vaultAddress(escrow, mint),
-    rentRecipient: buyer,
+    vault: PublicKey.default,
+    rentRecipient: payer,
     amount: 1_000_000n,
     creator: 'buyer',
     timer: null,
@@ -113,12 +121,12 @@ function escrowAccount(over: Partial<EscrowAccount> = {}): EscrowAccount {
     objectedAt: null,
     ...over,
   }
+  return over.vault ? e : { ...e, vault: vaultAddress(escrowAddress(termsOf(e)), e.mint) }
 }
 
-/** The same, opened by the seller: an invoice, at the seller's address, its rent back to the seller. */
+/** The same, opened by the seller: an invoice, at the same address as the same terms the buyer opens. */
 function invoiceAccount(over: Partial<EscrowAccount> = {}): EscrowAccount {
-  const escrow = escrowAddress(seller, 7n)
-  return escrowAccount({ creator: 'seller', vault: vaultAddress(escrow, mint), rentRecipient: seller, ...over })
+  return escrowAccount({ creator: 'seller', ...over })
 }
 
 function terms(over: Partial<Terms> = {}): Terms {
@@ -171,19 +179,44 @@ test('the discriminators are pinned', () => {
 })
 
 test('the deposit address is the standard associated token account of the escrow', () => {
-  const escrow = escrowAddress(buyer, 7n)
+  const escrow = baseEscrow()
   assert.ok(!PublicKey.isOnCurve(escrow.toBytes()), 'a program-derived address')
   const vault = vaultAddress(escrow, mint)
   assert.deepEqual(vault, getAssociatedTokenAddressSync(mint, escrow, true, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID))
   assert.deepEqual(refundAddress(buyer, mint), getAssociatedTokenAddressSync(mint, buyer, false, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID))
   assert.deepEqual(payoutAddress(seller, mint), getAssociatedTokenAddressSync(mint, seller, false, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID))
-  // Distinct per id and per creator.
-  assert.notDeepEqual(escrowAddress(buyer, 8n), escrow)
-  assert.notDeepEqual(escrowAddress(seller, 7n), escrow)
   // Random ids are 64 bits and do not repeat.
   const ids = new Set(Array.from({ length: 100 }, () => randomId()))
   assert.equal(ids.size, 100)
   for (const id of ids) assert.ok(id >= 0n && id < 1n << 64n)
+})
+
+test('the address is a hash of every term, the bytes the program hashes', () => {
+  // The same vector as the program's harness (`the_address_of_fixed_terms_is_the_clients`).
+  const key = (b: number) => new PublicKey(new Uint8Array(32).fill(b))
+  const fixed = { buyer: key(1), mint: key(3), terms: { id: 7n, seller: key(2), amount: 1_000_000n, arbiter: key(4), timer: { days: 3, to: 'seller' as const } } }
+  assert.equal(hex(termsHash(fixed)), '8e18bf2edbfebf9ff5fad9a21a034c5c9cfca68e03cd0cb65cd00e09c789821a')
+  assert.equal(escrowAddress(fixed).toBase58(), 'Cxa9ex9RSxEPHnDbsmGvNbcLQZ2U4XUmSvdwgGegiKS5')
+
+  // Change any one term and the address moves.
+  const all = { buyer, mint, terms: terms({ arbiter, timer: { days: 7, to: 'seller' } }) }
+  const at = escrowAddress(all)
+  const t = all.terms
+  const variants: [string, typeof all][] = [
+    ['the id', { ...all, terms: { ...t, id: 8n } }],
+    ['the buyer', { ...all, buyer: stranger }],
+    ['the seller', { ...all, terms: { ...t, seller: stranger } }],
+    ['the amount', { ...all, terms: { ...t, amount: 1_000_001n } }],
+    ['the mint', { ...all, mint: stranger }],
+    ['the arbiter', { ...all, terms: { ...t, arbiter: stranger } }],
+    ['no arbiter', { ...all, terms: { ...t, arbiter: null } }],
+    ['the timer\'s days', { ...all, terms: { ...t, timer: { days: 8, to: 'seller' } } }],
+    ['the timer\'s side', { ...all, terms: { ...t, timer: { days: 7, to: 'buyer' } } }],
+    ['no timer', { ...all, terms: { ...t, timer: null } }],
+  ]
+  for (const [what, v] of variants) assert.notDeepEqual(escrowAddress(v), at, what)
+  // Read back off the chain, an escrow's terms give its own address.
+  assert.deepEqual(escrowAddress(termsOf(escrowAccount({ arbiter, timer: { days: 7, to: 'seller' } }))), at)
 })
 
 test('create carries exactly the bytes the program reads', () => {
@@ -212,7 +245,7 @@ test('create carries exactly the bytes the program reads', () => {
   assert.deepEqual(ix.programId, PROGRAM_ID)
   assert.equal(hex(ix.data.subarray(0, 8)), '181ec828051c0777')
   assert.equal(hex(ix.data.subarray(8)), hex(bytes))
-  const escrow = escrowAddress(buyer, 7n)
+  const escrow = escrowAddress({ buyer, mint, terms: t })
   assert.deepEqual(meta(ix), [
     [escrow.toBase58(), false, true],
     [vaultAddress(escrow, mint).toBase58(), false, true],
@@ -224,25 +257,17 @@ test('create carries exactly the bytes the program reads', () => {
     ['11111111111111111111111111111111', false, false],
   ])
 
-  // An invoice: the same bytes, with the seller in the creator's slot, at the seller's address.
+  // An invoice: the same bytes, with the seller in the creator's slot, at the same address.
   const inv = invoiceIx({ seller, buyer, payer, mint, terms: t })
   assert.equal(hex(inv.data), hex(ix.data))
-  const invoiced = escrowAddress(seller, 7n)
-  assert.notDeepEqual(invoiced, escrow)
-  assert.deepEqual(inv.keys[0].pubkey, invoiced)
-  assert.deepEqual(inv.keys[1].pubkey, vaultAddress(invoiced, mint))
+  assert.deepEqual(inv.keys[0].pubkey, escrow)
+  assert.deepEqual(inv.keys[1].pubkey, vaultAddress(escrow, mint))
   assert.deepEqual([inv.keys[2].pubkey.toBase58(), inv.keys[2].isSigner], [seller.toBase58(), true])
   assert.throws(() => createIx({ buyer, payer, mint, terms: t, creator: arbiter }), /NotAParty/)
   assert.throws(() => createIx({ buyer, payer, mint: NATIVE_MINT, terms: t }), /NativeMint/)
   assert.throws(() => invoiceIx({ seller: arbiter, buyer, payer, mint, terms: t }), /its own seller/)
-
-  // Neither party may be the escrow itself or its deposit address, from either creator.
-  for (const party of [escrow, vaultAddress(escrow, mint)]) {
-    assert.throws(() => createIx({ buyer, payer, mint, terms: terms({ seller: party }) }), /PartyIsTheEscrow/)
-  }
-  for (const party of [invoiced, vaultAddress(invoiced, mint)]) {
-    assert.throws(() => invoiceIx({ seller, buyer: party, payer, mint, terms: t }), /PartyIsTheEscrow/)
-  }
+  assert.throws(() => createIx({ buyer, payer, mint, terms: terms({ arbiter: seller }) }), /ArbiterIsAParty/)
+  assert.throws(() => invoiceIx({ seller, buyer, payer, mint, terms: terms({ arbiter: buyer }) }), /ArbiterIsAParty/)
 })
 
 test('bad terms fail before a transaction is built, with the program\'s own error names', () => {
@@ -251,6 +276,8 @@ test('bad terms fail before a transaction is built, with the program\'s own erro
     ['zero buyer', terms(), PublicKey.default, /EmptyKey/],
     ['zero seller', terms({ seller: PublicKey.default }), buyer, /EmptyKey/],
     ['zero arbiter', terms({ arbiter: PublicKey.default }), buyer, /EmptyKey/],
+    ['the buyer as arbiter', terms({ arbiter: buyer }), buyer, /ArbiterIsAParty/],
+    ['the seller as arbiter', terms({ arbiter: seller }), buyer, /ArbiterIsAParty/],
     ['amount zero', terms({ amount: 0n }), buyer, /AmountZero/],
     ['a timer of 0 days', terms({ timer: { days: 0, to: 'seller' } }), buyer, /TimerZero/],
     ['a timer of 65,536 days', terms({ timer: { days: 65_536, to: 'seller' } }), buyer, /TimerZero/],
@@ -259,23 +286,18 @@ test('bad terms fail before a transaction is built, with the program\'s own erro
     ['an amount over 64 bits', terms({ amount: 1n << 64n }), buyer, /64 bits/],
   ]
   for (const [what, t, b, want] of cases) assert.throws(() => validateTerms(t, b), want, what)
-  // The arbiter may be either party; the longest timer is fine.
-  validateTerms(terms({ arbiter: buyer, timer: { days: MAX_TIMER_DAYS, to: 'buyer' } }), buyer)
-  validateTerms(terms({ arbiter: seller }), buyer)
+  // A third key as arbiter, and the longest timer, are fine.
+  validateTerms(terms({ arbiter, timer: { days: MAX_TIMER_DAYS, to: 'buyer' } }), buyer)
 })
 
 test('each way out names the accounts it pays and the keys that sign it', () => {
   const account = escrowAccount({ arbiter })
   const k = keysOf(account)
-  const escrow = escrowAddress(buyer, 7n)
-  assert.deepEqual(k, { escrow, vault: vaultAddress(escrow, mint), buyer, seller, mint, tokenProgram: TOKEN_PROGRAM_ID, rentRecipient: buyer })
-  assert.deepEqual(keysFor({ buyer, mint, terms: terms() }), k, 'from the terms, the same keys')
-  // An invoice's keys: its address and its rent recipient are the seller's.
-  const invoiced = escrowAddress(seller, 7n)
-  const ik = { escrow: invoiced, vault: vaultAddress(invoiced, mint), buyer, seller, mint, tokenProgram: TOKEN_PROGRAM_ID, rentRecipient: seller }
-  assert.deepEqual(keysOf(invoiceAccount()), ik)
-  assert.deepEqual(keysFor({ buyer, mint, terms: terms(), creator: seller }), ik)
-  assert.deepEqual([creatorKey(account), creatorKey(invoiceAccount())], [buyer, seller])
+  const escrow = escrowAddress({ buyer, mint, terms: terms({ arbiter }) })
+  assert.deepEqual(k, { escrow, vault: vaultAddress(escrow, mint), buyer, seller, mint, tokenProgram: TOKEN_PROGRAM_ID, rentRecipient: payer })
+  assert.deepEqual(keysFor({ buyer, payer, mint, terms: terms({ arbiter }) }), k, 'from the terms, the same keys')
+  // An invoice of the same terms: the same keys.
+  assert.deepEqual(keysOf(invoiceAccount({ arbiter })), k)
   const refund = refundAddress(buyer, mint).toBase58()
   const sellers = payoutAddress(seller, mint).toBase58()
   const head = [
@@ -283,9 +305,9 @@ test('each way out names the accounts it pays and the keys that sign it', () => 
     [vaultAddress(escrow, mint).toBase58(), false, true],
     [mint.toBase58(), false, false],
   ]
-  // Every rent refund to the creator: the buyer, here.
+  // Every rent back to the payer.
   const tail = [
-    [buyer.toBase58(), false, true],
+    [payer.toBase58(), false, true],
     [TOKEN_PROGRAM_ID.toBase58(), false, false],
   ]
 
@@ -312,7 +334,7 @@ test('each way out names the accounts it pays and the keys that sign it', () => 
   const close = closeUnfundedIx({ keys: k, closer: seller })
   assert.equal(hex(close.data), '06d9705bfa5c6746')
   assert.deepEqual(meta(close), [...head, [refund, false, true], ...tail, [seller.toBase58(), true, false]])
-  assert.deepEqual(meta(closeUnfundedIx({ keys: k, closer: buyer })).at(-1), [buyer.toBase58(), true, false], 'the buyer closing: its key twice')
+  assert.deepEqual(meta(closeUnfundedIx({ keys: k, closer: buyer })).at(-1), [buyer.toBase58(), true, false], 'the buyer closing')
   for (const closer of [payer, arbiter, stranger]) assert.throws(() => closeUnfundedIx({ keys: k, closer }), /NotACloser/)
 
   const mark = markFundedIx({ escrow, vault: k.vault })
@@ -323,15 +345,15 @@ test('each way out names the accounts it pays and the keys that sign it', () => 
 
 test('an objection: the escrow and the party who signs, refused here where the program would refuse it', () => {
   const account = escrowAccount({ status: 'funded', fundedAt: T0, timer: { days: 3, to: 'seller' } })
-  const escrow = escrowAddress(buyer, 7n)
+  const escrow = escrowAddress(termsOf(account))
   for (const party of [buyer, seller]) {
     const ix = objectIx({ account, party })
     assert.deepEqual(ix.programId, PROGRAM_ID)
     assert.equal(hex(ix.data), '2351ffae3d579786', 'the discriminator, and no arguments')
     assert.deepEqual(meta(ix), [[escrow.toBase58(), false, true], [party.toBase58(), true, false]])
   }
-  // An invoice's objection names the escrow at the seller's address.
-  assert.deepEqual(objectIx({ account: invoiceAccount(), party: buyer }).keys[0].pubkey, escrowAddress(seller, 7n))
+  // An invoice's objection names the escrow at its terms' address, the same as the buyer's.
+  assert.deepEqual(objectIx({ account: invoiceAccount(), party: buyer }).keys[0].pubkey, baseEscrow())
   for (const party of [arbiter, payer, stranger]) assert.throws(() => objectIx({ account, party }), /NotAnObjector/)
   assert.throws(() => objectIx({ account: escrowAccount({ objection: 'buyer', objectedAt: T0 }), party: seller }), /AlreadyObjected/)
   assert.throws(() => objectIx({ account: escrowAccount({ status: 'ended', outcome: 'split' }), party: buyer }), /Ended/)
@@ -347,7 +369,7 @@ test('an objection: the escrow and the party who signs, refused here where the p
 })
 
 test('the timer pays the side it names, and its builder refuses what the program would', () => {
-  const k = keysOf(escrowAccount())
+  const k = keysOf(escrowAccount({ timer: { days: 3, to: 'seller' } }))
   const funded = { status: 'funded' as const, fundedAt: T0 }
   const toSeller = timerReleaseIx({ account: escrowAccount({ ...funded, timer: { days: 3, to: 'seller' } }) })
   assert.equal(hex(toSeller.data), '6121b42562d607cf')
@@ -358,16 +380,17 @@ test('the timer pays the side it names, and its builder refuses what the program
       [k.vault.toBase58(), false, true],
       [mint.toBase58(), false, false],
       [payoutAddress(seller, mint).toBase58(), false, true],
-      [buyer.toBase58(), false, true],
+      [payer.toBase58(), false, true],
       [TOKEN_PROGRAM_ID.toBase58(), false, false],
     ],
     'no signer: anyone may send it; the seller paid at its standard account',
   )
   const toBuyer = timerReleaseIx({ account: escrowAccount({ ...funded, timer: { days: 3, to: 'buyer' } }) })
   assert.deepEqual(toBuyer.keys[3].pubkey, refundAddress(buyer, mint))
-  // An invoice's timer: its address and its rent recipient are the seller's.
-  const inv = timerReleaseIx({ account: invoiceAccount({ ...funded, timer: { days: 1, to: 'seller' } }) })
-  assert.deepEqual([inv.keys[0].pubkey, inv.keys[3].pubkey, inv.keys[4].pubkey], [escrowAddress(seller, 7n), payoutAddress(seller, mint), seller])
+  // An invoice's timer: its terms' address, its rent back to the payer.
+  const invAccount = invoiceAccount({ ...funded, timer: { days: 1, to: 'seller' } })
+  const inv = timerReleaseIx({ account: invAccount })
+  assert.deepEqual([inv.keys[0].pubkey, inv.keys[3].pubkey, inv.keys[4].pubkey], [escrowAddress(termsOf(invAccount)), payoutAddress(seller, mint), payer])
   assert.throws(() => timerReleaseIx({ account: escrowAccount(funded) }), /NoTimer/)
   assert.throws(() => timerReleaseIx({ account: escrowAccount({ timer: { days: 3, to: 'seller' } }) }), /FundingNotMarked/)
   assert.throws(() => timerReleaseIx({ account: escrowAccount({ status: 'ended', timer: { days: 3, to: 'seller' } }) }), /Ended/)
@@ -389,7 +412,7 @@ test('the timer pays the side it names, and its builder refuses what the program
 test('pay in one tap, and an invoice in one tap: the deposit address made first, create unless the seller opened it, a transfer_checked of the amount, and the buyer\'s release', () => {
   const t = terms()
   const token = { mint, program: TOKEN_PROGRAM_ID, decimals: 6 }
-  const k = keysFor({ buyer, mint, terms: t })
+  const k = keysFor({ buyer, payer, mint, terms: t })
   const ixs = payInOneTap({ buyer, payer, token, terms: t })
   assert.equal(ixs.length, 4)
   const [deposit, create, transfer, release] = ixs
@@ -430,7 +453,7 @@ test('pay in one tap, and an invoice in one tap: the deposit address made first,
   // first all the same, then the transfer of the amount and the buyer's release.
   const inv = invoiceAccount()
   const invKeys = keysOf(inv)
-  assert.deepEqual(invKeys.escrow, escrowAddress(seller, 7n), "the invoice is at the seller's address")
+  assert.deepEqual(invKeys.escrow, k.escrow, 'an invoice of the same terms is at the same address')
   const paid = payInvoiceInOneTap({ escrow: inv, payer, token })
   assert.equal(paid.length, 3)
   const [invDeposit, invTransfer, invRelease] = paid
@@ -445,7 +468,7 @@ test('pay in one tap, and an invoice in one tap: the deposit address made first,
     [buyer.toBase58(), true, false],
   ])
   assert.deepEqual(meta(invRelease), meta(releaseToSellerIx({ keys: invKeys })))
-  assert.deepEqual(meta(invRelease)[4], [seller.toBase58(), false, true], 'the rent back to the seller, who opened it')
+  assert.deepEqual(meta(invRelease)[4], [payer.toBase58(), false, true], 'the rent back to the payer, not the seller who opened it')
   assert.deepEqual(payInvoiceInOneTap({ escrow: inv, payer, token, from })[1].keys[0].pubkey, from)
   assert.throws(() => payInvoiceInOneTap({ escrow: { ...inv, status: 'funded' }, payer, token }), /already funded/)
   assert.throws(() => payInvoiceInOneTap({ escrow: { ...inv, status: 'ended' }, payer, token }), /ended/)
@@ -462,7 +485,7 @@ test('late money and the rent sweep: their accounts, and what the builders refus
   const ended = escrowAccount({ status: 'ended', outcome: 'releasedToSeller', endedAt: T0 })
   const ix = recoverLateIx({ account: ended, caller: stranger })
   assert.equal(hex(ix.data), '525629b57534cce3')
-  const escrow = escrowAddress(buyer, 7n)
+  const escrow = baseEscrow()
   assert.deepEqual(meta(ix), [
     [escrow.toBase58(), false, false],
     [ended.vault.toBase58(), false, true],
@@ -475,9 +498,9 @@ test('late money and the rent sweep: their accounts, and what the builders refus
     ['11111111111111111111111111111111', false, false],
   ])
   assert.throws(() => recoverLateIx({ account: escrowAccount(), caller: stranger }), /NotEnded/)
-  // An invoice's late money: the escrow at the seller's address, still back to the buyer.
+  // An invoice's late money: the same address, still back to the buyer.
   const late = recoverLateIx({ account: invoiceAccount({ status: 'ended', outcome: 'releasedToSeller', endedAt: T0 }), caller: stranger })
-  assert.deepEqual([late.keys[0].pubkey, late.keys[2].pubkey, late.keys[3].pubkey], [escrowAddress(seller, 7n), buyer, refundAddress(buyer, mint)])
+  assert.deepEqual([late.keys[0].pubkey, late.keys[2].pubkey, late.keys[3].pubkey], [baseEscrow(), buyer, refundAddress(buyer, mint)])
 })
 
 /** An escrow account's bytes, at the pinned offsets. */
@@ -500,7 +523,7 @@ function escrowBytes(o: {
   const data = Buffer.alloc(8 + ESCROW_LEN)
   Buffer.from(discriminator('account', 'Escrow')).copy(data, 0)
   const b = data.subarray(8)
-  const escrow = escrowAddress(buyer, 7n)
+  const escrow = baseEscrow()
   b[0] = 2
   b.writeBigUInt64LE(7n, 1)
   buyer.toBuffer().copy(b, 9)
@@ -508,7 +531,7 @@ function escrowBytes(o: {
   ;(o.arbiter ?? PublicKey.default).toBuffer().copy(b, 73)
   mint.toBuffer().copy(b, 105)
   vaultAddress(escrow, mint).toBuffer().copy(b, 137)
-  ;(o.rentRecipient ?? buyer).toBuffer().copy(b, 169)
+  ;(o.rentRecipient ?? payer).toBuffer().copy(b, 169)
   b.writeBigUInt64LE(1_000_000n, 201)
   b[209] = o.creator ?? 0
   b.writeUInt16LE(o.timerDays ?? 0, 210)
@@ -573,13 +596,13 @@ test('the escrow account decodes at the pinned offsets', () => {
 function eventBytes(name: string, size: number, fill: (b: Buffer) => void): Buffer {
   const b = Buffer.alloc(size)
   Buffer.from(discriminator('event', name)).copy(b, 0)
-  escrowAddress(buyer, 7n).toBuffer().copy(b, 8)
+  baseEscrow().toBuffer().copy(b, 8)
   fill(b)
   return b
 }
 
 test('events decode from the log, in order', () => {
-  const escrow = escrowAddress(buyer, 7n)
+  const escrow = baseEscrow()
   const vault = vaultAddress(escrow, mint)
   const created = eventBytes('Created', 293, (b) => {
     b[40] = 2
@@ -754,14 +777,14 @@ test('before working or paying, a person sees every option they did not set', ()
   assert.deepEqual(optionsNotAgreed({ escrow: escrowAccount(), me: 'seller', agreed: none }), [])
   assert.deepEqual(optionsNotAgreed({ escrow: escrowAccount(), me: 'buyer', agreed: null }), [])
 
-  // The buyer names itself arbiter and a one-day timer back to itself; the seller agreed to none.
-  const rigged = escrowAccount({ arbiter: buyer, timer: { days: 1, to: 'buyer' } })
+  // The buyer names an arbiter and a one-day timer back to itself; the seller agreed to none.
+  const rigged = escrowAccount({ arbiter: stranger, timer: { days: 1, to: 'buyer' } })
   assert.deepEqual(optionsNotAgreed({ escrow: rigged, me: 'seller', agreed: null }), [
-    { option: 'arbiter', kind: 'added', arbiter: buyer, holder: 'otherParty' },
+    { option: 'arbiter', kind: 'added', arbiter: stranger },
     { option: 'timer', kind: 'added', timer: { days: 1, to: 'buyer' }, favours: 'otherParty' },
   ])
   // The same escrow, seen by the buyer who made it from its own post: nothing to show.
-  const post = { arbiter: buyer.toBase58(), timer: { days: 1, to: 'buyer' as const } }
+  const post = { arbiter: stranger.toBase58(), timer: { days: 1, to: 'buyer' as const } }
   assert.deepEqual(optionsNotAgreed({ escrow: rigged, me: 'buyer', agreed: post }), [])
 
   // An invoice with a shorter timer than the offer said, and a third-party arbiter the buyer
@@ -769,7 +792,7 @@ test('before working or paying, a person sees every option they did not set', ()
   const offer = { arbiter: arbiter.toBase58(), timer: { days: 7, to: 'seller' as const } }
   const invoiced = escrowAccount({ creator: 'seller', arbiter: stranger, timer: { days: 1, to: 'seller' } })
   assert.deepEqual(optionsNotAgreed({ escrow: invoiced, me: 'buyer', agreed: offer }), [
-    { option: 'arbiter', kind: 'changed', arbiter: stranger, holder: 'thirdParty' },
+    { option: 'arbiter', kind: 'changed', arbiter: stranger },
     { option: 'timer', kind: 'changed', timer: { days: 1, to: 'seller' }, favours: 'otherParty' },
   ])
   // An option agreed and missing.
@@ -777,12 +800,12 @@ test('before working or paying, a person sees every option they did not set', ()
     { option: 'arbiter', kind: 'removed', expected: arbiter },
     { option: 'timer', kind: 'removed', expected: { days: 7, to: 'seller' } },
   ])
-  // The person's own key as arbiter, and a timer in their favour, are still shown if not set.
-  assert.deepEqual(optionsNotAgreed({ escrow: escrowAccount({ arbiter: seller, timer: { days: 2, to: 'seller' } }), me: 'seller', agreed: none }), [
-    { option: 'arbiter', kind: 'added', arbiter: seller, holder: 'me' },
+  // A timer in the person's favour is still shown if not set.
+  assert.deepEqual(optionsNotAgreed({ escrow: escrowAccount({ arbiter, timer: { days: 2, to: 'seller' } }), me: 'seller', agreed: none }), [
+    { option: 'arbiter', kind: 'added', arbiter },
     { option: 'timer', kind: 'added', timer: { days: 2, to: 'seller' }, favours: 'me' },
   ])
-  assert.throws(() => assertOptionsAgreed({ escrow: rigged, me: 'seller', agreed: null }), /arbiter not agreed \(otherParty\).*timer not agreed: 1 days to the buyer/)
+  assert.throws(() => assertOptionsAgreed({ escrow: rigged, me: 'seller', agreed: null }), /arbiter not agreed: .*timer not agreed: 1 days to the buyer/)
   assertOptionsAgreed({ escrow: rigged, me: 'buyer', agreed: optionsFromPost(post) })
 })
 
@@ -895,16 +918,17 @@ test('a mint is read with its token program and decimals; wrapped SOL, a transfe
 
 test('under Token-2022 every address is derived with it and every instruction names it; hook accounts go last, never signing', () => {
   const t22 = TOKEN_2022_PROGRAM_ID
-  const escrow = escrowAddress(buyer, 7n)
+  const t = terms({ arbiter, timer: { days: 1, to: 'seller' } })
+  const escrow = escrowAddress({ buyer, mint, terms: t })
   const vault = vaultAddress(escrow, mint, t22)
   assert.notDeepEqual(vault, vaultAddress(escrow, mint), 'another address than under the classic program')
   assert.deepEqual(vault, getAssociatedTokenAddressSync(mint, escrow, true, t22, ASSOCIATED_TOKEN_PROGRAM_ID))
   assert.deepEqual(refundAddress(buyer, mint, t22), getAssociatedTokenAddressSync(mint, buyer, false, t22, ASSOCIATED_TOKEN_PROGRAM_ID))
   assert.deepEqual(payoutAddress(seller, mint, t22), getAssociatedTokenAddressSync(mint, seller, false, t22, ASSOCIATED_TOKEN_PROGRAM_ID))
 
-  const create = createIx({ buyer, payer, mint, terms: terms(), tokenProgram: t22 })
+  const create = createIx({ buyer, payer, mint, terms: t, tokenProgram: t22 })
   assert.deepEqual([create.keys[1].pubkey, create.keys[5].pubkey], [vault, t22])
-  const k = keysFor({ buyer, mint, terms: terms(), tokenProgram: t22 })
+  const k = keysFor({ buyer, payer, mint, terms: t, tokenProgram: t22 })
   const account = escrowAccount({ vault, arbiter, status: 'funded', fundedAt: T0, timer: { days: 1, to: 'seller' } })
   assert.deepEqual(keysOf(account, { tokenProgram: t22 }), k)
   assert.throws(() => keysOf(account), /not under that token program/, 'the classic program named for a Token-2022 escrow')
@@ -920,7 +944,7 @@ test('under Token-2022 every address is derived with it and every instruction na
   const refund = refundAddress(buyer, mint, t22).toBase58()
   const sellers = payoutAddress(seller, mint, t22).toBase58()
   const head = [[escrow.toBase58(), false, true], [vault.toBase58(), false, true], [mint.toBase58(), false, false]]
-  const tail = [[buyer.toBase58(), false, true], [t22.toBase58(), false, false]]
+  const tail = [[payer.toBase58(), false, true], [t22.toBase58(), false, false]]
   assert.deepEqual(meta(releaseToSellerIx({ keys: k, hookAccounts: hook })), [...head, [sellers, false, true], ...tail, [buyer.toBase58(), true, false], ...forwarded])
   assert.deepEqual(meta(releaseToBuyerIx({ keys: k, hookAccounts: hook })), [...head, [refund, false, true], ...tail, [seller.toBase58(), true, false], ...forwarded])
   assert.deepEqual(meta(splitIx({ keys: k, sellerBps: 1, hookAccounts: hook })).slice(9), forwarded)
@@ -940,7 +964,7 @@ test('under Token-2022 every address is derived with it and every instruction na
 
   // The one tap under Token-2022, with each transfer's hook accounts in place.
   const token = { mint, program: t22, decimals: 6 }
-  const [deposit, , fund, release] = payInOneTap({ buyer, payer, token, terms: terms(), hookAccounts: { fund: [hook[1]], release: [hook[0]] } })
+  const [deposit, , fund, release] = payInOneTap({ buyer, payer, token, terms: t, hookAccounts: { fund: [hook[1]], release: [hook[0]] } })
   assert.deepEqual([deposit.keys[1].pubkey, deposit.keys[5].pubkey], [vault, t22])
   assert.deepEqual(fund.keys.map((m) => m.pubkey).slice(4), [arbiter])
   assert.deepEqual(meta(release).slice(7), [[stranger.toBase58(), false, false]])
@@ -950,7 +974,7 @@ test('a hook\'s accounts are resolved by spl-token\'s resolver: none without a h
   const t22 = TOKEN_2022_PROGRAM_ID
   const hookProgram = Keypair.generate().publicKey
   const listed = Keypair.generate().publicKey
-  const k = keysFor({ buyer, mint, terms: terms(), tokenProgram: t22 })
+  const k = keysFor({ buyer, payer, mint, terms: terms(), tokenProgram: t22 })
   const validation = PublicKey.findProgramAddressSync([Buffer.from('extra-account-metas'), mint.toBuffer()], hookProgram)[0]
   const counter = PublicKey.findProgramAddressSync([Buffer.from('counter')], hookProgram)[0]
   const tokenAccount = (owner: PublicKey) => {

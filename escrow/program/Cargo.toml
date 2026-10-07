@@ -26,6 +26,8 @@ anchor-debug = []
 [dependencies]
 anchor-lang = { version = "1.2.0", features = ["init-if-needed"] }
 anchor-spl = { version = "1.2.0", default-features = false, features = ["token", "token_2022", "associated_token"] }
+# SHA-256 of an escrow's terms, its address's seed: the runtime's syscall on chain, `sha2` off it.
+solana-sha256-hasher = { version = "3.1.0", features = ["sha2"] }
 
 # Arithmetic that overflows panics instead of wrapping, beside the checked math in the source.
 [profile.release]
