@@ -3,8 +3,8 @@
 // a stand-in for the public list of hosts. Two people:
 //
 // - The buyer, whose app gave this tool access keys: a write key on offer and review, a write key
-//   on review alone, a message key, and a read key, listed in its permissions record and as its
-//   inbox's reader. Its folder holds an offer its main key wrote, and a private record sealed to the
+//   on review alone, two message keys (one the owner later makes past), and a read key, listed in
+//   its permissions record and as its inbox's reader. Its folder holds an offer its main key wrote, and a private record sealed to the
 //   read key and to its own inbox key.
 // - The seller, with an offer and an inbox open to anyone.
 // - A quiet profile, whose card declares no inbox.
@@ -14,7 +14,7 @@ import { type Server, createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { generateHybridIdentity, identityToRecipient } from 'age-encryption'
 import { mainKey, newSeed, readingKey } from '../../keys/src/index.ts'
-import { type Body, b64u, hostsRecord, keyFromPrivate, ownerRecord, permissionsRecord, publish, readAll } from '../../records/src/index.ts'
+import { type AccessKey, type Body, b64u, hostsRecord, keyFromPrivate, ownerRecord, permissionsRecord, publish, readAll } from '../../records/src/index.ts'
 import { Host } from '../../records/src/host.ts'
 import { makePrivate } from '../../records/src/private.ts'
 import type { Context } from '../src/forest.ts'
@@ -28,6 +28,7 @@ export const sellerInbox = await readingKey(seller.privateKey)
 export const writeKey = keyFromPrivate(randomBytes(32))
 export const reviewKey = keyFromPrivate(randomBytes(32))
 export const messageKey = keyFromPrivate(randomBytes(32))
+export const laterPastKey = keyFromPrivate(randomBytes(32))
 export const strayKey = keyFromPrivate(randomBytes(32))
 export const readIdentity = await generateHybridIdentity()
 export const readRecipient = await identityToRecipient(readIdentity)
@@ -37,6 +38,7 @@ export const KEYS = {
   write: b64u.encode(writeKey.privateKey),
   review: b64u.encode(reviewKey.privateKey),
   message: b64u.encode(messageKey.privateKey),
+  laterPast: b64u.encode(laterPastKey.privateKey),
   stray: b64u.encode(strayKey.privateKey),
   main: b64u.encode(buyer.privateKey),
   read: readIdentity,
@@ -67,6 +69,15 @@ async function serveJson(files: { [path: string]: unknown }): Promise<{ url: str
   return { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, server }
 }
 
+/** The buyer's permissions record, as the setup writes it. */
+export const ACCESS: AccessKey[] = [
+  { key: writeKey.address, scope: 'write', paths: ['offer', 'review'] },
+  { key: reviewKey.address, scope: 'write', paths: ['review'] },
+  { key: messageKey.address, scope: 'message' },
+  { key: laterPastKey.address, scope: 'message' },
+  { key: readRecipient, scope: 'read' },
+]
+
 export type World = { host: Host; index: string; hostsList: string; ctx: (keys?: Context['keys'], profile?: string) => Context; close: () => Promise<void> }
 
 export async function world(): Promise<World> {
@@ -77,16 +88,7 @@ export async function world(): Promise<World> {
     [host.url],
     [
       hostsRecord(buyer, [host.url], now),
-      permissionsRecord(
-        buyer,
-        [
-          { key: writeKey.address, scope: 'write', paths: ['offer', 'review'] },
-          { key: reviewKey.address, scope: 'write', paths: ['review'] },
-          { key: messageKey.address, scope: 'message' },
-          { key: readRecipient, scope: 'read' },
-        ],
-        now,
-      ),
+      permissionsRecord(buyer, ACCESS, now),
       ownerRecord(buyer, 'profile', card('buyer', buyerInbox.recipient, [readRecipient]), now),
       ownerRecord(buyer, 'offer/owned', offer('Maths, written by the main key.'), now),
       ownerRecord(buyer, 'notes/1', await makePrivate({ text: 'Tuesdays suit me.' }, [readRecipient, buyerInbox.recipient]), now),

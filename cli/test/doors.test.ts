@@ -59,6 +59,10 @@ describe('the typed door', () => {
     assert.equal(wrote.status, 0, wrote.stderr)
     assert.equal(JSON.parse(wrote.stdout).path, 'offer/typed')
     assert.equal((await live()).get('offer/typed')!.record.body!.description, 'Typed, one hour.')
+
+    const asked = await forest(['request', 'remove-offer', '--params', '{"id":"typed"}'], { ...env, FOREST_MESSAGE_KEY: KEYS.message })
+    assert.equal(asked.status, 0, asked.stderr)
+    assert.equal(JSON.parse(asked.stdout).to, buyer.address)
   })
 
   test('a refusal is one line, and exit status 1', async () => {
@@ -82,13 +86,14 @@ describe('the MCP door', () => {
       for (const t of tools) assert.ok(t.description!.endsWith(`Key: ${keyNeeded(ACTIONS.find((a) => a.name === t.name)!)}.`))
       assert.deepEqual(Object.keys(tools.find((t) => t.name === 'post-offer')!.inputSchema.properties!), ['offer', 'id', 'profile', 'writeKey'])
       assert.deepEqual(Object.keys(tools.find((t) => t.name === 'market')!.inputSchema.properties!), ['market'])
+      assert.deepEqual(Object.keys(tools.find((t) => t.name === 'request')!.inputSchema.properties!), ['action', 'params', 'profile', 'messageKey'])
 
       // A key in the call.
       const wrote = await client.callTool({ name: 'post-offer', arguments: { offer: offer('By MCP.'), id: 'mcp', writeKey: KEYS.write } })
       assert.equal(wrote.isError, undefined, text(wrote))
       assert.equal(JSON.parse(text(wrote)).path, 'offer/mcp')
       // A key from the start: the AI never wrote it.
-      const asked = await client.callTool({ name: 'request', arguments: { what: 'remove', details: { path: 'offer/owned' } } })
+      const asked = await client.callTool({ name: 'request', arguments: { action: 'remove-offer', params: { id: 'owned' } } })
       assert.equal(asked.isError, undefined, text(asked))
       // No key at all, and a key the tool does not take.
       assert.deepEqual(await client.callTool({ name: 'post-review', arguments: { review: { subject: seller.address } } }), { isError: true, content: [{ type: 'text', text: NO_KEY }] })

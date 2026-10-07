@@ -220,9 +220,11 @@ export async function privateRecords(ctx: Context, under?: string) {
 /**
  * The messages to the profile, pulled from each of its hosts, each page in turn, a message on two
  * hosts shown once. `after` holds the cursors a pull returned, by host. With a read key the inbox
- * lists, each message is opened.
+ * lists, each message is opened, and marked as a request when it is one: sent by the profile to
+ * itself, by its main key or by a message key its permissions record lists, with a body
+ * `requestIn` names an action for. Any other request body is a plain message.
  */
-export async function inbox(ctx: Context, after: { [host: string]: number } = {}) {
+export async function inbox(ctx: Context, after: { [host: string]: number } = {}, requestIn: (body: Body) => string | null = () => null) {
   const text = ctx.keys.message ?? refuse(NO_KEY)
   if (Object.values(after).some((cursor) => !Number.isSafeInteger(cursor) || cursor < 0)) refuse('after holds the cursors a pull returned: whole numbers, by host')
   const address = acting(ctx)
@@ -238,7 +240,8 @@ export async function inbox(ctx: Context, after: { [host: string]: number } = {}
     }
     identity = read.identity
   }
-  const found = new Map<string, { id: string; from: string; time: number; key?: string; body?: Body; sealed?: true }>()
+  const itself = (m: { from: string; key?: string }) => m.from === address && (m.key === undefined || view.access.some((k) => k.key === m.key && k.scope === 'message'))
+  const found = new Map<string, { id: string; from: string; time: number; key?: string; request?: string; body?: Body; sealed?: true }>()
   const cursors: { [host: string]: number } = {}
   const failed: Array<{ host: string; why: string }> = []
   for (const host of view.hosts) {
@@ -249,7 +252,8 @@ export async function inbox(ctx: Context, after: { [host: string]: number } = {}
           if (found.has(id)) continue
           let body: Body | undefined
           if (identity) body = (await openMessage(m, identity).catch(() => undefined))?.body
-          found.set(id, { id, from: m.from, time: m.time, ...(m.key !== undefined && { key: m.key }), ...(body ? { body } : { sealed: true as const }) })
+          const asked = body && itself(m) ? requestIn(body) : null
+          found.set(id, { id, from: m.from, time: m.time, ...(m.key !== undefined && { key: m.key }), ...(asked && { request: asked }), ...(body ? { body } : { sealed: true as const }) })
         }
         cursors[host] = page.cursor
         if (page.cursor === cursor) break
@@ -334,11 +338,9 @@ export async function send(ctx: Context, to: string, body: Body) {
   return sendFrom(ctx, to, body)
 }
 
-/** A request to the profile's own inbox: `{ request: what, ...details }`, for the person's app to show. */
-export async function request(ctx: Context, what: string, details: Body = {}) {
-  if (!what) refuse('say what is asked')
-  if ('request' in details) refuse('what is asked goes in what, not in the details')
-  return sendFrom(ctx, null, { ...details, request: what })
+/** A request, `{ request: <action>, ...its parameters }`, to the profile's own inbox, for the person's app to show. */
+export async function request(ctx: Context, body: Body) {
+  return sendFrom(ctx, null, body)
 }
 
 /** Seal, sign and deliver `body` to `to`'s inbox; to the profile's own when `to` is null. */

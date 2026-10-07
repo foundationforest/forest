@@ -5,12 +5,12 @@
 
 import assert from 'node:assert/strict'
 import { after, before, describe, test } from 'node:test'
-import { deliver, pull, pullRequest, readProfile } from '../../records/src/index.ts'
+import { type Body, deliver, permissionsRecord, publish, pull, pullRequest, readProfile } from '../../records/src/index.ts'
 import { message, openMessage } from '../../records/src/private.ts'
 import type { MainKey } from '../../keys/src/index.ts'
-import { ACTIONS, checkArgs } from '../src/actions.ts'
+import { ACTIONS, REQUESTS, checkArgs } from '../src/actions.ts'
 import { type Context, NO_KEY, Refusal } from '../src/forest.ts'
-import { KEYS, MARKET, SCORES, type World, buyer, buyerInbox, messageKey, offer, quiet, seller, sellerInbox, strayKey, world, writeKey } from './setup.ts'
+import { ACCESS, KEYS, MARKET, SCORES, type World, buyer, buyerInbox, laterPastKey, messageKey, offer, quiet, seller, sellerInbox, strayKey, world, writeKey } from './setup.ts'
 
 let w: World
 before(async () => {
@@ -40,6 +40,18 @@ async function opened(owner: MainKey, identity: string) {
 }
 
 const PAY_LINK = `https://forest.foundation/pay?v=2&offer=${seller.address}/offer/maths`
+
+/** One request for each action a request may name, with that action's parameters. */
+const ASKED: Array<[string, Body]> = [
+  ['private', { path: 'notes' }],
+  ['inbox', {}],
+  ['post-offer', { offer: offer('Physics, asked for.'), id: 'asked' }],
+  ['update-offer', { id: 'owned', offer: offer('Maths, two hours.') }],
+  ['remove-offer', { id: 'owned' }],
+  ['post-review', { review: { subject: seller.address, text: 'Kind and clear.' } }],
+  ['send', { to: seller.address, text: 'Thank you.' }],
+  ['pay', { offer: PAY_LINK }],
+]
 
 describe('no key', () => {
   test('a market, from the index, as its own word', async () => {
@@ -145,32 +157,70 @@ describe('a message key', () => {
     assert.deepEqual(got.map((m) => [m.from, m.key, m.body]), [[buyer.address, messageKey.address, { text: 'Is Tuesday at six free?' }]])
   })
 
-  test("requests: a message to the profile's own inbox, which the person's app opens with the inbox key", async () => {
-    await run('request', { what: 'pay', details: { offer: PAY_LINK, note: 'Two hours on Tuesday.' } }, w.ctx({ message: KEYS.message }))
+  test("requests: one for each action a request may name, each landing in the profile's own inbox as { request, ...its parameters }", async () => {
+    assert.deepEqual(ASKED.map(([action]) => action).sort(), [...REQUESTS.keys()].sort(), 'one for each')
+    for (const [action, params] of ASKED) await run('request', { action, params }, w.ctx({ message: KEYS.message }))
     const mine = await opened(buyer, buyerInbox.identity)
-    assert.deepEqual(mine.map((m) => [m.from, m.body]), [[buyer.address, { request: 'pay', offer: PAY_LINK, note: 'Two hours on Tuesday.' }]])
+    assert.deepEqual(
+      mine.map((m) => [m.from, m.key, m.body]),
+      ASKED.map(([action, params]) => [buyer.address, messageKey.address, { ...params, request: action }]),
+    )
   })
 
-  test('pulls the inbox: opened with a read key the inbox lists, sealed without one, and newer only after the cursors', async () => {
+  test('refuses a request for an action that needs no key or is not one, and parameters that do not fit the action, a key among them', async () => {
+    const ask = (action: string, params?: Body) => run('request', { action, ...(params && { params }) }, w.ctx({ message: KEYS.message }))
+    const names = [...REQUESTS.keys()].join(', ')
+    await refused(ask('profile', { address: seller.address }), `a request names one of ${names}; not profile`)
+    await refused(ask('request', {}), `a request names one of ${names}; not request`)
+    await refused(ask('fly'), `a request names one of ${names}; not fly`)
+    await refused(ask('pay'), 'pay needs offer')
+    await refused(ask('post-offer', { offer: 'cheap' }), 'offer is an object')
+    await refused(ask('post-offer', { offer: offer('x'), writeKey: KEYS.write }), 'post-offer takes no writeKey')
+    await refused(run('request', { action: 'pay', params: { offer: PAY_LINK } }, w.ctx({ write: KEYS.write })), NO_KEY)
+  })
+
+  test('in the inbox, a request counts only when the profile sent it to itself, by its main key or a message key it lists; any other is a plain message', async () => {
     const card = (await live()).get('profile')!.record.body!
-    await deliver([w.host.url], [await message(seller, buyer.address, { text: 'Tuesday at six, yes.' }, Date.now(), card)])
+    // The person's own app, with the main key.
+    await deliver([w.host.url], [await message(buyer, buyer.address, { request: 'remove-offer', id: 'main' }, Date.now(), card)])
+    // A stranger.
+    await deliver([w.host.url], [await message(seller, buyer.address, { request: 'pay', offer: PAY_LINK }, Date.now(), card)])
+    // A message key the owner then makes past: it no longer speaks for the profile.
+    await run('request', { action: 'remove-offer', params: { id: 'past' } }, w.ctx({ message: KEYS.laterPast }))
+    await publish([w.host.url], [permissionsRecord(buyer, ACCESS.map((k) => (k.key === laterPastKey.address ? { ...k, scope: 'past' as const } : k)), Date.now())])
+    // The profile's own message key, with bodies that ask for no action this tool knows, or leave out what it needs.
+    await run('send', { to: buyer.address, body: { request: 'fly' } }, w.ctx({ message: KEYS.message }))
+    await run('send', { to: buyer.address, body: { request: 'pay' } }, w.ctx({ message: KEYS.message }))
+
     const all = await run('inbox', {}, w.ctx({ message: KEYS.message, read: KEYS.read }))
     assert.deepEqual(
-      all.messages.map((m: { from: string; body: unknown }) => [m.from, m.body]),
+      all.messages.map((m: { from: string; request?: string; body: Body }) => [m.from, m.request ?? null, m.body]),
       [
-        [buyer.address, { request: 'pay', offer: PAY_LINK, note: 'Two hours on Tuesday.' }],
-        [seller.address, { text: 'Tuesday at six, yes.' }],
+        ...ASKED.map(([action, params]) => [buyer.address, action, { ...params, request: action }]),
+        [buyer.address, 'remove-offer', { request: 'remove-offer', id: 'main' }],
+        [seller.address, null, { request: 'pay', offer: PAY_LINK }],
+        [buyer.address, null, { request: 'remove-offer', id: 'past' }],
+        [buyer.address, null, { request: 'fly' }],
+        [buyer.address, null, { request: 'pay' }],
       ],
     )
+  })
+
+  test('pulls the inbox: sealed without a read key the inbox lists, and newer only after the cursors', async () => {
+    const all = await run('inbox', {}, w.ctx({ message: KEYS.message, read: KEYS.read }))
     const sealed = await run('inbox', {}, w.ctx({ message: KEYS.message }))
-    assert.deepEqual(sealed.messages.map((m: { sealed?: true; body?: unknown }) => [m.sealed, m.body]), [[true, undefined], [true, undefined]])
+    assert.deepEqual(
+      sealed.messages.map((m: { id: string; sealed?: true; body?: unknown; request?: string }) => [m.id, m.sealed, m.body, m.request]),
+      all.messages.map((m: { id: string }) => [m.id, true, undefined, undefined]),
+      'sealed, nothing read from it, so nothing marked a request',
+    )
     assert.deepEqual((await run('inbox', { after: all.cursors }, w.ctx({ message: KEYS.message }))).messages, [])
   })
 
   test('refuses no key, another scope, the inbox key, a grant, and a profile with no inbox', async () => {
     const others = w.ctx({ write: KEYS.write, read: KEYS.read })
     await refused(run('send', { to: seller.address, text: 'x' }, others), NO_KEY)
-    await refused(run('request', { what: 'post' }, others), NO_KEY)
+    await refused(run('request', { action: 'pay', params: { offer: PAY_LINK } }, others), NO_KEY)
     await refused(run('inbox', {}, others), NO_KEY)
     await refused(run('send', { to: seller.address, text: 'x' }, w.ctx({ message: KEYS.write })), 'this key is listed as a write key, not a message key; use request')
     await refused(run('inbox', {}, w.ctx({ message: KEYS.write })), 'this key is listed as a write key, not a message key; use request')
@@ -179,6 +229,5 @@ describe('a message key', () => {
     await refused(run('send', { to: seller.address, body: { grant: { key: KEYS.write } } }, w.ctx({ message: KEYS.message })), /never carries a grant/)
     await refused(run('send', { to: quiet.address, text: 'x' }, w.ctx({ message: KEYS.message })), `${quiet.address} has no inbox this tool can read; nothing can be sent there`)
     await refused(run('send', { to: seller.address }, w.ctx({ message: KEYS.message })), 'give text or body, one of them')
-    await refused(run('request', { what: 'pay', details: { request: 'post' } }, w.ctx({ message: KEYS.message })), /goes in what/)
   })
 })

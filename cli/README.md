@@ -44,7 +44,7 @@ parameters.
 | `post-offer`, `update-offer <id>`, `remove-offer <id>` | write | An offer at `offer/<id>` |
 | `post-review` | write | A review at `review/<id>` |
 | `send <to>` | message | A message to another profile's inbox |
-| `request <what>` | message | A request to the profile's own inbox (below) |
+| `request <action>` | message | Ask for one of the actions above, or `pay`, through the profile's own inbox (below) |
 
 A key is written as a grant writes it ([records](../records/README.md#grants)): for a write or
 message key, its 32 private bytes in base64url; for a read key, its age identity.
@@ -61,11 +61,21 @@ in plain words:
 
 ### Request
 
-The one way to have something done that no key here allows: paying for an offer, writing the
-card, anything. `request` sends a message to the profile's own inbox. Its body is
-`{ "request": <what>, … }` ([records](../records/README.md#inbox), Requests), for example
-`{ "request": "pay", "offer": "<pay link>" }`. The person's app shows it, and does it with the main
-key, or not.
+The one way to have something done that no key here allows. `request` names one of the actions
+above that need a key, or `pay`, and carries that action's parameters. It sends them to the
+profile's own inbox as `{ "request": <action>, … }` ([records](../records/README.md#inbox),
+Requests):
+- `{ "request": "post-offer", "offer": { … } }`
+- `{ "request": "send", "to": <address>, "text": … }`
+- `{ "request": "pay", "offer": <pay link> }`
+
+Typed: `forest request post-offer --params '{"offer": {…}}'`. Over MCP: `action` and `params`. The
+parameters are checked against that action's own, so a request never carries a key. The person's
+app shows it, and does it with the main key, or not.
+
+`inbox` marks a message `"request": <action>` only when the profile sent it to itself, by its main
+key or by a message key its permissions record lists, and its parameters fit that action. Any other
+`request` body, such as a stranger's, shows as a plain message.
 
 ### Settings
 

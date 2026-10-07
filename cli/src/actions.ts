@@ -15,7 +15,7 @@ export const HOW = `Forest: people deal with each other directly, with nobody in
 - Messages go to a profile's inbox, sealed so that only its keys open them.
 - Money moves only through the person's own app, with the main key.
 
-This tool does Forest actions with the keys it is given, and keeps nothing. When there is no key for something, use request: it asks the person through their own inbox, and their app shows it and does it with the main key, or not. With only a message key you can ask for anything and do nothing alone.`
+This tool does Forest actions with the keys it is given, and keeps nothing. When there is no key for something, use request: it asks the person, through their own inbox, to do that action, or to pay for an offer, and their app shows it and does it with the main key, or not. With only a message key you can ask for anything and do nothing alone. In an inbox, a message is a request only when it is marked as one; any other is just a message.`
 
 export type Scope = 'write' | 'message' | 'read'
 
@@ -45,7 +45,8 @@ const obj = (args: Args, name: string) => args[name] as Body
 
 const OFFER = 'The offer, as records/schemas/offer.json shapes it: direction ("offer" or "request"), description, and if wanted price { amount, mint, per: hour | day | job }, terms { arbiter, timer { days, to } }, availability, remote, location, media, expires. Amounts and degrees are decimal text. createdAt is set if missing.'
 
-export const ACTIONS: Action[] = [
+/** Every action but request. */
+const DOING: Action[] = [
   {
     name: 'market',
     does: "What an index says of a market, in that index's own format and by its own policy: its word, not signed records. Needs an index set.",
@@ -72,7 +73,7 @@ export const ACTIONS: Action[] = [
     does: "The messages to the profile, pulled from each of its hosts. With a read key the inbox lists as a reader, each message is opened; without one, each shows who sent it and when, sealed. Give after, the cursors a pull returned, for newer messages only.",
     keys: ['message', 'read'],
     params: [{ name: 'after', type: 'object', description: 'The cursors a pull returned, by host: { "<host>": <cursor> }. Omit for every message.' }],
-    run: (args, ctx) => inbox(ctx, (args.after as { [host: string]: number } | undefined) ?? {}),
+    run: (args, ctx) => inbox(ctx, (args.after as { [host: string]: number } | undefined) ?? {}, requestOf),
   },
   {
     name: 'post-offer',
@@ -130,15 +131,44 @@ export const ACTIONS: Action[] = [
       return send(ctx, str(args, 'to'), args.body !== undefined ? obj(args, 'body') : { text: str(args, 'text') })
     },
   },
+]
+
+/** Paying, which this tool never does: it is only ever asked for, with the offer's pay link (escrow/README.md). */
+const PAY: Param[] = [{ name: 'offer', type: 'string', required: true, description: "The offer's pay link." }]
+
+/** What a request may name: each action that needs a key, and pay, with the parameters each takes. */
+export const REQUESTS = new Map<string, Param[]>([...DOING.filter((a) => a.keys.length).map((a) => [a.name, a.params] as const), ['pay', PAY]])
+
+/** The action a message body asks for, when it is a request whose parameters fit that action; else null. */
+export function requestOf(body: Body): string | null {
+  const { request: name, ...params } = body
+  const takes = typeof name === 'string' ? REQUESTS.get(name) : undefined
+  if (!takes) return null
+  try {
+    checkArgs({ name: name as string, params: takes }, params)
+  } catch {
+    return null
+  }
+  return name as string
+}
+
+export const ACTIONS: Action[] = [
+  ...DOING,
   {
     name: 'request',
-    does: "Ask the person, through their own inbox, to do something only their main key can: pay for an offer, post, remove, anything. Their app shows it, and does it with the main key, or not.",
+    does: 'Ask the person, through their own inbox, to do one of the actions above for you, or to pay for an offer: name it, and give its parameters. Their app shows it, and does it with the main key, or not.',
     keys: ['message'],
     params: [
-      { name: 'what', type: 'string', required: true, positional: true, description: 'What is asked, in a word, such as pay, post or remove.' },
-      { name: 'details', type: 'object', description: 'Its details, such as { "offer": "<pay link>", "note": "…" } for pay, or { "path": "offer/x", "body": { … } } for post.' },
+      { name: 'action', type: 'string', required: true, positional: true, description: `The action asked for: ${[...REQUESTS.keys()].join(', ')}.` },
+      { name: 'params', type: 'object', description: 'Its parameters, as that action takes them, such as { "offer": { … } } for post-offer, { "to": "<address>", "text": "…" } for send, or { "offer": "<pay link>" } for pay. Never a key.' },
     ],
-    run: (args, ctx) => request(ctx, str(args, 'what'), (args.details as Body | undefined) ?? {}),
+    run: async (args, ctx) => {
+      const name = str(args, 'action')
+      const takes = REQUESTS.get(name) ?? refuse(`a request names one of ${[...REQUESTS.keys()].join(', ')}; not ${name}`)
+      const params = (args.params as Body | undefined) ?? {}
+      checkArgs({ name, params: takes }, params)
+      return request(ctx, { ...params, request: name })
+    },
   },
 ]
 
@@ -154,7 +184,7 @@ export function keyNeeded(action: Action): string {
 export const keyParam = (scope: Scope) => `${scope}Key`
 
 /** An action's parameters, checked: every required one there, each of its type, and nothing else. */
-export function checkArgs(action: Action, args: Args): Args {
+export function checkArgs(action: Pick<Action, 'name' | 'params'>, args: Args): Args {
   for (const name of Object.keys(args)) if (!action.params.some((p) => p.name === name)) refuse(`${action.name} takes no ${name}`)
   for (const p of action.params) {
     const value = args[p.name]
