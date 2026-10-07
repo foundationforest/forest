@@ -257,6 +257,12 @@ host reads them again. The inbox's rule and `once` apply to `from`, as for any m
 - It is a POST and not a GET because hosting platforms log URLs, and a signed URL would be a log of
   pulls.
 
+**Requests.** A message body may be `{ "request": <what>, … }`: the sender asks the recipient's app
+to do something only its main key can. `request` names what, in a word such as `pay` or `post`, and
+the other fields are its details, such as `offer`, a pay link, for `pay`. A message key usually
+sends it to its own profile, so whoever holds only a message key can ask for anything and do
+nothing alone. The app shows it, and does it only if the person agrees.
+
 ### Grants
 
 A grant is how an access key reaches whoever it is for: its private half, and what it is for.
