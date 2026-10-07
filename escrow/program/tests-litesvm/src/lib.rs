@@ -57,10 +57,29 @@ pub fn discriminator(namespace: &str, name: &str) -> [u8; 8] {
     digest[..8].try_into().unwrap()
 }
 
-/// The escrow's address: `["escrow", creator, id]`, the key that opens it (and signs `create`) and
-/// its id. Nobody can open an escrow at an address made from someone else's key.
-pub fn escrow_address(creator: &Address, id: u64) -> Address {
-    Address::find_program_address(&[b"escrow", creator.as_ref(), &id.to_le_bytes()], &PROGRAM_ID).0
+/// The seed of an escrow's address: SHA-256 of all its terms, each at a fixed length, in the
+/// receipt's order. id (8, little-endian), buyer, seller, arbiter (the zero key for none), mint
+/// (32 each), amount (8, little-endian), timer days (2, little-endian; 0 for none), timer side
+/// (1: buyer 0, seller 1; the buyer's for no timer). Written here a second time, by hand.
+pub fn terms_hash(t: &Terms, buyer: &Address, mint: &Address) -> [u8; 32] {
+    let arbiter = t.arbiter.unwrap_or_default();
+    let (days, to) = t.timer.map_or((0u16, Side::Buyer), |timer| (timer.days, timer.to));
+    let mut h = Sha256::new();
+    h.update(t.id.to_le_bytes());
+    h.update(buyer.as_ref());
+    h.update(t.seller.as_ref());
+    h.update(arbiter.as_ref());
+    h.update(mint.as_ref());
+    h.update(t.amount.to_le_bytes());
+    h.update(days.to_le_bytes());
+    h.update([to as u8]);
+    h.finalize().into()
+}
+
+/// The escrow's address: `["escrow", terms_hash]`. Every term is in it, so a payment to it counts
+/// only toward a deal with exactly those terms. Who opens it is not a term.
+pub fn escrow_address(t: &Terms, buyer: &Address, mint: &Address) -> Address {
+    Address::find_program_address(&[b"escrow", &terms_hash(t, buyer, mint)], &PROGRAM_ID).0
 }
 
 /// An associated token account: the standard address of `owner`'s account for a classic `mint`.
@@ -120,8 +139,8 @@ pub struct Terms {
     pub timer: Option<Timer>,
 }
 
-/// The buyer, the key that fronts the rent (a fee payer, or anyone) and the mint. The escrow's
-/// address comes from the creator's key, which `create_ix_by` takes.
+/// The buyer, the key that fronts the rent (a fee payer, or anyone) and the mint. Who signs as
+/// creator, `create_ix_by` takes; it is not in the address.
 pub struct CreateAccounts {
     pub buyer: Address,
     pub payer: Address,
@@ -165,7 +184,7 @@ pub fn invoice_ix(t: &Terms, a: &CreateAccounts) -> Instruction {
 }
 
 /// `create` with `creator` in the signer slot: escrow, vault, creator, payer, mint, token
-/// program, associated token program, system program. The escrow's address is the creator's.
+/// program, associated token program, system program. The escrow's address is its terms'.
 pub fn create_ix_by(t: &Terms, a: &CreateAccounts, creator: Address) -> Instruction {
     create_ix_under(t, a, creator, TOKEN_PROGRAM)
 }
@@ -173,7 +192,7 @@ pub fn create_ix_by(t: &Terms, a: &CreateAccounts, creator: Address) -> Instruct
 /// `create` under a named token program: the one that owns the mint. The deposit address is
 /// derived under it.
 pub fn create_ix_under(t: &Terms, a: &CreateAccounts, creator: Address, token_program: Address) -> Instruction {
-    let escrow = escrow_address(&creator, t.id);
+    let escrow = escrow_address(t, &a.buyer, &a.mint);
     let mut data = discriminator("global", "create").to_vec();
     data.extend_from_slice(&create_args_bytes(t, &a.buyer));
     Instruction {
@@ -204,7 +223,7 @@ pub fn mark_funded_ix(escrow: Address, vault: Address) -> Instruction {
 /// The accounts the ways out touch. Each instruction takes the ones it pays, in this order:
 /// escrow, vault, mint, buyer_tokens, seller_tokens, rent_recipient, token program, then its
 /// signers, then any accounts a transfer hook needs. `buyer_tokens` and `seller_tokens` must be
-/// the parties' standard token accounts, `rent_recipient` the creator, and `token_program` the
+/// the parties' standard token accounts, `rent_recipient` the payer, and `token_program` the
 /// mint's owner; tests put other accounts there to see them refused.
 #[derive(Clone, Copy, Debug)]
 pub struct Accounts {
@@ -487,7 +506,7 @@ pub struct EscrowView {
     pub arbiter: Address,
     pub mint: Address,
     pub vault: Address,
-    /// The creator's key: the deposit account's rent and a closed escrow's rents go here.
+    /// The payer's key: every rent goes back here.
     pub rent_recipient: Address,
     pub amount: u64,
     pub creator: Side,
@@ -816,8 +835,7 @@ pub const T0: i64 = 1_800_000_000;
 pub struct Harness {
     pub svm: LiteSVM,
     /// The transaction fee payer, and the key that fronts every rent: a fee payer service's role.
-    /// Only a sweep of rent above the receipt's minimum comes back to it; every other refund goes
-    /// to the escrow's creator.
+    /// Every rent comes back to it.
     pub payer: Keypair,
     pub buyer: Keypair,
     pub seller: Keypair,
@@ -990,19 +1008,24 @@ impl Harness {
         create_ix_under(t, &self.create_accounts(), creator, self.token_program)
     }
 
-    /// `create`, signed by the buyer and the payer. Returns the escrow address: the buyer's.
+    /// The address of an escrow with these terms, the harness's buyer and its mint.
+    pub fn address(&self, t: &Terms) -> Address {
+        escrow_address(t, &self.buyer.pubkey(), &self.mint)
+    }
+
+    /// `create`, signed by the buyer and the payer. Returns the escrow address.
     pub fn create(&mut self, t: &Terms) -> Result<(Address, litesvm::types::TransactionMetadata), String> {
         let buyer = self.buyer.insecure_clone();
         let meta = self.send(&[self.create_ix(t, buyer.pubkey())], &[&buyer])?;
-        Ok((escrow_address(&buyer.pubkey(), t.id), meta))
+        Ok((self.address(t), meta))
     }
 
     /// `create`, opened by the seller as an invoice, signed by the seller and the payer. Returns
-    /// the escrow address: the seller's.
+    /// the escrow address: the same as the buyer's with the same terms.
     pub fn invoice(&mut self, t: &Terms) -> Result<(Address, litesvm::types::TransactionMetadata), String> {
         let seller = self.seller.insecure_clone();
         let meta = self.send(&[self.create_ix(t, seller.pubkey())], &[&seller])?;
-        Ok((escrow_address(&seller.pubkey(), t.id), meta))
+        Ok((self.address(t), meta))
     }
 
     /// The buyer's transfer of `amount` into the deposit account: a plain transfer for the classic
@@ -1088,11 +1111,11 @@ impl Harness {
     }
 
     /// The accounts a way out names, all the right ones: the parties' standard accounts and the
-    /// rent recipient the escrow records (the buyer, for an escrow not made yet: `create`'s creator).
+    /// rent recipient the escrow records (the harness's payer, for an escrow not made yet).
     pub fn accounts(&self, escrow: &Address) -> Accounts {
         let rent_recipient = match self.svm.get_account(escrow) {
             Some(a) if a.lamports > 0 && a.data.len() == ESCROW_LEN => read_escrow(&a.data).rent_recipient,
-            _ => self.buyer.pubkey(),
+            _ => self.payer.pubkey(),
         };
         Accounts {
             escrow: *escrow,

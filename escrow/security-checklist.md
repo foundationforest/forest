@@ -16,7 +16,7 @@ history.
 |---|---|
 | Program | `forest_escrow`, version byte 2, `FoRE2EscrowV2objectsTimerFundedAtPayer222222` for local work, `FA6ZodkyhMDj9yjzY27dk8JDCtcHnJx8mr45Mx9TfKg8` on devnet, upgraded in place once (its first deploy, classic only, at `B3p13G8xvNvUrAnaXg9AUtwffBAUHcp6XoMwGV2jKPi7`, closed) |
 | Framework | Anchor 1.2 with `anchor-spl`'s token interface, `cargo build-sbf --arch v3` (Solana CLI 4.2.2, platform-tools v1.54), no IDL, no build warning |
-| Testing | LiteSVM, 88 tests on every pull request: 64 on a classic mint, 24 on Token-2022 mints (one made with Open USD's mainnet extensions compared with the mainnet account's bytes; others with one extension each), with a builtin test hook and a builtin spy standing in for Token-2022; a mutation check of each rule added after version 1 (removing it fails at least one test). A Trident fuzzer: fifteen invariants, 50,000 iterations nightly, on an SBPF v0 build and a classic mint. On devnet: five deals through the client, three of them in a Token-2022 dollar with Open USD's extensions, and a non-transferable mint's `create` refused there. **No local-validator test** |
+| Testing | LiteSVM, 91 tests on every pull request: 67 on a classic mint, 24 on Token-2022 mints (one made with Open USD's mainnet extensions compared with the mainnet account's bytes; others with one extension each), with a builtin test hook and a builtin spy standing in for Token-2022; a mutation check of each rule added after version 1, the terms in the address included (removing it fails at least one test). A Trident fuzzer: fifteen invariants, 50,000 iterations nightly, on an SBPF v0 build and a classic mint. On devnet: five deals through the client, three of them in a Token-2022 dollar with Open USD's extensions, and a non-transferable mint's `create` refused there. **No local-validator test** |
 | Risk level | 🟡 Medium by the skill's table (an escrow: token transfers, basic CPI, PDAs, no admin). Treated as 🔴 **Critical**, because it is sealed at deploy and holds other people's money, so this checklist carries a High-Risk Decisions section |
 | Upgrade authority | Removed at mainnet deploy with `solana program set-upgrade-authority --final` (`README.md`). No admin key, no config, no pause, no fee. A change is a new program at a new address. On devnet the authority stays on the deploy key |
 
@@ -32,9 +32,11 @@ Each is on purpose, and none can be changed after deploy.
    event, and the other side sees it before working or paying (the client's `optionsNotAgreed`).
    Once the funding is marked it cannot be moved: `mark_funded` runs once, and the timer counts
    from that moment only (§31.7). Either side can turn it off (7).
-3. **The arbiter may be anyone, a party included.** A buyer who names itself arbiter can split any
-   way it likes, alone. The seller sees it before working (`optionsNotAgreed` reports the arbiter as
-   the other party's key). Pinned by `the_arbiter_signs_any_split_and_may_be_anyone_a_party_included`.
+3. **The arbiter is never a party, and may be any other key.** `create` refuses the buyer's or the
+   seller's key as arbiter (`ArbiterIsAParty`): a party as arbiter could split any way alone, and so
+   take everything. Who holds any other key, the program cannot tell: a party can name a key it holds.
+   The other side sees every arbiter it did not agree to before working or paying
+   (`optionsNotAgreed`). Pinned by `the_arbiter_cannot_be_the_buyer_or_the_seller`.
 4. **Every way out pays the whole balance.** No excess rule: a payment above the amount goes where
    the rest goes. Pinned by `finding_an_overpayment_goes_wherever_the_way_out_sends_the_balance`.
 5. **Anyone may send `mark_funded`, `timer_release`, `recover_late` and `sweep_rent`.** Each moves
@@ -48,15 +50,16 @@ Each is on purpose, and none can be changed after deploy.
    other side stays silent until it is due. After an objection with no arbiter named, the money
    moves only when the parties agree; each side alone can still give (release everything to the
    other), so the program never strands it, but neither side can take it.
-8. **The sweep pays whoever fronted the rent, not the person who opened the escrow.** When a fee
-   payer fronts the rent and charges the person for it, what the rent cuts free later goes to the
-   fee payer's key, which was already paid for it. Intended: the fee payer keeps it and says so
-   plainly to people. See Known limit 14.
+8. **Every rent goes back to whoever fronted it, not to the person who opened the escrow.** The
+   deposit account's at every ending, both at `close_unfunded`, and what a sweep takes, all to the
+   payer recorded at creation, which `create` also records as the rent recipient. When a fee payer
+   fronts the rent and charges the person for it, it gets the rent back too. Intended: the fee payer
+   keeps what it fronted and says so plainly to people. See Known limit 14.
 9. **Any Token-2022 mint without a transfer fee that can be transferred, the powers of the token's
    maker included.** The skill says to refuse a permanent delegate, an outside freeze authority and
    confidential transfers (§23.1), and a mint close authority (§17). The program refuses only the
    transfer fee, non-transferable mints and wrapped SOL; everything else the dollar's maker can do
-   is the maker's, listed plainly in `README.md` ("What a person accepts by choosing a dollar").
+   is the maker's, each listed here (Known limits 16 to 21).
    Open USD has every one: a permanent delegate that can empty any deposit account, a freeze
    authority, pause, a hook it can name at any time, a close authority. Known limits 16 to 21.
 10. **A hook's accounts are forwarded unchecked, and never signing.** Every way out passes the
@@ -68,8 +71,8 @@ Each is on purpose, and none can be changed after deploy.
 
 ### 1. Account and identity validation
 
-- **1.1 Signer checks. Applied.** Every authority is an Anchor `Signer`: the creator, whose key
-  the escrow's address is derived from, and the payer (`create`), the buyer (`release_to_seller`,
+- **1.1 Signer checks. Applied.** Every authority is an Anchor `Signer`: the creator, one of the
+  two parties the terms name, and the payer (`create`), the buyer (`release_to_seller`,
   `split`), the seller (`release_to_buyer`, `split`), the arbiter (`arbitrate`), the closer
   (`close_unfunded`), the objecting party (`object`), the caller (`recover_late`, who pays for an
   account). Each is then compared to the key recorded at creation, in the handler, with its own
@@ -77,9 +80,9 @@ Each is on purpose, and none can be changed after deploy.
   `NotAnObjector`). `mark_funded`, `timer_release` and `sweep_rent` take no signer by design.
   Tested for every instruction by `the_wrong_signer_is_refused_for_every_instruction`, `object` by
   a stranger, the arbiter, the payer and the buyer's key unsigned by
-  `a_stranger_or_the_arbiter_cannot_object_but_an_arbiter_who_is_a_party_objects_as_that_party`,
-  and in the fuzzer by I5, I7 and I15; the creator's signature at `create` by
-  `the_escrow_address_is_the_creators_and_nobody_can_open_someone_elses` and fuzzer I13.
+  `a_stranger_the_arbiter_or_the_payer_cannot_object`, and in the fuzzer by I5, I7 and I15; the
+  creator's signature at `create` by `the_escrow_address_is_its_terms_and_only_a_party_opens_it`
+  and fuzzer I13.
 - **1.2 Ownership checks. Applied.** The escrow is `Account<Escrow>` everywhere, `object`
   included (owned by this program). The mint and every token account are `InterfaceAccount`s,
   owned by the classic program or Token-2022; the mint must be owned by the token program named
@@ -100,7 +103,7 @@ Each is on purpose, and none can be changed after deploy.
   `substitution_…` tests, `a_payout_lands_only_at_the_receiving_partys_standard_account`,
   `sweep_pays_only_the_recorded_payer_and_only_from_an_escrow`,
   `a_sweep_returns_rent_above_the_minimum_to_the_payer_and_never_goes_below_it` and
-  `rent_goes_back_to_the_creator_and_a_sweep_to_the_payer`.
+  `every_rent_goes_back_to_the_payer`.
 - **1.4 Type cosplay. Applied.** Anchor's eight-byte discriminator on `Escrow` (`account:Escrow`,
   the same as version 1's, at another size; each program accepts only accounts it owns, so neither
   can read the other's). Token accounts and the mint by owner, length and initialized state, as
@@ -119,12 +122,17 @@ Each is on purpose, and none can be changed after deploy.
 - **2.1 Canonical bumps. Applied.** `seeds` and `bump` at `init` find the canonical bump; it is
   stored in `bump` and used for every signature after. The escrow account is trusted afterwards by
   owner and discriminator, which only this program can produce at an address it derives.
-- **2.2 PDA sharing. Applied.** One escrow per `["escrow", creator, id]`, the creator signing; its
-  deposit account is its own associated token account. No shared vault. Every signature the escrow
-  makes uses the same seeds, the creator's key read back from the stored side (`creator_key`).
-- **2.3 Seed collisions. Applied.** The seeds are a fixed tag and two fixed-length parts (32 and 8
-  bytes), so no two (creator, id) pairs concatenate alike. A key that is a buyer in one escrow and a
-  seller in another opens both from one id space. Version 1's program id differs from this one's,
+- **2.2 PDA sharing. Applied.** One escrow per `["escrow", terms_hash]`, the SHA-256 of every term,
+  both parties' keys among them, computed by the program from what `create` carries and the mint;
+  its deposit account is its own associated token account. No shared vault. Every signature the
+  escrow makes uses the same seeds, the hash rebuilt from the terms the account stores
+  (`Escrow::terms_hash`), which `create` writes exactly as it hashed them (`CreateArgs::options`).
+- **2.3 Seed collisions. Applied.** The seeds are a fixed tag and one 32-byte hash of the terms,
+  each term at a fixed length (147 bytes in all), so two different sets of terms share an address
+  only if SHA-256 collides. No arbiter is the zero key and no timer is 0 days, which `create` refuses
+  as named options, so each set of terms it accepts has one encoding. Pinned by
+  `every_term_is_in_the_address`, and by one fixed vector asserted in the harness and the client
+  (`the_address_of_fixed_terms_is_the_clients`). Version 1's program id differs from this one's,
   so the same seeds land at different addresses under the two; the registry's seeds never collide
   with these (`pda_the_two_programs_cannot_share_an_address`).
 - **2.4 Purpose isolation. Applied.** One PDA type.
@@ -141,13 +149,13 @@ Each is on purpose, and none can be changed after deploy.
 - **3.2 Multiply before divide. Applied** in `share`.
 - **3.3 Slippage. Does not apply:** nothing is priced or swapped. The nearest thing, a split's
   percentage, is signed by the parties or the arbiter named at creation.
-- **3.4 Lamport balance. Applied.** The deposit account's rent to the creator at every ending, both
-  rents to the creator at `close_unfunded`, the excess above the escrow account's minimum to the
-  recorded payer at `sweep_rent`, a re-created deposit account's to the buyer. Each destination is
-  recorded at creation. The sweep subtracts from the escrow and adds to the payer, then asserts the
-  escrow holds exactly its minimum. Tested with a sponsor that is neither party nor the
-  transaction's fee payer, to the lamport, and by
-  `close_unfunded_after_a_sweep_returns_the_excess_to_the_payer_and_the_rest_to_the_creator`;
+- **3.4 Lamport balance. Applied.** Every rent to the payer recorded at creation: the deposit
+  account's at every ending, both at `close_unfunded`, the excess above the escrow account's minimum
+  at `sweep_rent`; a re-created deposit account's to the buyer. Each destination is recorded at
+  creation. The sweep subtracts from the escrow and adds to the payer, then asserts the escrow holds
+  exactly its minimum. Tested with a sponsor that is neither party nor the transaction's fee payer,
+  to the lamport (`every_rent_goes_back_to_the_payer`), and by
+  `close_unfunded_after_a_sweep_returns_every_rent_to_the_payer`;
   fuzzer I3 names the wrong key in each rent slot now and then and expects a refusal.
 
 ### 4. Duplicate mutable accounts
@@ -155,10 +163,10 @@ Each is on purpose, and none can be changed after deploy.
 **Applied.** Anchor 1.2 refuses duplicate mutable `Account` fields, and skips `UncheckedAccount`.
 The unchecked ones are pinned by address or by `has_one`, and no two of them can be the same
 account: the buyer's and the seller's standard accounts are two different derivations (buyer and
-seller differ), the rent recipient is a key that signed `create` and so is not either of those
-program-derived addresses, nor the escrow, nor its deposit account. A buyer's standard account
+seller differ), the rent recipient is the payer, a key that signed `create` and so is not either of
+those program-derived addresses, nor the escrow, nor its deposit account. A buyer's standard account
 cannot fill both payout slots: the seller's slot takes only the seller's own standard address. The
-rent recipient may be the same key as a signer (the buyer releasing its own escrow); the runtime
+rent recipient may be the same key as a signer (a party that fronted its own rent); the runtime
 passes one account for both, and it only receives lamports. In `sweep_rent` the payer cannot be the
 escrow (the payer signed `create`; the escrow is a program-derived address and cannot sign). The
 payer may be the creator, or the transaction's fee payer; it only receives lamports.
@@ -207,7 +215,7 @@ payer may be the creator, or the transaction's fee payer; it only receives lampo
 - **6.2 Rent exemption. Applied.** `init` funds the minimum; `sweep_rent` leaves exactly it, and
   refuses when the account is at or below it (`NothingToSweep`). Tested by
   `a_sweep_returns_rent_above_the_minimum_to_the_payer_and_never_goes_below_it`; fuzzer I10.
-- **6.3 Closing. Applied.** `close = rent_recipient` (the creator) for the escrow account in
+- **6.3 Closing. Applied.** `close = rent_recipient` (the payer) for the escrow account in
   `close_unfunded` (zeroed, drained, reassigned); the deposit account by the token program's
   `close_account`. A receipt is never closed, by design. Tested with `assert_closed` (no lamports,
   no data, owned by the system program).
@@ -229,7 +237,7 @@ decisions 9 and 10.
   (`an_escrow_takes_one_objection`).
 - **8.2 Compute. Applied.** No loop over input beyond the two payouts and the hook accounts each
   carries. The heaviest transaction measured under LiteSVM is a one tap whose mint names a hook
-  with two accounts, about 101,000 units (`README.md`); `object` is about 4,000.
+  with two accounts, about 99,000 units (`README.md`); `object` is about 4,000.
 - **8.3 Address lookup tables. Does not apply.**
 - **8.4 Durable nonces. Does not apply.**
 
@@ -263,7 +271,8 @@ with no timer, on one whose funding nobody marked.
 
 **Applied.** Dust cannot block a close: every way out pays the whole balance before the deposit
 account closes, and `close_unfunded` returns whatever is there. Money sent to a closed never-funded
-escrow's address waits for the same creator to reopen the id, which adopts it. Nothing expires, so
+escrow's address waits for an escrow with exactly those terms, which either party can open, and
+which adopts it. Nothing expires, so
 nothing needs closing by a stranger: a never-funded escrow can be closed by either party at any
 time; a funded one is the parties' money and ends only by their ways out. Whoever fronted the rent
 cannot close anything. An objection blocks no close: `close_unfunded` runs on an objected,
@@ -293,14 +302,15 @@ Known limits.
 ### 18. Input validation
 
 **Applied:** amount above zero, timer days above zero (the `u16` bounds the top), no zero keys,
-buyer and seller different, creator a party and the signer the address is derived from, neither
+buyer and seller different, creator a party, the arbiter neither party (`ArbiterIsAParty`), neither
 party the escrow's own address or its deposit address (`PartyIsTheEscrow`: neither can ever sign,
-so a party named as either could never give, agree or be paid), the mint owned by the token
+so a party named as either could never give, agree or be paid; since the address is a hash of both
+parties, a party equal to it would need a SHA-256 fixed point, so the check cannot fire and stays
+as version 1 wrote it, untested), the mint owned by the token
 program named, not wrapped SOL of either program, no transfer fee, transferable. No strings. Any
 other mint is accepted by decision (High-risk decisions 6 and 9). `object` takes no arguments.
-Tested by `bad_terms_are_refused_at_creation` and
-`a_party_cannot_be_the_escrow_itself_or_its_deposit_address` (from either creator, and with the
-deposit address made first in the same transaction); fuzzer I14.
+Tested by `bad_terms_are_refused_at_creation` and `the_arbiter_cannot_be_the_buyer_or_the_seller`
+(from either creator); fuzzer I14.
 
 ### 19. Type narrowing. Applied.
 
@@ -393,12 +403,14 @@ covered:** tokens of another mint sent to the escrow's address (Known limit 9).
 
 ### 29. Permissionless initialization and user parameters
 
-- **29.1 Front-runnable initialization. Applied.** The escrow's address is
-  `["escrow", creator, id]`, and the creator signs `create`. So nobody can open an escrow at an
-  address another key will use: a front-runner's `create` lands at the front-runner's own address,
-  or is refused (`ConstraintSeeds` aimed at someone else's, `AccountNotSigner` without the key).
-  Tested by `nobody_can_open_the_address_a_buyer_is_about_to_use`,
-  `the_escrow_address_is_the_creators_and_nobody_can_open_someone_elses` and fuzzer I13. Anyone can
+- **29.1 Front-runnable initialization. Applied.** The escrow's address is `["escrow", terms_hash]`,
+  computed by the program from every term, and only the buyer or the seller the terms name can sign
+  `create`. So nobody else can open an escrow at a deal's address: a stranger with the same terms
+  is refused (`NotAParty`), and naming itself a party changes the terms and so the address
+  (`ConstraintSeeds` aimed at another's, `AccountNotSigner` without the key). Either party may open
+  the same terms; the second finds the address taken (Known limit 30). Tested by
+  `nobody_can_open_the_address_a_buyer_is_about_to_use`,
+  `the_escrow_address_is_its_terms_and_only_a_party_opens_it` and fuzzer I13. Anyone can
   still make the escrow's deposit account first (the associated token program lets anyone), or pay
   into it early: `create` adopts it, and the one who did pays for nothing that is theirs.
 - **29.2 User-controlled parameters. Applies, by decision:** High-risk decisions 2 and 7.
@@ -433,8 +445,8 @@ Every way out drains the whole balance and closes the deposit account; nothing i
 ## anchor.md
 
 - **§1.1 Account types.** Every unchecked account has a `/// CHECK:` comment:
-  - `rent_recipient` (every way out, `close_unfunded`): the creator's key, recorded at creation,
-    by `has_one`; it only receives lamports.
+  - `rent_recipient` (every way out, `close_unfunded`): the payer's key, recorded at creation as
+    the rent recipient, by `has_one`; it only receives lamports.
   - `payer` (`sweep_rent`): the key that fronted the rent, recorded at creation, by `has_one`; it
     only receives lamports.
   - `buyer_tokens` (`release_to_buyer`, `split`, `arbitrate`, `close_unfunded`): the buyer's
@@ -458,16 +470,16 @@ Every way out drains the whole balance and closes the deposit account; nothing i
     which is part of the deal;
   - the buyer's standard account at `recover_late`: Anchor checks its mint, holder and token
     program when it exists.
-- **§2.5 `close`.** Used in `close_unfunded`, to the creator, recorded as the rent recipient.
+- **§2.5 `close`.** Used in `close_unfunded`, to the payer, recorded as the rent recipient.
 - **§2.6 `realloc`. Not used.**
 - **§3 State.** No reload needed (5.2); `init` once; checks in handlers rather than `access_control`,
   so each rule and its error sit in the instruction's own text.
 - **§4 Tokens.** Either token program; `transfer_checked` built by hand (§5 above), since
   `token_interface::transfer_checked` drops a hook's accounts; decimals read from the mint.
 - **§5 CPI.** `Interface<TokenInterface>`; seeds from the stored bump.
-- **§6 Errors.** `#[error_code]` with a message on each of 31 errors: version 1's 25 at their
+- **§6 Errors.** `#[error_code]` with a message on each of 32 errors: version 1's 25 at their
   numbers, then `NotAnObjector`, `AlreadyObjected`, `TimerDue`, `Objected`, `TransferFee`,
-  `NonTransferable`. The `require!` family throughout.
+  `NonTransferable`, `ArbiterIsAParty`. The `require!` family throughout.
 - **§8 Tooling.** Anchor 1.2 against platform-tools v1.54; `overflow-checks = true`; the features
   Anchor's macros test for (`custom-heap`, `custom-panic`, `anchor-debug`) are declared, so the
   build has no warnings.
@@ -522,14 +534,13 @@ Each is reported, not fixed: fixing it would change a decided rule, or add one.
    another program's address, some other token account) cannot be told apart, and a party named as
    one locks what it would be paid, as in any transfer. The app names parties by keys people hold.
 4. **A part payment can be closed under the buyer** by the seller, at any time. The part comes
-   back; a second part sent to the closed address waits for the creator to reopen the id
-   (`finding_a_part_payment_can_be_closed_under_the_buyer_by_the_seller`). More broadly, the deposit
-   address is the creator's-key-and-id's, not the buyer's, so money sent to it before an escrow
-   exists there, or after a close, is adopted by whatever deal next holds the id, even one naming a
-   different buyer, who then cannot recover it
-   (`finding_a_reused_deposit_address_adopts_a_stranger_buyers_money`). Ids must be unique per deal,
-   and a buyer must pay only an escrow it has read and that names it (the client's checks); the
-   program cannot tell whose money arrived.
+   back; a second part sent to the closed address waits for an escrow with exactly those terms,
+   which the buyer can open, and close to get it back
+   (`finding_a_part_payment_can_be_closed_under_the_buyer_by_the_seller`,
+   `a_deposit_address_never_adopts_money_meant_for_other_terms`). Money sent to an address counts
+   only toward a deal with exactly the terms it was made from
+   (`a_payment_to_an_address_lands_only_in_a_deal_with_its_terms`); the program cannot tell whose
+   money arrived, so a buyer still pays only an escrow it has read (the client's checks).
 5. **An overpayment follows the balance** (High-risk decision 4).
 6. **A party's standard account must exist to be paid.** A seller who has never held the token has
    none: whoever sends the way out makes it first, at their own cost
@@ -537,7 +548,8 @@ Each is reported, not fixed: fixing it would change a decided rule, or add one.
 7. **`recover_late` checks who holds the buyer's standard account** (Anchor's create-if-missing
    does), so a buyer who hands that account away blocks its own late money there, and nothing else
    (`finding_a_buyer_who_hands_its_standard_account_away_blocks_its_own_late_money`).
-8. **SOL sent to an escrow's address** goes to the payer by `sweep_rent`, not to whoever sent it;
+8. **SOL sent to an escrow's address** goes to the payer, by `sweep_rent` or with the rents at
+   `close_unfunded`, not to whoever sent it;
    the program cannot tell it from rent. A sweep into a key that holds no SOL (a one-time sponsor
    key emptied) fails unless it leaves that key at least at the rent-exempt minimum of an empty
    account (128 bytes' worth); it can be sent again once more has built up.
@@ -553,11 +565,10 @@ Each is reported, not fixed: fixing it would change a decided rule, or add one.
 13. **A deadlock holds the money.** With no arbiter, if neither side gives and they do not agree,
     the money stays in the deposit account for good: after an objection, or with no timer at all.
     Nothing in the program can break it.
-14. **The fee payer gets the sweep, by decision.** When a fee payer signs as payer, the rent excess
-    goes to the fee payer's key, which already charged the person, in dollars, for the whole deposit
-    at the old rate. Intended: the fee payer keeps refunds from Solana's rent cuts and says so to
-    people. A product that wants the person to get it back makes the person's own key the payer,
-    which then needs SOL.
+14. **The fee payer gets every rent back, by decision.** When a fee payer signs as payer, every rent
+    goes back to the fee payer's key, which already charged the person for it, in dollars. Intended:
+    the fee payer keeps what it fronted and says so to people. A product that wants the person to
+    get it back makes the person's own key the payer, which then needs SOL.
 15. **An objection sent late may land after the deadline.** The chain's clock decides; the client's
     `canObject` reads the local clock.
 
@@ -565,8 +576,7 @@ Taking both token programs:
 
 16. **The dollar's maker can stop an escrow**, by freezing its deposit account, pausing the dollar,
     making new accounts start frozen, or a hook that refuses; and can stop a party being paid by
-    freezing that party's account. Nothing in the program routes around any of it. `README.md` lists
-    it.
+    freezing that party's account. Nothing in the program routes around any of it.
 17. **The dollar's maker can end the "held until the end" rule.** Only this program can move money
     out of a deposit account for a classic mint and a Token-2022 mint without a permanent delegate;
     with one, the delegate can take it at any time.
@@ -603,9 +613,14 @@ Testing and review:
 26. **A fee payer pays only for what its configuration allows.** A fee payer pays for the escrow's
     transactions only if its configuration allows this program's id and Token-2022; that
     configuration lives in `foundationforest/services`.
-27. **No pay link.** The client builds none: a Solana Pay recipient would be the escrow's own
+27. **No Solana Pay link.** The client builds none, and builds or reads no pay link (`README.md`,
+    "The pay link"): an app does. A Solana Pay recipient would be the escrow's own
     address, a program-derived address, which has not been tried in a wallet app on a phone.
 28. **Unaudited.** No paid review, no lawyer pass.
-29. **Refunds arrive in SOL.** The deposit account's rent goes back to the creator's key, a sweep to
-    the payer's; in an app that uses a fee payer, either may hold no SOL otherwise. How the app
-    shows or uses it, without saying "SOL", is the app's choice and open.
+29. **Refunds arrive in SOL,** to whichever key fronted the rent. How an app shows them to a person
+    who fronted their own, without saying "SOL", is the app's choice and open.
+30. **Either party can open the same terms.** The creator is not a term, so the buyer and the seller
+    land at the same address with the same terms; whoever is second finds it taken, and a buyer's
+    one tap fails whole if the seller opened those terms first. The app then pays the escrow already
+    there, which has exactly the terms it meant
+    (`the_escrow_address_is_its_terms_and_only_a_party_opens_it`).

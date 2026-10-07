@@ -66,4 +66,7 @@ pub enum EscrowError {
     TransferFee,
     #[msg("a token that cannot be transferred is not accepted: nothing could be paid into the escrow, and nothing minted into it could leave")]
     NonTransferable,
+    // Terms in the address from here on.
+    #[msg("the arbiter cannot be the buyer or the seller: a party as arbiter could take everything alone")]
+    ArbiterIsAParty,
 }

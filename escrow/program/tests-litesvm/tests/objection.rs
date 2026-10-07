@@ -87,7 +87,7 @@ fn an_objection_from_the_moment_the_timer_is_due_is_refused() {
                 Side::Buyer => h.refund(),
                 Side::Seller => h.seller_tokens,
             };
-            let release = timer_release_ix(escrow, vault, h.mint, to_account, h.buyer.pubkey());
+            let release = timer_release_ix(escrow, vault, h.mint, to_account, h.payer.pubkey());
             let err = h.send(&[object_ix(escrow, who.pubkey()), release.clone()], &[&who]).expect_err("object, then the timer");
             assert!(err.contains("TimerDue"), "{err}");
             let err = h.send(&[release, object_ix(escrow, who.pubkey())], &[&who]).expect_err("the timer, then object");
@@ -133,7 +133,7 @@ fn an_escrow_takes_one_objection() {
 }
 
 #[test]
-fn a_stranger_or_the_arbiter_cannot_object_but_an_arbiter_who_is_a_party_objects_as_that_party() {
+fn a_stranger_the_arbiter_or_the_payer_cannot_object() {
     let mut h = Harness::new();
     let arbiter = h.arbiter.insecure_clone();
     let stranger = h.someone();
@@ -155,15 +155,7 @@ fn a_stranger_or_the_arbiter_cannot_object_but_an_arbiter_who_is_a_party_objects
     assert_eq!(h.escrow(&escrow).objection, None);
     h.set_time(DUE);
     h.timer_release(&escrow, Side::Seller).expect("nobody objected, so the timer runs");
-
-    // An arbiter who is the seller is a party: it may object, as the seller.
-    let seller = h.seller.insecure_clone();
-    h.set_time(T0);
-    let t = Terms { arbiter: Some(seller.pubkey()), timer: Some(Timer { days: 1, to: Side::Buyer }), ..h.terms(2) };
-    let escrow = h.marked(&t);
-    h.object(&escrow, &seller).expect("the seller, also the arbiter");
-    assert_eq!(h.escrow(&escrow).objection, Some(Side::Seller));
-    println!("refused as expected: a stranger, the arbiter and the fee payer cannot object, nor the buyer's key unsigned; an arbiter who is the seller objects as the seller");
+    println!("refused as expected: a stranger, the arbiter and the fee payer cannot object, nor the buyer's key unsigned");
 }
 
 #[test]

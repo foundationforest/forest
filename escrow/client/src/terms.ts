@@ -79,12 +79,12 @@ export function termsFor(post: PostTerms | null | undefined, deal: { seller: Pub
  * an option the person did not set. `changed`: it names another arbiter, or another timer, than the
  * person set. `removed`: the person set an option the escrow does not carry.
  *
- * `holder` says whose key an arbiter is: the person's own, the other party's (who could then
- * decide any split alone), or a third key. `favours` says which side a timer pays: the person, or
- * the other party. These are facts for the app to put in words; none of them is copy.
+ * An arbiter is never either party (the program refuses it), and who holds a third key nobody can
+ * tell from the chain. `favours` says which side a timer pays: the person, or the other party.
+ * These are facts for the app to put in words; none of them is copy.
  */
 export type OptionDifference =
-  | { option: 'arbiter'; kind: 'added' | 'changed'; arbiter: PublicKey; holder: 'me' | 'otherParty' | 'thirdParty' }
+  | { option: 'arbiter'; kind: 'added' | 'changed'; arbiter: PublicKey }
   | { option: 'arbiter'; kind: 'removed'; expected: PublicKey }
   | { option: 'timer'; kind: 'added' | 'changed'; timer: Timer; favours: 'me' | 'otherParty' }
   | { option: 'timer'; kind: 'removed'; expected: Timer }
@@ -99,19 +99,16 @@ export type OptionDifference =
  * offer they wrote. Null means they agreed to none.
  */
 export function optionsNotAgreed(args: {
-  escrow: Pick<EscrowAccount, 'buyer' | 'seller' | 'arbiter' | 'timer'>
+  escrow: Pick<EscrowAccount, 'arbiter' | 'timer'>
   me: Side
   agreed: Options | PostTerms | null
 }): OptionDifference[] {
   const { escrow, me } = args
   const agreed = isOptions(args.agreed) ? args.agreed : optionsFromPost(args.agreed)
-  const myKey = me === 'buyer' ? escrow.buyer : escrow.seller
-  const theirKey = me === 'buyer' ? escrow.seller : escrow.buyer
   const out: OptionDifference[] = []
 
   if (escrow.arbiter && !(agreed.arbiter && agreed.arbiter.equals(escrow.arbiter))) {
-    const holder = escrow.arbiter.equals(myKey) ? 'me' : escrow.arbiter.equals(theirKey) ? 'otherParty' : 'thirdParty'
-    out.push({ option: 'arbiter', kind: agreed.arbiter ? 'changed' : 'added', arbiter: escrow.arbiter, holder })
+    out.push({ option: 'arbiter', kind: agreed.arbiter ? 'changed' : 'added', arbiter: escrow.arbiter })
   } else if (!escrow.arbiter && agreed.arbiter) {
     out.push({ option: 'arbiter', kind: 'removed', expected: agreed.arbiter })
   }
@@ -138,7 +135,7 @@ export function assertOptionsAgreed(args: Parameters<typeof optionsNotAgreed>[0]
     d.option === 'arbiter'
       ? d.kind === 'removed'
         ? `no arbiter, though ${d.expected.toBase58()} was agreed`
-        : `an arbiter not agreed (${d.holder}): ${d.arbiter.toBase58()}`
+        : `an arbiter not agreed: ${d.arbiter.toBase58()}`
       : d.kind === 'removed'
         ? `no timer, though ${d.expected.days} days to the ${d.expected.to} was agreed`
         : `a timer not agreed: ${d.timer.days} days to the ${d.timer.to} (${d.favours})`

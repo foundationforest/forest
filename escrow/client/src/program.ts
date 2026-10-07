@@ -55,12 +55,12 @@ export type Timer = { days: number; to: Side }
 
 /** What `create` carries, besides the buyer, whose key is passed beside it. Every option is off unless set. */
 export type Terms = {
-  /** Any number the creator has not used before. `randomId()` picks one. */
+  /** Tells apart two deals with the same terms. `randomId()` picks one. */
   id: bigint
   seller: PublicKey
   /** In the mint's base units: what the deal is for, and what funds it. */
   amount: bigint
-  /** null: no arbiter. Any key but the zero key otherwise, a party's included. */
+  /** null: no arbiter. Any key but the zero key and the two parties' otherwise. */
   arbiter: PublicKey | null
   /** null: no timer. */
   timer: Timer | null
@@ -149,20 +149,44 @@ export function randomId(): bigint {
   return new DataView(b.buffer).getBigUint64(0, true)
 }
 
+/** Every term of an escrow: what `create` carries, and the mint. */
+export type AllTerms = { buyer: PublicKey; mint: PublicKey; terms: Terms }
+
 /**
- * The escrow's address: from the key of the party who opens it (the buyer, or the seller for an
- * invoice) and an id. That party signs `create`, so nobody else can open an escrow there.
+ * The seed of an escrow's address: SHA-256 of all its terms, each at a fixed length, in the
+ * receipt's order. id (8 bytes, little-endian), buyer, seller, arbiter (the zero key for none),
+ * mint (32 each), amount (8, little-endian), the timer's days (2, little-endian; 0 for none) and
+ * its side (1: buyer 0, seller 1; the buyer's when there is no timer).
  */
-export function escrowAddress(creator: PublicKey, id: bigint, programId: PublicKey = PROGRAM_ID): PublicKey {
-  return PublicKey.findProgramAddressSync(
-    [Buffer.from(ESCROW_SEED), creator.toBuffer(), Buffer.from(u64le(id))],
-    programId,
-  )[0]
+export function termsHash(all: AllTerms): Uint8Array {
+  const { buyer, mint, terms } = all
+  return sha256(
+    concat([
+      u64le(terms.id),
+      buyer.toBytes(),
+      terms.seller.toBytes(),
+      (terms.arbiter ?? PublicKey.default).toBytes(),
+      mint.toBytes(),
+      u64le(terms.amount),
+      u16le(terms.timer?.days ?? 0),
+      u8(SIDES.indexOf(terms.timer?.to ?? 'buyer')),
+    ]),
+  )
 }
 
-/** The key an escrow's address comes from: the party who opened it. */
-export function creatorKey(account: Pick<EscrowAccount, 'creator' | 'buyer' | 'seller'>): PublicKey {
-  return account.creator === 'buyer' ? account.buyer : account.seller
+/**
+ * The escrow's address: `["escrow", termsHash]`. Every term is in it, so a payment sent to it
+ * counts only toward a deal with exactly those terms. Who opens it is not a term: the buyer and
+ * the seller land at the same address with the same terms, and only they can open it.
+ */
+export function escrowAddress(all: AllTerms, programId: PublicKey = PROGRAM_ID): PublicKey {
+  return PublicKey.findProgramAddressSync([Buffer.from(ESCROW_SEED), Buffer.from(termsHash(all))], programId)[0]
+}
+
+/** An escrow's terms, as read off the chain. */
+export function termsOf(account: Pick<EscrowAccount, 'id' | 'buyer' | 'seller' | 'mint' | 'amount' | 'arbiter' | 'timer'>): AllTerms {
+  const { id, seller, amount, arbiter, timer } = account
+  return { buyer: account.buyer, mint: account.mint, terms: { id, seller, amount, arbiter, timer } }
 }
 
 /**
@@ -378,6 +402,9 @@ export function validateTerms(terms: Terms, buyer: PublicKey): void {
   if (buyer.equals(PublicKey.default)) throw new Error('EmptyKey: the buyer cannot be the zero key')
   if (terms.seller.equals(PublicKey.default)) throw new Error('EmptyKey: the seller cannot be the zero key')
   if (terms.arbiter && terms.arbiter.equals(PublicKey.default)) throw new Error('EmptyKey: the arbiter cannot be the zero key')
+  if (terms.arbiter && (terms.arbiter.equals(buyer) || terms.arbiter.equals(terms.seller))) {
+    throw new Error('ArbiterIsAParty: the arbiter cannot be the buyer or the seller')
+  }
   if (terms.amount <= 0n) throw new Error('AmountZero: the amount must be above zero')
   if (terms.amount >= 1n << 64n) throw new RangeError('the amount does not fit in 64 bits')
   if (terms.timer) {
@@ -409,10 +436,10 @@ const rw = (pubkey: PublicKey, isSigner = false): AccountMeta => ({ pubkey, isSi
 
 /**
  * `create`. The creator signs: the buyer (the default), or the seller, invoicing (`invoiceIx`).
- * The escrow's address comes from the creator's key. The payer signs and fronts both rents, and is
- * recorded: rent above the receipt's minimum goes back to it (`sweepRentIx`); every other rent
- * refund goes to the creator. The terms are checked against the program's rules (`validateTerms`,
- * and neither party the escrow itself or its deposit address) before anything is built.
+ * The escrow's address comes from the terms (`escrowAddress`); who signs as creator does not change
+ * it. The payer signs and fronts both rents, and is recorded: every rent goes back to it. The
+ * terms are checked against the program's rules (`validateTerms`, and neither party the escrow
+ * itself or its deposit address) before anything is built.
  */
 export function createIx(args: {
   buyer: PublicKey
@@ -433,7 +460,7 @@ export function createIx(args: {
     throw new Error('NotAParty: the buyer or the seller opens an escrow')
   }
   if (args.mint.equals(NATIVE_MINT) || args.mint.equals(NATIVE_MINT_2022)) throw new Error('NativeMint: wrapped SOL is not accepted')
-  const escrow = escrowAddress(creator, args.terms.id, programId)
+  const escrow = escrowAddress({ buyer: args.buyer, mint: args.mint, terms: args.terms }, programId)
   const vault = vaultAddress(escrow, args.mint, tokenProgram)
   for (const party of [args.buyer, args.terms.seller]) {
     if (party.equals(escrow) || party.equals(vault)) {
@@ -485,8 +512,8 @@ export function markFundedIx(args: { escrow: PublicKey; vault: PublicKey; progra
 
 /**
  * The keys every way out needs, all fixed at creation: the escrow, its deposit account, both
- * parties, the mint, the token program that owns it, and the rent recipient (the creator; the
- * payer is only for `sweepRentIx`). `keysOf` reads them from an escrow account off the chain, with
+ * parties, the mint, the token program that owns it, and the rent recipient (the payer, who gets
+ * every rent back). `keysOf` reads them from an escrow account off the chain, with
  * the mint's owner, which the escrow does not store (`tokenOf`); `keysFor` computes them from
  * terms, for an escrow created in the same transaction.
  */
@@ -501,7 +528,7 @@ export type EscrowKeys = {
 }
 
 export function keysOf(account: EscrowAccount, opts: { tokenProgram?: PublicKey; programId?: PublicKey } = {}): EscrowKeys {
-  const escrow = escrowAddress(creatorKey(account), account.id, opts.programId ?? PROGRAM_ID)
+  const escrow = escrowAddress(termsOf(account), opts.programId ?? PROGRAM_ID)
   const tokenProgram = opts.tokenProgram ?? TOKEN_PROGRAM_ID
   if (!account.vault.equals(vaultAddress(escrow, account.mint, tokenProgram))) {
     throw new Error("the escrow's deposit account is not under that token program: name the program that owns the mint")
@@ -509,11 +536,10 @@ export function keysOf(account: EscrowAccount, opts: { tokenProgram?: PublicKey;
   return { escrow, vault: account.vault, buyer: account.buyer, seller: account.seller, mint: account.mint, tokenProgram, rentRecipient: account.rentRecipient }
 }
 
-export function keysFor(args: { buyer: PublicKey; mint: PublicKey; terms: Terms; creator?: PublicKey; tokenProgram?: PublicKey; programId?: PublicKey }): EscrowKeys {
-  const creator = args.creator ?? args.buyer
+export function keysFor(args: { buyer: PublicKey; payer: PublicKey; mint: PublicKey; terms: Terms; tokenProgram?: PublicKey; programId?: PublicKey }): EscrowKeys {
   const tokenProgram = args.tokenProgram ?? TOKEN_PROGRAM_ID
-  const escrow = escrowAddress(creator, args.terms.id, args.programId)
-  return { escrow, vault: vaultAddress(escrow, args.mint, tokenProgram), buyer: args.buyer, seller: args.terms.seller, mint: args.mint, tokenProgram, rentRecipient: creator }
+  const escrow = escrowAddress({ buyer: args.buyer, mint: args.mint, terms: args.terms }, args.programId)
+  return { escrow, vault: vaultAddress(escrow, args.mint, tokenProgram), buyer: args.buyer, seller: args.terms.seller, mint: args.mint, tokenProgram, rentRecipient: args.payer }
 }
 
 /** Hook accounts, as the escrow takes them: after its own, and never signing. */
@@ -634,7 +660,7 @@ export function timerReleaseIx(args: { account: EscrowAccount; tokenProgram?: Pu
 /**
  * `close_unfunded`: an escrow that never held the amount, by the buyer or the seller, at any time.
  * Whatever it holds goes back to the buyer's refund address (which must exist only if it holds
- * something); both accounts close; both rents go to the creator.
+ * something); both accounts close; both rents go to the payer.
  */
 export function closeUnfundedIx(args: { keys: EscrowKeys; closer: PublicKey; hookAccounts?: AccountMeta[]; programId?: PublicKey }): TransactionInstruction {
   const k = args.keys
@@ -714,7 +740,7 @@ export function objectIx(args: { account: EscrowAccount; party: PublicKey; progr
   if (a.objection) throw new Error('AlreadyObjected: an escrow takes one objection')
   return new TransactionInstruction({
     programId,
-    keys: [rw(escrowAddress(creatorKey(a), a.id, programId)), ro(args.party, true)],
+    keys: [rw(escrowAddress(termsOf(a), programId)), ro(args.party, true)],
     data: concat([discriminator('global', 'object')]),
   })
 }
@@ -840,10 +866,10 @@ export type EscrowAccount = {
   arbiter: PublicKey | null
   mint: PublicKey
   vault: PublicKey
-  /** Where the deposit account's rent goes at every ending, and both rents at a close: the creator's key. */
+  /** Where every rent goes back: the payer's key, the same as `payer`. */
   rentRecipient: PublicKey
   amount: bigint
-  /** Who opened it: the seller, for an invoice. The escrow's address comes from its key. */
+  /** Who opened it: the seller, for an invoice. Not a term: it does not change the address. */
   creator: Side
   /** null when none was set. */
   timer: Timer | null
@@ -968,7 +994,7 @@ export type EscrowEvent =
       toBuyer: bigint
       endedAt: bigint
       rentRecipient: PublicKey
-      /** The deposit account's rent, returned to the creator. The escrow account's stays in the receipt. */
+      /** The deposit account's rent, returned to the payer. The escrow account's stays in the receipt. */
       rentLamports: bigint
       /** The mark's time, or `endedAt` when nobody marked it. */
       fundedAt: bigint

@@ -65,15 +65,17 @@ pub enum Objection {
     Seller,
 }
 
-/// One escrow. Address: `["escrow", creator, id]`, where the creator is the party who opened it
-/// and signed `create`: nobody can open an escrow at an address another key will use. Never
-/// closed once it has ended: its deposit account closes and its rent goes back, and this account
-/// stays as the receipt. Only an escrow that never held the amount is closed (`close_unfunded`).
+/// One escrow. Address: `["escrow", terms_hash]`, made from every term (`terms_hash`), so a
+/// payment sent to it counts only toward a deal with exactly those terms; only the buyer or the
+/// seller can open it. Never closed once it has ended: its deposit account closes and its rent
+/// goes back, and this account stays as the receipt. Only an escrow that never held the amount is
+/// closed (`close_unfunded`).
 #[account]
 pub struct Escrow {
     /// `crate::VERSION`. A v3 is a new program; this says which program's rules a record followed.
     pub version: u8,
-    /// Chosen at creation, so one creator can open many escrows. The app picks it at random.
+    /// Chosen at creation; it tells apart two deals with the same terms. The app picks it at
+    /// random.
     pub id: u64,
     pub buyer: Pubkey,
     pub seller: Pubkey,
@@ -86,8 +88,9 @@ pub struct Escrow {
     /// token program. Derivable from the escrow address and the mint, and recorded so a reader
     /// need not derive it.
     pub vault: Pubkey,
-    /// Where the deposit account's rent goes at every ending, and both rents at `close_unfunded`:
-    /// the creator's key, always, whoever fronted the rent.
+    /// Where every rent goes back: the deposit account's at every ending, and both at
+    /// `close_unfunded`. The payer's key, the same as `payer`, kept in v1's place so the layout
+    /// does not move.
     pub rent_recipient: Pubkey,
     /// The agreed amount, in the mint's base units. The escrow is funded once the deposit account
     /// holds at least this much; every way out then pays out the whole balance, whatever it is.
@@ -114,8 +117,9 @@ pub struct Escrow {
     pub to_seller: u64,
     pub to_buyer: u64,
     // ---- v2 from here on; everything above is v1's layout, byte for byte. ----
-    /// The key that signed `create` as payer and fronted both rents. Rent above the escrow
-    /// account's minimum, which Solana's rent cuts free, goes back here (`sweep_rent`).
+    /// The key that signed `create` as payer and fronted both rents. Every rent goes back here:
+    /// through `rent_recipient`, and rent above the escrow account's minimum, which Solana's rent
+    /// cuts free, by `sweep_rent`.
     pub payer: Pubkey,
     /// Which party objected, if one did. Once one has, the timer never runs.
     pub objection: Objection,
@@ -149,12 +153,10 @@ impl Escrow {
         matches!(self.status, Status::Open | Status::Funded)
     }
 
-    /// The key the escrow's address is derived from: the party who opened it.
-    pub fn creator_key(&self) -> Pubkey {
-        match self.creator {
-            Side::Buyer => self.buyer,
-            Side::Seller => self.seller,
-        }
+    /// The seed of this escrow's address, rebuilt from the terms it stores: what every signature
+    /// the escrow makes uses.
+    pub fn terms_hash(&self) -> [u8; 32] {
+        terms_hash(self.id, &self.buyer, &self.seller, &self.arbiter, &self.mint, self.amount, self.timer_days, self.timer_to)
     }
 
     /// The buyer's refund address: the buyer's associated token account for the mint, under the
@@ -187,6 +189,32 @@ impl Escrow {
             .ok_or_else(|| error!(EscrowError::TimeOverflow))?;
         Ok(Some(due))
     }
+}
+
+/// The seed an escrow's address is made from: SHA-256 of all its terms, each at a fixed length,
+/// in the receipt's own order: id (8 bytes, little-endian), buyer, seller, arbiter (the zero key
+/// for none) and mint (32 bytes each), amount (8, little-endian), the timer's days (2,
+/// little-endian; 0 for none) and its side (1 byte: buyer 0, seller 1; the buyer's when there is
+/// no timer). `create` refuses the zero key as arbiter and a timer of 0 days, so no two sets of
+/// terms it accepts are hashed from the same bytes. The creator and the payer are not terms:
+/// either party may open the same terms, and they land at the same address.
+#[allow(clippy::too_many_arguments)]
+pub fn terms_hash(id: u64, buyer: &Pubkey, seller: &Pubkey, arbiter: &Pubkey, mint: &Pubkey, amount: u64, timer_days: u16, timer_to: Side) -> [u8; 32] {
+    let side = [match timer_to {
+        Side::Buyer => 0u8,
+        Side::Seller => 1,
+    }];
+    solana_sha256_hasher::hashv(&[
+        &id.to_le_bytes(),
+        buyer.as_ref(),
+        seller.as_ref(),
+        arbiter.as_ref(),
+        mint.as_ref(),
+        &amount.to_le_bytes(),
+        &timer_days.to_le_bytes(),
+        &side,
+    ])
+    .to_bytes()
 }
 
 /// `amount × bps / 10,000`, rounded down, in 128 bits so nothing overflows. `bps` is at most

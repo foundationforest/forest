@@ -55,7 +55,7 @@ fn create_writes_the_terms_and_makes_the_deposit_account() {
             arbiter: h.arbiter.pubkey(),
             mint: h.mint,
             vault: vault_address(&escrow, &h.mint),
-            rent_recipient: h.buyer.pubkey(),
+            rent_recipient: h.payer.pubkey(),
             amount: AMOUNT,
             creator: Side::Buyer,
             timer: Some(Timer { days: 14, to: Side::Seller }),
@@ -72,7 +72,7 @@ fn create_writes_the_terms_and_makes_the_deposit_account() {
             objected_at: 0,
         }
     );
-    assert_eq!(escrow, Address::create_program_address(&[b"escrow", h.buyer.pubkey().as_ref(), &7u64.to_le_bytes(), &[e.bump]], &PROGRAM_ID).unwrap());
+    assert_eq!(escrow, Address::create_program_address(&[b"escrow", &terms_hash(&t, &h.buyer.pubkey(), &h.mint), &[e.bump]], &PROGRAM_ID).unwrap());
 
     // The deposit account: a classic token account for the mint, held by the escrow, empty.
     let vault = h.account(&e.vault);
@@ -93,7 +93,7 @@ fn create_writes_the_terms_and_makes_the_deposit_account() {
             arbiter: h.arbiter.pubkey(),
             mint: h.mint,
             vault: e.vault,
-            rent_recipient: h.buyer.pubkey(),
+            rent_recipient: h.payer.pubkey(),
             amount: AMOUNT,
             timer_days: 14,
             timer_to: Side::Seller,
@@ -102,16 +102,27 @@ fn create_writes_the_terms_and_makes_the_deposit_account() {
         }]
     );
 
-    // The seller opens one naming the buyer: an invoice, at the seller's address, the seller its
-    // creator and its rent recipient.
+    // The seller opens one naming the buyer: an invoice, at its terms' address, the seller its
+    // creator, the payer its rent recipient.
     let (invoice, meta) = h.invoice(&h.terms(8)).expect("invoice");
-    assert_eq!(invoice, escrow_address(&h.seller.pubkey(), 8));
-    assert_ne!(invoice, escrow_address(&h.buyer.pubkey(), 8));
+    assert_eq!(invoice, h.address(&h.terms(8)));
     let e = h.escrow(&invoice);
-    assert_eq!((e.creator, e.buyer, e.rent_recipient, e.payer), (Side::Seller, h.buyer.pubkey(), h.seller.pubkey(), h.payer.pubkey()));
+    assert_eq!((e.creator, e.buyer, e.rent_recipient, e.payer), (Side::Seller, h.buyer.pubkey(), h.payer.pubkey(), h.payer.pubkey()));
     let Event::Created { creator, rent_recipient, payer, .. } = &events(&meta.logs)[0] else { panic!() };
-    assert_eq!((*creator, *rent_recipient, *payer), (Side::Seller, h.seller.pubkey(), h.payer.pubkey()));
-    println!("created: every option off by default; both on; an invoice at the seller's address, the seller its rent recipient, the payer recorded");
+    assert_eq!((*creator, *rent_recipient, *payer), (Side::Seller, h.payer.pubkey(), h.payer.pubkey()));
+    println!("created: every option off by default; both on; an invoice at its terms' address, the payer its rent recipient");
+}
+
+#[test]
+fn the_address_of_fixed_terms_is_the_clients() {
+    // One set of fixed terms and the address they make, asserted here and in the client's tests
+    // (`escrow/client/test/client.test.ts`), so the two hand-written hashes cannot drift apart.
+    // The program agrees with this harness in every test that opens an escrow.
+    let key = |b: u8| Address::new_from_array([b; 32]);
+    let t = Terms { id: 7, seller: key(2), amount: 1_000_000, arbiter: Some(key(4)), timer: Some(Timer { days: 3, to: Side::Seller }) };
+    let hash: String = terms_hash(&t, &key(1), &key(3)).iter().map(|b| format!("{b:02x}")).collect();
+    assert_eq!(hash, "8e18bf2edbfebf9ff5fad9a21a034c5c9cfca68e03cd0cb65cd00e09c789821a");
+    assert_eq!(escrow_address(&t, &key(1), &key(3)).to_string(), "Cxa9ex9RSxEPHnDbsmGvNbcLQZ2U4XUmSvdwgGegiKS5");
 }
 
 #[test]
@@ -142,7 +153,7 @@ fn money_arrives_by_plain_transfer_and_anyone_marks_it_funded() {
     assert_eq!(h.escrow(&escrow).funded_at, T0 + DAY);
 
     // Money that arrived before the escrow did: create adopts the account, and it counts.
-    let escrow2 = escrow_address(&h.buyer.pubkey(), 2);
+    let escrow2 = h.address(&h.terms(2));
     let vault2 = vault_address(&escrow2, &h.mint);
     h.svm.set_account(vault2, spl_token_account(&h.mint, &escrow2, AMOUNT + 5)).unwrap();
     h.create(&h.terms(2)).expect("create over an existing deposit account");
@@ -180,7 +191,7 @@ fn release_to_seller_the_buyer_gives_the_whole_balance() {
             to_seller: AMOUNT + 250_000,
             to_buyer: 0,
             ended_at: T0,
-            rent_recipient: h.buyer.pubkey(),
+            rent_recipient: h.payer.pubkey(),
             rent_lamports: vault_rent,
             funded_at: T0,
         }]
@@ -191,9 +202,9 @@ fn release_to_seller_the_buyer_gives_the_whole_balance() {
     assert_receipt(&h, &escrow, Outcome::ReleasedToSeller, AMOUNT + 250_000, 0);
     assert_eq!(h.escrow(&escrow).funded_at, T0, "nobody marked it: the ending records its own time as the funding time");
     assert_eq!(h.lamports(&escrow), escrow_rent, "the receipt keeps its own rent");
-    assert_eq!(h.lamports(&h.payer.pubkey()), payer_before - 2 * 5_000, "the key that fronted the rent pays the fee and gets nothing back");
-    assert_eq!(h.lamports(&h.buyer.pubkey()), buyer_sol + vault_rent, "the deposit account's rent goes to the creator");
-    println!("release_to_seller: 1.25 to the seller (the whole balance), {vault_rent} lamports of rent back to the creator");
+    assert_eq!(h.lamports(&h.payer.pubkey()), payer_before - 2 * 5_000 + vault_rent, "the key that fronted the rent pays the fee and gets the deposit account's rent back");
+    assert_eq!(h.lamports(&h.buyer.pubkey()), buyer_sol, "none to the creator");
+    println!("release_to_seller: 1.25 to the seller (the whole balance), {vault_rent} lamports of rent back to the payer");
 }
 
 #[test]
@@ -237,12 +248,10 @@ fn a_split_divides_the_whole_balance_both_signing() {
 }
 
 #[test]
-fn the_arbiter_signs_any_split_and_may_be_anyone_a_party_included() {
+fn the_arbiter_signs_any_split() {
     let mut h = Harness::new();
-    let buyer = h.buyer.insecure_clone();
-    let seller = h.seller.insecure_clone();
 
-    // A third key.
+    // A third key: the only kind of arbiter (`the_arbiter_cannot_be_the_buyer_or_the_seller`).
     let mut t = h.terms(1);
     t.arbiter = Some(h.arbiter.pubkey());
     let escrow = h.funded(&t);
@@ -251,30 +260,13 @@ fn the_arbiter_signs_any_split_and_may_be_anyone_a_party_included() {
     assert_eq!((outcome, to_seller, to_buyer), (Outcome::Arbitrated, 250_000, 750_000));
     assert_receipt(&h, &escrow, Outcome::Arbitrated, 250_000, 750_000);
 
-    // The buyer as arbiter decides alone, even everything back to itself. The seller's app shows
-    // this before the seller works (the client's `optionsNotAgreed`).
-    let mut t = h.terms(2);
-    t.arbiter = Some(buyer.pubkey());
-    let escrow = h.funded(&t);
-    let s = h.accounts(&escrow);
-    h.send(&[arbitrate_ix(&s, buyer.pubkey(), 0)], &[&buyer]).expect("the buyer arbitrates");
-    assert_receipt(&h, &escrow, Outcome::Arbitrated, 0, AMOUNT);
-
-    // The seller as arbiter, the other way.
-    let mut t = h.terms(3);
-    t.arbiter = Some(seller.pubkey());
-    let escrow = h.funded(&t);
-    let s = h.accounts(&escrow);
-    h.send(&[arbitrate_ix(&s, seller.pubkey(), 10_000)], &[&seller]).expect("the seller arbitrates");
-    assert_receipt(&h, &escrow, Outcome::Arbitrated, AMOUNT, 0);
-
     // An arbiter adds a way out; it takes none away.
     let mut t = h.terms(4);
     t.arbiter = Some(h.arbiter.pubkey());
     let escrow = h.funded(&t);
     h.release_to_seller(&escrow).expect("the buyer can still give");
-    assert_eq!(h.balance(&h.seller_tokens), 250_000 + AMOUNT + AMOUNT);
-    println!("arbitrate: a third key, the buyer and the seller each decided a split; the parties' own ways out still work");
+    assert_eq!(h.balance(&h.seller_tokens), 250_000 + AMOUNT);
+    println!("arbitrate: a third key decided a split; the parties' own ways out still work");
 }
 
 #[test]
@@ -344,9 +336,9 @@ fn a_never_funded_escrow_is_closed_by_either_party_at_any_time() {
     let seller = h.seller.insecure_clone();
     let payer = h.payer.insecure_clone();
 
-    // Nobody paid. The buyer, its creator, closes it at once; both rents go to the buyer, not to
-    // the key that fronted them, and the buyer's standard account is not needed: nothing goes to
-    // the buyer's tokens.
+    // Nobody paid. The buyer, its creator, closes it at once; both rents go to the key that
+    // fronted them, not to the buyer, and the buyer's standard account is not needed: nothing goes
+    // to the buyer's tokens.
     let (escrow, _) = h.create(&h.terms(1)).expect("create");
     let vault = vault_address(&escrow, &h.mint);
     let (vault_rent, escrow_rent) = (h.lamports(&vault), h.lamports(&escrow));
@@ -357,39 +349,40 @@ fn a_never_funded_escrow_is_closed_by_either_party_at_any_time() {
     let meta = h.close_unfunded(&escrow, &buyer).expect("the buyer closes");
     assert_eq!(
         events(&meta.logs),
-        [Event::Closed { escrow, closed_by: buyer.pubkey(), to_buyer: 0, rent_recipient: buyer.pubkey(), rent_lamports: vault_rent + escrow_rent }]
+        [Event::Closed { escrow, closed_by: buyer.pubkey(), to_buyer: 0, rent_recipient: payer.pubkey(), rent_lamports: vault_rent + escrow_rent }]
     );
     h.assert_closed(&escrow, "the escrow account");
     h.assert_closed(&vault, "the deposit account");
-    assert_eq!(h.lamports(&buyer.pubkey()), buyer_before + vault_rent + escrow_rent, "both rents to the creator");
-    assert_eq!(h.lamports(&payer.pubkey()), payer_before - 2 * 5_000, "the key that fronted them pays the fee, and gets nothing back");
+    assert_eq!(h.lamports(&buyer.pubkey()), buyer_before, "none to the creator");
+    assert_eq!(h.lamports(&payer.pubkey()), payer_before - 2 * 5_000 + vault_rent + escrow_rent, "both rents to the key that fronted them, which paid the fee");
     assert!(!h.exists(&h.refund()), "nobody had to make the buyer an account");
 
     // The address is free again: nothing was dealt there.
-    h.create(&h.terms(1)).expect("the same creator and id, again");
+    h.create(&h.terms(1)).expect("the same terms, again");
 
     // Part paid, closed by the seller: the part goes back to the buyer's standard account, which
-    // has to exist when it is paid (whoever closes makes it first); the rents to the creator.
+    // has to exist when it is paid (whoever closes makes it first); the rents to the payer.
     let (make, refund) = create_ata_idempotent_ix(seller.pubkey(), buyer.pubkey(), h.mint);
     h.send(&[make], &[&seller]).expect("the buyer's standard account");
     h.fund(&escrow, 400_000);
-    let buyer_before = h.lamports(&buyer.pubkey());
+    let payer_before = h.lamports(&payer.pubkey());
     let rents = h.lamports(&escrow) + h.lamports(&vault);
     h.close_unfunded(&escrow, &seller).expect("the seller closes");
     assert_eq!(h.balance(&refund), 400_000);
-    assert_eq!(h.lamports(&buyer.pubkey()), buyer_before + rents, "the rents to the creator, whoever closes");
+    assert_eq!(h.lamports(&payer.pubkey()), payer_before - 2 * 5_000 + rents, "the rents to the payer, whoever closes");
     h.assert_closed(&escrow, "the escrow account");
 
-    // An invoice, part paid, closed by the buyer: the part to the buyer, the rents to its creator,
-    // the seller.
+    // An invoice, part paid, closed by the buyer: the part to the buyer, the rents to the payer,
+    // none to the seller who opened it.
     let (invoice, _) = h.invoice(&h.terms(3)).expect("invoice");
     h.fund(&invoice, AMOUNT - 1);
-    let seller_before = h.lamports(&seller.pubkey());
+    let (payer_before, seller_before) = (h.lamports(&payer.pubkey()), h.lamports(&seller.pubkey()));
     let rents = h.lamports(&invoice) + h.lamports(&vault_address(&invoice, &h.mint));
     h.close_unfunded(&invoice, &buyer).expect("the buyer closes");
     assert_eq!(h.balance(&refund), 400_000 + AMOUNT - 1);
     assert_eq!(h.buyer_total(), BUYER_START);
-    assert_eq!(h.lamports(&seller.pubkey()), seller_before + rents, "the invoice's rents to the seller, its creator");
+    assert_eq!(h.lamports(&payer.pubkey()), payer_before - 2 * 5_000 + rents, "the invoice's rents to the payer");
+    assert_eq!(h.lamports(&seller.pubkey()), seller_before, "none to the seller, its creator");
 
     // Funded, marked or not: it ends by a way out, not by closing.
     let funded = h.funded(&h.terms(4));
@@ -398,90 +391,143 @@ fn a_never_funded_escrow_is_closed_by_either_party_at_any_time() {
     h.mark_funded(&funded).expect("mark");
     let err = h.close_unfunded(&funded, &seller).expect_err("marked");
     assert!(err.contains("StillFunded"), "{err}");
-    println!("close_unfunded: by the buyer with no buyer account needed, by the seller with part paid, an invoice by the buyer; both rents to the creator every time");
+    println!("close_unfunded: by the buyer with no buyer account needed, by the seller with part paid, an invoice by the buyer; both rents to the payer every time");
 }
 
 #[test]
-fn the_escrow_address_is_the_creators_and_nobody_can_open_someone_elses() {
-    // Carlos's first change: the address is ["escrow", creator, id], and the creator signs create.
-    // A stranger who names itself the seller opens an escrow at its own address, never at the
-    // buyer's; the buyer's own create at that id still lands.
+fn the_escrow_address_is_its_terms_and_only_a_party_opens_it() {
+    // The address is ["escrow", SHA-256 of every term]. Who opens it is not a term: the buyer and
+    // the seller land at the same address with the same terms, and whoever is second finds it
+    // taken. A stranger cannot open it: with the same terms it is not a party, and naming itself
+    // a party changes the terms, and so the address.
     let mut h = Harness::new();
     let buyer = h.buyer.insecure_clone();
     let stranger = h.someone();
-    let a = CreateAccounts { buyer: buyer.pubkey(), payer: stranger.pubkey(), mint: h.mint };
-    let squat = Terms { seller: stranger.pubkey(), timer: Some(Timer { days: 1, to: Side::Seller }), ..h.terms(1) };
-    h.send(&[invoice_ix(&squat, &a)], &[&stranger]).expect("the stranger's own invoice");
-    assert!(h.exists(&escrow_address(&stranger.pubkey(), 1)), "at the stranger's address");
-    assert!(!h.exists(&escrow_address(&buyer.pubkey(), 1)), "not at the buyer's");
-    h.create(&h.terms(1)).expect("the buyer's create at its own address still lands");
-    assert_eq!(h.escrow(&escrow_address(&buyer.pubkey(), 1)).seller, h.seller.pubkey());
+    let t = h.terms(1);
+    let target = h.address(&t);
+    let a = CreateAccounts { payer: stranger.pubkey(), ..h.create_accounts() };
 
-    // Aiming at the buyer's address directly: with the stranger as creator the address does not
-    // match its seeds; with the buyer's key in the creator's slot, the buyer did not sign.
-    let t = Terms { seller: stranger.pubkey(), ..h.terms(2) };
-    let mut ix = invoice_ix(&t, &a);
-    let target = escrow_address(&buyer.pubkey(), 2);
+    let err = h.send(&[create_ix_by(&t, &a, stranger.pubkey())], &[&stranger]).expect_err("a stranger, the same terms");
+    assert!(err.contains("NotAParty"), "{err}");
+    let err = h.send(&[unsigned(create_ix(&t, &a), &buyer.pubkey())], &[&stranger]).expect_err("the buyer's key, unsigned");
+    assert!(err.contains("AccountNotSigner"), "{err}");
+    let squat = Terms { seller: stranger.pubkey(), ..t.clone() };
+    h.send(&[create_ix_by(&squat, &a, stranger.pubkey())], &[&stranger]).expect("the stranger's own terms");
+    assert_ne!(h.address(&squat), target, "its own terms, its own address");
+    let mut ix = create_ix_by(&Terms { seller: stranger.pubkey(), ..h.terms(2) }, &a, stranger.pubkey());
     ix.accounts[0].pubkey = target;
     ix.accounts[1].pubkey = vault_address(&target, &h.mint);
-    let err = h.send(&[ix], &[&stranger]).expect_err("the stranger at the buyer's address");
+    let err = h.send(&[ix], &[&stranger]).expect_err("the stranger's terms aimed at the buyer's address");
     assert!(err.contains("ConstraintSeeds"), "{err}");
-    let mut ix = create_ix(&h.terms(2), &a);
-    ix.accounts[2].is_signer = false;
-    let err = h.send(&[ix], &[&stranger]).expect_err("the buyer's key, unsigned");
-    assert!(err.contains("AccountNotSigner"), "{err}");
     assert!(!h.exists(&target));
-    println!("the address is the creator's: a stranger lands at its own, never at the buyer's");
+
+    // Either party opens the same terms at the same address; the second finds it taken.
+    let (opened, _) = h.create(&t).expect("the buyer opens");
+    assert_eq!(opened, target);
+    let err = h.invoice(&t).expect_err("the seller, the same terms");
+    assert!(err.contains("already in use"), "{err}");
+    let (invoiced, _) = h.invoice(&h.terms(3)).expect("the seller opens other terms");
+    let err = h.create(&h.terms(3)).expect_err("the buyer, the invoice's terms");
+    assert!(err.contains("already in use"), "{err}");
+    assert_eq!((h.escrow(&target).creator, h.escrow(&invoiced).creator), (Side::Buyer, Side::Seller));
+    println!("the address is the terms': a stranger cannot open it, and either party lands at the same one");
 }
 
 #[test]
-fn rent_goes_back_to_the_creator_and_a_sweep_to_the_payer() {
-    // v1 sent every rent refund to the creator. v2 keeps that for the deposit account's rent at
-    // every ending and both rents at close_unfunded, and records the key that fronted the rent:
-    // rent above the receipt's minimum (what Solana's rent cuts free) goes back to that payer.
+fn every_term_is_in_the_address() {
+    // Change any one term and the address changes: `create` aimed at the first terms' address
+    // with any one of them different is refused by its seeds. So a payment to an address counts
+    // only toward a deal with exactly its terms. The creator and the payer are not terms.
     let mut h = Harness::new();
     let buyer = h.buyer.insecure_clone();
     let seller = h.seller.insecure_clone();
-    let payer = h.payer.pubkey();
+    let other_buyer = h.someone();
+    let other_mint = Address::new_unique();
+    h.svm.set_account(other_mint, spl_mint_account(6, TOKEN_PROGRAM)).unwrap();
+    let t = Terms { arbiter: Some(h.arbiter.pubkey()), timer: Some(Timer { days: 7, to: Side::Seller }), ..h.terms(1) };
+    let target = h.address(&t);
+    let timer = |days, to| Some(Timer { days, to });
+    let variants: Vec<(&str, Terms, &Keypair, Address)> = vec![
+        ("the id", Terms { id: 2, ..t.clone() }, &buyer, h.mint),
+        ("the buyer", t.clone(), &other_buyer, h.mint),
+        ("the seller", Terms { seller: Address::new_unique(), ..t.clone() }, &buyer, h.mint),
+        ("the amount", Terms { amount: AMOUNT + 1, ..t.clone() }, &buyer, h.mint),
+        ("the mint", t.clone(), &buyer, other_mint),
+        ("the arbiter", Terms { arbiter: Some(Address::new_unique()), ..t.clone() }, &buyer, h.mint),
+        ("no arbiter", Terms { arbiter: None, ..t.clone() }, &buyer, h.mint),
+        ("the timer's days", Terms { timer: timer(8, Side::Seller), ..t.clone() }, &buyer, h.mint),
+        ("the timer's side", Terms { timer: timer(7, Side::Buyer), ..t.clone() }, &buyer, h.mint),
+        ("no timer", Terms { timer: None, ..t.clone() }, &buyer, h.mint),
+    ];
+    for (what, terms, creator, mint) in variants {
+        let a = CreateAccounts { buyer: creator.pubkey(), payer: h.payer.pubkey(), mint };
+        assert_ne!(escrow_address(&terms, &a.buyer, &mint), target, "{what}");
+        let mut ix = create_ix_by(&terms, &a, creator.pubkey());
+        ix.accounts[0].pubkey = target;
+        ix.accounts[1].pubkey = vault_address(&target, &mint);
+        let err = h.send(&[ix], &[creator]).err().unwrap_or_else(|| panic!("{what}: must be refused"));
+        assert!(err.contains("ConstraintSeeds"), "{what}: {err}");
+    }
+    assert!(!h.exists(&target));
 
-    // The buyer's escrow, fronted by the payer: the deposit account's rent to the buyer, the sweep
-    // to the payer.
-    let escrow = h.funded(&h.terms(1));
-    let e = h.escrow(&escrow);
-    assert_eq!((e.rent_recipient, e.payer), (buyer.pubkey(), payer));
-    let s = h.accounts(&escrow);
-    let wrong = Accounts { rent_recipient: payer, ..s };
-    let err = h.send(&[release_to_seller_ix(&wrong, buyer.pubkey())], &[&buyer]).expect_err("the payer as the deposit rent's recipient");
-    assert!(err.contains("ConstraintHasOne"), "{err}");
-    let vault_rent = h.lamports(&s.vault);
-    let buyer_sol = h.lamports(&buyer.pubkey());
-    h.release_to_seller(&escrow).expect("release");
-    assert_eq!(h.lamports(&buyer.pubkey()), buyer_sol + vault_rent, "the deposit account's rent to the buyer");
-    h.send(&[sol_transfer_ix(seller.pubkey(), escrow, 1_000_000)], &[&seller]).expect("SOL to the receipt");
-    let err = h.send(&[sweep_rent_ix(escrow, buyer.pubkey())], &[]).expect_err("swept to the creator");
-    assert!(err.contains("ConstraintHasOne"), "{err}");
-    let (buyer_sol, payer_sol) = (h.lamports(&buyer.pubkey()), h.lamports(&payer));
-    h.sweep(&escrow).expect("swept to the payer");
-    assert_eq!(h.lamports(&payer), payer_sol + 1_000_000 - 5_000, "the excess to the payer, which also paid the fee");
-    assert_eq!(h.lamports(&buyer.pubkey()), buyer_sol, "nothing to the creator");
+    // The seller as creator, and another payer: the same terms, the same address.
+    let sponsor = h.someone();
+    let a = CreateAccounts { payer: sponsor.pubkey(), ..h.create_accounts() };
+    h.send(&[create_ix_by(&t, &a, seller.pubkey())], &[&seller, &sponsor]).expect("the seller, another payer");
+    assert_eq!(h.escrow(&target).arbiter, h.arbiter.pubkey());
+    println!("rejected as expected: each of ten one-term changes lands elsewhere; the creator and the payer do not move the address");
+}
 
-    // An invoice, fronted by the payer: the seller created it, so the seller gets the deposit
-    // account's rent back; the payer gets nothing at the ending.
-    let (invoice, _) = h.invoice(&h.terms(2)).expect("invoice");
-    assert_eq!((h.escrow(&invoice).rent_recipient, h.escrow(&invoice).payer), (seller.pubkey(), payer));
+#[test]
+fn every_rent_goes_back_to_the_payer() {
+    // Whoever fronts the rent gets it back: here a sponsor that is neither party and not the
+    // transaction's fee payer, as a fee payer service fronts it. None goes to the creator.
+    let mut h = Harness::new();
+    let buyer = h.buyer.insecure_clone();
+    let seller = h.seller.insecure_clone();
+    let sponsor = h.someone();
+    let a = CreateAccounts { payer: sponsor.pubkey(), ..h.create_accounts() };
+
+    // Closed unpaid: both rents to the sponsor, none to the buyer who opened it or the seller who
+    // closed it.
+    h.send(&[create_ix(&h.terms(1), &a)], &[&buyer, &sponsor]).expect("create, the sponsor paying");
+    let escrow = h.address(&h.terms(1));
+    let rents = h.lamports(&escrow) + h.lamports(&vault_address(&escrow, &h.mint));
+    let before = (h.lamports(&sponsor.pubkey()), h.lamports(&buyer.pubkey()), h.lamports(&seller.pubkey()));
+    let meta = h.close_unfunded(&escrow, &seller).expect("closed unpaid");
+    let Some(Event::Closed { rent_recipient, .. }) = events(&meta.logs).pop() else { panic!("no Closed") };
+    assert_eq!(rent_recipient, sponsor.pubkey());
+    assert_eq!(
+        (h.lamports(&sponsor.pubkey()), h.lamports(&buyer.pubkey()), h.lamports(&seller.pubkey())),
+        (before.0 + rents, before.1, before.2),
+        "both rents to the sponsor, none to the creator or the closer"
+    );
+
+    // An invoice, ended: the deposit account's rent to the sponsor, none to the seller who opened it.
+    h.send(&[invoice_ix(&h.terms(2), &a)], &[&seller, &sponsor]).expect("invoice, the sponsor paying");
+    let invoice = h.address(&h.terms(2));
+    let e = h.escrow(&invoice);
+    assert_eq!((e.rent_recipient, e.payer), (sponsor.pubkey(), sponsor.pubkey()));
     h.fund(&invoice, AMOUNT);
+    // The rent goes only to the key recorded: the creator in its place is refused.
+    let wrong = Accounts { rent_recipient: seller.pubkey(), ..h.accounts(&invoice) };
+    let err = h.send(&[release_to_seller_ix(&wrong, buyer.pubkey())], &[&buyer]).expect_err("the creator as rent recipient");
+    assert!(err.contains("ConstraintHasOne"), "{err}");
     let vault_rent = h.lamports(&vault_address(&invoice, &h.mint));
-    let (seller_sol, payer_sol) = (h.lamports(&seller.pubkey()), h.lamports(&payer));
-    h.release_to_seller(&invoice).expect("the buyer releases the invoice");
-    assert_eq!(h.lamports(&seller.pubkey()), seller_sol + vault_rent, "the deposit account's rent to the seller, the creator");
-    assert_eq!(h.lamports(&payer), payer_sol - 2 * 5_000, "and nothing to the payer but its fee spent");
+    let before = (h.lamports(&sponsor.pubkey()), h.lamports(&seller.pubkey()));
+    h.release_to_seller(&invoice).expect("the buyer releases");
+    assert_eq!(
+        (h.lamports(&sponsor.pubkey()), h.lamports(&seller.pubkey())),
+        (before.0 + vault_rent, before.1),
+        "the deposit account's rent to the sponsor, none to the creator"
+    );
 
-    // A party that fronts its own rent is both: the seller invoices and pays for it itself.
-    let a = CreateAccounts { payer: seller.pubkey(), ..h.create_accounts() };
-    h.send(&[invoice_ix(&h.terms(3), &a)], &[&seller]).expect("the seller pays its own invoice's rent");
-    let own = escrow_address(&seller.pubkey(), 3);
-    assert_eq!((h.escrow(&own).rent_recipient, h.escrow(&own).payer), (seller.pubkey(), seller.pubkey()));
-    println!("rent: the deposit account's to the creator at every ending; the sweep to the payer, never to the creator");
+    // A party that fronts its own rent gets it back the same way: the seller invoices and pays.
+    let own = CreateAccounts { payer: seller.pubkey(), ..h.create_accounts() };
+    h.send(&[invoice_ix(&h.terms(3), &own)], &[&seller]).expect("the seller pays its own invoice's rent");
+    let e = h.escrow(&h.address(&h.terms(3)));
+    assert_eq!((e.rent_recipient, e.payer), (seller.pubkey(), seller.pubkey()));
+    println!("rent: every rent back to whoever fronted it, at a close and at an ending, never to the creator");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -555,7 +601,7 @@ fn the_wrong_signer_is_refused_for_every_instruction() {
         assert!(err.contains(want), "{what}: expected {want}, got\n{err}");
     }
 
-    // Payouts go only to the recorded parties' standard accounts, rent only to the creator.
+    // Payouts go only to the recorded parties' standard accounts, rent only to the payer.
     let strangers_tokens = Address::new_unique();
     h.svm.set_account(strangers_tokens, spl_token_account(&h.mint, &stranger.pubkey(), 0)).unwrap();
     let bad = Accounts { seller_tokens: strangers_tokens, ..s };
@@ -607,7 +653,7 @@ fn timer_release_needs_a_timer_the_funding_marked_and_its_day() {
     // Marked and released in one breath: the mark is now, so the timer is not due.
     let vault = vault_address(&escrow, &h.mint);
     let err = h
-        .send(&[mark_funded_ix(escrow, vault), timer_release_ix(escrow, vault, h.mint, h.seller_tokens, h.buyer.pubkey())], &[])
+        .send(&[mark_funded_ix(escrow, vault), timer_release_ix(escrow, vault, h.mint, h.seller_tokens, h.payer.pubkey())], &[])
         .expect_err("mark and release together");
     assert!(err.contains("TimerNotDue"), "{err}");
     assert_eq!(h.escrow(&escrow).status, Status::Open, "the failed transaction marked nothing");
@@ -726,7 +772,7 @@ fn a_payout_lands_only_at_the_receiving_partys_standard_account() {
         ("the deposit account itself", vault),
         ("the seller's address, not a token account", sl),
     ] {
-        let err = h.send(&[timer_release_ix(escrow, vault, h.mint, to, b)], &[]).expect_err(what);
+        let err = h.send(&[timer_release_ix(escrow, vault, h.mint, to, h.payer.pubkey())], &[]).expect_err(what);
         assert!(err.contains("NotTheSellersAccount"), "{what}: {err}");
     }
     h.timer_release(&escrow, Side::Seller).expect("to the seller's standard account");
@@ -742,13 +788,13 @@ fn wrapped_sol_of_either_token_program_is_refused() {
     let a = CreateAccounts { buyer: buyer.pubkey(), payer: h.payer.pubkey(), mint: NATIVE_MINT };
     let err = h.send(&[create_ix(&h.terms(1), &a)], &[&buyer]).expect_err("wrapped SOL");
     assert!(err.contains("NativeMint"), "{err}");
-    assert!(!h.exists(&escrow_address(&buyer.pubkey(), 1)));
+    assert!(!h.exists(&escrow_address(&h.terms(1), &buyer.pubkey(), &NATIVE_MINT)));
 
     h.svm.set_account(NATIVE_MINT_2022, spl_mint_account(9, TOKEN_2022_PROGRAM)).unwrap();
     let a = CreateAccounts { buyer: buyer.pubkey(), payer: h.payer.pubkey(), mint: NATIVE_MINT_2022 };
     let err = h.send(&[create_ix_under(&h.terms(1), &a, buyer.pubkey(), TOKEN_2022_PROGRAM)], &[&buyer]).expect_err("Token-2022's wrapped SOL");
     assert!(err.contains("NativeMint"), "{err}");
-    assert!(!h.exists(&escrow_address(&buyer.pubkey(), 1)));
+    assert!(!h.exists(&escrow_address(&h.terms(1), &buyer.pubkey(), &NATIVE_MINT_2022)));
     println!("wrapped SOL, classic and Token-2022: refused at create, nothing written");
 }
 
@@ -769,7 +815,7 @@ fn bad_terms_are_refused_at_creation() {
         change(&mut t);
         let err = h.send(&[create_ix(&t, &h.create_accounts())], &[&buyer]).err().unwrap_or_else(|| panic!("{what}: must be refused"));
         assert!(err.contains(want), "{what}: expected {want}, got\n{err}");
-        assert!(!h.exists(&escrow_address(&buyer_key, 1)), "{what}: nothing written");
+        assert!(!h.exists(&escrow_address(&t, &buyer_key, &h.mint)), "{what}: nothing written");
     }
     // The zero key as buyer: its address is its own, and still refused.
     let zero_buyer = CreateAccounts { buyer: Address::default(), payer: h.payer.pubkey(), mint: h.mint };
@@ -782,56 +828,29 @@ fn bad_terms_are_refused_at_creation() {
     ix.data[last] = 2;
     let err = h.send(&[ix], &[&buyer]).expect_err("side 2");
     assert!(err.contains("InstructionDidNotDeserialize"), "{err}");
-    // The arbiter may be a party, and the longest timer is fine.
+    // The longest timer is fine.
     let mut t = h.terms(1);
-    t.arbiter = Some(buyer_key);
+    t.arbiter = Some(h.arbiter.pubkey());
     t.timer = Some(Timer { days: u16::MAX, to: Side::Buyer });
-    h.create(&t).expect("the buyer as arbiter, a 65,535-day timer");
-    println!("seven bad term sets refused at create; the buyer as arbiter and the longest timer accepted");
+    h.create(&t).expect("a 65,535-day timer");
+    println!("seven bad term sets refused at create; the longest timer accepted");
 }
 
 #[test]
-fn a_party_cannot_be_the_escrow_itself_or_its_deposit_address() {
-    // Neither key can sign or hold anything for itself: a party named as either would be paid at
-    // an address only the deposit account itself answers to, so money could leave only by a way
-    // out that pays that party nothing. `create` refuses it, from either creator, and with the
-    // deposit address made first in the same transaction, as the client does.
+fn the_arbiter_cannot_be_the_buyer_or_the_seller() {
+    // A party as arbiter could decide any split alone, so it could take everything. Refused, from
+    // either creator; a third key is still fine.
     let mut h = Harness::new();
-    let buyer = h.buyer.insecure_clone();
-    let seller = h.seller.insecure_clone();
-    let (buyer_key, seller_key) = (buyer.pubkey(), seller.pubkey());
-    let own = escrow_address(&buyer_key, 1);
-    let own_deposit = vault_address(&own, &h.mint);
-    let invoiced = escrow_address(&seller_key, 1);
-    let invoiced_deposit = vault_address(&invoiced, &h.mint);
-
-    // The buyer opens it, naming as seller the escrow's own address, then its deposit address.
-    for (what, party) in [("the escrow as seller", own), ("its deposit address as seller", own_deposit)] {
-        let t = Terms { seller: party, ..h.terms(1) };
-        let err = h.send(&[create_ix(&t, &h.create_accounts())], &[&buyer]).err().unwrap_or_else(|| panic!("{what}: must be refused"));
-        assert!(err.contains("PartyIsTheEscrow"), "{what}: {err}");
-        assert!(!h.exists(&own), "{what}: nothing written");
+    let (buyer, seller, arbiter) = (h.buyer.pubkey(), h.seller.pubkey(), h.arbiter.pubkey());
+    for (id, party) in [(1, buyer), (2, seller)] {
+        let t = Terms { arbiter: Some(party), ..h.terms(id) };
+        let err = h.create(&t).expect_err("opened by the buyer");
+        assert!(err.contains("ArbiterIsAParty"), "{err}");
+        let err = h.invoice(&t).expect_err("opened by the seller");
+        assert!(err.contains("ArbiterIsAParty"), "{err}");
     }
-    // The same with the deposit address made first, as `createAndFund` and one tap send it: the
-    // whole transaction reverts, the deposit address with it.
-    let t = Terms { seller: own, ..h.terms(1) };
-    let (make, _) = create_ata_idempotent_ix(h.payer.pubkey(), own, h.mint);
-    let err = h.send(&[make, create_ix(&t, &h.create_accounts())], &[&buyer]).expect_err("made first");
-    assert!(err.contains("PartyIsTheEscrow"), "{err}");
-    assert!(!h.exists(&own) && !h.exists(&own_deposit), "nothing written, the deposit address included");
-
-    // The seller invoices, naming as buyer the escrow's own address, then its deposit address.
-    for (what, party) in [("the escrow as buyer", invoiced), ("its deposit address as buyer", invoiced_deposit)] {
-        let a = CreateAccounts { buyer: party, ..h.create_accounts() };
-        let err = h.send(&[invoice_ix(&h.terms(1), &a)], &[&seller]).err().unwrap_or_else(|| panic!("{what}: must be refused"));
-        assert!(err.contains("PartyIsTheEscrow"), "{what}: {err}");
-        assert!(!h.exists(&invoiced), "{what}: nothing written");
-    }
-
-    // The same ids with the real parties open at once.
-    h.create(&h.terms(1)).expect("the buyer's escrow");
-    h.invoice(&h.terms(1)).expect("the seller's invoice");
-    println!("rejected as expected: the escrow's own address or its deposit address as either party, from either creator");
+    h.create(&Terms { arbiter: Some(arbiter), ..h.terms(3) }).expect("a third key");
+    println!("rejected as expected: the buyer or the seller as arbiter, from either creator");
 }
 
 #[test]
@@ -890,7 +909,7 @@ fn an_escrow_ends_once() {
         ("release_to_buyer", release_to_buyer_ix(&s, sl), vec![&seller]),
         ("split", split_ix(&s, b, sl, 5_000), vec![&buyer, &seller]),
         ("arbitrate", arbitrate_ix(&s, arbiter.pubkey(), 5_000), vec![&arbiter]),
-        ("timer_release", timer_release_ix(escrow, vault, h.mint, h.seller_tokens, b), vec![]),
+        ("timer_release", timer_release_ix(escrow, vault, h.mint, h.seller_tokens, h.payer.pubkey()), vec![]),
         ("close_unfunded", close_unfunded_ix(&s, b), vec![&buyer]),
         ("object", object_ix(escrow, sl), vec![&seller]),
     ];
@@ -951,14 +970,14 @@ fn money_after_the_end_goes_back_to_the_buyer_whoever_sends_it() {
 #[test]
 fn a_sweep_returns_rent_above_the_minimum_to_the_payer_and_never_goes_below_it() {
     // The refund to the payer: a sponsor, neither party and not the transaction's fee payer,
-    // fronts both rents. The deposit account's rent goes to the creator at the ending; what the
-    // rent cuts free above the receipt's minimum goes to the sponsor, sent by anyone.
+    // fronts both rents. The deposit account's rent goes back to it at the ending; what the rent
+    // cuts free above the receipt's minimum goes to it too, sent by anyone.
     let mut h = Harness::new();
     let buyer = h.buyer.insecure_clone();
     let sponsor = h.someone();
     let a = CreateAccounts { payer: sponsor.pubkey(), ..h.create_accounts() };
     h.send(&[create_ix(&h.terms(1), &a)], &[&buyer, &sponsor]).expect("create, the sponsor fronting the rent");
-    let escrow = escrow_address(&buyer.pubkey(), 1);
+    let escrow = h.address(&h.terms(1));
     assert_eq!(h.escrow(&escrow).payer, sponsor.pubkey());
     h.fund(&escrow, AMOUNT);
     h.release_to_seller(&escrow).expect("release");
@@ -1025,7 +1044,7 @@ fn what_each_way_out_costs() {
     full.timer = Some(Timer { days: 7, to: Side::Seller });
     h.measure("create, an arbiter and a timer", &[create_ix(&full, &a)], &[&buyer]);
 
-    let e1 = escrow_address(&buyer.pubkey(), 1);
+    let e1 = h.address(&h.terms(1));
     h.fund(&e1, AMOUNT);
     let v1 = vault_address(&e1, &h.mint);
     h.measure("mark_funded", &[mark_funded_ix(e1, v1)], &[]);
@@ -1040,7 +1059,7 @@ fn what_each_way_out_costs() {
     let s = h.accounts(&e);
     h.measure("split 70/30", &[split_ix(&s, buyer.pubkey(), seller.pubkey(), 7_000)], &[&buyer, &seller]);
 
-    let e2 = escrow_address(&buyer.pubkey(), 2);
+    let e2 = h.address(&full);
     h.fund(&e2, AMOUNT);
     let s = h.accounts(&e2);
     h.measure("arbitrate 70/30", &[arbitrate_ix(&s, arbiter.pubkey(), 7_000)], &[&arbiter]);
@@ -1050,13 +1069,13 @@ fn what_each_way_out_costs() {
     let e = h.marked(&timed);
     h.advance(DAY);
     let v = vault_address(&e, &h.mint);
-    h.measure("timer_release, to the seller", &[timer_release_ix(e, v, h.mint, h.seller_tokens, buyer.pubkey())], &[]);
+    h.measure("timer_release, to the seller", &[timer_release_ix(e, v, h.mint, h.seller_tokens, h.payer.pubkey())], &[]);
     let mut timed = h.terms(6);
     timed.timer = Some(Timer { days: 1, to: Side::Buyer });
     let e = h.marked(&timed);
     h.advance(DAY);
     let v = vault_address(&e, &h.mint);
-    h.measure("timer_release, to the buyer", &[timer_release_ix(e, v, h.mint, h.refund(), buyer.pubkey())], &[]);
+    h.measure("timer_release, to the buyer", &[timer_release_ix(e, v, h.mint, h.refund(), h.payer.pubkey())], &[]);
 
     let (e, _) = h.create(&h.terms(7)).expect("create");
     let s = h.accounts(&e);

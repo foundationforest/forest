@@ -78,12 +78,12 @@ fn release_to_the_seller() {
         let before = hook_calls(&h);
         let escrow = h.funded(&h.terms(1));
         let rent = h.lamports(&h.vault(&escrow));
-        let creator_before = h.lamports(&h.buyer.pubkey());
+        let payer_before = h.lamports(&h.payer.pubkey());
         let meta = h.release_to_seller(&escrow).expect("release");
         assert_eq!(h.balance(&h.seller_tokens), AMOUNT);
         assert_eq!(h.buyer_total(), BUYER_START - AMOUNT);
         h.assert_closed(&h.vault(&escrow), "deposit account");
-        assert_eq!(h.lamports(&h.buyer.pubkey()), creator_before + rent, "its rent to the creator");
+        assert_eq!(h.lamports(&h.payer.pubkey()), payer_before + rent - 2 * 5_000, "its rent to the payer, which paid the fee");
         let e = h.escrow(&escrow);
         assert_eq!((e.status, e.outcome, e.to_seller, e.to_buyer), (Status::Ended, Some(Outcome::ReleasedToSeller), AMOUNT, 0));
         assert_eq!(ended(&events(&meta.logs)).0, Outcome::ReleasedToSeller);
@@ -211,7 +211,7 @@ fn one_tap_and_an_invoice_paid_in_one_tap() {
         let mut h = Harness::open_usd(hook);
         let buyer = h.buyer.insecure_clone();
         let t = h.terms(1);
-        let escrow = escrow_address(&buyer.pubkey(), 1);
+        let escrow = h.address(&t);
         let (make, _) = create_ata_idempotent_ix_under(h.payer.pubkey(), escrow, h.mint, h.token_program);
         let create = h.create_ix(&t, buyer.pubkey());
         // The client resolves the hook's accounts against the chain as it stands; in a one-tap the
@@ -497,7 +497,7 @@ fn a_transfer_fee_mint_is_refused_at_create() {
         let id = 10 + u64::from(bps);
         let err = h.send(&[create_ix_under(&h.terms(id), &a, buyer.pubkey(), TOKEN_2022_PROGRAM)], &[&buyer]).expect_err("a transfer fee");
         assert!(err.contains("TransferFee"), "{bps} bps: {err}");
-        let escrow = escrow_address(&buyer.pubkey(), id);
+        let escrow = escrow_address(&h.terms(id), &buyer.pubkey(), &fee_mint);
         assert!(!h.exists(&escrow), "nothing written");
         assert!(!h.exists(&ata_address_under(&escrow, &fee_mint, &TOKEN_2022_PROGRAM)), "not even the deposit account");
     }
@@ -514,7 +514,7 @@ fn a_non_transferable_mint_is_refused_at_create() {
     let a = CreateAccounts { mint, ..h.create_accounts() };
     let err = h.send(&[create_ix_under(&h.terms(1), &a, buyer.pubkey(), TOKEN_2022_PROGRAM)], &[&buyer]).expect_err("non-transferable");
     assert!(err.contains("NonTransferable"), "{err}");
-    let escrow = escrow_address(&buyer.pubkey(), 1);
+    let escrow = escrow_address(&h.terms(1), &buyer.pubkey(), &mint);
     assert!(!h.exists(&escrow), "nothing written");
     assert!(!h.exists(&ata_address_under(&escrow, &mint, &TOKEN_2022_PROGRAM)), "not even the deposit account");
 }
@@ -561,7 +561,7 @@ fn a_plain_token_2022_mint_works_too() {
     let buyer = h.buyer.insecure_clone();
     let a = CreateAccounts { mint: plain, ..h.create_accounts() };
     h.send(&[create_ix_under(&h.terms(1), &a, buyer.pubkey(), TOKEN_2022_PROGRAM)], &[&buyer]).expect("create");
-    let escrow = escrow_address(&buyer.pubkey(), 1);
+    let escrow = escrow_address(&h.terms(1), &buyer.pubkey(), &plain);
     assert_eq!(h.account(&ata_address_under(&escrow, &plain, &TOKEN_2022_PROGRAM)).owner, TOKEN_2022_PROGRAM);
     let seller = h.seller.insecure_clone();
     let s = Accounts {
@@ -619,7 +619,7 @@ fn what_each_way_out_costs_under_token_2022() {
 
         let create = h.create_ix(&h.terms(1), buyer.pubkey());
         h.measure(&format!("create, Open USD, {tag}"), &[create], &[&buyer]);
-        let e1 = escrow_address(&buyer.pubkey(), 1);
+        let e1 = h.address(&h.terms(1));
         h.fund(&e1, AMOUNT);
         let ix = h.release_to_seller_ix(&e1);
         h.measure(&format!("release_to_seller, Open USD, {tag}"), &[ix], &[&buyer]);
