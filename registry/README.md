@@ -1,91 +1,161 @@
 # registry
 
-Devnet only: the program runs on devnet at `J4ES52YohsZhknYbsgmZwHpyNw14EjrrGZxHpcmcBmq4`, still
-upgradable ([record](devnet/devnet.json)). The version before it, which took Semaphore's membership
-proof, is left behind at `5zTPm1bGY8ANLcJd12fPiKSTd71bvnq38LAUDT4ToeoC`. Nothing is on mainnet.
+On devnet: the program runs at `J4ES52YohsZhknYbsgmZwHpyNw14EjrrGZxHpcmcBmq4`, still upgradable
+([record](devnet/devnet.json)). Nothing is on mainnet.
 
 Up: [the repo](../README.md). Down: the [security checklist](security-checklist.md).
 
 ## What it is
 
-A free public list on Solana, and the client a device uses to add to it and read it. Each row says:
-*this profile holds a note this issuer signed, under this label*. It is proven without showing the
-note, so without saying who. A stamp gets at most one row: a stamp is one person's, for one label,
-at one issuer. A row is written once and never changes. The program holds nothing else: no fee, no
-token, no treasury, no admin and no list. The only costs are Solana's own: the network fee and the
-row's deposit, paid by whoever sends the transaction.
+A free public registry on Solana, and the client a device uses to add to it and read it. Each row
+says: *this profile holds a note this issuer signed, under this label*. A zero-knowledge proof shows
+it without showing the note, so a row does not say who the person is. A stamp, the number a person
+has for one label at one issuer ([keys](../keys/README.md#stamps)), gets at most one row, and a row
+is written once and never changes. The program holds nothing else: no fee, no token, no treasury and
+no admin. The only costs are Solana's own, the network fee and the row's deposit, paid by whoever
+sends the transaction.
 
 - `program/`: the program (Anchor 1.2) and its LiteSVM tests, the property test among them.
-- `client/`: stamps, the person proof and its check off chain, the two instructions, rows read
-  back, and a tier checked against its row. It talks to no network of its own.
-- `circuit/`: the person proof the program checks: the circuit, its devnet setup and its tests.
+- `client/`: stamps, the person proof and its check, the two instructions, rows read back, and a
+  tier checked against its row. It talks to no network of its own.
+- `circuit/`: the person proof's circuit, its devnet setup and its tests.
 - `devnet/`: the deploy script and the public record of what runs on devnet.
 
 ## How it works
 
-- **Issuers and notes.** An issuer is anyone who signs notes for people. An issuer that checks
-  faces checks a face once and signs that person a note. A note holds the person's note number,
-  which comes from their secret, and a tier; the person keeps it (the note and the person proof,
-  below).
-- **Stamps.** A person's device derives a secret for each issuer from their seed and the issuer's
-  name (`keys/`: `issuerSecret(seed, name)`). Their stamp for a label is `Poseidon(scope, secret)`:
-  the same every time for one person at one issuer under one label, and nobody else can work it
-  out. Stamps for two issuers or two labels cannot be matched to each other.
-- **The row.** To register, the device proves, showing neither the secret nor the note, *this
-  issuer's key signed a note for my secret; my stamp for this label is this one; this proof is for
-  this main key*, and the main key signs the transaction; registered, it is that profile. The
-  program verifies the proof, requires that signature, and writes the row at the address derived
-  from the stamp. The row holds the main key, the stamp, the issuer's key, who paid, when it was
-  made (the chain's clock, never the sender's) and the label.
-- **The tier is not in the row.** The proof shows the tier the issuer signed, and the program
-  checks it, but keeps nothing of it: a profile shows its tier with the same proof attached to it,
-  and a reader checks that proof against the row (`verifyTier`).
-- **One per stamp.** A second row at the same stamp's address cannot exist. A new note from the
-  same issuer, with a new tier or under a new key, gives the same stamp, so a second profile in the
-  same market needs a second issuer.
-- **Readers decide.** The program checks no issuer: anyone can sign notes. A reader counts a row
-  when it trusts the row's issuer key, and each reader keeps its own list of keys it trusts. If an
-  issuer's key leaks, readers stop counting its rows from that date on.
-- **Labels.** Free text of at most 128 bytes. The recommended shape is `market/role`, such as
-  `tutoring/seller`, with names from the
-  [markets directory](https://github.com/foundationforest/markets). The program does not care what
-  the text says.
-- **Anyone pays.** Whoever signs as payer (the person, an app or a fee payer) pays the deposit and
-  is recorded, so a refund can find them.
+```
+issuer ── checks a face once, signs a note ──▶ the person's device
+device ── the person proof, and the main key's signature ──▶ the program
+program ── checks both, writes one row at the stamp's address ──▶ anyone reads it
+```
+
+### The note and the person proof
+
+**The note.** An issuer is anyone who signs notes for people. One that checks faces checks a
+person's face once and signs them one note: *note number, face embedding, model name, tier*.
+
+- The note number comes from the person's secret for that issuer
+  ([keys](../keys/README.md#the-note-number)). The device sends it to the issuer once; the issuer
+  never learns the secret.
+- The embedding is the bytes the issuer's model gives for the face, and the model name says which
+  model. The tier is a number whose meaning is the issuer's.
+- Text and bytes enter a proof as `keccak256(…) >> 8`: their hash, one byte shorter, so it fits
+  the proof's numbers.
+- The issuer signs `Poseidon(tag, note number, keccak256(embedding) >> 8, keccak256(model) >> 8,
+  tier)` with its EdDSA key on Baby Jubjub, over Poseidon (circomlib's). The tag is
+  `keccak256("forest/v1/note") >> 8`, always the same, so nothing an issuer signs for another
+  purpose can pass as a note. The embedding and the model enter only as their hashes.
+- The person keeps the note.
+
+**The person proof.** To register, the device proves, showing neither the secret nor the note:
+*I know an issuer secret and a note this issuer signed for its note number; my stamp for this
+label is this one; this proof is for this main key.*
+
+- Public: the issuer's key (two numbers), the label as its scope, the main key as its message, the
+  stamp and the tier.
+- The scope is `keccak256("forest.foundation/label/v1/" ‖ label) >> 8`, and the message
+  `keccak256("forest.foundation/profile/v1/" ‖ main key) >> 8`. The program derives both itself,
+  so a proof counts for one label and one profile, and a proof seen in flight cannot be landed
+  under any other.
+- The stamp is `Poseidon(scope, secret)` ([keys](../keys/README.md#stamps)). It depends on the
+  secret and the label, not on the note, so a new note, with a new tier or under a new key, gives
+  the same stamp.
+- The same proof, attached to the profile later, shows its tier
+  ([records](../records/README.md)).
+- **The issuer's key is the issuer's to keep.** Whoever holds it can sign notes for people who do
+  not exist. An issuer signs only numbers it computed itself: a number someone hands it to sign
+  could be a note.
 
 ### The row
 
-At `["row", stamp]`. Every fixed field sits at a fixed offset; the label is last.
+`register` carries the proof, signed by the main key. The program verifies the proof, requires
+that signature, and writes the row at the address derived from the stamp, `["row", stamp]`.
+Registered, the main key is that profile.
 
 | Offset | Bytes | Field |
 |---|---|---|
-| 0 | 8 | discriminator, `sha256("account:Row")[..8]` |
+| 0 | 8 | discriminator, `sha256("account:Row")[..8]`: Anchor's mark for the account's type |
 | 8 | 32 | profile: the main key, which signed |
-| 40 | 32 | stamp: the proof's output, which the address comes from; an index reads it here |
+| 40 | 32 | stamp: the proof's output, which the address comes from |
 | 72 | 64 | issuer: its key on Baby Jubjub, x then y, each 32 bytes big-endian |
-| 136 | 32 | payer |
+| 136 | 32 | payer: whoever paid the deposit |
 | 168 | 8 | made: the chain's clock when the row was written, Unix seconds, i64 little-endian |
 | 176 | 4 + n | label: u32 length, then UTF-8 |
 
-A row is `180 + label` bytes, and never more. A reader finds every row of one profile with a filter
-at offset 8, of one issuer at offset 72, and of one label at offset 176 (`fetchRows`).
+- Every fixed field sits at a fixed offset and the label, at most 128 bytes, is last. So a row is
+  `180 + label` bytes, and a reader finds every row of one profile with a filter at offset 8, of
+  one issuer at offset 72, and of one label at offset 176 (`fetchRows`).
+- The tier is checked and not kept: a profile shows its tier with the same proof attached to it,
+  and a reader checks that proof against the row (`verifyTier`).
+- Whoever signs as payer pays the deposit and is recorded, so a refund can find them: the person,
+  an app, or a fee payer, a service that pays Solana's costs for others.
+- A label is any text ([keys](../keys/README.md#main-keys)); the program does not care what it
+  says.
+
+### One row per stamp
+
+A stamp is one person's, for one label, at one issuer, so there is at most one row per person, per
+label, per issuer.
+
+- A second row at the same stamp's address cannot exist: `register` refuses it.
+- A row is never written again and never closes, since closing it would free the stamp for a
+  second row.
+- A new note from the same issuer gives the same stamp, so a second profile under one label needs
+  a note from a second issuer.
+- Rows are not numbered in order: a count shared across registrations would link a person's
+  profiles.
+
+### The leak date
+
+The program checks no issuer: anyone can sign notes, and each reader decides which issuer keys it
+trusts. A row's `made` comes from the chain's clock, never from the sender, so no row can be
+backdated. So when an issuer's key leaks, a reader stops counting that key's rows made from the
+leak on, and keeps counting the ones made before. Which date it takes, if any, is each reader's
+choice.
 
 ### Instructions
 
 | | What it does | Signs |
 |---|---|---|
 | `register(stamp, issuer, tier, proof, label)` | Verifies the proof with public inputs `[stamp, issuer x, issuer y, scope(label), message(profile), tier]`, then writes the row with the clock's time. A second row for the same stamp is refused | the main key and the payer (one key may be both) |
-| `refund()` | Moves what a row holds above its current rent-exempt minimum to the payer the row records. The row's data is untouched | nobody |
+| `refund()` | Moves what a row holds above its current rent-exempt minimum, the deposit Solana requires for an account to stay, to the payer the row records. The row's data is untouched | nobody |
 
-The scope is `keccak256("forest.foundation/label/v1/" ‖ label) >> 8`, and the message
-`keccak256("forest.foundation/profile/v1/" ‖ main key) >> 8`. The program derives both, so a
-proof counts for one label and one profile and no other. The tier is checked and not kept. The
-program emits no events; readers read the rows.
+The program emits no events; readers read the rows.
+
+### The circuit and its setup
+
+[`circuit/person.circom`](circuit/person.circom):
+
+| | Signals |
+|---|---|
+| Private | `secret`, the scalar `keys/`'s `issuerSecret` gives; the note's embedding hash and model hash; the issuer's signature, `R8x`, `R8y` and `S` |
+| Public, in this order | `stamp`, the output; `issuerX`, `issuerY`; `scope`; `message`; `tier` |
+
+Inside the proof: the note number is `Poseidon(secret)`; circomlib's `EdDSAPoseidonVerifier`,
+unchanged, checks that the issuer's key signed `Poseidon(tag, note number, embedding, model,
+tier)`, with the tag fixed in the circuit; the stamp is `Poseidon(scope, secret)`; and the message
+is squared, as Semaphore does, so it cannot be changed in a proof.
+
+A proof of this kind (Groth16) needs a setup, made once for the circuit: whoever knows all of the
+setup's secret randomness could forge proofs, so it is made in public by many people, and one
+honest one is enough.
+
+- **The setup is single-party.** Phase 1 is public, PSE's Perpetual Powers of Tau
+  (`ppot_0080_16.ptau`); phase 2 is one contribution, so whoever ran `circuit/devnet/setup.sh`
+  could forge a proof. Devnet only; a public setup ceremony comes before mainnet.
+- **Its files are pinned.** All are small, so all are committed in `circuit/devnet/`, with their
+  sizes and SHA-256 in [`setup.json`](circuit/devnet/setup.json). `npm run fetch` checks the
+  hashes, and `npm run compile` checks the compiled circuit against `setup.json`.
+- **It does not change.** `person.circom` is fixed by its setup: a change means a new setup and a
+  new program. The program has the verification key baked in as `program/src/verifying_key.rs`,
+  written by `groth16-solana` 0.2.0's own converter (`circuit/scripts/parse_vk_to_rust.cjs`,
+  copied unchanged, `npm run vk`); a test checks it is the converter's output for the committed
+  key.
 
 ### Use it
 
 The client (`client/src/`) talks to no network of its own: the caller passes the note, a recent
-blockhash and a connection.
+blockhash and a connection to Solana.
 
 | Function | Gives |
 |---|---|
@@ -93,7 +163,13 @@ blockhash and a connection.
 | `buildRegistration({...})` | Makes the person proof from the note, and returns the unsigned `register` transaction |
 | `registerIx`, `refundIx` | The two instructions, by hand |
 | `fetchRow(connection, stamp)`, `fetchRows(connection, { profile, issuer, label })`, `decodeRow(data)` | Rows read back and checked |
-| `verifyTier(connection, { profile, issuer?, label?, stamp, tier, proof })` | The tier a profile shows, as a `person` proof in its profile record ([records/](../records/README.md#proofs)): its person proof, as snarkjs writes it or its 256 bytes, checked against its row, and so are the issuer and label it shows, when given. Gives the row, so the reader weighs its issuer and when it was made |
+| `verifyTier(connection, { profile, issuer?, label?, stamp, tier, proof })` | The tier a profile shows, as a `person` proof in its profile record: its person proof, as snarkjs writes it or its 256 bytes, checked against its row, and so are the issuer and label it shows, when given. Gives the row, so the reader weighs its issuer and when it was made |
+| `signNote(privateKey, note)`, `issuerKeyOf(privateKey)` | For an issuer: the signed note, and its key |
+| `noteNumberOf(secret)`, `noteHash(note)`, `noteSigned(note)` | The note number, what an issuer signs, and whether its issuer signed it |
+| `provePerson({ secret, note, label, profile, artifacts })` | The proof, on the device. Refuses a note for another secret, or one its issuer did not sign |
+| `verifyPerson({ proof, issuer, label, profile, stamp, tier })` | Whether the proof holds for that issuer, label, main key, stamp and tier |
+| `proofBytes(proof)`, `proofFromBytes(bytes)` | The proof as its 256 bytes, and back; both checks take either |
+| `personInput({...})` | The circuit's input, for a caller that drives snarkjs itself |
 
 ```ts
 import { issuerSecret } from '@forest/keys'
@@ -111,29 +187,47 @@ const r = await buildRegistration({
 // r.proof, r.stamp and r.tier: what the profile shows for its tier.
 ```
 
+### Run it
+
 ```
-cd registry/program   && cargo build-sbf --arch v3       # Solana CLI 4.2.2 or later
-cd registry/program/tests-litesvm && cargo test          # the rules, the attacks, the property test
-cd registry/program/tests-litesvm && FOREST_FUZZ_ITERATIONS=1000 cargo test --release --test invariants -- --nocapture
-cd registry/client    && npm ci && npm test              # no chain (install keys/ first)
-cd registry/client    && npm run test:validator          # starts solana-test-validator itself
-cd registry/client    && npm run test:devnet             # read-only, against registry/devnet/devnet.json
-cd registry/client    && npm run fixtures                # remake the real proofs the Rust tests use
+cd keys && npm ci                 # the client and the circuit's tests read keys/
+
+cd registry/client && npm ci
+npm run check && npm test         # no chain
+npm run test:validator            # starts solana-test-validator itself
+npm run test:devnet               # read-only, against registry/devnet/devnet.json
+npm run fixtures                  # remake the real proofs the Rust tests use
+
+cd registry/circuit && npm ci     # after registry/client
+npm run fetch                     # the committed setup files, hash-checked
+npm run compile                   # circom 2.2.3 on PATH or in CIRCOM; checks setup.json
+npm run check && npm test         # a proof, and every way one must fail
+npm run vk                        # rewrite ../program/src/verifying_key.rs from the committed key
+devnet/setup.sh                   # a new setup: new files, every hash new, a new program key
+
+cd registry/program && cargo build-sbf --arch v3      # Solana CLI 4.2.2 or later
+cd registry/program/tests-litesvm && cargo test       # the rules, the attacks, the property test
+FOREST_FUZZ_ITERATIONS=1000 cargo test --release --test invariants -- --nocapture
 ```
 
-The LiteSVM tests run against real person proofs committed in
-`program/tests-litesvm/fixtures/proofs.json`, which `npm run fixtures` makes with the committed
-devnet setup. Their test person is keys/'s: two profiles from its test seed, and its secrets for
-keys/'s two test issuers. They check the wire format against a second copy written by hand in
-`program/tests-litesvm/src/lib.rs`.
+- The circuit's tests make a proof for `keys/`'s test person and check that a wrong issuer key, a
+  forged signature, the issuer's signature without the tag, a tier the issuer did not sign,
+  another person's secret, a stamp for another label and a proof replayed for another main key all
+  fail.
+- The LiteSVM tests run against real person proofs committed in
+  `program/tests-litesvm/fixtures/proofs.json`, which `npm run fixtures` makes with the committed
+  setup, for `keys/`'s test person: two profiles from its test seed, and its secrets for `keys/`'s
+  two test issuers. They check the wire format against a second copy written by hand in
+  `program/tests-litesvm/src/lib.rs`.
 
 Devnet: `FOREST_DEVNET_SEED=<phrase> registry/devnet/deploy.sh` builds a copy with the devnet
 program id, deploys it, or upgrades it in place when it holds other bytes (the exact cost checked
 first), and records it in `devnet/devnet.json`; the script's header holds the recipe for every
-devnet key it needs. Then `FOREST_DEVNET_KEYS=<dir> node scripts/devnet.ts` in `client/` has a
-stand-in issuer sign a note for keys/'s test person, writes one row, shows the refusal of a second
-profile's row for the same stamp, and a refund, and checks the tier the profile shows against its
-row; the record keeps that proof. The registries before this one are under `earlier`.
+devnet key it needs. The source's own program id, `FoRRegistryRows…1111`, is a placeholder nobody
+holds a key for; every deploy puts in its own. Then `FOREST_DEVNET_KEYS=<dir> node
+scripts/devnet.ts` in `client/` has a stand-in issuer sign a note for `keys/`'s test person,
+writes one row, shows the refusal of a second profile's row for the same stamp, and a refund, and
+checks the tier the profile shows against its row; the record keeps that proof.
 
 ### What one row costs
 
@@ -145,98 +239,13 @@ signatures, no compute-budget instruction.
 | `register`, a 16-byte label | 620 | 132,511 |
 | `refund` | | 3,164 |
 
-One proof is about 130,000 compute units to verify, and about a second to make in Node. The deposit
-is the rent-exempt minimum for the row's size: 1,645,920 lamports for that 196-byte row at today's
-rate of 5,080 lamports a byte, and 225,504 once the rate reaches 696. The network fee is 5,000
-lamports a signature. The program is 163,136 bytes.
-
-### The note and the person proof
-
-This is the proof registering takes.
-
-- **The note.** An issuer signs a note for each person it checks: *note number, face embedding,
-  model name, tier*.
-  - The note number is Poseidon of the person's secret for that issuer (`keys/`:
-    `issuerSecret(seed, name)`). The device sends it to the issuer once; the issuer never learns
-    the secret.
-  - The embedding is the bytes the issuer's model gives for the face, the model name says which
-    model, and the tier is a number whose meaning is the issuer's.
-  - The issuer signs `Poseidon(tag, note number, keccak256(embedding) >> 8, keccak256(model) >> 8,
-    tier)` with its EdDSA key on Baby Jubjub, over Poseidon (circomlib's). The tag is
-    `keccak256("forest/v1/note") >> 8`, always the same, so nothing an issuer signs for another
-    purpose can be turned into a note. The embedding and the model enter the signed message only
-    as their hashes. The person keeps the note.
-- **The person proof.** To register, the device proves, showing neither the secret nor the note:
-  *I know an issuer secret and a note this issuer signed whose note number is the hash of that
-  secret; my stamp for this label is the hash of that secret and the label; this proof is for this
-  main key.*
-  - Public: the issuer's key (two numbers), the label (as its scope), the main key (as its
-    message), the stamp and the tier.
-  - The stamp is `Poseidon(scope, secret)`, the number a row's address comes from. It depends on
-    the secret and the label, not on the note, so a new note, with a new tier or under a new key,
-    keeps the same stamp.
-  - The same proof, attached to a profile later, shows that profile's tier.
-- **The issuer's key is the issuer's to keep.** Whoever holds it can sign notes for people who do
-  not exist, and so can anyone it signs a number for without knowing what that number is. Rows name
-  the issuer, so readers can stop trusting a key. The person's secret comes from the issuer's name,
-  not its key, so a new key changes no one's stamps.
-- **The setup is single-party.** One party made it, so until a public setup ceremony, whoever ran
-  `circuit/devnet/setup.sh` could forge a proof. Devnet only.
-
-[`circuit/person.circom`](circuit/person.circom):
-
-| | Signals |
-|---|---|
-| Private | `secret`, the scalar `keys/`'s `issuerSecret` gives; the note's embedding hash and model hash; the issuer's signature, `R8x`, `R8y` and `S` |
-| Public, in this order | `stamp`, the output; `issuerX`, `issuerY`; `scope`; `message`; `tier` |
-
-Inside the proof: the note number is `Poseidon(secret)`; circomlib's `EdDSAPoseidonVerifier`,
-unchanged, checks that the issuer's key signed `Poseidon(tag, note number, embedding, model, tier)`,
-with the tag fixed in the circuit; the stamp is `Poseidon(scope, secret)`; and the message is
-squared, as Semaphore does, so it cannot be changed in a proof. The scope and the message are the
-ones `register` derives.
-
-The setup's phase 1 is the reputation circuit's: PSE's Perpetual Powers of Tau,
-`ppot_0080_16.ptau`, pinned by SHA-256 in `circuit/devnet/setup.sh`. Phase 2 is one contribution.
-Every file is small, so all are committed in `circuit/devnet/`, pinned in `setup.json`;
-`npm run fetch` checks their hashes, and `npm run compile` checks the compiled circuit against
-`setup.json`. `person.circom` does not change after its setup: a change means a new setup, and a
-new program. The program has the verification key baked in as `program/src/verifying_key.rs`,
-written by `groth16-solana` 0.2.0's own converter (`circuit/scripts/parse_vk_to_rust.cjs`, copied
-unchanged, `npm run vk`); a test checks it is the converter's output for the committed key.
-
-| File | Bytes | SHA-256 |
-|---|---|---|
-| `verification-key.json` | 3,838 | `5d0f0b9c62e6b0013e8c19e86bb00628dbe3bcb39d35bebaac8ac64c5faaaaa4` |
-| `person.zkey` | 3,396,483 | `90632ee12c389127007c2c5e29a1974fad42bc080e47b127a1f6426ad6c94dd3` |
-| `person.wasm` | 2,815,205 | `063882b8f5a8208d16485c609494b53b1b0fd84da234f5207b63f80bd8e56c99` |
-
-| Function | Gives |
-|---|---|
-| `signNote(privateKey, note)`, `issuerKeyOf(privateKey)` | For an issuer: the signed note, and its key |
-| `noteNumberOf(secret)`, `noteHash(note)`, `noteSigned(note)` | The note number, what an issuer signs, and whether its issuer signed it |
-| `provePerson({ secret, note, label, profile, artifacts })` | The proof, on the device. Refuses a note for another secret, or one its issuer did not sign |
-| `verifyPerson({ proof, issuer, label, profile, stamp, tier })` | Whether the proof, as snarkjs writes it or its 256 bytes (`proofBytes`, `proofFromBytes`), holds for that issuer, label, main key, stamp and tier |
-| `personInput({...})` | The circuit's input, for a caller that drives snarkjs itself |
-
-```
-cd keys && npm ci && cd ../registry/client && npm ci     # the circuit's tests read both
-cd registry/circuit && npm ci
-npm run fetch                     # the committed setup files, hash-checked
-npm run compile                   # circom 2.2.3 on PATH or in CIRCOM; checks setup.json
-npm run check && npm test         # a proof, and every way one must fail
-npm run vk                        # rewrite ../program/src/verifying_key.rs from the committed key
-devnet/setup.sh                   # a new setup: new files, every hash new, a new program key
-```
-
-The tests make a proof for `keys/`'s test person and check that a wrong issuer key, a forged
-signature, the issuer's signature without the tag, a tier the issuer did not sign, another person's
-secret, a stamp for another label and a proof replayed for another main key all fail.
-
-Measured in Node 22 on a 4-core machine: 4,979 constraints; a proof takes about 0.7 s to make and
-50 ms to check, and is 725 bytes as snarkjs writes it. It trusts circom 2.2.3, snarkjs 0.7.5,
-circomlib 2.0.5's EdDSA verifier and Poseidon, and zk-kit's `@zk-kit/eddsa-poseidon` 1.0.4 to sign,
-used unchanged.
+- Verifying the proof is about 130,000 of those compute units. The circuit has 4,979 constraints;
+  in Node, a proof takes about a second to make and 50 ms to check. It is 725 bytes as snarkjs
+  writes it, 256 as a profile carries it, and 128 as `register` takes it, its points compressed.
+- The deposit is the rent-exempt minimum for the row: its 196 bytes, plus the 128 Solana counts
+  for every account, at 5,080 lamports a byte, the rate on devnet when it was made, is 1,645,920
+  lamports (a lamport is a billionth of a SOL).
+- The network fee is 5,000 lamports a signature. The program is 163,136 bytes.
 
 ### Sealed on mainnet
 
@@ -280,21 +289,20 @@ solana program show <program id>          # Authority: none
 - **It trusts the person circuit's single-party setup.** Its verification key is baked into the
   program, and whoever ran `circuit/devnet/setup.sh` could forge a proof. Devnet only; a public
   setup ceremony comes before mainnet.
-- **It trusts `groth16-solana` 0.2.0** and Solana's `alt_bn128` syscalls to verify, and Anchor 1.2.
-- **It trusts issuers** to sign notes only for the people they say they do (one that checks faces:
-  one per real, distinct human). The program cannot tell; readers choose whom to trust.
-- **On the device, it trusts** `snarkjs` 0.7.5 to make proofs and check them (`verifyPerson`,
-  `verifyTier`), and zk-kit's `@zk-kit/eddsa-poseidon` 1.0.4 to sign notes.
-- **A row is only as good as its issuer.** Issuer keys are not checked, so anyone can sign notes
-  with a key of their own and write rows with them. A reader that trusts no issuer counts no row.
+- **It trusts its pieces, used unchanged:** on chain, `groth16-solana` 0.2.0 and Solana's
+  `alt_bn128` syscalls to verify, and Anchor 1.2; on the device, `snarkjs` 0.7.5 to make proofs and
+  check them (`verifyPerson`, `verifyTier`), and zk-kit's `@zk-kit/eddsa-poseidon` 1.0.4 to sign
+  notes.
+- **A row is only as good as its issuer.** The program checks no issuer key, so anyone can sign
+  notes with a key of their own and write rows with them. An issuer that checks faces is trusted to
+  sign one note per real, distinct human; the program cannot tell. A reader that trusts no issuer
+  counts no row.
 - **A row made after its issuer's key leaked stays uncounted.** Its stamp is taken, and a note
   under the issuer's new key gives the same stamp, so that person cannot write a second row.
 - **One row per issuer, not per face.** A person with notes from two issuers can hold two rows
   under one label, for two profiles. A reader that trusts both issuers counts both.
-- **Whoever pays is recorded.** A fee payer that pays gets the refund. A refund to a payer holding
-  no SOL is refused until it holds some again.
-- **The source's program id is a placeholder** (`FoRRegistryRows…1111`) nobody holds a key for;
-  every deploy substitutes its own.
+- **The refund goes to whoever paid.** When a fee payer paid the deposit, the refund is the fee
+  payer's, not the person's.
 - **Not audited.** The [security checklist](security-checklist.md) lists every rule and every known
   limit.
 
@@ -310,33 +318,12 @@ solana program show <program id>          # Authority: none
 
 ## FAQ
 
-**Can I have two profiles in one market?** Yes, through a second issuer. Your stamp for a market
-comes from your secret for one issuer, so one issuer gives one row per market, whatever notes it
-signs you. A second row needs a second issuer's note, and a second face check. Nothing on chain ties
-the two rows to each other, but moving money between your own profiles links them until a privacy
-pool is used.
-
-**Why are rows not numbered?** A number shared across registrations would link a person's profiles.
-A row's address comes from its stamp alone: one per stamp.
-
-**Why does the program not check the issuer?** Anyone must be able to sign notes, so the program
-knows no issuer. Each reader weighs whose keys it trusts.
-
-**Who pays for a row?** Whoever signs as payer: the person, an app or a fee payer. The program pays
-for no one and cannot tell who the payer is, so paying for someone else needs nothing in it. There
-is no fee: only Solana's network fee and the row's deposit.
-
-**Can a stranger register my profile?** No. `register` needs the main key's signature, and the proof
-names the main key, so a proof seen in flight cannot be landed under anyone else's profile either.
-
-**What is `refund` for?** Solana is cutting its rent rate in steps, and only the owning program can
-move the difference out of its accounts. `refund` sends what a row holds above the new minimum, or
-anything someone sent the row, back to whoever paid for it. Anyone may send it: the amount and the
+**What is `refund` for?** Solana is cutting its rent rate in steps, and only the program that owns
+an account can move the difference out of it: at 696 lamports a byte, a 196-byte row's minimum
+would be 225,504 lamports. `refund` sends what a row holds above the new minimum, or anything
+someone sent the row, back to whoever paid for it. Anyone may send it: the amount and the
 destination are read from the chain, never from the caller.
 
-**Why does a row never change or close?** Its existence is the one-row-per-stamp rule: closing it
-would free the stamp for a second row.
-
 **What if I lose my seed?** The rows stay on the chain and nobody else can use them, but your issuer
-secrets are gone, and the issuer's face check will not take you again. The 24 words are the only
-backup.
+secrets are gone, and an issuer that checks faces will not sign your face a note for a new seed.
+The 24 words are the only backup.

@@ -1,89 +1,99 @@
 # forest
 
-You own your seed. You make it accountable through stamps, and keep it private through profiles.
+Forest is a set of open standards for trading with strangers, and this repo holds them. Your keys,
+your records and your money need no one in the middle: one seed of 24 words gives you a profile for
+each thing you do, each profile signs its offers and reviews as records on open hosts, and an
+escrow lets money out only when both sides agree. Two things keep a middle on purpose: proving you
+are one person, which an issuer does by checking you once and signing you a note, and judging
+reputation, which an index does by weighing records into scores. You choose which issuers and
+indexes count, and can switch. Your seed, keys and records live with you; hosts only serve copies
+of your records, and you can leave any of them.
 
-Because nothing of you lives inside any service, every host, index, app and AI must be good, cheap
-and open, or people leave. Until there are others, the foundation, which makes the first app, runs
-the first of each, and should want to lose each one.
+## The pieces
 
-Anyone can make a new seed, but it starts with no stamps and no reviews, and an issuer that checks
-faces won't stamp the same face twice. Trust is the stamps and records on each of a seed's
-profiles; indexes decide which stamps count.
+Every piece is sorted by one question: what if there were two of it?
 
-Forest removes one thing: having to trust someone in the middle.
+- **Core:** two would mean two of you, so it never changes.
+- **Standard:** anyone can offer another.
+- **Service:** anyone can run another. The foundation runs the first of each until there are
+  others, and should want to lose each one.
+- **App:** the person picks one.
 
-## How it works
-
-Your seed is 24 random words. Your app keeps it, by default in its secure slot on your device,
-unlocked by your face or fingerprint and used only to derive keys. From it come your main keys, one
-per label such as `tutoring/seller`. Each is a folder (everything it signs on a host), an address
-(its Solana address) and, once registered, a profile. An issuer signs you a note after the checks it
-chooses, such as checking once that you are one human, and registering writes a row in the registry
-that pins your stamp for a market to one of your main keys, without saying who you are. Each main
-key writes offers and reviews as
-signed records in its folder, on open hosts anyone can read; photos and other large files go beside
-them as blobs. A review belongs to whoever wrote it: the one it's about can't erase it; the one who
-wrote it can. Beside each folder is an inbox, where others leave messages for that main key,
-encrypted to its inbox key; the access keys others hand you, your grants, are kept as a private
-record in your own folder. Money between two people moves through an escrow, and leaves only when
-both sides agree, or by an arbiter or a timer both saw at the start. An app makes this easy;
-everything else is open code. The registry and the escrow run on devnet; nothing is on mainnet.
-
-## What if there were two of it?
-
-Every piece of Forest is sorted by that question.
-
-| | Two of it would mean | Pieces | Where |
+| Piece | Layer | Folder | Where it runs |
 |---|---|---|---|
-| **Core** | two of you | the recipe that mixes keys from the seed; the registry | [`keys/`](keys/README.md), [`registry/`](registry/README.md) |
-| **Standards Forest offers** | anyone can offer another | records, the host socket (the six requests every host answers, for records, the inbox and blobs), the permissions record (which access keys may write in a folder), envelopes (how a record is made private), the inbox, the three shapes (profile, offer and review), the reputation proof and the tree an index publishes for it | [`records/`](records/README.md), [`circuits/`](circuits/README.md); market names in [foundationforest/markets](https://github.com/foundationforest/markets) |
-| **Services** | the foundation runs the first; anyone can run another | hosts, issuers, indexes, fee payers (who pay Solana's fee for someone else), escrows, connections (how an AI reads and drafts for a person), key holders (who hold access keys for assistants that can log in but cannot keep a key) | [`escrow/`](escrow/README.md) and a reference host in `records/` here; the rest, and who runs which, in [foundationforest/services](https://github.com/foundationforest/services) |
-| **Apps** | the person picks one | the secure slot that holds the seed, and the screens | the first, the Forest app, by the foundation, in [foundationforest/app](https://github.com/foundationforest/app), its own repo; anyone can make another; the CLI: a small open client for scripts and AI assistants, in [`cli/`](cli/README.md) |
-| **The person** | up to them | the words, where they keep them, what they post | with them, in no repo |
-
-- **The core does not change.** The registry is to be sealed the day it deploys on mainnet. The
-  recipe stays as it is, since a new one would give every profile a new main key and so a new name.
-- **The escrow is a program the foundation offers; use any.** Each escrow version is to be sealed
-  on mainnet the day it deploys, because it holds money. A new version comes as a new program, and
-  the old ones keep working.
+| Keys: the seed, and the recipe that mixes every key from it | core | [`keys/`](keys/README.md) | on the person's device |
+| Registry: one row per stamp (one person, one label, one issuer), proven without saying who | core | [`registry/`](registry/README.md) | a Solana program, on devnet (Solana's test network) |
+| Records: signed records and the hosts that keep them, private records, the inbox, blobs (photos and other files), the three record shapes | standard | [`records/`](records/README.md) | a library, wherever an app, host or index runs |
+| The reputation proof, and the tree an index publishes for it | standard | [`circuits/`](circuits/README.md) | made on the person's device, checked by anyone; its setup is for devnet |
+| Market names: recommended spellings of labels | standard | [foundationforest/markets](https://github.com/foundationforest/markets) | nowhere: a directory to read |
+| Escrow: money out when both sides agree, or by an arbiter or timer set at the start | service: a program the foundation offers; use any | [`escrow/`](escrow/README.md) | a Solana program, on devnet |
+| Hosts, issuers, indexes and fee payers | service | a reference host in [`records/`](records/README.md); the rest in [foundationforest/services](https://github.com/foundationforest/services) | anywhere; the foundation's on devnet |
+| The Forest app: the screens, and the secure slot that holds the seed | app | [foundationforest/app](https://github.com/foundationforest/app) | on the person's device |
+| The CLI: Forest actions with access keys, for scripts and AI | app | [`cli/`](cli/README.md) | on the person's device, or hosted |
+| The words, where they are kept, and what is posted | the person | none | with the person |
 
 ## Who decides what
 
-The standard holds only what two strangers' implementations must agree on; everything else is a
-service's policy, an app's choice, or the person's.
+The standard holds only what two strangers' programs must agree on; everything else is a service's
+policy, an app's choice, or the person's.
 
 - **The standard** is fixed: no service or app can change it.
-- **A service** decides its own policy. The first ones publish theirs, each in its own README in
+- **A service** decides its own policy. The foundation's publish theirs, each in its own README in
   [foundationforest/services](https://github.com/foundationforest/services).
 - **An app** makes its choices with the person.
 - **The person** decides the rest.
 
-## The six pieces
+## For builders
 
-| Where | What it is | In the sort | Runs |
-|---|---|---|---|
-| [`keys/`](keys/README.md) | The 24 words, the recipe that mixes keys from them, and the rules for apps that hold keys | core | on the person's device |
-| [`records/`](records/README.md) | Signed records, the host socket, the permissions record, envelopes for private records, the inbox, blobs, the three record shapes, and a reference host | standards; the reference host is a service | a library and a reference host |
-| [`registry/`](registry/README.md) | A program and its client: one row per stamp, free | core | on devnet |
-| [`escrow/`](escrow/README.md) | A program and its client: money out when both sides agree, or by an arbiter or timer set at the start | a service; use any | on devnet |
-| [`circuits/`](circuits/README.md) | The proofs Forest offers: reputation, and the tree an index publishes | a standard | on the person's device; the reputation circuit's setup is devnet only |
-| [`cli/`](cli/README.md) | One program, `forest`: Forest actions given an address and an access key, as typed commands and as MCP tools for AI chats | an app | on the person's device, or hosted |
+- **Find a profile's folder.** A profile's address is its name. Ask any host you know for the
+  profile's records; its hosts record, signed by the profile, names every host that keeps them, so
+  read those too. There is no directory ([records](records/README.md)).
+- **Read a market.** Ask an index. Its answer is in that index's own format, not part of the
+  standard; [cli](cli/README.md) reads the foundation's. You can also read the records yourself
+  and weigh them your own way.
+- **Pay Solana's fees for someone.** Whoever signs a transaction as payer pays its fee and any
+  deposit a new account needs, and the programs do not care who that is. A fee payer is a service
+  that pays for others; the foundation's is Kora, the Solana Foundation's open fee payer, and
+  speaks its JSON-RPC ([services](https://github.com/foundationforest/services)).
+- **Register a profile.** Get a note from an issuer, then send the registry a proof made on the
+  device; it writes one row ([registry](registry/README.md)).
+- **Let an AI act for someone.** The person's app hands it access keys, which act for a profile
+  within limits, never the main key that is the profile. The AI works through the
+  [CLI](cli/README.md), whose README gives the three setups.
 
-Each piece's README is its standard: what it is, how it works, its promises, its limits, who
-decides what, and an FAQ.
+## Privacy, honestly
 
-## On chain, and never on chain
+What Forest does:
+- Nothing in a person's keys ties their profiles together: each is its own mix of the seed
+  ([keys](keys/README.md)).
+- A registry row says which issuer signed the person's note, never who the person is
+  ([registry](registry/README.md)).
+- Private records and messages are encrypted to post-quantum keys; hosts keep them and cannot open
+  them ([records](records/README.md)).
+- Never on chain: seeds, private keys, records, messages, blobs, issuers' notes, and the index.
 
-- **On chain:** registry rows, escrows and their receipts, and money moving.
-- **Never on chain:** seeds, private keys, records, messages, blobs, issuers' notes, and the index.
+What others can still see:
+- On chain, everything: rows, escrows and their receipts, and money moving. Paying between your
+  own profiles links them.
+- A host sees who wrote to whom and when, though not what, and the network address of whoever
+  reads or writes.
+- The face check keeps your face: an issuer that checks faces, or the provider it checks them
+  with, holds it so it can refuse the same face a second time.
+- An AI model run in the cloud shows its maker what you tell it, and any key written into a call.
+
+What you can add:
+- A VPN, so hosts and indexes do not see your network address.
+- A model on your own device, so nothing you tell your AI leaves it ([cli](cli/README.md)).
+
+Planned, not built:
+- A relay, so hosts and indexes do not see your network address, with no VPN.
+- A privacy pool, so money moves between your own profiles without the chain linking them.
 
 ## Promises
 
 - **Nothing in the standard needs the seed or a main key to leave your device.** Where they live
-  is the app's choice: by default they stay in its secure slot on your device, unlocked by your
-  face or fingerprint and used only to derive and sign, and only access keys and signatures leave
-  ([keys](keys/README.md)). The standard has no user accounts: there are keys, records and rows;
-  whether a service keeps any is its policy.
+  is the app's choice ([keys](keys/README.md)). The standard has no user accounts: there are keys,
+  records and rows; whether a service keeps any is its policy.
 - **Private by default off chain.** Nothing ties your profiles together unless you link them.
   Reputation is computed per profile, and nothing in the standard holds a person next to a profile;
   whether a service does is its policy. On chain, moving money between your own profiles links them
@@ -103,14 +113,13 @@ decides what, and an FAQ.
 
 - **Devnet only.** Nothing is on mainnet and nothing is shipped. Both programs can still be
   upgraded by the devnet deploy key.
-- **Not audited.** Each program keeps a security checklist next to it; no paid review has been done.
-- **No recovery.** Lose the seed, and every profile and stamp it gives is gone. Nobody else has it.
-- **A row is only as good as its issuer.** The registry checks no issuer; each reader decides which
-  issuers it trusts.
+- **Not audited.** Each program keeps a security checklist next to it; no paid review has been
+  done.
+- **No recovery.** Lose the seed, and every profile and stamp it gives is gone. Nobody else has it
+  ([keys](keys/README.md)).
 - **A host can withhold.** It cannot forge or change a record, but it can stop serving one, or a
-  message or a blob. The app's copies and the main key's other hosts cover for it.
-- **Not here:** recovery through an issuer, a privacy pool built by Forest, and an arbiter by
-  default.
+  message or a blob. The app's copies and the profile's other hosts cover for it.
+- **Not here:** recovery through an issuer, and an arbiter by default.
 
 ## FAQ
 
@@ -141,4 +150,4 @@ people check. It pins a version of forest, the way services does.
 Existing pieces, used unchanged: Ed25519, RFC 8785 canonical JSON, age, Semaphore's lean Merkle
 tree, circomlib's Poseidon and EdDSA verifier and zk-kit's Merkle circuit on PSE's Perpetual Powers
 of Tau, zk-kit's EdDSA-Poseidon, snarkjs, groth16-solana, Anchor, the SPL token programs, and Kora,
-in the foundation's fee payer, in services. Forest writes only what does not exist yet.
+in the foundation's fee payer. Forest writes only what does not exist yet.
