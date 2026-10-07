@@ -154,6 +154,24 @@ describe('the socket', () => {
     }
   })
 
+  test('a request target that is no path, such as //, is answered 400, and the host goes on', async () => {
+    const h = await startHost({ now: () => T0 })
+    try {
+      const { port } = new URL(h.url)
+      const socket = connect(Number(port), '127.0.0.1')
+      socket.write('GET // HTTP/1.1\r\nhost: x\r\nconnection: close\r\n\r\n')
+      const answer = await new Promise<string>((resolve) => {
+        let got = ''
+        socket.on('data', (d) => (got += d))
+        socket.on('close', () => resolve(got))
+      })
+      assert.match(answer, /^HTTP\/1\.1 400/)
+      assert.equal((await fetch(`${h.url}/v1/records`)).status, 200)
+    } finally {
+      await h.close()
+    }
+  })
+
   test('a host is open: it takes a profile whose hosts record does not name it, or that has none', async () => {
     const h = await startHost({ now: () => T0 })
     try {
@@ -436,6 +454,36 @@ describe('limits: each host’s own size, batch and page; each reader’s own si
     } finally {
       stall.closeAllConnections()
       await new Promise((resolve) => stall.close(resolve))
+    }
+  })
+
+  test('a reader reads through the fetch it is given, and may refuse redirects', async () => {
+    const h = await startHost({ now: () => T0 })
+    const away = createServer((req, res) => res.writeHead(302, { location: `${h.url}${req.url}` }).end())
+    await new Promise<void>((resolve) => away.listen(0, '127.0.0.1', resolve))
+    const url = `http://127.0.0.1:${(away.address() as { port: number }).port}`
+    try {
+      await publish([h.url], [ownerRecord(alice, 'profile', profileBody('A'), T0)])
+      assert.equal((await readPage(url)).records.length, 1, 'followed unless told')
+      await assert.rejects(readPage(url, { redirect: 'error' }))
+      await assert.rejects(readAll(url, { redirect: 'error' }))
+      assert.equal((await readProfile([url], alice.address, T0, { redirect: 'error' })).current.size, 0, 'a host that redirects is skipped')
+
+      // The caller's fetch: one that refuses some addresses, say.
+      const asked: string[] = []
+      const counting: typeof fetch = (input, init) => {
+        asked.push(String(input))
+        return fetch(input, init)
+      }
+      await readPage(h.url, { fetch: counting })
+      await readAll(h.url, { fetch: counting, post: true })
+      await readProfile([h.url], alice.address, T0, { fetch: counting })
+      assert.deepEqual(asked.map((u) => new URL(u).pathname), ['/v1/records', '/v1/records/read', '/v1/records/read', '/v1/records', '/v1/records'])
+      await assert.rejects(readPage(h.url, { fetch: async () => Promise.reject(new Error('a private address')) }), /a private address/)
+    } finally {
+      away.closeAllConnections()
+      await new Promise((resolve) => away.close(resolve))
+      await h.close()
     }
   })
 
