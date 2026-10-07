@@ -1,6 +1,6 @@
 {
   "name": "Ana Ribeiro",
-  "market": "online-tutors",
+  "market": "tutoring",
   "role": "seller",
   "photo": {
     "sha256": "5e3b1f3c2a8a8f2b6c4e9d0a7b1c3d5e7f9a0b2c4d6e8f0a1b3c5d7e9f1a3b5c",
@@ -22,6 +22,14 @@
       "signature": "4cfotrsbwai3y4vXvx1iesh0BeAYMqycSWkPqYEzJRQ7PbZUiOiu9pj3yuDVefXCWYeqz9JwoYJaMaNxfwJLCA",
       "score": 87,
       "proof": "FYEvid9M889fSFGUfAVT5ExGNqKhQqrHyMzsS-qhoB8AcuJy7923TGIIIOTjM-QKfK6ZJU1Y56f_fi_r9ya5rhRVs6xRrKI1naZvb-Am4dE0aPo0vF_k-MX5WXaaCFP7DSdYqNlziOanhK-mFEJQuCiuZBNEqLzUPNjB2ygatOwI55GrIaEpAxcNa2CYth5yIoyrzs-4647WRWloY9MOiBFXuyEtnfNUfwpyQQBCoqEF-0FbODMnn8MN6pT6A9I7DYc3XsI_E85nGlyr7rXGoDb5H6k-cVb6BUyDQFDoHuMCqtW3JoPCnDp6EbrXc2nI3sxeRlyNR8NQSjiXI10WDQ"
+    },
+    {
+      "circuit": "person",
+      "issuer": "1f94c72d4e5d0f9f6d4ea3b1135b4af2eaec6d14ebe63a96a2f136236887c09611bfedb43d85cb0ead1845d088ba92eb5c96715cde3ccf90607eb007285c2ea6",
+      "label": "tutoring/seller",
+      "stamp": "1190cd2c0ce535af97624d41fb8b393e531ca7d52ee7659c050d4bc79b5033b8",
+      "tier": "2",
+      "proof": "CIs3Py9gNn5t64SyJacK_25w_EFl2VLT4wqKfPKcfkkWP-8R2yUP03ABThDTtRuvq4Gu7QjrRvxRBzdqc_d23AWw_F6PgSB3ymCBLwLgTXdPAXdEcHAOeEouDkd7OI2dBrf1xzhb46iHPGTVjZFRtlkhVaqXlgfxqY0bqGrYcvcRjqAjoTx6oCfHnZOK745hoL0z76yDdSzdiS4xyYALGCOKCmdGQZMi0kFNxSIE_LD71isOdarLjx44wQNiV-rfIn9DU1anKKgX5pPugj46YKp0Cw2uuFWXMODzBVk99ugJwkPko3QcqSXsRDRfjkYC7BCJbLQO9UD1g4TNYxgTZQ"
     }
   ],
   "createdAt": "2026-09-14T10:00:00Z"
