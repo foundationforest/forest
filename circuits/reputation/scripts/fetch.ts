@@ -4,8 +4,8 @@
 //
 // The verification key is committed (devnet/verification-key.json, a few kB). The proving key and
 // the witness generator are about 30 MB and only ever used to make a proof, so they sit in a GitHub
-// release, pinned by SHA-256 in devnet/setup.json, the way registry/artifacts pins Semaphore's. A
-// file that does not match its hash is deleted rather than kept.
+// release, pinned by SHA-256 in devnet/setup.json. A file that does not match its hash is deleted
+// rather than kept.
 
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'

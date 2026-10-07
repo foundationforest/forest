@@ -17,10 +17,10 @@ Forest removes one thing: having to trust someone in the middle.
 Your seed is 24 random words. Your app keeps it, by default in its secure slot on your device,
 unlocked by your face or fingerprint and used only to derive keys. From it come your main keys, one
 per label such as `tutoring/seller`. Each is a folder (everything it signs on a host), an address
-(its Solana address) and, once registered, a profile. An issuer puts your stamp on its list after
-the checks it chooses, such as checking once that you are one human, and registering writes a row
-in the registry that pins that stamp to one of your main keys in a market, without saying who you
-are. Each main key writes offers and reviews as
+(its Solana address) and, once registered, a profile. An issuer signs you a note after the checks it
+chooses, such as checking once that you are one human, and registering writes a row in the registry
+that pins your stamp for a market to one of your main keys, without saying who you are. Each main
+key writes offers and reviews as
 signed records in its folder, on open hosts anyone can read; photos and other large files go beside
 them as blobs. A review belongs to whoever wrote it: the one it's about can't erase it; the one who
 wrote it can. Beside each folder is an inbox, where others leave messages for that main key,
@@ -64,7 +64,7 @@ service's policy, an app's choice, or the person's.
 |---|---|---|---|
 | [`keys/`](keys/README.md) | The 24 words, the recipe that mixes keys from them, and the rules for apps that hold keys | core | on the person's device |
 | [`records/`](records/README.md) | Signed records, the host socket, the permissions record, envelopes for private records, the inbox, blobs, the three record shapes, and a reference host | standards; the reference host is a service | a library and a reference host |
-| [`registry/`](registry/README.md) | A program and its client: one row per market stamp, free | core | on devnet |
+| [`registry/`](registry/README.md) | A program and its client: one row per stamp, free | core | on devnet |
 | [`escrow/`](escrow/README.md) | A program and its client: money out when both sides agree, or by an arbiter or timer set at the start | a service; use any | on devnet |
 | [`circuits/`](circuits/README.md) | The proofs Forest offers: reputation, and the tree an index publishes | a standard | on the person's device; the reputation circuit's setup is devnet only |
 
@@ -74,7 +74,7 @@ decides what, and an FAQ.
 ## On chain, and never on chain
 
 - **On chain:** registry rows, escrows and their receipts, and money moving.
-- **Never on chain:** seeds, private keys, records, messages, blobs, issuers' lists, and the index.
+- **Never on chain:** seeds, private keys, records, messages, blobs, issuers' notes, and the index.
 
 ## Promises
 
@@ -92,7 +92,7 @@ decides what, and an FAQ.
   Services, apps and the ramps in and out set their own prices.
 - **Only the deal decides where money goes.** The escrow has no admin and no custodian: only the
   two sides, and an arbiter or a timer both saw at the start, can move what it holds.
-- **Anyone can take part.** Anyone can run a host, keep a list, name a market or build an app.
+- **Anyone can take part.** Anyone can run a host, run an issuer, name a market or build an app.
   Everything needed to compete with the foundation is open: here, in services and in markets.
 - **The programs are built to be sealed.** On mainnet, the registry and the escrow are to be sealed
   the day they deploy, so a change is a new program at a new address. On devnet they are still
@@ -137,8 +137,7 @@ that holds the seed is open source so anyone can check that nothing leaks, and a
 people check. It pins a version of forest, the way services does.
 
 **What is it built from?**
-Existing pieces, used unchanged: Ed25519, RFC 8785 canonical JSON, age, Semaphore's circuit and its
-public 2025 setup files, circomlib's Poseidon and EdDSA verifier and zk-kit's Merkle circuit on
-PSE's Perpetual Powers of Tau, zk-kit's EdDSA-Poseidon, snarkjs, groth16-solana, Anchor, the SPL
-token programs, and Kora, in the foundation's fee payer, in services. Forest writes only what does
-not exist yet.
+Existing pieces, used unchanged: Ed25519, RFC 8785 canonical JSON, age, Semaphore's lean Merkle
+tree, circomlib's Poseidon and EdDSA verifier and zk-kit's Merkle circuit on PSE's Perpetual Powers
+of Tau, zk-kit's EdDSA-Poseidon, snarkjs, groth16-solana, Anchor, the SPL token programs, and Kora,
+in the foundation's fee payer, in services. Forest writes only what does not exist yet.

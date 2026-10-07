@@ -46,9 +46,9 @@ A standard: any index may publish one, and a proof names the root it used.
   - `score`: the index's score for the profile times ten, an integer from 0 to 2^32 - 1.
   - `count`: how many reviews the score comes from, from 0 to 2^32 - 1.
 - **One leaf per market stamp.**
-- **The tree** is Semaphore's, the kind an issuer's list is: a lean incremental Merkle tree over
-  Poseidon of pairs, with the leaves in the index's order. The circuit fixes its depth at 20, so a
-  tree holds at most 1,048,576 leaves.
+- **The tree** is Semaphore's: a lean incremental Merkle tree over Poseidon of pairs, with the
+  leaves in the index's order. The circuit fixes its depth at 20, so a tree holds at most 1,048,576
+  leaves.
 - **The index signs the root with a time:** ed25519 by the index's key over
   `0xff ‖ "forest/v1/reputation\n" ‖ root ‖ time`, the root as 32 big-endian bytes and the time as
   8 big-endian bytes of milliseconds since 1970. Like a record's signed bytes, they start with
