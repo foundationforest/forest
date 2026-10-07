@@ -347,9 +347,6 @@ extensions, and one more invoice in it. There is no smoke test: read a receipt w
   - **Take the money.** A permanent delegate can move or burn any amount from any account, a
     deposit account included. An escrow left holding less than its amount ends only by
     `close_unfunded`, what is left going back to the buyer, or once the amount is back.
-  - **Stop it.** Freezing the deposit account, pausing the dollar, or making new accounts start
-    frozen stops every way out until undone; freezing one party's standard account stops every
-    way out that pays that party.
   - **A check on every transfer.** A transfer hook can refuse any transfer and ask for accounts
     the app must pass. It never receives a signature through the escrow.
   - **Close the dollar.** Once nobody holds any, its maker can close the mint; an escrow in it that
