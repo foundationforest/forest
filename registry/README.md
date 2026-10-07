@@ -93,7 +93,7 @@ blockhash and a connection.
 | `buildRegistration({...})` | Makes the person proof from the note, and returns the unsigned `register` transaction |
 | `registerIx`, `refundIx` | The two instructions, by hand |
 | `fetchRow(connection, stamp)`, `fetchRows(connection, { profile, issuer, label })`, `decodeRow(data)` | Rows read back and checked |
-| `verifyTier(connection, { profile, stamp, tier, proof })` | The tier a profile shows: its person proof checked against its row. Gives the row, so the reader weighs its issuer and when it was made |
+| `verifyTier(connection, { profile, issuer?, label?, stamp, tier, proof })` | The tier a profile shows, as a `person` proof in its profile record ([records/](../records/README.md#proofs)): its person proof, as snarkjs writes it or its 256 bytes, checked against its row, and so are the issuer and label it shows, when given. Gives the row, so the reader weighs its issuer and when it was made |
 
 ```ts
 import { issuerSecret } from '@forest/keys'
@@ -216,7 +216,7 @@ unchanged, `npm run vk`); a test checks it is the converter's output for the com
 | `signNote(privateKey, note)`, `issuerKeyOf(privateKey)` | For an issuer: the signed note, and its key |
 | `noteNumberOf(secret)`, `noteHash(note)`, `noteSigned(note)` | The note number, what an issuer signs, and whether its issuer signed it |
 | `provePerson({ secret, note, label, profile, artifacts })` | The proof, on the device. Refuses a note for another secret, or one its issuer did not sign |
-| `verifyPerson({ proof, issuer, label, profile, stamp, tier })` | Whether the proof holds for that issuer, label, main key, stamp and tier |
+| `verifyPerson({ proof, issuer, label, profile, stamp, tier })` | Whether the proof, as snarkjs writes it or its 256 bytes (`proofBytes`, `proofFromBytes`), holds for that issuer, label, main key, stamp and tier |
 | `personInput({...})` | The circuit's input, for a caller that drives snarkjs itself |
 
 ```
