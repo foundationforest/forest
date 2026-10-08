@@ -54,6 +54,8 @@ export const reviewBody = (subject: string): Body => ({
 
 /** One entry in a permissions record: this key, with this scope (write unless given), under these paths if given. */
 export const allow = (key: Key, paths?: string[], scope: Scope = 'write'): AccessKey => (paths === undefined ? { key: key.address, scope } : { key: key.address, scope, paths })
+/** A past key's entry: `was`, the scope it had, in place of `scope`, and the paths it had. */
+export const pastKey = (key: Key, was: 'write' | 'message', paths?: string[]): AccessKey => (paths === undefined ? { key: key.address, was } : { key: key.address, was, paths })
 
 /** A signed owner record whose canonical text is exactly `bytes` long, `wide` of its characters two-byte (é). */
 export function sizedRecord(key: Key, path: string, bytes: number, wide = 0): SignedRecord {

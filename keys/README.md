@@ -26,6 +26,8 @@ defaults an app adopts, or says it doesn't. The library in `src/` follows it, an
   secure keychain (Apple's Keychain or Android's Keystore), opened by the person's face or
   fingerprint and used only to mix keys, with the 24 words in the person's password manager as the
   backup.
+- The app holding the seed is the one thing a person trusts: it can do whatever the seed can. A web
+  app's code comes from its server on each visit; an installed app's does not.
 
 ### The recipe
 
@@ -137,6 +139,7 @@ whoever it is for ([records](../records/README.md)).
 8. The app that holds the seed is open source.
 9. Keep a copy of every record signed; a host may drop one, and the copy puts it back.
 10. Keep each grant, an access key handed to the person, as a private record in their own folder.
+11. Keep the issuer's note as safely as a key.
 
 ### Use it
 
@@ -147,7 +150,7 @@ Everything is exported from `src/index.ts`. Everything that mixes is async.
 | `newSeed()` | A new seed: 32 random bytes |
 | `exportWords(seed)`, `importWords(text)` | The 24 words, and the seed back from them |
 | `mainKey(seed, label)` | The main key: `label`, `privateKey`, `publicKey`, `address` |
-| `readingKey(main.privateKey)` | The inbox key: age's `identity`, and the `recipient` others encrypt to |
+| `inboxKey(main.privateKey)` | The inbox key: age's `identity`, and the `recipient` others encrypt to |
 | `issuerSecret(seed, name)` | The issuer's `secret`, its `scalar`, and the `noteNumber` |
 | `hkdf(ikm, info)`, `INFO` | The mixer and its info strings |
 

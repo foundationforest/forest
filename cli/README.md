@@ -46,7 +46,8 @@ anything, `forest` checks the key against the profile's permissions record, and 
 words:
 
 - No key: `no key for this; use request`.
-- A key that is not listed, is listed with another scope, or whose paths don't cover the path.
+- A key that is not listed, is listed with another scope or as past, or whose paths don't cover
+  the path.
 - The profile's main key, or its inbox key: only access keys are taken
   ([keys/](../keys/README.md#rules-for-apps-that-hold-keys)).
 - A path the owner wrote. The owner wins, so only the owner's app can change it.
@@ -87,6 +88,10 @@ A folder is always read from hosts, never from an index:
 - Writes and messages go to the hosts that the hosts record names.
 - A profile with no records on any start host is out of reach until one of its hosts is added with
   `--host`.
+- A host other than the start hosts is reached only at a public address: one that is loopback,
+  private, link-local, carrier-grade NAT, unspecified, multicast or reserved, written or looked up,
+  is refused before anything is sent. No request follows a redirect, and a folder read, or an inbox
+  pull, stops after 100 pages.
 
 An index is read for two things only, `GET <index>/markets/<market>.json` and
 `GET <index>/profiles/<address>.json`. Both are passed on as that index's word. This JSON is the
@@ -128,7 +133,8 @@ Node 22.18 or later. Built from existing pieces, used unchanged:
 - records' library;
 - `@modelcontextprotocol/sdk`, for the MCP door;
 - `ajv` and `ajv-formats`, for the record shapes;
-- `age-encryption`, to work out a read key's public half.
+- `age-encryption`, to work out a read key's public half;
+- `undici`, to reach a host only at a public address.
 
 ## Promises
 
@@ -147,6 +153,8 @@ Node 22.18 or later. Built from existing pieces, used unchanged:
   it acts. The AI's maker also sees every key the AI writes into a call (Three setups).
 - **Profiles off the start hosts are out of reach.** A profile that no start host holds can't be
   read, written to or sent to until its host is added.
+- **An AI reading strangers' text can be steered** by what they wrote. With only a message key, it
+  can only ask.
 - **What an index says goes unchecked.** It carries no signatures. `forest` can't tell whether an
   index is honest; it only passes on what the index says.
 - **Not here:**

@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { after, describe, test } from 'node:test'
-import { readingKey } from '../../keys/src/index.ts'
+import { inboxKey } from '../../keys/src/index.ts'
 import { importSingleFile } from '../scripts/import-single-file.ts'
 import { deliver, getBlob, publish, pull, putBlob, readAll, readPage } from '../src/client.ts'
 import { type BlobDriver, DAY, Host, rebuild } from '../src/host.ts'
@@ -38,7 +38,7 @@ const ref = (bytes: Uint8Array, mimeType: string) => ({ sha256: sha256Hex(bytes)
 const photo = bytesOf(1)
 const clip = bytesOf(2, 3000)
 
-const [aliceInbox, bobInbox] = await Promise.all([readingKey(alice.privateKey), readingKey(bob.privateKey)])
+const [aliceInbox, bobInbox] = await Promise.all([inboxKey(alice.privateKey), inboxKey(bob.privateKey)])
 const aliceCard: Body = { ...profileBody('Alice'), inboxKey: aliceInbox.recipient, inbox: { senders: 'anyone' }, photo: ref(photo, 'image/jpeg') }
 const bobCard: Body = { ...profileBody('Bob'), role: 'buyer', inboxKey: bobInbox.recipient, inbox: { senders: 'anyone' } }
 const withClip = (price: string): Body => ({ ...offerBody(price), media: [ref(clip, 'video/mp4')] })

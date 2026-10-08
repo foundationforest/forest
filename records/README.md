@@ -116,14 +116,15 @@ whoever it is for in a grant (Grants).
 | `message` | sign messages for the main key, and pull its inbox (Inbox) |
 | `read` | open the private records and messages encrypted to it (Private records) |
 | `pay` | spend the token allowance the chain gives it; Forest has no format for it |
-| `past` | nothing more: a write or message key the owner removed, whose work still counts |
 
 - `key` is the key's address, or, for a read key, its age recipient (`age1pq1…`). A key listed
   twice makes the record invalid.
-- `paths`: at most 16 content-path prefixes, on a write, read or past key, never on a message or
-  pay key. With `paths`, the key works only under them: where a write key writes, and which
-  private records the owner's devices encrypt to a read key. Without, it works at every content path
-  but those `profile` and `grants` cover.
+- `was`, in place of `scope`, marks a past key: a write or message key the owner removed, and the
+  scope it had (Removing a key).
+- `paths`: at most 16 content-path prefixes, on a write or read key, never on a message or pay key;
+  a past key keeps the paths it had. With `paths`, the key works only under them: where a write key
+  writes, and which private records the owner's devices encrypt to a read key. Without, it works at
+  every content path but those `profile` and `grants` cover.
 - In the hosts and the permissions record, a field not named here, at any level, makes the record
   invalid, so a later limit is never ignored.
 
@@ -132,18 +133,18 @@ counts while it is listed, past or not.
 
 - Hosts take an access key's record only if its key is listed with scope `write`, its paths
   covering the record's path.
-- Readers count it if its key is listed with scope `write` or `past`, its paths covering the
-  record's path. No date is checked.
+- Readers count it if its key is listed with scope `write`, or `was` `write`, its paths covering
+  the record's path. No date is checked.
 - The owner's record wins over an access key's at the same path, so the owner can always delete
   an access key's record.
 
-**Removing a key.** To remove a write or message key, the owner sets its scope to `past` and keeps
-its entry: it can no longer act, and what it wrote still counts. Readers count a past key's
-records only because the permissions record, signed by the main key, still lists it, so a host
-cannot slip in a key never allowed. Deleting the entry instead disowns what the key wrote: none
-of it counts any more. To keep one of a past key's records as the owner's own, the owner publishes
-it again with the main key. A read or pay key is removed by deleting its entry: nothing it did
-needs to count.
+**Removing a key.** To remove a write or message key, the owner replaces its `scope` with `was`,
+the scope it had, and keeps its entry and its paths: it can no longer act. Readers count a past
+write key's records, at its paths, only because the permissions record, signed by the main key,
+still lists it, so a host cannot slip in a key never allowed. A past message key never counts for
+writing. Deleting the entry instead disowns what the key wrote: none of it counts any more. To
+keep one of a past key's records as the owner's own, the owner publishes it again with the main
+key. A read or pay key is removed by deleting its entry: nothing it did needs to count.
 
 **Notes.** `notes` holds the owner's notes on its keys (who holds each, until when, why), as one
 envelope, a body only chosen keys open (Private records), encrypted to the owner's own inbox key
@@ -356,7 +357,8 @@ host.
 3. It MUST become the current record at its path by Which record counts, over what the host
    stores plus it [`older`, `permission`].
 4. An access key's record: its key MUST be listed with scope `write`, its paths covering the
-   record's path [`permission`]. A reader also counts a past key's records; a host takes none.
+   record's path [`permission`]. A reader also counts a past write key's records; a host takes
+   none.
 5. A host MAY refuse a content record by its own policy [`policy`]. It MUST NOT refuse a hosts or
    permissions record by policy but for its size, so a person can always move and always remove
    an access key: a record that only removes one is never larger than the one before.
@@ -431,13 +433,13 @@ its policy.
   `nextTime`); messages and pulls (`signMessage`, `decodeMessage`, `messageId`, `pullRequest`,
   `checkPull`, `inboxOf`, `sealedTo`); grants and notes (`checkGrant`, `checkNote`,
   `GRANTS_PATH`); talking to hosts (`publish`, `readPage`, `readAll`, `readProfile`, `deliver`,
-  `pull`, `putBlob`, `getBlob`). A read asks by POST with `post: true`, goes through the caller's
-  own `fetch` if given, and refuses a host that redirects with `redirect: 'error'`. No server,
-  database or encryption library is in it.
+  `pull`, `putBlob`, `getBlob`). A read asks by POST with `post: true`. A read, a publish, a
+  delivery and a pull go through the caller's own `fetch` if given, and refuse a host that
+  redirects with `redirect: 'error'`. No server, database or encryption library is in it.
 - `@forest/records/private`: `makePrivate`, `openPrivate`, `readerCount`; `message` (encrypt to a
   card's inbox key and readers, a grant to the inbox key alone, and sign) and `openMessage`;
   `grantsRecord` and `openGrants`; `makeNotes` and `openNotes`. The inbox key itself is keys/'s
-  `readingKey`.
+  `inboxKey`.
 - `@forest/records/host`: `Host`, the reference host (below).
 - `@forest/records/schemas/<kind>.json`: the three shapes, as JSON Schemas.
 
@@ -469,7 +471,7 @@ await publish(view.hosts, [accessRecord(helper, me.address, 'offer/physics', phy
 Write to that profile's inbox from another profile, then pull it on the owner's device:
 
 ```ts
-import { mainKey, readingKey } from '@forest/keys'
+import { mainKey, inboxKey } from '@forest/keys'
 import { deliver, pull, pullRequest, readProfile } from '@forest/records'
 import { message, openMessage } from '@forest/records/private'
 
@@ -480,7 +482,7 @@ const ask = await message(buyer, me.address, { text: 'Is Tuesday at six free?' }
 await deliver(seller.hosts, [ask])
 
 const page = await pull(host, pullRequest(me, 0, Date.now())) // the main key signs each pull
-const { identity } = await readingKey(me.privateKey) // the inbox key
+const { identity } = await inboxKey(me.privateKey) // the inbox key
 for (const m of page.messages) (await openMessage(m.message, identity)).body
 ```
 
@@ -574,7 +576,7 @@ with the pinned inbox key they were encrypted to. The profile is
 - **The owner wins.** An access key never replaces or deletes what the main key wrote, and never
   writes the hosts or permissions record.
 - **Nobody writes for a profile unless its permissions record says so.** Removing an access key
-  ends what it can add, never what it already wrote.
+  ends what it can add at any host that follows the standard, never what it already wrote.
 - **A person can always move.** A profile's name is its key, not a host's address. A host never
   refuses a newer hosts or permissions record by its own policy but for its size, and one that
   only removes an access key is never larger than the one before.
@@ -591,9 +593,9 @@ with the pinned inbox key they were encrypted to. The profile is
   verify in native code with the same strict rules (Hosts).
 - **A host keeps only the newest record at each path,** and what it replaced for its keep days.
   Older history is in the app's copies, or nowhere.
-- **A past access key can still write to a careless host.** Honest hosts refuse its records, but
-  readers count every record a past key wrote, since no date is checked: a host that skips the
-  check could take a new one, and readers of that host would count it. The owner deletes it by
+- **A past write key can still write to a careless host.** Honest hosts refuse its records, but
+  readers count every record it signed at its paths, since no date is checked: a host that skips
+  the check could take a new one, and readers of that host would count it. The owner deletes it by
   writing at that path.
 - **A past message key can still send until a host reads the sender's permissions again.** A host
   keeps what it read for a time it chooses, and until then takes what the past key signs. One of
@@ -641,6 +643,10 @@ It is public. A date would tell anyone when you met someone or began using an ap
 would say who. Who a key is for, and since when, is in its grant, which only you and its holder
 can open, and in your notes, which only you can. A key ends when you rewrite the record, so
 readers check no clock, and agree whatever theirs say.
+
+**Why does a past key have `was` in place of `scope`?**
+So nothing that checks a key's scope lets a removed key act, and removing a key never makes the
+permissions record larger: `"was":"write"` is shorter than `"scope":"write"`.
 
 **Why does the owner win?**
 An access key lives somewhere less safe than the main key: on a server, or with another app. If

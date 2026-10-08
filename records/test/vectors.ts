@@ -130,11 +130,11 @@ const describePull = (pull: SignedPull) => {
 }
 
 export async function vectors() {
-  const inbox = KEYS.mainKeys[0].reading
+  const inbox = KEYS.mainKeys[0].inbox
   const hostA = 'https://host-a.example'
   const offer = { direction: 'offer', description: 'One hour of maths tutoring, online.', price: { amount: '30', mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', per: 'hour' }, createdAt: '2026-09-21T13:33:20Z' }
   return {
-    about: "Forest records vectors. The profile is keys/'s tutoring/seller profile, from its test seed, and the profile record's inboxKey field is that profile's inbox key: both are pinned in keys/test/vectors.json (keys/ names the inbox key reading). The access key is the ed25519 key whose private key is 32 bytes of 0x2a, listed with scope write; the message key is the one whose private key is 32 bytes of 0x2b, listed with scope message. The message is from keys/'s tutoring/buyer profile, from the same seed, to tutoring/seller; its body is sealed to tutoring/seller's inbox key. The delegated message is from tutoring/seller, signed by its message key and naming host-a, to tutoring/buyer; its body is sealed to tutoring/buyer's inbox key. Both bodies were made once and are pinned as made, since age's sealing is random. The pull is tutoring/seller's, for everything; keyPull is the same pull signed by its message key. past is a later permissions record in which the access key is past and the message key still listed, with notes on both keys sealed to tutoring/seller's inbox key alone, pinned as made.",
+    about: "Forest records vectors. The profile is keys/'s tutoring/seller profile, from its test seed, and the profile record's inboxKey field is that profile's inbox key: both are pinned in keys/test/vectors.json. The access key is the ed25519 key whose private key is 32 bytes of 0x2a, listed with scope write; the message key is the one whose private key is 32 bytes of 0x2b, listed with scope message. The message is from keys/'s tutoring/buyer profile, from the same seed, to tutoring/seller; its body is sealed to tutoring/seller's inbox key. The delegated message is from tutoring/seller, signed by its message key and naming host-a, to tutoring/buyer; its body is sealed to tutoring/buyer's inbox key. Both bodies were made once and are pinned as made, since age's sealing is random. The pull is tutoring/seller's, for everything; keyPull is the same pull signed by its message key. past is a later permissions record in which the access key is past and the message key still listed, with notes on both keys sealed to tutoring/seller's inbox key alone, pinned as made.",
     profile: alice.address,
     accessKey: accessKey.address,
     messageKey: messageKey.address,
@@ -148,7 +148,7 @@ export async function vectors() {
     delegated: describeMessage(signMessage({ key: messageKey, from: alice.address, host: hostA }, aliceBuyer.address, { private: SEALED_TO_BUYER }, TIME + 300_000)),
     pull: describePull(pullRequest(alice, 0, TIME + 240_000)),
     keyPull: describePull(pullRequest({ key: messageKey, profile: alice.address }, 0, TIME + 360_000)),
-    past: describe(permissionsRecord(alice, [{ key: accessKey.address, scope: 'past', paths: ['offer'] }, { key: messageKey.address, scope: 'message' }], TIME + 420_000, SEALED_NOTES)),
+    past: describe(permissionsRecord(alice, [{ key: accessKey.address, was: 'write', paths: ['offer'] }, { key: messageKey.address, scope: 'message' }], TIME + 420_000, SEALED_NOTES)),
   }
 }
 

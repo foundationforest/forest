@@ -181,20 +181,28 @@ export type HostsBody = {
 /**
  * What an access key is for. write: signing records where its paths allow. message: signing
  * messages for the main key, and pulling its inbox. read: opening what is sealed to it. pay: the
- * chain's own allowance to it, which lives on chain. past: a write or message key the owner no
- * longer allows: it can no longer act, and what it wrote still counts.
+ * chain's own allowance to it, which lives on chain.
  */
-export type Scope = 'write' | 'message' | 'read' | 'pay' | 'past'
-export const SCOPES: readonly Scope[] = ['write', 'message', 'read', 'pay', 'past']
+export type Scope = 'write' | 'message' | 'read' | 'pay'
+export const SCOPES: readonly Scope[] = ['write', 'message', 'read', 'pay']
 
+/**
+ * A listed key: one that acts, with its `scope`; or a past key, a write or message key the owner
+ * removed, with `was`, the scope it had, in place of `scope`. A past key can no longer act: nothing
+ * that checks a scope finds one. What a past write key wrote still counts, at its paths; a past
+ * message key never counts for writing.
+ */
 export type AccessKey = {
   /** Its public half: an address, or a read key's age post-quantum hybrid recipient (age1pq1…). */
   key: string
-  scope: Scope
+  /** What it may do; on a key that acts, and only there. */
+  scope?: Scope
+  /** The scope a past key had; on a past key, and only there. */
+  was?: 'write' | 'message'
   /**
    * Content path prefixes it works under, segment by segment: where a write key writes, and which
    * private records the owner's devices seal to a read key. Without it, every content path but
-   * those `profile` and `grants` cover. Never on a message or pay key.
+   * those `profile` and `grants` cover. Never on a message or pay key, past or not.
    */
   paths?: string[]
 }
@@ -235,14 +243,17 @@ export function checkControlBody(path: string, body: Body): void {
   const listed = new Set<unknown>()
   for (const k of access as unknown[]) {
     if (k === null || typeof k !== 'object' || Array.isArray(k)) fail('permissions', 'an access entry is an object')
-    only(k, ['key', 'scope', 'paths'], 'permissions', 'access')
-    const { key, scope, paths } = k as { [key: string]: unknown }
-    if (!SCOPES.includes(scope as Scope)) fail('permissions', `scope is one of ${SCOPES.join(', ')}`)
-    if (scope === 'read') {
+    only(k, ['key', 'scope', 'was', 'paths'], 'permissions', 'access')
+    const { key, scope, was, paths } = k as { [key: string]: unknown }
+    if ('was' in (k as object) ? 'scope' in (k as object) || (was !== 'write' && was !== 'message') : !SCOPES.includes(scope as Scope)) {
+      fail('permissions', `scope is one of ${SCOPES.join(', ')}; a past key has was, write or message, in its place`)
+    }
+    const had = (scope ?? was) as Scope
+    if (had === 'read') {
       if (typeof key !== 'string' || !RECIPIENT.test(key)) fail('permissions', 'a read key is an age post-quantum hybrid recipient, age1pq1…')
     } else if (!publicKeyFromAddress(key)) fail('permissions', 'an access key is a usable ed25519 address')
     if ('paths' in (k as object)) {
-      if (scope === 'message' || scope === 'pay') fail('permissions', `a ${scope} key has no paths`)
+      if (had === 'message' || had === 'pay') fail('permissions', `a ${had} key has no paths`)
       checkAccessPaths(paths, 'permissions')
     }
     if (listed.has(key)) fail('permissions', 'a key is listed twice')

@@ -25,21 +25,24 @@ export const MAX_LINE_READ = 65_536
 /** The largest blob a reader takes unless told otherwise: the most the reference host takes. */
 export const MAX_BLOB_READ = 50_000_000
 
+/** How to reach a host: `fetch` and `redirect` as a read takes them (ReadHow). */
+export type Reach = Pick<ReadHow, 'fetch' | 'redirect'>
+
 /** Send records to each host. A host that fails does not stop the others. */
-export async function publish(hosts: string[], records: SignedRecord[]): Promise<PublishOutcome[]> {
-  return post(hosts, '/v1/records', records.map(encodeRecord))
+export async function publish(hosts: string[], records: SignedRecord[], how: Reach = {}): Promise<PublishOutcome[]> {
+  return post(hosts, '/v1/records', records.map(encodeRecord), how)
 }
 
 /** Deliver messages to each host: each of the recipient's hosts, as its hosts record names them. */
-export async function deliver(hosts: string[], messages: SignedMessage[]): Promise<PublishOutcome[]> {
-  return post(hosts, '/v1/inbox', messages.map(encodeMessage))
+export async function deliver(hosts: string[], messages: SignedMessage[], how: Reach = {}): Promise<PublishOutcome[]> {
+  return post(hosts, '/v1/inbox', messages.map(encodeMessage), how)
 }
 
-async function post(hosts: string[], path: string, lines: string[]): Promise<PublishOutcome[]> {
+async function post(hosts: string[], path: string, lines: string[], how: Reach): Promise<PublishOutcome[]> {
   return Promise.all(
     hosts.map(async (host): Promise<PublishOutcome> => {
       try {
-        return { host, ...(await postLines(`${host}${path}`, lines)) }
+        return { host, ...(await postLines(`${host}${path}`, lines, how)) }
       } catch (err) {
         return { host, status: 0, results: [], error: (err as Error).message }
       }
@@ -48,8 +51,8 @@ async function post(hosts: string[], path: string, lines: string[]): Promise<Pub
 }
 
 /** One request; if the host finds it too big (413, or one `batch` refusal), each half again, down to one line. */
-async function postLines(url: string, lines: string[]): Promise<{ status: number; results: Result[] }> {
-  const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/x-ndjson' }, body: lines.map((l) => l + '\n').join('') })
+async function postLines(url: string, lines: string[], how: Reach): Promise<{ status: number; results: Result[] }> {
+  const res = await (how.fetch ?? fetch)(url, { method: 'POST', headers: { 'content-type': 'application/x-ndjson' }, body: lines.map((l) => l + '\n').join(''), ...(how.redirect && { redirect: how.redirect }) })
   const results = (await res.text())
     .split('\n')
     .filter((l) => l)
@@ -57,8 +60,8 @@ async function postLines(url: string, lines: string[]): Promise<{ status: number
   const tooBig = res.status === 413 || (results.length === 1 && results[0]!.error === 'batch')
   if (!tooBig || lines.length < 2) return { status: res.status, results }
   const half = Math.ceil(lines.length / 2)
-  const first = await postLines(url, lines.slice(0, half))
-  const second = await postLines(url, lines.slice(half))
+  const first = await postLines(url, lines.slice(0, half), how)
+  const second = await postLines(url, lines.slice(half), how)
   return { status: first.status !== 200 ? first.status : second.status, results: [...first.results, ...second.results.map((r) => ({ ...r, i: r.i + half }))] }
 }
 
@@ -184,10 +187,10 @@ export type MessagePage = { messages: CheckedMessage[]; cursor: number; refused:
  * profile's main key, or one of its message keys, signs each pull. Each message is checked, and one
  * not to that profile, or longer than `maxBytes` (MAX_LINE_READ when omitted), is refused. It throws
  * a RecordError with the host's code (stale, signature, permission, ...) when the host refuses the
- * pull, and on a page not read within `timeout` ms.
+ * pull, and on a page not read within `timeout` ms. `fetch` and `redirect` are as for a read.
  */
-export async function pull(host: string, request: SignedPull, options: { maxBytes?: number; timeout?: number } = {}): Promise<MessagePage> {
-  const res = await fetch(`${host}/v1/inbox/pull`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: canonical(request), signal: AbortSignal.timeout(options.timeout ?? READ_TIMEOUT_MS) })
+export async function pull(host: string, request: SignedPull, options: { maxBytes?: number; timeout?: number } & Reach = {}): Promise<MessagePage> {
+  const res = await (options.fetch ?? fetch)(`${host}/v1/inbox/pull`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: canonical(request), signal: AbortSignal.timeout(options.timeout ?? READ_TIMEOUT_MS), ...(options.redirect && { redirect: options.redirect }) })
   if (!res.ok) {
     const why = (await res.json().catch(() => ({}))) as { error?: string; message?: string }
     throw new RecordError(why.error ?? 'host', `${host} answered ${res.status}${why.message ? `: ${why.message}` : ''}`)

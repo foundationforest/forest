@@ -192,7 +192,7 @@ export class Host {
       if (reason === 'not-allowed') return { ok: false, error: 'permission', message: 'the permissions record does not allow this access key here' }
       return { ok: false, error: 'older', message: 'a newer version is already here' }
     }
-    // A reader counts a past key's records, since it is still listed; a host takes none.
+    // A reader counts a past write key's records, since it is still listed; a host takes none.
     if (record.by !== undefined && !allowsArrival(view.access, record)) return { ok: false, error: 'permission', message: 'this access key is past' }
     if (this.policy && !isControlPath(record.path)) {
       const refused = await this.policy(record, this.storage.recordTotals(record.profile))

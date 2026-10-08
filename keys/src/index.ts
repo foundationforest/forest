@@ -3,5 +3,5 @@
 
 export { INFO, SEED_LENGTH, hkdf } from './hkdf.ts'
 export { newSeed, exportWords, importWords, WORD_COUNT } from './words.ts'
-export { mainKey, readingKey, type MainKey, type ReadingKey } from './profile.ts'
+export { mainKey, inboxKey, type MainKey, type InboxKey } from './profile.ts'
 export { issuerSecret, type IssuerSecret } from './issuer.ts'

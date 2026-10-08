@@ -23,7 +23,7 @@ test('the vectors are what this implementation computes', async () => {
 
 test("the keys are keys/'s pinned ones; the access key and the message key, recomputed with node:crypto", () => {
   assert.equal(pinned.profile, KEYS.mainKeys[0].address)
-  assert.equal(decodeRecord(pinned.profileCard.wire).record.body!.inboxKey, KEYS.mainKeys[0].reading.recipient)
+  assert.equal(decodeRecord(pinned.profileCard.wire).record.body!.inboxKey, KEYS.mainKeys[0].inbox.recipient)
   const address = (byte: number) => {
     const der = Buffer.concat([Buffer.from('302e020100300506032b657004220420', 'hex'), Buffer.alloc(32, byte)]) // Ed25519 PKCS#8
     return base58.encode(new Uint8Array(createPublicKey(createPrivateKey({ key: der, format: 'der', type: 'pkcs8' })).export({ format: 'der', type: 'spki' }).subarray(-32)))
@@ -41,15 +41,15 @@ test("the keys are keys/'s pinned ones; the access key and the message key, reco
 test("the past permissions record keeps the access key, now past, and carries notes only tutoring/seller's pinned inbox key opens", async () => {
   const { body } = decodeRecord(pinned.past.wire).record
   assert.deepEqual(body!.access, [
-    { key: pinned.accessKey, scope: 'past', paths: ['offer'] },
+    { key: pinned.accessKey, was: 'write', paths: ['offer'] },
     { key: pinned.messageKey, scope: 'message' },
   ])
-  const notes = await openNotes(body!, KEYS.mainKeys[0].reading.identity)
+  const notes = await openNotes(body!, KEYS.mainKeys[0].inbox.identity)
   assert.deepEqual(notes.map((n) => [n.key, n.scope, n.folder, n.from]), [
     [pinned.accessKey, 'write', pinned.profile, pinned.profile],
     [pinned.messageKey, 'message', pinned.profile, pinned.profile],
   ])
-  await assert.rejects(openNotes(body!, KEYS.mainKeys[1].reading.identity))
+  await assert.rejects(openNotes(body!, KEYS.mainKeys[1].inbox.identity))
 })
 
 /** Ed25519 by node:crypto (OpenSSL). */
@@ -78,7 +78,7 @@ test("the message checks with a second Ed25519 and a second SHA-256, is from key
   assert.equal(createHash('sha256').update(input).digest('hex'), v.id)
   assert.deepEqual([message.from, message.to], [KEYS.mainKeys[1].address, KEYS.mainKeys[0].address])
   assert.ok(nodeVerifies(input, message.from, message.sig))
-  assert.deepEqual((await openMessage(v.wire, KEYS.mainKeys[0].reading.identity)).body, { text: 'Is Tuesday at six free?' })
+  assert.deepEqual((await openMessage(v.wire, KEYS.mainKeys[0].inbox.identity)).body, { text: 'Is Tuesday at six free?' })
 })
 
 test("the delegated message checks with a second Ed25519 by the message key, is for keys/'s tutoring/seller on host-a, and opens with tutoring/buyer's pinned inbox key", async () => {
@@ -91,7 +91,7 @@ test("the delegated message checks with a second Ed25519 by the message key, is 
   assert.deepEqual([message.from, message.key, message.host, message.to], [KEYS.mainKeys[0].address, pinned.messageKey, 'https://host-a.example', KEYS.mainKeys[1].address])
   assert.ok(nodeVerifies(input, message.key!, message.sig))
   assert.ok(!nodeVerifies(input, message.from, message.sig), 'the main key did not sign it')
-  const opened = await openMessage(v.wire, KEYS.mainKeys[1].reading.identity)
+  const opened = await openMessage(v.wire, KEYS.mainKeys[1].inbox.identity)
   assert.deepEqual([opened.body, opened.key], [{ text: 'Tuesday at six, yes.' }, pinned.messageKey])
 })
 

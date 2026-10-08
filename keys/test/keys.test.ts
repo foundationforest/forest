@@ -20,7 +20,7 @@ import {
   issuerSecret,
   mainKey,
   newSeed,
-  readingKey,
+  inboxKey,
 } from '../src/index.ts'
 
 const vectors = JSON.parse(readFileSync(new URL('./vectors.json', import.meta.url), 'utf8'))
@@ -119,43 +119,43 @@ test('a main key needs a 32-byte seed and a label that is text', async () => {
   await assert.rejects(mainKey(seed, 7 as unknown as string), /label must be text/)
 })
 
-// Reading keys
+// Inbox keys
 
-test('each profile gives the pinned reading key, from its main key alone', async () => {
+test('each profile gives the pinned inbox key, from its main key alone', async () => {
   for (const expected of vectors.mainKeys) {
     const key = await mainKey(seed, expected.label)
-    const { privateKey, ...reading } = expected.reading
-    assert.deepEqual(await readingKey(key.privateKey), reading)
+    const { privateKey, ...inbox } = expected.inbox
+    assert.deepEqual(await inboxKey(key.privateKey), inbox)
     assert.equal(hex.encode(await hkdf(key.privateKey, INFO.read)), privateKey)
   }
 })
 
-test("the reading key, recomputed without the library: HKDF, ML-KEM-768 with X25519, age's bech32", () => {
+test("the inbox key, recomputed without the library: HKDF, ML-KEM-768 with X25519, age's bech32", () => {
   const privateKey = mix(hex.decode(seller.privateKey), INFO.read)
-  assert.equal(hex.encode(privateKey), seller.reading.privateKey)
-  assert.equal(bech32.encodeFromBytes('AGE-SECRET-KEY-PQ-', privateKey).toUpperCase(), seller.reading.identity)
+  assert.equal(hex.encode(privateKey), seller.inbox.privateKey)
+  assert.equal(bech32.encodeFromBytes('AGE-SECRET-KEY-PQ-', privateKey).toUpperCase(), seller.inbox.identity)
   // The recipient is the hybrid public key the 32 bytes expand to, in bech32 under age1pq, with
   // no length limit: it is about 1,960 characters.
   const publicKey = MLKEM768X25519.getPublicKey(privateKey)
-  assert.equal(bech32.encode('age1pq', bech32.toWords(publicKey), false), seller.reading.recipient)
-  assert.match(seller.reading.identity, /^AGE-SECRET-KEY-PQ-1[0-9A-Z]+$/)
-  assert.match(seller.reading.recipient, /^age1pq1[0-9a-z]+$/)
+  assert.equal(bech32.encode('age1pq', bech32.toWords(publicKey), false), seller.inbox.recipient)
+  assert.match(seller.inbox.identity, /^AGE-SECRET-KEY-PQ-1[0-9A-Z]+$/)
+  assert.match(seller.inbox.recipient, /^age1pq1[0-9a-z]+$/)
 })
 
-test('age encrypts to the reading key, and only that profile opens it', async () => {
+test('age encrypts to the inbox key, and only that profile opens it', async () => {
   const encrypter = new Encrypter()
-  encrypter.addRecipient(seller.reading.recipient)
+  encrypter.addRecipient(seller.inbox.recipient)
   const encrypted = await encrypter.encrypt('only for the seller profile')
   const opener = new Decrypter()
-  opener.addIdentity(seller.reading.identity)
+  opener.addIdentity(seller.inbox.identity)
   assert.equal(await opener.decrypt(encrypted, 'text'), 'only for the seller profile')
   const other = new Decrypter()
-  other.addIdentity(buyer.reading.identity)
+  other.addIdentity(buyer.inbox.identity)
   await assert.rejects(other.decrypt(encrypted, 'text'))
 })
 
-test('a reading key needs the 32 private bytes of a main key', async () => {
-  await assert.rejects(readingKey(new Uint8Array(64)), /main private key must be 32 bytes/)
+test('an inbox key needs the 32 private bytes of a main key', async () => {
+  await assert.rejects(inboxKey(new Uint8Array(64)), /main private key must be 32 bytes/)
 })
 
 // Issuer secrets and note numbers
@@ -194,7 +194,7 @@ test('two issuers, two unrelated note numbers; and none of it is a main key', as
   const b = await issuerSecret(seed, issuerB.name)
   assert.notEqual(a.noteNumber, b.noteNumber)
   assert.notEqual(hex.encode(a.secret), hex.encode(b.secret))
-  const all = [issuerA.secret, issuerB.secret, seller.privateKey, buyer.privateKey, seller.reading.privateKey, buyer.reading.privateKey, vectors.seed]
+  const all = [issuerA.secret, issuerB.secret, seller.privateKey, buyer.privateKey, seller.inbox.privateKey, buyer.inbox.privateKey, vectors.seed]
   assert.equal(new Set(all).size, all.length)
 })
 

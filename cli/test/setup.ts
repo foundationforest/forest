@@ -13,7 +13,7 @@ import { randomBytes } from 'node:crypto'
 import { type Server, createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { generateHybridIdentity, identityToRecipient } from 'age-encryption'
-import { mainKey, newSeed, readingKey } from '../../keys/src/index.ts'
+import { mainKey, newSeed, inboxKey } from '../../keys/src/index.ts'
 import { type AccessKey, type Body, b64u, hostsRecord, keyFromPrivate, ownerRecord, permissionsRecord, publish, readAll } from '../../records/src/index.ts'
 import { Host } from '../../records/src/host.ts'
 import { makePrivate } from '../../records/src/private.ts'
@@ -22,8 +22,8 @@ import type { Context } from '../src/forest.ts'
 export const buyer = await mainKey(newSeed(), 'tutoring/buyer')
 export const seller = await mainKey(newSeed(), 'tutoring/seller')
 export const quiet = await mainKey(newSeed(), 'tutoring/seller')
-export const buyerInbox = await readingKey(buyer.privateKey)
-export const sellerInbox = await readingKey(seller.privateKey)
+export const buyerInbox = await inboxKey(buyer.privateKey)
+export const sellerInbox = await inboxKey(seller.privateKey)
 
 export const writeKey = keyFromPrivate(randomBytes(32))
 export const reviewKey = keyFromPrivate(randomBytes(32))
