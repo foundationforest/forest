@@ -6,12 +6,19 @@
 // A folder is always read from hosts, every signature checked (records' readProfile). An index is
 // read only for markets and scores, and what it says is passed on as its own word: its JSON is its
 // own format, with no signatures, so nothing here checks it.
+//
+// The start hosts are reached as they are: whoever runs this copy chose them. Any other host, one a
+// profile's hosts record names, is reached only at a public address; no request follows a
+// redirect; and a folder read, or an inbox pull, stops after MAX_PAGES pages.
 
 import { randomBytes } from 'node:crypto'
+import { type LookupAddress, lookup as dnsLookup } from 'node:dns'
 import { readFileSync } from 'node:fs'
+import { BlockList, isIP } from 'node:net'
 import { identityToRecipient } from 'age-encryption'
 import { Ajv2020 } from 'ajv/dist/2020.js'
 import formats from 'ajv-formats'
+import { Agent, fetch as undiciFetch } from 'undici'
 import {
   type Body,
   type Checked,
@@ -20,6 +27,7 @@ import {
   PATH,
   type PublishOutcome,
   READ_TIMEOUT_MS,
+  type Reach,
   RecordError,
   type View,
   accessRecord,
@@ -74,6 +82,55 @@ export type Context = {
 export const HOSTS_LIST = 'https://raw.githubusercontent.com/foundationforest/services/main/index/lists/hosts.json'
 /** The most of an index's JSON, or of the hosts list, read: a page's worth on the reference host. */
 const MAX_JSON_BYTES = 4 * 1024 * 1024
+/** The most pages one folder read, or one inbox pull, takes, across all its hosts. */
+export const MAX_PAGES = 100
+
+// ---------------------------------------------------------------------------------------------
+// Reaching hosts: the rule services' host reads senders' hosts by (services, host/src/host.ts).
+
+/**
+ * What a host a record names may not be: loopback, private, link-local, carrier-grade NAT,
+ * unspecified, multicast or reserved. An IPv4 address written as IPv6 (`::ffff:127.0.0.1`) is
+ * checked as IPv4.
+ */
+const NOT_PUBLIC = new BlockList()
+for (const [net, prefix] of [['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8], ['169.254.0.0', 16], ['172.16.0.0', 12], ['192.0.0.0', 24], ['192.168.0.0', 16], ['198.18.0.0', 15], ['224.0.0.0', 3]] as const) {
+  NOT_PUBLIC.addSubnet(net, prefix, 'ipv4')
+}
+for (const [net, prefix] of [['::', 128], ['::1', 128], ['fc00::', 7], ['fe80::', 10], ['ff00::', 8]] as const) NOT_PUBLIC.addSubnet(net, prefix, 'ipv6')
+
+/** Whether `address` is an IP address and a public one. */
+export function isPublic(address: string): boolean {
+  const family = isIP(address)
+  return family !== 0 && !NOT_PUBLIC.check(address, family === 6 ? 'ipv6' : 'ipv4')
+}
+
+/** A name's addresses, all of them public, or an error: the connection then goes to one of them, never to an address unchecked. */
+function publicLookup(hostname: string, options: { all?: boolean }, callback: (err: Error | null, address: string | LookupAddress[], family?: number) => void): void {
+  dnsLookup(hostname, { ...options, all: true }, (err, addresses) => {
+    if (err) return callback(err, '')
+    const refused = addresses.find((a) => !isPublic(a.address))
+    if (refused || !addresses.length) return callback(new Error(`${hostname} leads to ${refused?.address ?? 'no address'}, not a public address`), '')
+    if (options.all) return callback(null, addresses)
+    callback(null, addresses[0]!.address, addresses[0]!.family)
+  })
+}
+
+const PUBLIC = new Agent({ connect: { lookup: publicLookup as never } })
+
+/** fetch, to public addresses only: an address written in the URL is checked before anything is sent, and a name's at connection. */
+export const publicFetch = (async (input: string | URL | Request, init?: RequestInit) => {
+  const url = new URL(input instanceof Request ? input.url : input)
+  const host = url.hostname.replace(/^\[|\]$/g, '')
+  if (isIP(host) && !isPublic(host)) throw new TypeError(`${url.origin} is not a public address`)
+  return undiciFetch(url, { ...init, dispatcher: PUBLIC } as never)
+}) as typeof fetch
+
+/** How a call reaches hosts: the start hosts by the plain fetch, every other host by publicFetch, never after a redirect. */
+function reach(start: string[]): Reach {
+  const fetchFor = (input: string | URL | Request) => (start.includes(new URL(input instanceof Request ? input.url : input).origin) ? fetch : publicFetch)
+  return { fetch: (input, init) => fetchFor(input)(input, init), redirect: 'error' }
+}
 
 // ---------------------------------------------------------------------------------------------
 // Finding a folder
@@ -111,8 +168,12 @@ async function readHostsList(url: string): Promise<string[]> {
 export async function folder(ctx: Context, address: string): Promise<View> {
   if (!publicKeyFromAddress(address)) refuse(`${address} is not a profile's address`)
   const hosts = await startHosts(ctx)
+  const how = reach(hosts)
+  let pages = 0
+  const counted: typeof fetch = (input, init) => (++pages > MAX_PAGES ? Promise.reject(new Error(`more than ${MAX_PAGES} pages`)) : how.fetch!(input, init))
   // By POST, so the address is not in a URL a front door logs.
-  const view = await readProfile(hosts, address, Date.now(), { post: true })
+  const view = await readProfile(hosts, address, Date.now(), { post: true, ...how, fetch: counted })
+  if (pages > MAX_PAGES) refuse(`the hosts of ${address} served more than ${MAX_PAGES} pages; this reads no further`)
   if (!view.current.size) {
     refuse(`no records for ${address} on ${hosts.join(', ')}: a profile on a host outside that list is out of reach until the host is added (--host)`)
   }
@@ -155,6 +216,7 @@ async function readKey(text: string, view: View): Promise<{ identity: string; re
 function listed(view: View, key: string, scope: 'write' | 'message' | 'read', path?: string): void {
   const entry = view.access.find((k) => k.key === key)
   if (!entry) refuse(`this ${scope} key is not listed in ${view.profile}'s permissions record; use request`)
+  if (!entry.scope) refuse(`this key is past in ${view.profile}'s permissions record: the owner removed it; use request`)
   if (entry.scope !== scope) refuse(`this key is listed as a ${entry.scope} key, not a ${scope} key; use request`)
   if (path !== undefined && !covers(entry, path)) {
     refuse(`this write key writes only under ${entry.paths ? entry.paths.join(', ') : 'any path but profile and grants'}, not at ${path}; use request`)
@@ -222,7 +284,8 @@ export async function privateRecords(ctx: Context, under?: string) {
  * hosts shown once. `after` holds the cursors a pull returned, by host. With a read key the inbox
  * lists, each message is opened, and marked as a request when it is one: sent by the profile to
  * itself, by its main key or by a message key its permissions record lists, with a body
- * `requestIn` names an action for. Any other request body is a plain message.
+ * `requestIn` names an action for. Any other request body is a plain message. It stops after
+ * MAX_PAGES pages in all; the cursors say where to pull again.
  */
 export async function inbox(ctx: Context, after: { [host: string]: number } = {}, requestIn: (body: Body) => string | null = () => null) {
   const text = ctx.keys.message ?? refuse(NO_KEY)
@@ -244,10 +307,13 @@ export async function inbox(ctx: Context, after: { [host: string]: number } = {}
   const found = new Map<string, { id: string; from: string; time: number; key?: string; request?: string; body?: Body; sealed?: true }>()
   const cursors: { [host: string]: number } = {}
   const failed: Array<{ host: string; why: string }> = []
+  const how = reach(await startHosts(ctx))
+  let pages = 0
   for (const host of view.hosts) {
     try {
       for (let cursor = after[host] ?? 0; ; ) {
-        const page = await pull(host, pullRequest({ key, profile: address }, cursor, Date.now()))
+        if (++pages > MAX_PAGES) throw new Error(`stopped after ${MAX_PAGES} pages; pull again from its cursor`)
+        const page = await pull(host, pullRequest({ key, profile: address }, cursor, Date.now()), how)
         for (const { message: m, id } of page.messages) {
           if (found.has(id)) continue
           let body: Body | undefined
@@ -313,7 +379,7 @@ async function write(ctx: Context, path: string, kind: 'new' | 'existing', body:
   if (kind === 'existing' && !there) refuse(`nothing at ${path}`)
   if (!view.hosts.length) refuse(`${address} has no hosts record to write to`)
   const record = accessRecord(key, address, path, body(before), nextTime(Date.now(), view, path))
-  return { profile: address, path, time: record.time, ...landed(await publish(view.hosts, [record])) }
+  return { profile: address, path, time: record.time, ...landed(await publish(view.hosts, [record], reach(await startHosts(ctx)))) }
 }
 
 /** Where a record or message landed; refused if no host took it. */
@@ -364,7 +430,7 @@ async function sendFrom(ctx: Context, recipient: string | null, body: Body) {
     }
     throw err
   }
-  return { from: address, to, id: messageId(unsignedMessageOf(signed)), ...landed(await deliver(theirs.hosts, [signed])) }
+  return { from: address, to, id: messageId(unsignedMessageOf(signed)), ...landed(await deliver(theirs.hosts, [signed], reach(await startHosts(ctx)))) }
 }
 
 // ---------------------------------------------------------------------------------------------

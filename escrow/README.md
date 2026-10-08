@@ -61,7 +61,7 @@ so does whoever fronts the rent, recorded as the payer (Rent).
   mint with a transfer fee (it would take part of every payment, while every way out pays the
   whole balance), or one that cannot be transferred (it could never leave). A dollar, here, is
   such a token made to track the US dollar, such as Open USD; what its maker can still do is in
-  Limits.
+  the [security checklist](security-checklist.md).
 - **The deposit address** is the escrow's associated token account for the mint, so a payment
   sent "to the escrow's address" from any wallet lands there. Money arrives by a plain transfer,
   from anywhere; a payment in a Token-2022 token must be a `transfer_checked`. Confidential
@@ -137,10 +137,10 @@ price. It never pays and never holds money: it links.
 Parameters come in exactly this order, so two apps write the same link. Every parameter after
 `record` is the offer record's own field, named by its path
 ([offer schema](../records/schemas/offer.json)). The seller is the profile the offer address
-names, paid at its address: the link carries no other key, so a forged link cannot send money
-anywhere else. An app reads the offer at `offer` (from its hosts, or an index), shows the record's
-terms if its id is not `record`, and pays as in A deal, start to end, the buyer opening the
-escrow. The client builds and reads no link.
+names, paid at its address. The only other key the link carries is the arbiter, and the escrow
+pays only the two sides, so a forged link cannot send money anywhere else. An app reads the offer
+at `offer` (from its hosts, or an index), shows the record's terms if its id is not `record`, and
+pays as in A deal, start to end, the buyer opening the escrow. The client builds and reads no link.
 
 ### The receipt
 
@@ -220,8 +220,8 @@ objected escrow is open or funded, and ends by any way out but the timer.
 - **When to offer the objection, and what to say.** The program records nothing about why.
   `canObject` reads the device's clock; the chain's decides, so one sent in the last seconds may
   be refused.
-- **Which dollars to offer,** and what to say about each one's maker (Limits). Know a dollar by
-  its mint's address, never its name.
+- **Which dollars to offer,** and what to say about each one's maker (the security checklist). Know
+  a dollar by its mint's address, never its name.
 - **A hook's accounts.** For a mint whose hook names a program, resolve them before each
   transaction (`hookAccounts`), since the dollar's maker can change the program at any time, and
   pass them to each way out and to the payment in.
@@ -314,8 +314,7 @@ extensions, and one more invoice in it. There is no smoke test: read a receipt w
 
 - **Money leaves a funded escrow only** by a release from the side giving it up, a split both sign,
   the arbiter named at creation, or the timer set at creation once due and while nobody has
-  objected. The one exception is a Token-2022 dollar whose maker holds a permanent delegate
-  (Limits).
+  objected.
 - **Every way out pays the whole balance,** to the parties' standard token accounts and nowhere
   else.
 - **An address holds only its own terms.** A payment to an escrow's address counts only toward a
@@ -333,24 +332,13 @@ extensions, and one more invoice in it. There is no smoke test: read a receipt w
 ## Limits
 
 - **It trusts** the SPL Token and Token-2022 programs, the associated token program, and Anchor
-  1.2; the dollar's maker, for the powers listed below; and the app, to show a person every option
-  they did not agree to before they work or pay.
+  1.2; and the app, to show a person every option they did not agree to before they work or pay.
 - **A deadlock holds the money.** With no arbiter, if neither side gives and they do not agree,
   the money stays in the escrow for good: after an objection, or with no timer at all. Nothing in
   the program can break it. A deal that may need a third view names an arbiter at the start.
 - **Options nobody checked.** The program runs whatever options the creator set. A one-day timer
   to the creator's own side runs if the other side never read the escrow and never objected.
 - **A timer is a default, not a promise.** Either side can turn it off the day before it is due.
-- **What a person accepts by choosing a dollar.** Whoever makes a dollar keeps powers over it that
-  the escrow cannot take away or route around; which a dollar has is on its mint, for anyone to
-  read. Open USD (`ousd2mJsPEckLHcSCDxyKD7NDGARZcfLbDZkKiatYHB`) has every one below.
-  - **Take the money.** A permanent delegate can move or burn any amount from any account, a
-    deposit account included. An escrow left holding less than its amount ends only by
-    `close_unfunded`, what is left going back to the buyer, or once the amount is back.
-  - **A check on every transfer.** A transfer hook can refuse any transfer and ask for accounts
-    the app must pass. It never receives a signature through the escrow.
-  - **Close the dollar.** Once nobody holds any, its maker can close the mint; an escrow in it that
-    never held money then cannot be closed, and its rent stays.
 - **Money sent to an address before its escrow opens, or after a close,** waits there, and counts
   only toward an escrow opened with exactly those terms. Either party can open one, and close it
   if it holds less than the amount, which sends the money back to the buyer.

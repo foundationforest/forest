@@ -5,7 +5,7 @@
 
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
-import { readingKey } from '../../keys/src/index.ts'
+import { inboxKey } from '../../keys/src/index.ts'
 import { canonical } from '../src/canonical.ts'
 import { deliver, publish, pull, readAll, readProfile } from '../src/client.ts'
 import { DEFAULT_MAX_LINE_BYTES, type Host, type HostOptions } from '../src/host.ts'
@@ -14,12 +14,12 @@ import { type SignedMessage, encodeMessage, inboxOf, pullRequest, readMessage, s
 import { makePrivate, message, openMessage, readerCount } from '../src/private.ts'
 import { type AccessKey, type Body, RecordError } from '../src/record.ts'
 import { hostsRecord, ownerRecord, permissionsRecord } from '../src/write.ts'
-import { DAY, MINUTE, T0, accessKey, alice, aliceBuyer, allow, bob, messageKey, profileBody, stranger } from './fixtures.ts'
+import { DAY, MINUTE, T0, accessKey, alice, aliceBuyer, allow, bob, messageKey, pastKey, profileBody, stranger } from './fixtures.ts'
 import { Clock, startHost } from './helpers.ts'
 
-const [aliceInbox, aliceBuyerInbox, bobInbox] = await Promise.all([readingKey(alice.privateKey), readingKey(aliceBuyer.privateKey), readingKey(bob.privateKey)])
+const [aliceInbox, aliceBuyerInbox, bobInbox] = await Promise.all([inboxKey(alice.privateKey), inboxKey(aliceBuyer.privateKey), inboxKey(bob.privateKey)])
 /** Two read keys Alice's app made, for a helper and for her other device. */
-const [helperRead, deviceRead] = await Promise.all([readingKey(new Uint8Array(32).fill(11)), readingKey(new Uint8Array(32).fill(12))])
+const [helperRead, deviceRead] = await Promise.all([inboxKey(new Uint8Array(32).fill(11)), inboxKey(new Uint8Array(32).fill(12))])
 /** An issuer, named by its key as a registry row holds it, x then y in hex: the registry fixtures' issuer A. */
 const ISSUER = '1f94c72d4e5d0f9f6d4ea3b1135b4af2eaec6d14ebe63a96a2f136236887c09611bfedb43d85cb0ead1845d088ba92eb5c96715cde3ccf90607eb007285c2ea6'
 
@@ -410,7 +410,7 @@ describe('message keys', () => {
       assert.deepEqual(await errors(other, [await toBob(viaKey(home.url))]), ['rule_unsupported'], 'a host without readSender')
 
       // Past: the next request reads her permissions record again.
-      await publish([home.url], [permissionsRecord(alice, [allow(messageKey, undefined, 'past')], T0 + 1)])
+      await publish([home.url], [permissionsRecord(alice, [pastKey(messageKey, 'message')], T0 + 1)])
       assert.deepEqual(await errors(inbox, [await toBob(viaKey(home.url), 'after revoking')]), ['permission'])
     } finally {
       await close()
@@ -459,7 +459,7 @@ describe('pulling', () => {
       assert.equal(await refusal(pull(h.url, { ...byKey(messageKey), key: stranger.address })), 'signature')
       assert.equal(await refusal(pull(h.url, { ...byKey(messageKey), profile: bob.address })), 'signature')
       assert.throws(() => pullRequest({ key: alice, profile: alice.address }, 0, T0), code('shape'), 'the main key signs without key')
-      await publish([h.url], [permissionsRecord(alice, [allow(messageKey, undefined, 'past')], T0 + 1)])
+      await publish([h.url], [permissionsRecord(alice, [pastKey(messageKey, 'message')], T0 + 1)])
       assert.equal(await refusal(pull(h.url, byKey(messageKey))), 'permission', 'past')
     } finally {
       await h.close()

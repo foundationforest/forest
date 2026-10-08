@@ -75,10 +75,14 @@ What Forest does:
 What others can still see:
 - On chain, everything: rows, escrows and their receipts, and money moving. Paying between your
   own profiles links them.
+- A ramp knows the profile it paid into.
 - A host sees who wrote to whom and when, though not what, and the network address of whoever
   reads or writes.
 - The face check keeps your face: an issuer that checks faces, or the provider it checks them
   with, holds it so it can refuse the same face a second time.
+- At the start, with few people, a face check and the first profile registered right after it can
+  be matched by their times. With many people this blends in, and you can always wait before
+  registering.
 - An AI model run in the cloud shows its maker what you tell it, and any key written into a call.
 
 What you can add:
@@ -111,12 +115,14 @@ Planned, not built:
 
 ## Limits
 
-- **Devnet only.** Nothing is on mainnet and nothing is shipped. Both programs can still be
-  upgraded by the devnet deploy key.
+- **Devnet only.** Nothing is on mainnet and nothing is shipped. Until mainnet the standard is a
+  draft and can change; from mainnet, a change gets a new version number, and readers keep reading
+  the old one. Both programs can still be upgraded by the devnet deploy key.
 - **Not audited.** Each program keeps a security checklist next to it; no paid review has been
   done.
 - **No recovery.** Lose the seed, and every profile and stamp it gives is gone. Nobody else has it
-  ([keys](keys/README.md)).
+  ([keys](keys/README.md)). Losing the words also means your face cannot get a note again from the
+  same issuer.
 - **A host can withhold.** It cannot forge or change a record, but it can stop serving one, or a
   message or a blob. The app's copies and the profile's other hosts cover for it.
 - **Not here:** recovery through an issuer, and an arbiter by default.
@@ -134,8 +140,10 @@ A sealed program cannot learn new kinds of evidence, and an index can. So the pr
 interpret evidence; indexes weigh it.
 
 **Can Forest take my money or my profile?**
-No. Forest never holds your seed or your main keys, the escrow has no admin, and Forest arbitrates
-nothing: an arbiter is a key both sides saw at the start.
+Not through the standard. Forest never holds your seed or your main keys, the escrow has no admin,
+and Forest arbitrates nothing: an arbiter is a key both sides saw at the start. The app holding your
+seed is the one thing you trust, Forest's own app included. A web app's code comes from its server
+on each visit; an installed app's does not.
 
 **Why is all of this open?**
 A piece that only works if everyone shares it is a public good, so the shared pieces are open and

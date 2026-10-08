@@ -8,7 +8,7 @@ import { describe, test } from 'node:test'
 import { Ajv2020 } from 'ajv/dist/2020.js'
 import formats from 'ajv-formats'
 import { checkValue } from '../src/canonical.ts'
-import { readingKey } from '../../keys/src/index.ts'
+import { inboxKey } from '../../keys/src/index.ts'
 import { inboxOf } from '../src/message.ts'
 import { checkRecord, decodeRecord, encodeRecord } from '../src/record.ts'
 import { ownerRecord } from '../src/write.ts'
@@ -148,13 +148,13 @@ describe('schemas', () => {
   })
 
   test('a profile’s inboxKey is its inbox key, an age post-quantum hybrid recipient', async () => {
-    assert.ok(fits('profile', edit('profile', ['inboxKey'], (await readingKey(alice.privateKey)).recipient)))
+    assert.ok(fits('profile', edit('profile', ['inboxKey'], (await inboxKey(alice.privateKey)).recipient)))
     assert.ok(fits('profile', edit('profile', ['inboxKey'], undefined)), 'optional')
     for (const bad of ['age1pq1' + 'q'.repeat(60), alice.address, 'AGE1' + 'Q'.repeat(58), 'age1' + 'b'.repeat(58)]) assert.ok(!fits('profile', edit('profile', ['inboxKey'], bad)), bad)
   })
 
   test('a profile’s inbox: open to anyone or to an issuer’s rows, once, a size, readers; nothing else', async () => {
-    const reader = (await readingKey(new Uint8Array(32).fill(5))).recipient
+    const reader = (await inboxKey(new Uint8Array(32).fill(5))).recipient
     const issuer = '1f94c72d4e5d0f9f6d4ea3b1135b4af2eaec6d14ebe63a96a2f136236887c09611bfedb43d85cb0ead1845d088ba92eb5c96715cde3ccf90607eb007285c2ea6'
     for (const inbox of [{ senders: 'anyone' }, { senders: { issuer } }, { senders: 'anyone', once: true, maxBytes: 4000 }, { senders: 'anyone', readers: [reader] }, { senders: 'anyone', readers: [] }]) {
       assert.ok(fits('profile', edit('profile', ['inbox'], inbox)), JSON.stringify(inbox))

@@ -1,4 +1,4 @@
-// A profile's two keys: the main key, one per label, mixed from the seed; and its reading key,
+// A profile's two keys: the main key, one per label, mixed from the seed; and its inbox key,
 // mixed from the main key. See README.md, "The recipe".
 
 import { ed25519 } from '@noble/curves/ed25519.js'
@@ -23,7 +23,7 @@ export type MainKey = {
  * The key that opens private records encrypted to a profile: age's post-quantum hybrid identity,
  * ML-KEM-768 with X25519 (mlkem768x25519).
  */
-export type ReadingKey = {
+export type InboxKey = {
   /** age's hybrid identity, `AGE-SECRET-KEY-PQ-1…`: it opens what is encrypted to this profile. */
   identity: string
   /** What others encrypt to, `age1pq1…`. The profile's address does not give it. */
@@ -43,11 +43,11 @@ export async function mainKey(seed: Uint8Array, label: string): Promise<MainKey>
 }
 
 /**
- * The profile's reading key, from its main key's 32 private bytes. The 32 mixed bytes are used
+ * The profile's inbox key, from its main key's 32 private bytes. The 32 mixed bytes are used
  * unchanged as age's hybrid identity (its seed, which age expands into the ML-KEM-768 and X25519
  * keys); age's own library computes the recipient.
  */
-export async function readingKey(mainPrivateKey: Uint8Array): Promise<ReadingKey> {
+export async function inboxKey(mainPrivateKey: Uint8Array): Promise<InboxKey> {
   assertBytes('main private key', mainPrivateKey, 32)
   const bytes = await hkdf(mainPrivateKey, INFO.read)
   const identity = bech32.encodeFromBytes('AGE-SECRET-KEY-PQ-', bytes).toUpperCase()

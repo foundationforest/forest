@@ -7,7 +7,7 @@ import { randomBytes } from 'node:crypto'
 import { describe, test } from 'node:test'
 import { publish, readAll, readProfile } from '../src/client.ts'
 import { DAY, DEFAULT_MAX_LINE_BYTES } from '../src/host.ts'
-import { readingKey } from '../../keys/src/index.ts'
+import { inboxKey } from '../../keys/src/index.ts'
 import { b64u } from '../src/bytes.ts'
 import { GRANTS_PATH, type Grant, type Note, checkGrant, checkNote } from '../src/grant.ts'
 import { keyFromPrivate } from '../src/keys.ts'
@@ -18,15 +18,15 @@ import { type PermissionsBody, RecordError, decodeRecord, encodeRecord } from '.
 import { KEYS, MINUTE, T0, accessKey, alice, aliceBuyer, allow, bob, messageKey, profileBody } from './fixtures.ts'
 import { startHost } from './helpers.ts'
 
-const [aliceInbox, aliceBuyerInbox, bobInbox] = await Promise.all([readingKey(alice.privateKey), readingKey(aliceBuyer.privateKey), readingKey(bob.privateKey)])
-const strangerInbox = await readingKey(new Uint8Array(32).fill(3))
+const [aliceInbox, aliceBuyerInbox, bobInbox] = await Promise.all([inboxKey(alice.privateKey), inboxKey(aliceBuyer.privateKey), inboxKey(bob.privateKey)])
+const strangerInbox = await inboxKey(new Uint8Array(32).fill(3))
 /** A read key Alice's app made for Bob. */
-const readKeyForBob = await readingKey(new Uint8Array(32).fill(9))
+const readKeyForBob = await inboxKey(new Uint8Array(32).fill(9))
 
 describe('keys an envelope is sealed to', () => {
   test("keys/'s inbox key, one per profile: age's post-quantum hybrid, the pinned one", async () => {
-    assert.equal(aliceInbox.identity, KEYS.mainKeys[0].reading.identity)
-    assert.equal(aliceInbox.recipient, KEYS.mainKeys[0].reading.recipient)
+    assert.equal(aliceInbox.identity, KEYS.mainKeys[0].inbox.identity)
+    assert.equal(aliceInbox.recipient, KEYS.mainKeys[0].inbox.recipient)
     assert.notEqual(aliceInbox.recipient, aliceBuyerInbox.recipient)
     assert.match(aliceInbox.recipient, /^age1pq1[02-9ac-hj-np-z]{1952}$/)
     assert.match(aliceInbox.identity, /^AGE-SECRET-KEY-PQ-1[02-9AC-HJ-NP-Z]+$/)
@@ -47,7 +47,7 @@ describe('private records', () => {
     const host = await startHost({ now: () => T0 })
     try {
       // Alice's app makes a read key for Bob and hands him its private half: Bob needs no profile and no key of his own.
-      const forBob = await readingKey(randomBytes(32))
+      const forBob = await inboxKey(randomBytes(32))
       const secret = { text: 'My phone is +00 555 0100; call after six.', createdAt: '2026-10-02T12:00:00Z' }
       await publish([host.url], [hostsRecord(alice, [host.url], T0), ownerRecord(alice, 'note/1', await makePrivate(secret, [forBob.recipient, aliceInbox.recipient]), T0)])
 
@@ -63,7 +63,7 @@ describe('private records', () => {
       await assert.rejects(openPrivate(onHost, aliceBuyerInbox.identity))
       await assert.rejects(openPrivate(onHost, strangerInbox.identity))
       // A made key that leaks opens only what the owner who made it sealed to it.
-      const fromOther = await readingKey(randomBytes(32))
+      const fromOther = await inboxKey(randomBytes(32))
       await assert.rejects(openPrivate(await makePrivate(secret, [fromOther.recipient]), forBob.identity))
       // What anyone can see: that it exists, its size, and how many keys it was sealed to.
       assert.equal(readerCount(onHost as { private: string }), 2)
@@ -77,7 +77,7 @@ describe('private records', () => {
     try {
       await publish([host.url], [permissionsRecord(alice, [allow(accessKey, ['note'])], T0)])
       // The access key's app holds no read key's private half: it seals to the public halves it was given.
-      const forBob = await readingKey(randomBytes(32))
+      const forBob = await inboxKey(randomBytes(32))
       const note = { text: 'The keys are under the mat.', createdAt: '2026-10-02T12:01:00Z' }
       const readers = [aliceInbox.recipient, forBob.recipient]
       const inside = accessRecord(accessKey, alice.address, 'note/door', await makePrivate(note, readers), T0 + MINUTE)
@@ -126,7 +126,7 @@ describe('private records', () => {
   })
 
   test('each key adds about 2 KB, so a record the reference host takes, 65,536 bytes, is made for about 30', async () => {
-    const readers = await Promise.all(Array.from({ length: 32 }, (_, i) => readingKey(new Uint8Array(32).fill(i + 1))))
+    const readers = await Promise.all(Array.from({ length: 32 }, (_, i) => inboxKey(new Uint8Array(32).fill(i + 1))))
     const size = async (n: number) => canonical({ ...ownerRecord(alice, 'note/many', null, T0), body: await makePrivate({ text: 'x' }, readers.slice(0, n).map((r) => r.recipient)) }).length
     const [one, two] = [await size(1), await size(2)]
     assert.ok(two - one > 2000 && two - one < 2200, `${two - one} bytes a reader`)
@@ -164,7 +164,7 @@ describe('grants', () => {
   })
 
   test('a grant reaches its holder as a message body { grant }, sealed to its inbox key alone, never to its inbox’s readers', async () => {
-    const helper = await readingKey(new Uint8Array(32).fill(13)) // a read key Bob listed as a reader of his inbox
+    const helper = await inboxKey(new Uint8Array(32).fill(13)) // a read key Bob listed as a reader of his inbox
     const withReader = { ...bobCard, inbox: { senders: 'anyone', readers: [helper.recipient] } }
     const m = await message(alice, bob.address, { grant: write }, T0, withReader)
     assert.equal(readerCount(m.body), 1)

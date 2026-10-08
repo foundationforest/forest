@@ -7,7 +7,7 @@ import { canonical, parseCanonical } from '../src/canonical.ts'
 import { keyFromPrivate, publicKeyFromAddress } from '../src/keys.ts'
 import { RecordError, checkRecord, decodeRecord, encodeRecord, recordId, signRecord, unsignedOf } from '../src/record.ts'
 import { accessRecord, ownerRecord, permissionsRecord } from '../src/write.ts'
-import { KEYS, T0, accessKey, alice, aliceBuyer, allow, messageKey, offerBody, profileBody, sizedRecord, stranger } from './fixtures.ts'
+import { KEYS, T0, accessKey, alice, aliceBuyer, allow, messageKey, offerBody, pastKey, profileBody, sizedRecord, stranger } from './fixtures.ts'
 
 describe('keys', () => {
   test("main keys are keys/'s: its pinned profiles sign here, and a name is the key in base58", () => {
@@ -118,7 +118,7 @@ describe('records', () => {
     assert.ok(checkRecord(ownerRecord(alice, 'hosts', { urls: ['https://a.example', 'http://127.0.0.1:8080'] }, T0)))
 
     const perms = (access: unknown[]) => () => permissionsRecord(alice, access as never, T0)
-    const readKey = KEYS.mainKeys[1].reading.recipient as string // any age1pq1 recipient: a read key's public half
+    const readKey = KEYS.mainKeys[1].inbox.recipient as string // any age1pq1 recipient: a read key's public half
     assert.throws(perms([{ ...allow(accessKey, ['offer']), pay: 5 }]), /unknown access field pay/)
     assert.throws(perms([{ ...allow(accessKey, ['offer']), until: T0 }]), /unknown access field until/, 'no dates')
     assert.throws(perms([allow(accessKey, ['hosts'])]), /content path/)
@@ -132,12 +132,16 @@ describe('records', () => {
     }
     assert.throws(perms([{ key: accessKey.address, scope: 'read' }]), /read key is an age/, 'a read key is an age recipient')
     assert.throws(perms([{ key: readKey, scope: 'write' }]), /usable/, 'every other key is an address')
-    assert.throws(perms([{ key: readKey, scope: 'past' }]), /usable/, 'only write and message keys are past')
+    assert.throws(perms([{ key: accessKey.address, scope: 'past' }]), /scope is one of/, 'a past key has was, not a scope')
+    for (const was of ['read', 'pay', 'past']) assert.throws(perms([{ key: accessKey.address, was }]), /a past key has was, write or message/, `was ${was}`)
+    assert.throws(perms([{ key: accessKey.address, scope: 'write', was: 'write' }]), /a past key has was/, 'one or the other')
+    assert.throws(perms([{ key: readKey, was: 'write' }]), /usable/, 'only write and message keys are past')
+    assert.throws(perms([{ key: accessKey.address, was: 'message', paths: ['offer'] }]), /a message key has no paths/, 'a past message key had none')
     assert.ok(checkRecord(permissionsRecord(alice, [{ key: readKey, scope: 'read', paths: ['note'] }], T0)), 'a read key may list paths')
-    assert.ok(checkRecord(permissionsRecord(alice, [allow(accessKey), allow(messageKey, ['offer'], 'past'), allow(stranger, undefined, 'past')], T0)), 'paths are optional')
-    assert.throws(perms([allow(accessKey), allow(accessKey, ['offer'], 'past')]), /listed twice/, 'one key, one entry')
+    assert.ok(checkRecord(permissionsRecord(alice, [allow(accessKey), pastKey(messageKey, 'write', ['offer']), pastKey(stranger, 'message')], T0)), 'paths are optional')
+    assert.throws(perms([allow(accessKey), pastKey(accessKey, 'write', ['offer'])]), /listed twice/, 'one key, one entry')
     assert.throws(perms([{ key: readKey, scope: 'read' }, { key: readKey, scope: 'read', paths: ['note'] }]), /listed twice/)
-    const many = Array.from({ length: 100 }, (_, i) => ({ key: keyFromPrivate(new Uint8Array(32).fill(i + 1)).address, scope: 'past' as const }))
+    const many = Array.from({ length: 100 }, (_, i) => ({ key: keyFromPrivate(new Uint8Array(32).fill(i + 1)).address, was: 'write' as const }))
     assert.ok(checkRecord(permissionsRecord(alice, many, T0)), 'no cap on how many keys it lists')
     assert.throws(() => ownerRecord(alice, 'permissions', { access: [], more: 1 }, T0), /unknown permissions field/)
     assert.ok(checkRecord(permissionsRecord(alice, [allow(accessKey)], T0, 'YWdlLWVuY3J5cHRpb24')), 'notes: an envelope in base64url')

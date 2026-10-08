@@ -5,12 +5,13 @@ import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { connect } from 'node:net'
 import { after, before, describe, test } from 'node:test'
-import { MAX_LINE_READ, publish, readAll, readPage, readProfile } from '../src/client.ts'
+import { MAX_LINE_READ, deliver, publish, pull, readAll, readPage, readProfile } from '../src/client.ts'
+import { pullRequest, signMessage } from '../src/message.ts'
 import { DAY, DEFAULT_MAX_LINE_BYTES, DEFAULT_MAX_PAGE_BYTES, type Host } from '../src/host.ts'
 import { type AccessKey, type SignedRecord, checkRecord, encodeRecord } from '../src/record.ts'
 import { liveContent } from '../src/view.ts'
 import { accessRecord, hostsRecord, nextTime, ownerRecord, permissionsRecord } from '../src/write.ts'
-import { MINUTE, T0, accessKey, alice, aliceBuyer, allow, bob, offerBody, profileBody, reviewBody, sizedRecord, stranger } from './fixtures.ts'
+import { MINUTE, T0, accessKey, alice, aliceBuyer, allow, bob, offerBody, pastKey, profileBody, reviewBody, sizedRecord, stranger } from './fixtures.ts'
 import { Clock, startHost } from './helpers.ts'
 
 const errors = async (host: Host, records: SignedRecord[]) => (await publish([host.url], records))[0]!.results.map((r) => r.error ?? 'ok')
@@ -221,7 +222,7 @@ describe('access keys, checked as they arrive', () => {
     try {
       await publish([h.url], [permissionsRecord(alice, [allow(accessKey, ['offer'])], T0), accessRecord(accessKey, alice.address, 'offer/w', offerBody('9'), T0)])
       clock.advance(MINUTE)
-      await publish([h.url], [permissionsRecord(alice, [allow(accessKey, ['offer'], 'past')], clock.t)])
+      await publish([h.url], [permissionsRecord(alice, [pastKey(accessKey, 'write', ['offer'])], clock.t)])
       assert.equal((await readProfile([h.url], alice.address, clock.t + 30 * DAY)).current.get('offer/w')!.record.by, accessKey.address, 'what it wrote stays')
       const refused = (await publish([h.url], [accessRecord(accessKey, alice.address, 'offer/again', offerBody('1'), T0 + 1)]))[0]!.results[0]!
       assert.deepEqual([refused.error, refused.message], ['permission', 'this access key is past'], 'nor anything backdated')
@@ -419,7 +420,7 @@ describe('limits: each host’s own size, batch and page; each reader’s own si
       // key is never larger: a past key's entry is shorter than a write key's, a deleted one gone.
       const sized = (access: AccessKey[]) => Buffer.byteLength(encodeRecord(permissionsRecord(alice, access, T0)))
       const listed = sized([allow(accessKey, ['offer']), allow(stranger, undefined, 'message')])
-      assert.ok(sized([allow(accessKey, ['offer'], 'past'), allow(stranger, undefined, 'past')]) < listed, 'each made past')
+      assert.ok(sized([pastKey(accessKey, 'write', ['offer']), pastKey(stranger, 'message')]) < listed, 'each made past')
       assert.ok(sized([allow(accessKey, ['offer'])]) < listed, 'one deleted')
     } finally {
       await h.close()
@@ -480,6 +481,35 @@ describe('limits: each host’s own size, batch and page; each reader’s own si
       await readProfile([h.url], alice.address, T0, { fetch: counting })
       assert.deepEqual(asked.map((u) => new URL(u).pathname), ['/v1/records', '/v1/records/read', '/v1/records/read', '/v1/records', '/v1/records'])
       await assert.rejects(readPage(h.url, { fetch: async () => Promise.reject(new Error('a private address')) }), /a private address/)
+    } finally {
+      away.closeAllConnections()
+      await new Promise((resolve) => away.close(resolve))
+      await h.close()
+    }
+  })
+
+  test('publishing, delivering and pulling go through the fetch given too, and may refuse redirects', async () => {
+    const h = await startHost({ now: () => T0 })
+    const away = createServer((req, res) => res.writeHead(307, { location: `${h.url}${req.url}` }).end())
+    await new Promise<void>((resolve) => away.listen(0, '127.0.0.1', resolve))
+    const url = `http://127.0.0.1:${(away.address() as { port: number }).port}`
+    const card = ownerRecord(alice, 'profile', profileBody('A'), T0)
+    const note = signMessage(bob, alice.address, { private: 'YWdl' }, T0)
+    try {
+      const asked: string[] = []
+      const counting: typeof fetch = (input, init) => {
+        asked.push(String(input))
+        return fetch(input, init)
+      }
+      await publish([h.url], [card], { fetch: counting })
+      await deliver([h.url], [note], { fetch: counting })
+      await pull(h.url, pullRequest(alice, 0, T0), { fetch: counting })
+      assert.deepEqual(asked.map((u) => new URL(u).pathname), ['/v1/records', '/v1/inbox', '/v1/inbox/pull'])
+
+      assert.equal((await publish([url], [card], { redirect: 'error' }))[0]!.status, 0, 'a host that redirects takes nothing')
+      assert.equal((await deliver([url], [note], { redirect: 'error' }))[0]!.status, 0)
+      await assert.rejects(pull(url, pullRequest(alice, 0, T0), { redirect: 'error' }))
+      assert.equal((await publish([url], [card]))[0]!.status, 200, 'followed unless told')
     } finally {
       away.closeAllConnections()
       await new Promise((resolve) => away.close(resolve))

@@ -6,7 +6,7 @@ import { describe, test } from 'node:test'
 import { type Checked, type SignedRecord, checkRecord } from '../src/record.ts'
 import { liveContent, viewProfile } from '../src/view.ts'
 import { accessRecord, hostsRecord, nextTime, ownerRecord, permissionsRecord } from '../src/write.ts'
-import { DAY, MINUTE, T0, accessKey, alice, allow, bob, offerBody, profileBody, stranger } from './fixtures.ts'
+import { DAY, MINUTE, T0, accessKey, alice, allow, bob, offerBody, pastKey, profileBody, stranger } from './fixtures.ts'
 
 const checked = (...records: SignedRecord[]): Checked[] => records.map((r) => checkRecord(r))
 const view = (records: SignedRecord[], now = T0 + MINUTE) => viewProfile(alice.address, checked(...records), now)
@@ -130,12 +130,20 @@ describe('access keys and permissions', () => {
     assert.equal(v.current.get('offer/physics')!.id, idOf(fix))
   })
 
-  test('removing a write key is setting its scope to past: it is still listed, so what it wrote still counts, whatever the date', () => {
-    const past = permissionsRecord(alice, [allow(accessKey, ['offer'], 'past')], T0 + 10 * MINUTE)
+  test('removing a write key is replacing its scope with was: it is still listed, so what it wrote still counts, whatever the date', () => {
+    const past = permissionsRecord(alice, [pastKey(accessKey, 'write', ['offer'])], T0 + 10 * MINUTE)
     const v = view([permissions, written, past], T0 + 365 * DAY)
     assert.equal(v.current.get('offer/physics')!.id, idOf(written), 'a year later')
     const outside = accessRecord(accessKey, alice.address, 'review/1', { subject: bob.address }, T0 + MINUTE)
     assert.equal(view([past, outside]).ignored.get(idOf(outside)), 'not-allowed', 'a past key keeps its paths')
+  })
+
+  test('a past message key never counts for writing, at any path, though it lists no paths', () => {
+    const past = permissionsRecord(alice, [pastKey(accessKey, 'message')], T0)
+    for (const path of ['offer/physics', 'review/1', 'note']) {
+      const sneaked = accessRecord(accessKey, alice.address, path, offerBody('30'), T0 + MINUTE)
+      assert.equal(view([past, sneaked]).ignored.get(idOf(sneaked)), 'not-allowed', path)
+    }
   })
 
   test('deleting a key’s entry, or the permissions record, disowns what it wrote: it stops counting', () => {

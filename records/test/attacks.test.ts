@@ -11,12 +11,12 @@ import { getCompiledTransactionMessageDecoder } from '@solana/transaction-messag
 import { b64u, base58, concat, hex, utf8 } from '../src/bytes.ts'
 import { deliver, publish, readAll, readProfile } from '../src/client.ts'
 import type { Host } from '../src/host.ts'
-import { readingKey } from '../../keys/src/index.ts'
+import { inboxKey } from '../../keys/src/index.ts'
 import { message } from '../src/private.ts'
 import { checkRecord, encodeRecord, signingInput, unsignedOf, verifySignature } from '../src/record.ts'
 import { viewProfile } from '../src/view.ts'
 import { accessRecord, hostsRecord, ownerRecord, permissionsRecord } from '../src/write.ts'
-import { DAY, MINUTE, SEED, T0, accessKey, alice, aliceBuyer, allow, bob, messageKey, offerBody, profileBody } from './fixtures.ts'
+import { DAY, MINUTE, SEED, T0, accessKey, alice, aliceBuyer, allow, bob, messageKey, offerBody, pastKey, profileBody } from './fixtures.ts'
 import { startHost } from './helpers.ts'
 
 const L = 2n ** 252n + 27742317777372353535851937790883648493n
@@ -151,7 +151,7 @@ describe('a stolen access key', () => {
     // An honest host refuses it (host.test.ts). A reader counts every record a past key wrote,
     // since it is still listed and no date is checked, so whoever holds a host that takes one can
     // show it. The owner's record wins at that path, so the owner deletes it there.
-    const past = permissionsRecord(alice, [allow(accessKey, ['offer'], 'past')], T0 + MINUTE)
+    const past = permissionsRecord(alice, [pastKey(accessKey, 'write', ['offer'])], T0 + MINUTE)
     const sneaked = accessRecord(accessKey, alice.address, 'offer/new', offerBody('1'), T0 + 2 * MINUTE)
     const later = T0 + 365 * DAY
     assert.equal(viewProfile(alice.address, [past, sneaked].map((r) => checkRecord(r)), later).current.has('offer/new'), true)
@@ -168,9 +168,9 @@ describe('a stolen message key', () => {
     const inbox = await startHost({ now: () => T0, readSender })
     try {
       const listed = permissionsRecord(alice, [allow(messageKey, undefined, 'message')], T0)
-      await publish([home.url], [hostsRecord(alice, [home.url], T0), listed, permissionsRecord(alice, [allow(messageKey, undefined, 'past')], T0 + 1)])
+      await publish([home.url], [hostsRecord(alice, [home.url], T0), listed, permissionsRecord(alice, [pastKey(messageKey, 'message')], T0 + 1)])
       await publish([thief.url], [hostsRecord(alice, [home.url], T0), listed])
-      const bobInbox = await readingKey(bob.privateKey)
+      const bobInbox = await inboxKey(bob.privateKey)
       const bobCard = { ...profileBody('Bob'), inboxKey: bobInbox.recipient, inbox: { senders: 'anyone' } }
       await publish([inbox.url], [ownerRecord(bob, 'profile', bobCard, T0)])
       const send = (host: string) => message({ key: messageKey, from: alice.address, host }, bob.address, { text: 'Send me the money.' }, T0 + 2, bobCard)
@@ -206,7 +206,7 @@ describe('over real hosts', () => {
   })
 
   test('a host holds no key: its whole database holds no secret of the person', async () => {
-    const inbox = await readingKey(alice.privateKey)
+    const inbox = await inboxKey(alice.privateKey)
     const disk = [...h1.dump(), ...h2.dump()].join('\n')
     for (const secret of [alice.privateKey, SEED]) {
       for (const form of [hex.encode(secret), b64u.encode(secret), Buffer.from(secret).toString('base64'), base58.encode(secret)]) assert.ok(!disk.includes(form))
@@ -231,7 +231,7 @@ describe('over real hosts', () => {
 
 describe('linking two profiles of one person', () => {
   test('addresses, inbox keys and access keys: nothing public repeats across the two profiles', async () => {
-    const [inbox0, inbox1] = await Promise.all([readingKey(alice.privateKey), readingKey(aliceBuyer.privateKey)])
+    const [inbox0, inbox1] = await Promise.all([inboxKey(alice.privateKey), inboxKey(aliceBuyer.privateKey)])
     const accessFor = (n: number) => ({ key: base58.encode(ed25519.getPublicKey(sha512(utf8(`access ${n}`)).subarray(0, 32))), scope: 'write' as const, paths: ['offer'] })
     const one = [
       hostsRecord(alice, ['https://big-host.example'], T0),
