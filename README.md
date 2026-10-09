@@ -1,4 +1,4 @@
-# forest
+# standard
 
 Forest is a set of open standards for trading with strangers, and this repo holds them. Your keys,
 your records and your money need no one in the middle: one seed of 24 words gives you a profile for
@@ -152,7 +152,7 @@ kept by the foundation. Apps, and the ramps in and out, are products.
 **Why is the app in its own repo?**
 An app is the person's choice, one of many, so the standard must not look like one app. The app
 that holds the seed is open source so anyone can check that nothing leaks, and a repo is what
-people check. It pins a version of forest, the way services does.
+people check. It pins a version of this repo, the way services does.
 
 **What is it built from?**
 Existing pieces, used unchanged: Ed25519, RFC 8785 canonical JSON, age, Semaphore's lean Merkle

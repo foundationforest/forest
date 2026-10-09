@@ -1,4 +1,4 @@
-This repo is `forest`: the standards every Forest app shares (keys, records, the registry, the
+This repo is `standard`: the standards every Forest app shares (keys, records, the registry, the
 escrow). Read `README.md` and the README of the directory you work in before any task.
 
 ## Words

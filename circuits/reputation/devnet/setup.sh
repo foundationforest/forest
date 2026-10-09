@@ -64,7 +64,7 @@ const record = {
   phase1: { what: "PSE's Perpetual Powers of Tau, up to 2^16 constraints", url: e.PTAU_URL, sha256: e.PTAU_SHA256 },
   phase2: { contributions: 1, contributionHash: e.CONTRIBUTION },
   r1cs: pin('build/reputation.r1cs'),
-  release: { tag: e.TAG, baseUrl: `https://github.com/foundationforest/forest/releases/download/${e.TAG}/` },
+  release: { tag: e.TAG, baseUrl: `https://github.com/foundationforest/standard/releases/download/${e.TAG}/` },
   files: { 'reputation.zkey': pin('devnet/reputation.zkey'), 'reputation.wasm': pin('devnet/reputation.wasm') },
   committed: { 'verification-key.json': pin('devnet/verification-key.json') },
 }
