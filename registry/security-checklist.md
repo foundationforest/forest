@@ -1,10 +1,11 @@
 # Security checklist: the Forest registry
 
-Written with the safe-solana-builder skill (`.claude/skills/safe-solana-builder/`) for the registry
-of rows, one per stamp: every rule in its `references/shared-base.md` (sections 1 to 31),
-`references/anchor.md` and `references/litesvm.md`, how this program applies it or why it does not
-apply, and every limit known today. The program is `program/src/`; the tests named here are in
-`program/tests-litesvm/tests/`. Nothing here is in production, and no paid review has happened.
+Written with the safe-solana-builder skill (kept in this repo while the programs were written, and
+in its git history since) for the registry of rows, one per stamp: every rule in its
+`references/shared-base.md` (sections 1 to 31), `references/anchor.md` and `references/litesvm.md`,
+how this program applies it or why it does not apply, and every limit known today. The program is
+`program/src/`; the tests named here are in `program/tests-litesvm/tests/`. Nothing here is in
+production, and no paid review has happened.
 
 | | |
 |---|---|
