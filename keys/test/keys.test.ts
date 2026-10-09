@@ -21,6 +21,7 @@ import {
   mainKey,
   newSeed,
   inboxKey,
+  vaultKey,
 } from '../src/index.ts'
 
 const vectors = JSON.parse(readFileSync(new URL('./vectors.json', import.meta.url), 'utf8'))
@@ -38,13 +39,15 @@ test('the info strings are exactly the standard', () => {
   assert.equal(INFO.profile('tutoring/seller'), 'forest/v1/profile/tutoring/seller')
   assert.equal(INFO.read, 'forest/v1/read')
   assert.equal(INFO.issuer('issuer-a.example'), 'forest/v1/issuer/issuer-a.example')
+  assert.equal(INFO.vault, 'forest/v1/vault')
+  assert.equal(INFO.vault, vectors.vault.info)
   for (const v of [...vectors.mainKeys.map((p: { label: string; info: string }) => [INFO.profile(p.label), p.info]), ...vectors.issuers.map((i: { name: string; info: string }) => [INFO.issuer(i.name), i.info])]) {
     assert.equal(v[0], v[1])
   }
 })
 
 test('HKDF agrees with an independent implementation', async () => {
-  for (const info of [INFO.profile('tutoring/seller'), INFO.profile(''), INFO.read, INFO.issuer(issuerA.name)]) {
+  for (const info of [INFO.profile('tutoring/seller'), INFO.profile(''), INFO.read, INFO.issuer(issuerA.name), INFO.vault]) {
     assert.equal(hex.encode(await hkdf(seed, info)), hex.encode(mix(seed, info)), info)
   }
 })
@@ -156,6 +159,40 @@ test('age encrypts to the inbox key, and only that profile opens it', async () =
 
 test('an inbox key needs the 32 private bytes of a main key', async () => {
   await assert.rejects(inboxKey(new Uint8Array(64)), /main private key must be 32 bytes/)
+})
+
+// The vault key
+
+test('the seed gives the pinned vault key, and gives it again; its inbox key is any main key\'s', async () => {
+  for (let round = 0; round < 2; round++) {
+    const key = await vaultKey(seed)
+    assert.equal(hex.encode(key.privateKey), vectors.vault.privateKey)
+    assert.equal(key.address, vectors.vault.address)
+    assert.equal('label' in key, false, 'it belongs to no label')
+    const { privateKey, ...inbox } = vectors.vault.inbox
+    assert.deepEqual(await inboxKey(key.privateKey), inbox)
+    assert.equal(hex.encode(await hkdf(key.privateKey, INFO.read)), privateKey)
+  }
+})
+
+test('the vault key, recomputed without the library: HKDF, ed25519, base58, and its inbox key', () => {
+  const privateKey = mix(seed, 'forest/v1/vault')
+  assert.equal(hex.encode(privateKey), vectors.vault.privateKey)
+  assert.equal(base58.encode(ed25519.getPublicKey(privateKey)), vectors.vault.address)
+  const inbox = mix(privateKey, INFO.read)
+  assert.equal(hex.encode(inbox), vectors.vault.inbox.privateKey)
+  assert.equal(bech32.encodeFromBytes('AGE-SECRET-KEY-PQ-', inbox).toUpperCase(), vectors.vault.inbox.identity)
+  assert.equal(bech32.encode('age1pq', bech32.toWords(MLKEM768X25519.getPublicKey(inbox)), false), vectors.vault.inbox.recipient)
+})
+
+test('the vault key is no profile\'s, and another seed gives another', async () => {
+  // A profile's text always starts forest/v1/profile/, so no label can spell the vault's.
+  for (const label of ['', 'vault', '../vault', 'tutoring/seller']) assert.notEqual(INFO.profile(label), INFO.vault)
+  const vault = await vaultKey(seed)
+  for (const p of vectors.mainKeys) assert.notEqual(vault.address, p.address)
+  assert.notEqual(vault.address, (await mainKey(seed, 'vault')).address)
+  assert.notEqual((await vaultKey(otherSeed)).address, vault.address)
+  await assert.rejects(vaultKey(new Uint8Array(31)), /seed must be 32 bytes/)
 })
 
 // Issuer secrets and note numbers
