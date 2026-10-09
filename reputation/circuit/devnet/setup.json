@@ -1,12 +1,12 @@
 {
   "note": "The reputation circuit's devnet setup. One party made it, so that party could make false proofs: devnet only. A public setup ceremony comes before mainnet. Made by devnet/setup.sh.",
   "parties": 1,
-  "made": "2026-10-04",
+  "made": "2026-10-09",
   "circuit": {
     "file": "reputation.circom",
     "slots": 8,
     "depth": 20,
-    "constraints": 44493
+    "constraints": 44732
   },
   "circom": {
     "version": "2.2.3",
@@ -25,30 +25,30 @@
   },
   "phase2": {
     "contributions": 1,
-    "contributionHash": "856d112c09411cbae402f7d05a4a6a6b034ee4d9de9df1b1cccdda112e17ae0333f320f61a6132a6c7daac4b749e4475d904b8bada096cdbe8ef79716216031f"
+    "contributionHash": "d0104dc611c84a101608ac4c0dad8fdc0d16a21d43e4e7f3db2510f3be2ed330e9d0c667278cd0bc4ba7a9573746fc643cb6376193929af4a1f6a9001d571552"
   },
   "r1cs": {
-    "bytes": 21757440,
-    "sha256": "d537a45d2b55f786a1b7942330070945b288a1ce7f28714b559eb44b68456684"
+    "bytes": 21871552,
+    "sha256": "55c943d60b094d0ce3c7dcd7f73bd04845988334935c0aa9ae1cb7b9580d07ae"
   },
   "release": {
-    "tag": "reputation-devnet-1",
-    "baseUrl": "https://github.com/foundationforest/standard/releases/download/reputation-devnet-1/"
+    "tag": "reputation-devnet-2",
+    "baseUrl": "https://github.com/foundationforest/standard/releases/download/reputation-devnet-2/"
   },
   "files": {
     "reputation.zkey": {
-      "bytes": 28241035,
-      "sha256": "1b18b394ce8f19984d09259b901f3116e831525f177f11c5026344b2978863c9"
+      "bytes": 28359403,
+      "sha256": "383202dcb01122c534751c5d1aae5ea3566da2dd26ac4c46caa7c90c88549cf9"
     },
     "reputation.wasm": {
-      "bytes": 2592737,
-      "sha256": "70b90c31b3769018ae1801431b6ac82c28e67aea3d1a6799fbbcf63665db7543"
+      "bytes": 2593932,
+      "sha256": "c8038bb8a4923ce0aa08347a3ea74eaa32749c8dd2182109164129e8a6448c90"
     }
   },
   "committed": {
     "verification-key.json": {
-      "bytes": 3469,
-      "sha256": "23710bab5211c73197c3ae149e7bd45ec01250a99195bd7db282c9838a2ea13f"
+      "bytes": 3474,
+      "sha256": "79585a0523cdbce2cfd344ed841f920bc6176abf36760d1d858d1abe605547a6"
     }
   }
 }

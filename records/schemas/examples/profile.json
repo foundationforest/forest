@@ -16,12 +16,13 @@
   "proofs": [
     {
       "circuit": "reputation",
-      "index": "HhHVCGT5JvMwiBzP4vFGMF4usL4MY9HpTyKMRQUNUn33",
-      "root": "11771f12822b2af6148da8f57c4ce392279cbca0a0f5fdaf4f17ebfbad751c9d",
+      "index": "AzXW61LgzhJTXN1so7rBR5auU2oCSzRyNEqFxPkZct3G",
+      "root": "1afc9f1db208eecf737c7e32f480ea6a59675370d58ea83bc80ed5da20a07027",
       "time": 1790812800000,
-      "signature": "4cfotrsbwai3y4vXvx1iesh0BeAYMqycSWkPqYEzJRQ7PbZUiOiu9pj3yuDVefXCWYeqz9JwoYJaMaNxfwJLCA",
+      "signature": "tLJI3R1JjT7I7SAV6UdCJSaz5D9wmSAwNV3v6yrFaJoC84YiDn116rqlToRtPMF-2DW5gKrqPT_h7qyNS5BRCw",
       "score": 87,
-      "proof": "FYEvid9M889fSFGUfAVT5ExGNqKhQqrHyMzsS-qhoB8AcuJy7923TGIIIOTjM-QKfK6ZJU1Y56f_fi_r9ya5rhRVs6xRrKI1naZvb-Am4dE0aPo0vF_k-MX5WXaaCFP7DSdYqNlziOanhK-mFEJQuCiuZBNEqLzUPNjB2ygatOwI55GrIaEpAxcNa2CYth5yIoyrzs-4647WRWloY9MOiBFXuyEtnfNUfwpyQQBCoqEF-0FbODMnn8MN6pT6A9I7DYc3XsI_E85nGlyr7rXGoDb5H6k-cVb6BUyDQFDoHuMCqtW3JoPCnDp6EbrXc2nI3sxeRlyNR8NQSjiXI10WDQ"
+      "stamp": "1190cd2c0ce535af97624d41fb8b393e531ca7d52ee7659c050d4bc79b5033b8",
+      "proof": "GwiAnLXZM7QFosAW_cF503P2DuLFfxj5MgefXnB99dweXECC0GEcvfifWr8EdmMGiw5uDvbav_N9NJhRCpLSggc63wYiM-0uQdARn1Ww9pNBdORt1ctkhFZ5kQHN13IAA0lI1XNSD2llcxrJUe9jyNuF5k5_U7Fz8JZGae8TfuMquvopCdcgL8bnCLHKRZV1b-s3vp1ssGCaINdtj1ii0QSc4NeG24w11CYFwrGywB9HmdQUfmokKRdipbSOPXaTGmA1cBcaIFCBfiQTFS6zo9VjEK27d0XLUBbaig92pGAlMPFgfsDz4nAqcn-qLnid955E8vLKts3WUHtC2PwOBw"
     },
     {
       "circuit": "person",

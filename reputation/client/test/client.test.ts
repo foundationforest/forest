@@ -16,7 +16,9 @@ import { poseidon4 } from 'poseidon-lite/poseidon4'
 import { issuerSecret } from '../../../keys/src/index.ts'
 import { BN254_R, scopeOf } from '../../../registry/client/src/field.ts'
 import { stampOf } from '../../../registry/client/src/stamp.ts'
-import { BOUND, DEPTH, SIGNED_PREFIX, buildTree, circuitInput, leafHash, signedBytes, type Leaf } from '../src/index.ts'
+import { PROGRAM_ID } from '../../../registry/client/src/program.ts'
+import { base58 } from '../../../registry/client/src/rows.ts'
+import { BOUND, DEPTH, SIGNED_PREFIX, buildTree, circuitInput, leafHash, signedBytes, verifyReputation, type Leaf } from '../src/index.ts'
 import { REPUTATION_KEY } from '../src/reputation-key.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -46,8 +48,8 @@ const index = ed25519.getPublicKey(indexKey)
 const time = 1_791_072_000_000n
 const signature = ed25519.sign(signedBytes(tree.root, time), indexKey)
 
-// The person shows the proof on a new profile.
-const profile = ed25519.getPublicKey(ed25519.utils.randomSecretKey())
+// The person shows the proof on a new profile, registered with the same issuer.
+const profileLabel = 'tutoring/new'
 
 test('a leaf is Poseidon(stamp, scope, score, count), and the tree is Semaphore\'s over them', () => {
   assert.equal(leafHash(mine[0]), poseidon4([mine[0].stamp, mine[0].scope, 47n, 12n]))
@@ -79,14 +81,55 @@ test('an index signs 0xff, its text, the root as 32 bytes and the time as 8, bot
 })
 
 test('the client refuses what the circuit would', () => {
-  assert.throws(() => circuitInput({ secret: stranger.secret, labels: ['tutoring/seller'], leaves, profile }), /no leaf/)
-  assert.throws(() => circuitInput({ secret, labels: labels.slice(0, 2), leaves, profile, show: true }), /only one/)
-  assert.throws(() => circuitInput({ secret, labels: [labels[0], labels[0]], leaves, profile }), /twice/)
-  assert.throws(() => circuitInput({ secret, labels: Array.from({ length: 9 }, (_, i) => `x/${i}`), leaves, profile }), /one to 8/)
+  assert.throws(() => circuitInput({ secret: stranger.secret, labels: ['tutoring/seller'], leaves, profileLabel }), /no leaf/)
+  assert.throws(() => circuitInput({ secret, labels: labels.slice(0, 2), leaves, profileLabel, show: true }), /only one/)
+  assert.throws(() => circuitInput({ secret, labels: [labels[0], labels[0]], leaves, profileLabel }), /twice/)
+  assert.throws(() => circuitInput({ secret, labels: Array.from({ length: 9 }, (_, i) => `x/${i}`), leaves, profileLabel }), /one to 8/)
+})
+
+test('the proof names the stamp of the profile it is shown on, from the same secret', () => {
+  const { input, publicSignals } = circuitInput({ secret, labels, leaves, profileLabel })
+  assert.equal(publicSignals[2], stampOf(secret, profileLabel), 'score, root, stamp, scope')
+  assert.equal(input.stamp, stampOf(secret, profileLabel))
+  assert.equal(input.profileScope, scopeOf(profileLabel))
+  assert.notEqual(publicSignals[2], stampOf(stranger.secret, profileLabel), 'another issuer, another stamp')
+  assert.equal('message' in input, false, 'no main key in the proof: the stamp names the profile')
 })
 
 test('the verification key is the circuit setup\'s, value for value', () => {
   const committed = JSON.parse(readFileSync(join(here, '../../circuit/devnet/verification-key.json'), 'utf8'))
   assert.deepEqual(REPUTATION_KEY, committed)
   assert.equal(REPUTATION_KEY.nPublic, 4)
+})
+
+test('a reputation proof as a profile shows it (records/schemas/examples/profile.json): verifyReputation takes it as it is', async () => {
+  // The example card is keys/'s tutoring/seller. Its row is the one the registry's tests landed for
+  // it (registry/program/tests-litesvm/fixtures/proofs.json), at the stamp its person proof shows.
+  const card = JSON.parse(readFileSync(join(here, '../../../records/schemas/examples/profile.json'), 'utf8'))
+  const shown = card.proofs.find((p: { circuit: string }) => p.circuit === 'reputation')
+  assert.equal(shown.stamp, card.proofs.find((p: { circuit: string }) => p.circuit === 'person').stamp, 'the same row as its person proof')
+  const fixtures = JSON.parse(readFileSync(join(here, '../../../registry/program/tests-litesvm/fixtures/proofs.json'), 'utf8'))
+  const w = fixtures.wire
+  const connection = {
+    async getAccountInfo(at: { toBase58(): string }) {
+      return at.toBase58() === w.rowAddress ? { data: Buffer.from(w.row, 'hex'), owner: PROGRAM_ID, lamports: 1, executable: false } : null
+    },
+  } as never
+  const seller = keysVectors.mainKeys[0]
+  const index = ed25519.getPublicKey(new Uint8Array(32).fill(0x2c)) // the example index's key: 32 bytes of 0x2c
+  assert.equal(base58(index), shown.index)
+  const input = {
+    proof: new Uint8Array(Buffer.from(shown.proof, 'base64url')),
+    root: BigInt('0x' + shown.root),
+    score: BigInt(shown.score),
+    stamp: new Uint8Array(Buffer.from(shown.stamp, 'hex')),
+    profile: ed25519.getPublicKey(Buffer.from(seller.privateKey, 'hex')),
+    index,
+    time: shown.time,
+    signature: new Uint8Array(Buffer.from(shown.signature, 'base64url')),
+  }
+  const row = await verifyReputation(connection, input)
+  assert.equal(row?.label, 'tutoring/seller')
+  assert.equal(await verifyReputation(connection, { ...input, profile: ed25519.getPublicKey(Buffer.from(keysVectors.mainKeys[1].privateKey, 'hex')) }), null, 'not on the buyer profile')
+  assert.equal(await verifyReputation(connection, { ...input, score: input.score - 1n }), null, 'not with another score')
 })

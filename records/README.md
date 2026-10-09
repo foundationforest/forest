@@ -296,9 +296,12 @@ proof in the profile record only when the person chooses to show it there:
 
 - **`reputation`** shows the score of the profiles the person holds in an index's tree, without
   saying which. It carries the index's key, the root and time the index signed and its signature,
-  the score, the label when the proof shows one market, and the proof's 256 bytes. Each reader
-  decides which indexes it trusts and how old a time it accepts. How it is made is
-  [reputation/](../reputation/README.md)'s.
+  the score, the stamp of this profile's registry row, the label when the proof shows one market,
+  and the proof's 256 bytes. A reader checks it with reputation/client's `verifyReputation`: it
+  holds only when the row at that stamp names this main key, and the proof shows that stamp comes
+  from the same secret as the profiles it counts, so nobody can lend their score to someone else.
+  Each reader decides which indexes and issuers it trusts and how old a time it accepts. How it is
+  made is [reputation/](../reputation/README.md)'s.
 - **`person`** shows the profile's tier: that an issuer signed the person a note at that tier
   ([registry/](../registry/README.md)). It carries the issuer's key, the label and the stamp as
   the profile's registry row holds them, the tier in decimal (a tier can be a number far past

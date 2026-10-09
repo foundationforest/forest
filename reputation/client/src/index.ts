@@ -1,10 +1,10 @@
 // The reputation proof's client: the tree an index publishes, the proof an app makes from it on the
 // device, and the check any reader makes. It talks to no network of its own: the caller passes in
-// the index's published leaves, root, time and signature.
+// the index's published leaves, root, time and signature, and a connection to Solana to read the
+// row of the profile a proof is shown on.
 //
-// The market stamp, the scope and the message come from the registry client unchanged, so a leaf
-// names a profile exactly as its registry row does, and a proof names a main key exactly as a
-// registration does.
+// The market stamp and the scope come from the registry client unchanged, so a leaf names a profile
+// exactly as its registry row does, and a proof names the row of the profile it is shown on.
 //
 // Nothing here is in production: the circuit's setup is devnet only (../README.md).
 
@@ -14,14 +14,16 @@ import { poseidon4 } from 'poseidon-lite/poseidon4'
 import { groth16 } from 'snarkjs'
 
 import { type SnarkjsProof, proofFromBytes } from '../../../registry/client/src/compress.ts'
-import { isFieldElement, messageOf, scopeOf, toBytes32 } from '../../../registry/client/src/field.ts'
+import { fromBytes32, isFieldElement, scopeOf, toBytes32 } from '../../../registry/client/src/field.ts'
+import { type Row, keyBytes } from '../../../registry/client/src/program.ts'
+import { fetchRow } from '../../../registry/client/src/rows.ts'
 import { scalarOf, stampOf } from '../../../registry/client/src/stamp.ts'
 import { REPUTATION_KEY } from './reputation-key.ts'
 
 /** An issuer secret: the 32 bytes `keys/`'s `issuerSecret(seed, name)` returns. */
 type Secret = Uint8Array
 /** A 32-byte ed25519 key: a main key or an index's key. */
-type Key = Parameters<typeof messageOf>[0]
+type Key = Parameters<typeof keyBytes>[0]
 
 /** The circuit's slots: a proof counts up to this many profiles. */
 export const SLOTS = 8
@@ -64,7 +66,8 @@ export type ReputationProof = {
   /** The count-weighted score of the profiles counted, times ten, rounded down. */
   score: bigint
   root: bigint
-  message: bigint
+  /** The stamp of the profile the proof is shown on: its registry row's. */
+  stamp: bigint
   /** The scope shown, or 0. */
   scope: bigint
   /** The proof as snarkjs wrote it. */
@@ -131,8 +134,11 @@ export function circuitInput(input: {
   labels: string[]
   /** The index's published leaves, in its order. */
   leaves: Leaf[]
-  /** The main key the proof is shown for. The proof names it and counts for it alone. */
-  profile: Key
+  /**
+   * The label of the profile the proof is shown on: one of the person's profiles registered with
+   * this issuer. The proof names its stamp, so it counts on that profile alone.
+   */
+  profileLabel: string
   /** Show the label. Only with one label. */
   show?: boolean
 }): { input: Record<string, unknown>; publicSignals: bigint[] } {
@@ -160,7 +166,8 @@ export function circuitInput(input: {
   const blank = { leaf: { stamp: 0n, scope: 0n, score: 0n, count: 0n }, path: { length: 0, index: 0, siblings: [] as bigint[] } }
   const all = [...slots, ...Array(SLOTS - slots.length).fill(blank)] as typeof slots
   const scope = input.show ? scopeOf(labels[0]) : 0n
-  const message = messageOf(input.profile)
+  const profileScope = scopeOf(input.profileLabel)
+  const stamp = stampOf(input.secret, input.profileLabel)
 
   return {
     input: {
@@ -174,11 +181,12 @@ export function circuitInput(input: {
       pathIndices: all.map((s) => s.path.index),
       // The circuit walks `pathLengths` levels; the rest is padding it never reads.
       pathSiblings: all.map((s) => [...s.path.siblings, ...Array(DEPTH - s.path.siblings.length).fill(0n)]),
+      profileScope,
       root: tree.root,
-      message,
+      stamp,
       scope,
     },
-    publicSignals: [score, tree.root, message, scope],
+    publicSignals: [score, tree.root, stamp, scope],
   }
 }
 
@@ -189,13 +197,13 @@ export async function proveReputation(input: Parameters<typeof circuitInput>[0] 
     proof: SnarkjsProof
     publicSignals: string[]
   }
-  // The circuit's order: score, root, message, scope. Checked so a change in the circuit or the
+  // The circuit's order: score, root, stamp, scope. Checked so a change in the circuit or the
   // setup files shows up here, and not as a proof every reader refuses.
   if (publicSignals.length !== 4 || publicSignals.some((s, i) => BigInt(s) !== want[i])) {
     throw new Error('the proof carries other public signals than the ones asked for')
   }
-  const [score, root, message, scope] = want
-  return { score, root, message, scope, proof, publicSignals }
+  const [score, root, stamp, scope] = want
+  return { score, root, stamp, scope, proof, publicSignals }
 }
 
 // The proof as a profile record stores it, 256 bytes, and back: the registry client's, which a
@@ -203,38 +211,54 @@ export async function proveReputation(input: Parameters<typeof circuitInput>[0] 
 export { proofBytes, proofFromBytes } from '../../../registry/client/src/compress.ts'
 
 /**
- * Does this proof hold, under a root this index signed with this time? Checks the index's signature
- * (strict ed25519, as `records/` checks every record), that every public value is in range, then the
- * proof with the committed verification key, for this main key and, if one is given, this shown
- * label. How old a time to accept, and which indexes to trust, is the reader's choice. Anything that
- * is not a good proof for these inputs is false.
+ * Does this proof hold, under a root this index signed with this time, on this profile? Checks the
+ * index's signature (strict ed25519, as `records/` checks every record), that every public value is
+ * in range, the proof with the committed verification key for this stamp and, if one is given, this
+ * shown label; then that the registry row at the stamp names this profile. So a proof counts only on
+ * the profile it was made for, the prover's own. Gives the row, so the reader can weigh its issuer,
+ * whose secret every counted profile shares, and when it was made; null when anything fails. Throws
+ * when the connection does, or when what sits at the stamp's address is not the registry's. How old
+ * a time to accept, and which indexes and issuers to trust, is the reader's choice.
  */
-export async function verifyReputation(input: {
-  /** The proof as snarkjs writes it, `proveReputation`'s `proof`, or its 256 bytes (`proofBytes`). */
-  proof: SnarkjsProof | Uint8Array
-  root: bigint
-  score: bigint
-  /** The main key the proof is shown for. */
-  profile: Key
-  /** The label shown, if the proof shows one. */
-  label?: string
-  /** The index's ed25519 key. */
-  index: Key
-  /** The time the index signed with the root, in ms. */
-  time: bigint | number
-  /** The index's signature over `signedBytes(root, time)`. */
-  signature: Uint8Array
-}): Promise<boolean> {
+export async function verifyReputation(
+  connection: Parameters<typeof fetchRow>[0],
+  input: {
+    /** The proof as snarkjs writes it, `proveReputation`'s `proof`, or its 256 bytes (`proofBytes`). */
+    proof: SnarkjsProof | Uint8Array
+    root: bigint
+    score: bigint
+    /** The stamp the proof shows: the registry row of the profile it is shown on. */
+    stamp: bigint | Uint8Array
+    /** The main key of the profile that shows the proof. */
+    profile: Key
+    /** The label shown, if the proof shows one. */
+    label?: string
+    /** The index's ed25519 key. */
+    index: Key
+    /** The time the index signed with the root, in ms. */
+    time: bigint | number
+    /** The index's signature over `signedBytes(root, time)`. */
+    signature: Uint8Array
+  },
+  options: Parameters<typeof fetchRow>[2] = {},
+): Promise<Row | null> {
+  let stamp: bigint
   try {
-    const index = input.index instanceof Uint8Array ? input.index : input.index.toBytes()
-    if (index.length !== 32 || input.signature.length !== 64) return false
-    if (!ed25519.verify(input.signature, signedBytes(input.root, input.time), index, { zip215: false })) return false
-    if (input.score < 0n || input.score >= BOUND) return false
+    const index = keyBytes(input.index)
+    if (input.signature.length !== 64) return null
+    if (!ed25519.verify(input.signature, signedBytes(input.root, input.time), index, { zip215: false })) return null
+    if (input.score < 0n || input.score >= BOUND) return null
+    stamp = typeof input.stamp === 'bigint' ? input.stamp : fromBytes32(input.stamp)
+    if (!isFieldElement(stamp)) return null
     const scope = input.label === undefined ? 0n : scopeOf(input.label)
-    const publicSignals = [input.score, input.root, messageOf(input.profile), scope].map(String)
+    const publicSignals = [input.score, input.root, stamp, scope].map(String)
     const proof = input.proof instanceof Uint8Array ? proofFromBytes(input.proof) : input.proof
-    return await groth16.verify(REPUTATION_KEY, publicSignals, proof)
+    if (!(await groth16.verify(REPUTATION_KEY, publicSignals, proof))) return null
   } catch {
-    return false
+    return null
   }
+  const row = await fetchRow(connection, stamp, options)
+  const profile = keyBytes(input.profile)
+  if (!row || row.stamp !== stamp || !keyBytes(row.profile).every((b, i) => b === profile[i])) return null
+  return row
 }
