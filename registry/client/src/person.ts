@@ -21,7 +21,7 @@ import { poseidon5 } from 'poseidon-lite/poseidon5'
 import { groth16 } from 'snarkjs'
 
 import { type SnarkjsProof, proofFromBytes } from './compress.ts'
-import { fieldHash, fromBytes32, isFieldElement, messageOf, scopeOf } from './field.ts'
+import { fieldHash, fromBytes32, isFieldElement, messageOf, scopeOf, toBytes32 } from './field.ts'
 import { PERSON_KEY } from './person-key.ts'
 import { scalarOf, stampOf } from './stamp.ts'
 
@@ -92,6 +92,70 @@ export function issuerKeyOf(privateKey: Uint8Array): IssuerKey {
 export function signNote(privateKey: Uint8Array, note: Note): SignedNote {
   const issuer = issuerKeyOf(privateKey)
   return { ...note, issuer, signature: signMessage(privateKey, noteHash(note)) }
+}
+
+/**
+ * A signed note as JSON: the form a person's vault keeps it in (records/README.md, The vault), and
+ * an issuer may hand it over in. Numbers in decimal text, the embedding in base64url without
+ * padding, the issuer's key as a row holds it, 128 characters of lowercase hex. Every key starts in
+ * lower case, so it fits inside a record.
+ */
+export type NoteJson = {
+  noteNumber: string
+  embedding: string
+  model: string
+  tier: string
+  issuer: string
+  signature: { r8: [string, string]; s: string }
+}
+
+const base64url = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+const fromBase64url = (text: string): Uint8Array => {
+  if (!/^[A-Za-z0-9_-]*$/.test(text)) throw new Error('not base64url')
+  const bytes = Uint8Array.from(atob(text.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (text.length % 4)) % 4)), (c) => c.charCodeAt(0))
+  if (base64url(bytes) !== text) throw new Error('base64url in more than one spelling')
+  return bytes
+}
+const field = (n: bigint, what: string): bigint => {
+  if (!isFieldElement(n)) throw new Error(`${what} is below BN254's scalar order`)
+  return n
+}
+const decimal = (text: unknown, what: string): bigint => {
+  if (typeof text !== 'string' || !/^(0|[1-9][0-9]{0,76})$/.test(text)) throw new Error(`${what} is a whole number in decimal text`)
+  return field(BigInt(text), what)
+}
+
+/** A signed note as JSON (NoteJson). */
+export function noteToJson(note: SignedNote): NoteJson {
+  const hex = (n: bigint) => Array.from(toBytes32(n), (b) => b.toString(16).padStart(2, '0')).join('')
+  return {
+    noteNumber: String(note.noteNumber),
+    embedding: base64url(note.embedding),
+    model: note.model,
+    tier: String(note.tier),
+    issuer: hex(note.issuer[0]) + hex(note.issuer[1]),
+    signature: { r8: [String(note.signature.R8[0]), String(note.signature.R8[1])], s: String(note.signature.S) },
+  }
+}
+
+/** A signed note back from its JSON. Refuses any other shape; whether its issuer signed it is noteSigned's to say. */
+export function noteFromJson(value: unknown): SignedNote {
+  const isObject = (v: unknown): v is { [key: string]: unknown } => v !== null && typeof v === 'object' && !Array.isArray(v)
+  if (!isObject(value)) throw new Error('a note is an object')
+  const fields = ['noteNumber', 'embedding', 'model', 'tier', 'issuer', 'signature']
+  for (const key of Object.keys(value)) if (!fields.includes(key)) throw new Error(`unknown note field ${key}`)
+  if (typeof value.embedding !== 'string' || typeof value.model !== 'string') throw new Error('an embedding is base64url and a model is text')
+  if (typeof value.issuer !== 'string' || !/^[0-9a-f]{128}$/.test(value.issuer)) throw new Error("an issuer's key is 128 characters of lowercase hex")
+  const sig = value.signature
+  if (!isObject(sig) || Object.keys(sig).sort().join() !== 'r8,s' || !Array.isArray(sig.r8) || sig.r8.length !== 2) throw new Error('a signature is { r8: [x, y], s }')
+  return {
+    noteNumber: decimal(value.noteNumber, 'noteNumber'),
+    embedding: fromBase64url(value.embedding),
+    model: value.model,
+    tier: decimal(value.tier, 'tier'),
+    issuer: [field(BigInt('0x' + value.issuer.slice(0, 64)), 'issuer x'), field(BigInt('0x' + value.issuer.slice(64)), 'issuer y')],
+    signature: { R8: [decimal(sig.r8[0], 'r8 x'), decimal(sig.r8[1], 'r8 y')], S: decimal(sig.s, 's') },
+  }
 }
 
 /** Did the note's issuer sign it? zk-kit's check, the same equation the circuit checks. */

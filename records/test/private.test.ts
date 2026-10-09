@@ -1,6 +1,6 @@
 // Private records: a body only chosen keys open (read keys, and the owner's inbox key), whoever
 // writes it: the owner, or an access key the permissions record allows. Hosts check and store them
-// like any record, and read none. And the grants record, a private record a person keeps.
+// like any record, and read none.
 
 import assert from 'node:assert/strict'
 import { randomBytes } from 'node:crypto'
@@ -9,9 +9,9 @@ import { publish, readAll, readProfile } from '../src/client.ts'
 import { DAY, DEFAULT_MAX_LINE_BYTES } from '../src/host.ts'
 import { inboxKey } from '../../keys/src/index.ts'
 import { b64u } from '../src/bytes.ts'
-import { GRANTS_PATH, type Grant, type Note, checkGrant, checkNote } from '../src/grant.ts'
+import { type Grant, type Note, checkGrant, checkNote } from '../src/grant.ts'
 import { keyFromPrivate } from '../src/keys.ts'
-import { grantsRecord, isPrivate, makeNotes, makePrivate, message, openGrants, openMessage, openNotes, openPrivate, readerCount } from '../src/private.ts'
+import { isPrivate, makeNotes, makePrivate, message, openMessage, openNotes, openPrivate, readerCount } from '../src/private.ts'
 import { accessRecord, hostsRecord, ownerRecord, permissionsRecord } from '../src/write.ts'
 import { canonical } from '../src/canonical.ts'
 import { type PermissionsBody, RecordError, decodeRecord, encodeRecord } from '../src/record.ts'
@@ -175,28 +175,6 @@ describe('grants', () => {
     await assert.rejects(openMessage(m, helper.identity), 'a reader acts on the inbox; a grant is a key')
     assert.equal(readerCount((await message(alice, bob.address, { text: 'hi' }, T0, withReader)).body), 2, 'any other message: the readers too')
     await assert.rejects(message(alice, bob.address, { grant: { ...write, scope: 'admin' } }, T0, withReader), code('grant'))
-  })
-
-  test('a person keeps the grants they received at grants, sealed to their own inbox key alone; a host holds none of them', async () => {
-    const host = await startHost({ now: () => T0 })
-    try {
-      const record = await grantsRecord(bob, bobInbox.recipient, [write, read, sends], T0)
-      assert.equal(record.path, GRANTS_PATH)
-      assert.equal(readerCount(record.body as { private: string }), 1)
-      await publish([host.url], [record])
-      // Lose the phone: the record on the host gives every grant back, to the inbox key alone.
-      const kept = decodeRecord(encodeRecord((await readProfile([host.url], bob.address, T0)).current.get('grants')!.record)).record.body!
-      assert.deepEqual(await openGrants(kept, bobInbox.identity), [write, read, sends])
-      await assert.rejects(openGrants(kept, aliceInbox.identity))
-      const disk = host.dump().join('\n')
-      for (const secret of [write.key, read.key, sends.key, 'Tuesday']) assert.ok(!disk.includes(secret), secret)
-
-      await assert.rejects(grantsRecord(bob, bobInbox.recipient, [{ ...write, scope: 'admin' } as never], T0), code('grant'))
-      const other = ownerRecord(bob, GRANTS_PATH, await makePrivate({ grants: [], more: 1 }, [bobInbox.recipient]), T0)
-      await assert.rejects(openGrants(other.body!, bobInbox.identity), code('grant'))
-    } finally {
-      await host.close()
-    }
   })
 })
 

@@ -81,6 +81,9 @@ What others can still see:
 - A ramp knows the profile it paid into.
 - A host sees who wrote to whom and when, though not what, and the network address of whoever
   reads or writes.
+- A host that keeps your vault, the folder a new device restores from, sees when it changes. Kept
+  on the same host as your profiles, its times can link them
+  ([records](records/README.md#the-vault)).
 - The face check keeps your face: an issuer that checks faces, or the provider it checks them
   with, holds it so it can refuse the same face a second time.
 - At the start, with few people, a face check and the first profile registered right after it can

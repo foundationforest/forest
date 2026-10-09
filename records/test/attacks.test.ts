@@ -131,12 +131,11 @@ describe('a stolen access key', () => {
     assert.throws(() => accessRecord(accessKey, alice.address, 'hosts', { urls: ['https://evil.example'] }, T0 + DAY), /only the owner/)
   })
 
-  test('with no paths, it still cannot write the card or the grants record', () => {
+  test('with no paths, it still cannot write the card', () => {
     const anywhere = permissionsRecord(alice, [allow(accessKey)], T0)
     const card = accessRecord(accessKey, alice.address, 'profile', profileBody('Not Alice'), T0 + DAY)
-    const grants = accessRecord(accessKey, alice.address, 'grants', { private: 'x' }, T0 + DAY)
-    const v = view(anywhere, card, grants)
-    assert.deepEqual([v.current.has('profile'), v.current.has('grants')], [false, false])
+    const v = view(anywhere, card)
+    assert.equal(v.current.has('profile'), false)
   })
 
   test('once its entry is deleted, nothing it signed counts, however it is dated, on any host or none', () => {

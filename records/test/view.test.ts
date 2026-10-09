@@ -94,13 +94,13 @@ describe('access keys and permissions', () => {
     assert.equal(v.ignored.get(idOf(sneaky)), 'not-allowed')
   })
 
-  test('with no paths, a write key covers every content path but those profile and grants cover; with paths, only those', () => {
+  test('with no paths, a write key covers every content path but those profile covers; with paths, only those', () => {
     const anywhere = permissionsRecord(alice, [allow(accessKey)], T0)
     const at = (path: string) => accessRecord(accessKey, alice.address, path, { text: path }, T0 + MINUTE)
-    const v = view([anywhere, ...['offer/x', 'review/1', 'note/a/b', 'profiles', 'grantsx', 'profile', 'profile/x', 'grants', 'grants/x'].map(at)], T0 + 2 * MINUTE)
-    assert.deepEqual([...liveContent(v).keys()].sort(), ['grantsx', 'note/a/b', 'offer/x', 'profiles', 'review/1'])
-    const named = view([permissionsRecord(alice, [allow(accessKey, ['profile', 'grants'])], T0), at('profile'), at('grants'), at('offer/x')], T0 + 2 * MINUTE)
-    assert.deepEqual([...liveContent(named).keys()].sort(), ['grants', 'profile'], 'paths can name them; then only those')
+    const v = view([anywhere, ...['offer/x', 'review/1', 'note/a/b', 'profiles', 'grants', 'profile', 'profile/x'].map(at)], T0 + 2 * MINUTE)
+    assert.deepEqual([...liveContent(v).keys()].sort(), ['grants', 'note/a/b', 'offer/x', 'profiles', 'review/1'])
+    const named = view([permissionsRecord(alice, [allow(accessKey, ['profile'])], T0), at('profile'), at('offer/x')], T0 + 2 * MINUTE)
+    assert.deepEqual([...liveContent(named).keys()].sort(), ['profile'], 'paths can name it; then only those')
     assert.equal(liveContent(view([permissionsRecord(alice, [allow(accessKey, [])], T0), at('offer/x')])).size, 0, 'an empty list covers nothing')
   })
 
