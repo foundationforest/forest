@@ -424,7 +424,7 @@ its policy.
 
 ### Run it
 
-`@forest/records` has three import paths, each built to `dist/` with types, and the shapes:
+`@forest/records` has four import paths, each built to `dist/` with types, and the shapes:
 
 - `@forest/records`: keys as addresses (`keyFromPrivate`, `publicKeyFromAddress`); canonical
   text; signing, checking and encoding records; the view (`viewProfile`, `liveContent`, `allows`,
@@ -440,6 +440,11 @@ its policy.
   `grantsRecord` and `openGrants`; `makeNotes` and `openNotes`. The inbox key itself is keys/'s
   `inboxKey`.
 - `@forest/records/host`: `Host`, the reference host (below).
+- `@forest/records/public`: `publicFetch`, a fetch that reaches only public addresses and follows
+  no redirect, for a host or an app that goes to a host a stranger named: it refuses loopback,
+  private, link-local, carrier-grade NAT, NAT64, 6to4, multicast and every other range not
+  globally reachable, written in the URL or behind a name. `isPublic` checks one address. Node
+  only, like the host.
 - `@forest/records/schemas/<kind>.json`: the three shapes, as JSON Schemas.
 
 Publish a profile with one offer, read it back, then let another app write offers:
@@ -519,7 +524,7 @@ node test/vectors.ts   # print the test vectors
 
 Node 22.18 or later. Built from existing pieces, unchanged: `@noble/curves`, `@noble/hashes`,
 `@scure/base` and `canonicalize` for the core; `age-encryption` for private records and messages;
-Node's built-in `node:sqlite` for the host.
+Node's built-in `node:sqlite` for the host; `undici` for the public fetch.
 
 **The reference host.** One process, listening on `127.0.0.1` unless told otherwise; TLS is the
 operator's. Its policy, unless told otherwise: records and messages of up to 65,536 bytes, and
