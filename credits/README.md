@@ -112,13 +112,32 @@ const credits = await finish(b.pending, answer)       // the answer's bytes
 // Spend one: fetch(url, { headers: { authorization: authorization(credits[0]) }, … })
 ```
 
+### Selling credits
+
+A service's side, in `src/service.ts` (Node only, like records' host: its spent list is SQLite):
+
+| Function | Gives |
+|---|---|
+| `keyFrom(pkcs8)` | The service's credit key from its private key, RSA-2048 in PKCS #8: what it signs with, and the bytes its directory publishes |
+| `directoryOf({ requestUri, keys, credit })` | The directory to serve at `DIRECTORY_PATH`, with its `forest-credit` entry |
+| `countOf(buy)`, `amountOf(price, n)` | How many credits a buy asks for, and what they cost: what its pay link asks |
+| `paid(rpc, { reference, address, mint, amount })` | The signature of a finalized payment that names the reference and pays at least the amount, or null; through the RPC the service passes, two calls |
+| `answer(buy, key, origin)` | The blind signatures for a paid buy: one per request under the key, an empty slot for any other, the same every time |
+| `SpentList` | The spent list: `hold` (held, spent or busy), `land`, `free`, and `holds`, what is held now, with the service's note on each |
+
+A service collects a buy this way: `countOf` it and refuse more than its policy allows; `paid` for
+`amountOf(price, n)` at the buy's `referenceOf`; then `answer` it. It spends a credit this way:
+`checkCredit`, then `hold` its id with a note of what to look for, and `land` or `free` it once
+it knows whether the action landed; on a restart it settles each of `holds()`. Nothing in it
+logs what it is sent.
+
 ### Run it
 
 ```
 cd credits
 npm ci
 npm run check   # type-check
-npm test        # against a stand-in service made of Cloudflare's own issuer and origin
+npm test        # against a stand-in service made of Cloudflare's own issuer and origin, and the service side against a stand-in RPC
 ```
 
 Node 22.18 or later. Built from existing pieces, used unchanged: `@cloudflare/privacypass-ts` 0.9.0,
