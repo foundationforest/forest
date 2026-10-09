@@ -5,10 +5,10 @@ Up: [the repo](../README.md).
 ## What it is
 
 A credit is a prepaid unit for one service, bought once and spent without the service being able
-to tell who bought it. A service that sells them says what one buys: for the foundation's fee
-payer, one registration; for its host, storage beyond the free tier. Anyone can buy credits for
-someone else, without learning which spends are theirs: that is how an issuer gives its people
-free registrations.
+to tell who bought it. A service that sells them says what one buys: for the foundation's registry
+payer, one registration; for its host, a cent of storage. Anyone can buy credits for someone else,
+without learning which spends are theirs: that is how an issuer gives its people free
+registrations.
 
 A credit is a Privacy Pass token (RFC 9576, RFC 9577, RFC 9578) of type 2, Blind RSA: the service
 signs it blind, over a number only the buyer's app knows, so when the credit comes back to be
@@ -77,7 +77,7 @@ more field:
 - A credit counts as spent only once its action lands; then its id joins the spent list. If the
   action fails, or can no longer land, the id is freed and the credit can be shown again, so a
   failed registration can retry.
-- What the action is, and when it lands, is each service's to say, with its unit. For the fee
+- What the action is, and when it lands, is each service's to say, with its unit. For the registry
   payer, the action is the register transaction: it lands when confirmed, and can no longer land
   once its blockhash expires.
 - The spent list holds ids only.
@@ -89,7 +89,7 @@ collects and finishes.
 
 - The buyer sees the amount and the reference, never the credits.
 - The service sees who paid and the blinded buy, never which spends they become.
-- An issuer gives its people free registrations by paying one-credit links for the fee payer.
+- An issuer gives its people free registrations by paying one-credit links for the registry payer.
 
 ### Use it
 
@@ -112,13 +112,32 @@ const credits = await finish(b.pending, answer)       // the answer's bytes
 // Spend one: fetch(url, { headers: { authorization: authorization(credits[0]) }, … })
 ```
 
+### Selling credits
+
+A service's side, in `src/service.ts` (Node only, like records' host: its spent list is SQLite):
+
+| Function | Gives |
+|---|---|
+| `keyFrom(pkcs8)` | The service's credit key from its private key, RSA-2048 in PKCS #8: what it signs with, and the bytes its directory publishes |
+| `directoryOf({ requestUri, keys, credit })` | The directory to serve at `DIRECTORY_PATH`, with its `forest-credit` entry |
+| `countOf(buy)`, `amountOf(price, n)` | How many credits a buy asks for, and what they cost: what its pay link asks |
+| `paid(rpc, { reference, address, mint, amount })` | The signature of a finalized payment that names the reference and pays at least the amount, or null; through the RPC the service passes, two calls |
+| `answer(buy, key, origin)` | The blind signatures for a paid buy: one per request under the key, an empty slot for any other, the same every time |
+| `SpentList` | The spent list: `hold` (held, spent or busy), `land`, `free`, and `holds`, what is held now, with the service's note on each |
+
+A service collects a buy this way: `countOf` it and refuse more than its policy allows; `paid` for
+`amountOf(price, n)` at the buy's `referenceOf`; then `answer` it. It spends a credit this way:
+`checkCredit`, then `hold` its id with a note of what to look for, and `land` or `free` it once
+it knows whether the action landed; on a restart it settles each of `holds()`. Nothing in it
+logs what it is sent.
+
 ### Run it
 
 ```
 cd credits
 npm ci
 npm run check   # type-check
-npm test        # against a stand-in service made of Cloudflare's own issuer and origin
+npm test        # against a stand-in service made of Cloudflare's own issuer and origin, and the service side against a stand-in RPC
 ```
 
 Node 22.18 or later. Built from existing pieces, used unchanged: `@cloudflare/privacypass-ts` 0.9.0,

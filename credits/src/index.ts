@@ -135,8 +135,8 @@ export async function referenceOf(buy: Uint8Array): Promise<string> {
   return base58.encode(await sha256(own(buy)))
 }
 
-/** `count` times `price`, exactly, in decimal text. */
-function times(price: string, count: number): string {
+/** What `count` credits cost: `count` times `price`, exactly, in decimal text. A buy's pay link asks for it, and a service checks the payment against it. */
+export function amountOf(price: string, count: number): string {
   const [whole, fraction = ''] = price.split('.')
   const total = (BigInt(whole + fraction) * BigInt(count)).toString().padStart(fraction.length + 1, '0')
   const cut = total.length - fraction.length
@@ -164,7 +164,7 @@ export async function buy(service: Service, count: number): Promise<{ buy: Uint8
   }
   const bytes = new genericBatched.BatchedTokenRequest(requests).serialize()
   const reference = await referenceOf(bytes)
-  const amount = times(service.price, count)
+  const amount = amountOf(service.price, count)
   const payLink =
     `solana:${service.address}?amount=${amount}` +
     (service.mint === 'SOL' ? '' : `&spl-token=${service.mint}`) +
