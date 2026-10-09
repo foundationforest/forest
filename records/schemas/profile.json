@@ -23,20 +23,6 @@
     "photo": {
       "$ref": "#/$defs/photo"
     },
-    "addresses": {
-      "type": "object",
-      "description": "Optional. Addresses on other chains, by chain name in camelCase, such as arbitrumOne: each derived from the main key by that chain's line in keys/'s recipe; no chain has one yet. Never solana: the main key is the Solana address.",
-      "propertyNames": {
-        "pattern": "^[a-z][a-zA-Z0-9]{0,31}$",
-        "not": {
-          "const": "solana"
-        }
-      },
-      "additionalProperties": {
-        "type": "string",
-        "maxLength": 128
-      }
-    },
     "about": {
       "type": "string",
       "description": "What I do.",
@@ -247,7 +233,10 @@
           "pattern": "^[0-9a-f]{64}$"
         },
         "mimeType": {
-          "enum": ["image/png", "image/jpeg"]
+          "type": "string",
+          "description": "The file's media type, type/subtype in lower case, such as image/jpeg. Which types to take is each host's policy, and each reader's.",
+          "maxLength": 255,
+          "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*$"
         },
         "size": {
           "type": "integer",

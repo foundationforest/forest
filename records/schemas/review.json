@@ -70,7 +70,10 @@
           "pattern": "^[0-9a-f]{64}$"
         },
         "mimeType": {
-          "enum": ["image/png", "image/jpeg", "video/mp4"]
+          "type": "string",
+          "description": "The file's media type, type/subtype in lower case, such as image/jpeg. Which types to take is each host's policy, and each reader's.",
+          "maxLength": 255,
+          "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*$"
         },
         "size": {
           "type": "integer",
