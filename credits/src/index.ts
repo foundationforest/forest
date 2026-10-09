@@ -4,7 +4,7 @@
 // to be spent the service sees a good signature and nothing that ties it to the buy. See README.md.
 //
 // This is the client side, and the one check every service makes: the buy, its pay link, finishing
-// the credits from the service's answer, showing one, and checking one. It talks to no network of
+// the credits from the service's answer, showing one or several, and checking them. It talks to no network of
 // its own. The blinding and the signatures are Cloudflare's privacypass-ts, unchanged; its type 2
 // client keeps the blinding in memory only, so the buy here keeps it as bytes, to finish later, on
 // any device, from the vault.
@@ -241,6 +241,14 @@ export function authorization(credit: Credit | Uint8Array | string): string {
   return new AuthorizationHeader(Token.deserialize(BLIND_RSA, bytesOf(credit))).toString(true)
 }
 
+/**
+ * Several credits shown with one request, as its body lists them: each credit's bytes, base64url, in
+ * order. A service takes as many in one request as its policy says, and all of them or none.
+ */
+export function creditList(credits: (Credit | Uint8Array | string)[]): string[] {
+  return credits.map((credit) => b64u.encode(bytesOf(credit)))
+}
+
 /** The credit an Authorization header shows, as bytes; throws when it shows none, or more than one. */
 export function creditOf(header: string): Uint8Array {
   const shown = AuthorizationHeader.parse(BLIND_RSA, header)
@@ -271,4 +279,20 @@ export async function checkCredit(credit: Credit | Uint8Array | string, service:
   if (!keyBytes) throw new Error('not under a key this service counts')
   if (!(await suite().verify(await importKey(keyBytes), token.authenticator, input.serialize()))) throw new Error('the signature does not hold')
   return creditId(bytes)
+}
+
+/**
+ * For a service: several credits shown together, as a request body lists them (`creditList`). At
+ * least one and at most `max`, each one that holds (`checkCredit`), and no credit twice. Gives their
+ * ids, in order; throws on anything else, so the service takes none of them.
+ */
+export async function checkCredits(list: unknown, service: { origin: string; keys: Uint8Array[] }, max: number): Promise<string[]> {
+  if (!Array.isArray(list) || list.length < 1 || list.length > max) throw new Error(`show from 1 to ${max} credits`)
+  const ids: string[] = []
+  for (const credit of list) {
+    if (typeof credit !== 'string') throw new Error('not a credit')
+    ids.push(await checkCredit(credit, service))
+  }
+  if (new Set(ids).size !== ids.length) throw new Error('the same credit twice')
+  return ids
 }
