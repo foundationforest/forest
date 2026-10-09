@@ -1,5 +1,6 @@
 // The reputation proof, end to end: an index's tree of made-up leaves around keys/'s test person,
-// proofs with one slot and with three, and every way a proof must fail.
+// proofs with one slot and with three, and every way a proof must fail. The tree, what an index
+// signs and what the client refuses on its own are the client's tests (../../client/test/).
 //
 // They need the devnet setup's files: `npm run fetch` first. A missing file fails; nothing skips.
 
@@ -11,27 +12,21 @@ import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 
 import { ed25519 } from '@noble/curves/ed25519.js'
-import { Group } from '@semaphore-protocol/group'
-import { poseidon4 } from 'poseidon-lite/poseidon4'
 import { groth16 } from 'snarkjs'
 
 import { issuerSecret } from '../../../keys/src/index.ts'
 import { BN254_P, BN254_R, fromBytes32, scopeOf, toBytes32 } from '../../../registry/client/src/field.ts'
 import { stampOf } from '../../../registry/client/src/stamp.ts'
 import {
-  BOUND,
-  DEPTH,
-  SIGNED_PREFIX,
   buildTree,
   circuitInput,
-  leafHash,
   proofBytes,
   proofFromBytes,
   proveReputation,
   signedBytes,
   verifyReputation,
   type Leaf,
-} from '../src/index.ts'
+} from '../../client/src/index.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const artifacts = { wasm: join(here, '../devnet/reputation.wasm'), zkey: join(here, '../devnet/reputation.zkey') }
@@ -63,35 +58,6 @@ const signature = ed25519.sign(signedBytes(tree.root, time), indexKey)
 
 // The person shows the proof on a new profile.
 const profile = ed25519.getPublicKey(ed25519.utils.randomSecretKey())
-
-test('a leaf is Poseidon(stamp, scope, score, count), and the tree is Semaphore\'s over them', () => {
-  assert.equal(leafHash(mine[0]), poseidon4([mine[0].stamp, mine[0].scope, 47n, 12n]))
-  assert.equal(tree.root, new Group(leaves.map(leafHash)).root)
-  const path = tree.pathOf(mine[1].stamp)
-  assert.ok(path)
-  assert.equal(path.length, path.siblings.length)
-  assert.ok(path.length <= DEPTH)
-  assert.equal(tree.pathOf(field()), undefined)
-})
-
-test('buildTree refuses an empty tree, one too deep, a field out of range, and two leaves for one stamp', () => {
-  assert.throws(() => buildTree([]), /at least one leaf/)
-  assert.throws(() => buildTree(Array(2 ** DEPTH + 1).fill(mine[0])), /at most 2\^20/)
-  assert.throws(() => buildTree([{ ...mine[0], score: BOUND }]), /0 to 2\^32 - 1/)
-  assert.throws(() => buildTree([{ ...mine[0], count: -1n }]), /0 to 2\^32 - 1/)
-  assert.throws(() => buildTree([{ ...mine[0], stamp: BN254_R }]), /field element/)
-  assert.throws(() => buildTree([mine[0], { ...mine[0], score: 50n }]), /second leaf/)
-})
-
-test('an index signs 0xff, its text, the root as 32 bytes and the time as 8, both big-endian', () => {
-  const bytes = signedBytes(tree.root, time)
-  const text = Buffer.from(SIGNED_PREFIX)
-  assert.equal(bytes.length, 1 + text.length + 32 + 8)
-  assert.equal(bytes[0], 0xff)
-  assert.deepEqual(Buffer.from(bytes.subarray(1, 1 + text.length)), text)
-  assert.equal(BigInt('0x' + Buffer.from(bytes.subarray(1 + text.length, -8)).toString('hex')), tree.root)
-  assert.equal(Buffer.from(bytes.subarray(-8)).readBigUInt64BE(), time)
-})
 
 test('single: one profile, its label shown, its score exactly', async () => {
   const r = await proveReputation({ secret, labels: ['tutoring/seller'], leaves, profile, show: true, artifacts })
@@ -173,11 +139,4 @@ test('the circuit refuses a label shown with two profiles', async () => {
   const input = good()
   input.scope = input.scopes[0]
   await refused(input)
-})
-
-test('the client refuses what the circuit would', () => {
-  assert.throws(() => circuitInput({ secret: stranger.secret, labels: ['tutoring/seller'], leaves, profile }), /no leaf/)
-  assert.throws(() => circuitInput({ secret, labels: labels.slice(0, 2), leaves, profile, show: true }), /only one/)
-  assert.throws(() => circuitInput({ secret, labels: [labels[0], labels[0]], leaves, profile }), /twice/)
-  assert.throws(() => circuitInput({ secret, labels: Array.from({ length: 9 }, (_, i) => `x/${i}`), leaves, profile }), /one to 8/)
 })

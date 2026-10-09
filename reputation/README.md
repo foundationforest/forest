@@ -1,9 +1,9 @@
-# circuits
+# reputation
 
 On devnet only: the reputation circuit's setup was made by one party; a public setup ceremony
 comes before mainnet. Nothing is on mainnet.
 
-Up: [the repo](../README.md). The circuit, its setup and its client: [reputation/](reputation/).
+Up: [the repo](../README.md).
 
 ## What it is
 
@@ -20,6 +20,9 @@ It is a zero-knowledge proof: it shows that this is true and nothing else. The p
 it on the device from their secret for one issuer ([keys](../keys/README.md#the-issuer-secret)),
 so the secret never leaves the device, and any reader checks it, off chain. It is built with
 circom 2.2.3, Groth16 on BN254, and the Poseidon and Merkle pieces Semaphore uses.
+
+- `circuit/`: the circuit, its devnet setup, and the tests that make proofs.
+- `client/`: the tree an index builds, the proof an app makes, and the check any reader makes.
 
 ## How it works
 
@@ -52,7 +55,7 @@ index may publish one, and a proof names the root it used.
 
 ### The reputation proof
 
-[`reputation/reputation.circom`](reputation/reputation.circom), `Reputation(8, 20)`: eight slots,
+[`circuit/reputation.circom`](circuit/reputation.circom), `Reputation(8, 20)`: eight slots,
 each one profile, a leaf and its path to the root. The person fills the ones they want and leaves
 the rest blank.
 
@@ -86,11 +89,11 @@ randomness could make false proofs, so it is made in public by many people, and 
 enough.
 
 - **Phase 1** is public: PSE's Perpetual Powers of Tau, `ppot_0080_16.ptau`, pinned by SHA-256.
-- **Phase 2** is one contribution, made once by `reputation/devnet/setup.sh`: one party. Whoever
+- **Phase 2** is one contribution, made once by `circuit/devnet/setup.sh`: one party. Whoever
   made it could make false proofs, so it is for devnet only. A public setup ceremony, with many
   people contributing to phase 2 on the same phase 1, comes before mainnet.
 - **What is committed:** `verification-key.json`, and
-  [`setup.json`](reputation/devnet/setup.json), which records the toolchain, phase 1, the
+  [`setup.json`](circuit/devnet/setup.json), which records the toolchain, phase 1, the
   contribution's hash, and every file's size and SHA-256.
 - **What is not:** the proving key and the witness generator, used only to make a proof. They are
   in the GitHub release `reputation-devnet-1`, and `npm run fetch` refuses anything whose hash does
@@ -102,7 +105,7 @@ enough.
 
 ### Use it
 
-`reputation/src/` talks to no network of its own. The stamp, the scope and the message come from
+`client/src/` talks to no network of its own. The stamp, the scope and the message come from
 the registry client, unchanged.
 
 | Function | Gives |
@@ -124,7 +127,10 @@ const r = await proveReputation({
   labels: ['tutoring/seller', 'tutoring/buyer', 'cleaning/seller'],
   leaves,                      // the index's published leaves, in its order
   profile,                     // the main key the proof is shown for
-  artifacts: { wasm: 'devnet/reputation.wasm', zkey: 'devnet/reputation.zkey' },
+  artifacts: {
+    wasm: 'reputation/circuit/devnet/reputation.wasm',
+    zkey: 'reputation/circuit/devnet/reputation.zkey',
+  },
 })
 
 // Any reader, with the index's key, and the time and signature it published with the root:
@@ -140,15 +146,18 @@ SHA-256 `setup.json` records; and, from `package-lock.json`, snarkjs 0.7.5, circ
 ```
 cd keys && npm ci                       # registry/client and the tests read it
 cd registry/client && npm ci            # the stamp, the scope and the message
-cd circuits/reputation && npm ci
+cd reputation/client && npm ci
+npm run check && npm test               # the tree, what an index signs, what the client refuses
+cd reputation/circuit && npm ci         # after reputation/client
 npm run fetch                           # the release's files, hash-checked
 npm run compile                         # circom 2.2.3 on PATH or in CIRCOM; checks setup.json
-npm run check && npm test               # the tree, two proofs, and every way one must fail
+npm run check && npm test               # two proofs, and every way one must fail
 devnet/setup.sh                         # a new setup: new files, every hash new, a new release
 ```
 
-The tests build a tree of made-up leaves around `keys/`'s test person, and prove with one profile
-and with three. A wrong secret, a leaf not in the tree, a profile counted twice and a label shown
+The client's tests check the tree, the bytes an index signs, and the inputs the client refuses.
+The circuit's tests build a tree of made-up leaves around `keys/`'s test person, and prove with
+one profile and with three. A wrong secret, a leaf not in the tree, a profile counted twice and a label shown
 with two profiles are refused; a changed output, a changed message, a root the index did not sign
 and a changed time fail to verify.
 
@@ -175,7 +184,7 @@ Measured in Node 22 on a 4-core machine, with 8 slots at depth 20:
 
 ## Limits
 
-- **Devnet setup only, made by one party.** Whoever ran `devnet/setup.sh` could make false
+- **Devnet setup only, made by one party.** Whoever ran `circuit/devnet/setup.sh` could make false
   reputation proofs. A public setup ceremony comes before mainnet.
 - **The person picks which profiles count.** Up to eight, all from one issuer. A proof says "these
   profiles of mine", never "all of them": a low-scored profile can be left out, and nothing public

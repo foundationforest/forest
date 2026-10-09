@@ -1,7 +1,7 @@
 # Security checklist: the Forest escrow
 
-Written with the safe-solana-builder skill (Frank Castle's, copied unchanged into
-`.claude/skills/safe-solana-builder/`, its source in `SOURCE.md`): every rule in its
+Written with the safe-solana-builder skill (Frank Castle's, copied unchanged into this repo while
+the programs were written, and in its git history since): every rule in its
 `references/shared-base.md` (sections 1 to 31), `references/anchor.md` and `references/litesvm.md`,
 how this program applies it or why it does not apply, and every limit known today. The program is
 `program/src/`; the tests named here are in `program/tests-litesvm/tests/` and

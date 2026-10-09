@@ -33,7 +33,7 @@
   },
   "release": {
     "tag": "reputation-devnet-1",
-    "baseUrl": "https://github.com/foundationforest/forest/releases/download/reputation-devnet-1/"
+    "baseUrl": "https://github.com/foundationforest/standard/releases/download/reputation-devnet-1/"
   },
   "files": {
     "reputation.zkey": {

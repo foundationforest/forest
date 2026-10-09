@@ -1,4 +1,4 @@
-# forest
+# standard
 
 Forest is a set of open standards for trading with strangers, and this repo holds them. Your keys,
 your records and your money need no one in the middle: one seed of 24 words gives you a profile for
@@ -24,13 +24,15 @@ Every piece is sorted by one question: what if there were two of it?
 | Keys: the seed, and the recipe that mixes every key from it | core | [`keys/`](keys/README.md) | on the person's device |
 | Registry: one row per stamp (one person, one label, one issuer), proven without saying who | core | [`registry/`](registry/README.md) | a Solana program, on devnet (Solana's test network) |
 | Records: signed records and the hosts that keep them, private records, the inbox, blobs (photos and other files), the three record shapes | standard | [`records/`](records/README.md) | a library, wherever an app, host or index runs |
-| The reputation proof, and the tree an index publishes for it | standard | [`circuits/`](circuits/README.md) | made on the person's device, checked by anyone; its setup is for devnet |
+| The reputation proof, and the tree an index publishes for it | standard | [`reputation/`](reputation/README.md) | made on the person's device, checked by anyone; its setup is for devnet |
 | Market names: recommended spellings of labels | standard | [foundationforest/markets](https://github.com/foundationforest/markets) | nowhere: a directory to read |
 | Escrow: money out when both sides agree, or by an arbiter or timer set at the start | service: a program the foundation offers; use any | [`escrow/`](escrow/README.md) | a Solana program, on devnet |
 | Hosts, issuers, indexes and fee payers | service | a reference host in [`records/`](records/README.md); the rest in [foundationforest/services](https://github.com/foundationforest/services) | anywhere; the foundation's on devnet |
 | The Forest app: the screens, and the secure slot that holds the seed | app | [foundationforest/app](https://github.com/foundationforest/app) | on the person's device |
-| The CLI: Forest actions with access keys, for scripts and AI | app | [`cli/`](cli/README.md) | on the person's device, or hosted |
 | The words, where they are kept, and what is posted | the person | none | with the person |
+
+The CLI, Forest actions with access keys for scripts and AI, moved to services:
+[`mcp/`](https://github.com/foundationforest/services/tree/main/mcp).
 
 ## Who decides what
 
@@ -49,8 +51,8 @@ policy, an app's choice, or the person's.
   profile's records; its hosts record, signed by the profile, names every host that keeps them, so
   read those too. There is no directory ([records](records/README.md)).
 - **Read a market.** Ask an index. Its answer is in that index's own format, not part of the
-  standard; [cli](cli/README.md) reads the foundation's. You can also read the records yourself
-  and weigh them your own way.
+  standard; the [CLI](https://github.com/foundationforest/services/tree/main/mcp)
+  reads the foundation's. You can also read the records yourself and weigh them your own way.
 - **Pay Solana's fees for someone.** Whoever signs a transaction as payer pays its fee and any
   deposit a new account needs, and the programs do not care who that is. A fee payer is a service
   that pays for others; the foundation's is Kora, the Solana Foundation's open fee payer, and
@@ -59,7 +61,8 @@ policy, an app's choice, or the person's.
   device; it writes one row ([registry](registry/README.md)).
 - **Let an AI act for someone.** The person's app hands it access keys, which act for a profile
   within limits, never the main key that is the profile. The AI works through the
-  [CLI](cli/README.md), whose README gives the three setups.
+  [CLI](https://github.com/foundationforest/services/tree/main/mcp),
+  whose README gives the three setups.
 
 ## Privacy, honestly
 
@@ -87,7 +90,8 @@ What others can still see:
 
 What you can add:
 - A VPN, so hosts and indexes do not see your network address.
-- A model on your own device, so nothing you tell your AI leaves it ([cli](cli/README.md)).
+- A model on your own device, so nothing you tell your AI leaves it
+  ([CLI](https://github.com/foundationforest/services/tree/main/mcp)).
 
 Planned, not built:
 - A relay, so hosts and indexes do not see your network address, with no VPN.
@@ -152,7 +156,7 @@ kept by the foundation. Apps, and the ramps in and out, are products.
 **Why is the app in its own repo?**
 An app is the person's choice, one of many, so the standard must not look like one app. The app
 that holds the seed is open source so anyone can check that nothing leaks, and a repo is what
-people check. It pins a version of forest, the way services does.
+people check. It pins a version of this repo, the way services does.
 
 **What is it built from?**
 Existing pieces, used unchanged: Ed25519, RFC 8785 canonical JSON, age, Semaphore's lean Merkle

@@ -4,7 +4,7 @@
 # setup ceremony (many people contributing to the second phase, on the same first phase) comes
 # before mainnet.
 #
-#   cd circuits/reputation && npm ci && devnet/setup.sh     # circom 2.2.3 on PATH, or in CIRCOM
+#   cd reputation/circuit && npm ci && devnet/setup.sh     # circom 2.2.3 on PATH, or in CIRCOM
 #
 # Phase 1 is public: PSE's Perpetual Powers of Tau, pinned below by SHA-256. Phase 2 is one
 # contribution: 64 random bytes drawn inside Node, never on a command line, to which snarkjs adds
@@ -64,7 +64,7 @@ const record = {
   phase1: { what: "PSE's Perpetual Powers of Tau, up to 2^16 constraints", url: e.PTAU_URL, sha256: e.PTAU_SHA256 },
   phase2: { contributions: 1, contributionHash: e.CONTRIBUTION },
   r1cs: pin('build/reputation.r1cs'),
-  release: { tag: e.TAG, baseUrl: `https://github.com/foundationforest/forest/releases/download/${e.TAG}/` },
+  release: { tag: e.TAG, baseUrl: `https://github.com/foundationforest/standard/releases/download/${e.TAG}/` },
   files: { 'reputation.zkey': pin('devnet/reputation.zkey'), 'reputation.wasm': pin('devnet/reputation.wasm') },
   committed: { 'verification-key.json': pin('devnet/verification-key.json') },
 }
