@@ -5,10 +5,10 @@ Up: [the repo](../README.md).
 ## What it is
 
 A credit is a prepaid unit for one service, bought once and spent without the service being able
-to tell who bought it. A service that sells them says what one buys: for the foundation's fee
-payer, one registration; for its host, storage beyond the free tier. Anyone can buy credits for
-someone else, without learning which spends are theirs: that is how an issuer gives its people
-free registrations.
+to tell who bought it. A service that sells them says what one buys: for the foundation's registry
+payer, one registration; for its host, a cent of storage. Anyone can buy credits for someone else,
+without learning which spends are theirs: that is how an issuer gives its people free
+registrations.
 
 A credit is a Privacy Pass token (RFC 9576, RFC 9577, RFC 9578) of type 2, Blind RSA: the service
 signs it blind, over a number only the buyer's app knows, so when the credit comes back to be
@@ -77,7 +77,7 @@ more field:
 - A credit counts as spent only once its action lands; then its id joins the spent list. If the
   action fails, or can no longer land, the id is freed and the credit can be shown again, so a
   failed registration can retry.
-- What the action is, and when it lands, is each service's to say, with its unit. For the fee
+- What the action is, and when it lands, is each service's to say, with its unit. For the registry
   payer, the action is the register transaction: it lands when confirmed, and can no longer land
   once its blockhash expires.
 - The spent list holds ids only.
@@ -89,7 +89,7 @@ collects and finishes.
 
 - The buyer sees the amount and the reference, never the credits.
 - The service sees who paid and the blinded buy, never which spends they become.
-- An issuer gives its people free registrations by paying one-credit links for the fee payer.
+- An issuer gives its people free registrations by paying one-credit links for the registry payer.
 
 ### Use it
 
