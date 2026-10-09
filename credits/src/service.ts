@@ -152,22 +152,47 @@ export class SpentList {
     this.#db.exec('CREATE TABLE IF NOT EXISTS credits (id TEXT PRIMARY KEY, spent INTEGER NOT NULL, note TEXT, at INTEGER) WITHOUT ROWID')
   }
 
-  /** Hold `id` for a request now: `held` if it was free, `spent` if it was spent, `busy` if another request holds it. */
-  hold(id: string, note: string | null = null, at: number = Date.now()): Hold {
-    const taken = this.#db.prepare('INSERT OR IGNORE INTO credits (id, spent, note, at) VALUES (?, 0, ?, ?)').run(id, note, at).changes === 1
-    if (taken) return 'held'
-    const row = this.#db.prepare('SELECT spent FROM credits WHERE id = ?').get(id) as { spent: number } | undefined
-    return row?.spent ? 'spent' : 'busy'
+  /**
+   * Hold `id` for a request now, or several ids together, all or none: `held` if each was free,
+   * `spent` if one was spent, `busy` if another request holds one.
+   */
+  hold(id: string | string[], note: string | null = null, at: number = Date.now()): Hold {
+    const ids = typeof id === 'string' ? [id] : id
+    if (!ids.length || new Set(ids).size !== ids.length) throw new Error('hold one id or more, each once')
+    return this.#together(() => {
+      const rows = ids.map((i) => this.#db.prepare('SELECT spent FROM credits WHERE id = ?').get(i) as { spent: number } | undefined)
+      if (rows.some((r) => r?.spent)) return 'spent'
+      if (rows.some((r) => r)) return 'busy'
+      for (const i of ids) this.#db.prepare('INSERT INTO credits (id, spent, note, at) VALUES (?, 0, ?, ?)').run(i, note, at)
+      return 'held'
+    })
   }
 
-  /** The action landed: `id` is spent, for good. */
-  land(id: string): void {
-    this.#db.prepare('UPDATE credits SET spent = 1, note = NULL, at = NULL WHERE id = ?').run(id)
+  /** The action landed: `id`, or each of several, is spent, for good. */
+  land(id: string | string[]): void {
+    this.#together(() => {
+      for (const i of typeof id === 'string' ? [id] : id) this.#db.prepare('UPDATE credits SET spent = 1, note = NULL, at = NULL WHERE id = ?').run(i)
+    })
   }
 
-  /** The action failed, or can no longer land: `id` is free to be shown again. A spent id stays spent. */
-  free(id: string): void {
-    this.#db.prepare('DELETE FROM credits WHERE id = ? AND spent = 0').run(id)
+  /** The action failed, or can no longer land: `id`, or each of several, is free to be shown again. A spent id stays spent. */
+  free(id: string | string[]): void {
+    this.#together(() => {
+      for (const i of typeof id === 'string' ? [id] : id) this.#db.prepare('DELETE FROM credits WHERE id = ? AND spent = 0').run(i)
+    })
+  }
+
+  /** `work` in one transaction: all of it, or, if it throws, none. */
+  #together<T>(work: () => T): T {
+    this.#db.exec('BEGIN IMMEDIATE')
+    try {
+      const done = work()
+      this.#db.exec('COMMIT')
+      return done
+    } catch (error) {
+      this.#db.exec('ROLLBACK')
+      throw error
+    }
   }
 
   /** Every id held now, with its note and when: what a service settles when it starts again. */

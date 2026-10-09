@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto'
 import { test } from 'node:test'
 import { AuthorizationHeader, Token, genericBatched, publicVerif } from '@cloudflare/privacypass-ts'
 import { base58, base64urlnopad as b64u } from '@scure/base'
-import { CREDIT_TYPE, type Pending, authorization, buy, challengeOf, checkCredit, checkPending, creditId, creditOf, finish, referenceOf, serviceOf } from '../src/index.ts'
+import { CREDIT_TYPE, type Pending, authorization, buy, challengeOf, checkCredit, checkCredits, checkPending, creditId, creditList, creditOf, finish, referenceOf, serviceOf } from '../src/index.ts'
 
 const { BLIND_RSA, BlindRSAMode, Issuer, Origin, getPublicKeyBytes } = publicVerif
 const T = Date.UTC(2026, 9, 9)
@@ -100,6 +100,25 @@ test('shown with a request: one Authorization header, PrivateToken, as RFC 9577 
   assert.deepEqual(AuthorizationHeader.parse(BLIND_RSA, header)[0]!.token.serialize(), b64u.decode(credit!.credit), 'Cloudflare reads it the same')
   assert.throws(() => creditOf(`${header}, ${header}`), /one credit/)
   assert.throws(() => creditOf('Bearer x'))
+})
+
+test('several shown with one request, as its body lists them: checked together, all or none', async () => {
+  const b = await buy(payer.info, 4)
+  const credits = await finish(b.pending, await payer.answer(b.buy))
+  const service = { origin: payer.origin, keys: [payer.key] }
+  const list = creditList(credits)
+  assert.deepEqual(list, credits.map((c) => c.credit), 'each credit as the vault keeps it')
+  assert.deepEqual(JSON.parse(JSON.stringify({ credits: list })).credits, list, 'and as JSON carries it')
+  assert.deepEqual(await checkCredits(list, service, 4), credits.map((c) => creditId(c)), 'their ids, in order')
+  await assert.rejects(checkCredits(list, service, 3), /from 1 to 3 credits/, 'more than the service takes at once')
+  await assert.rejects(checkCredits([], service, 4), /from 1 to 4/)
+  await assert.rejects(checkCredits(list[0], service, 4), /from 1 to 4/, 'a list, not one credit')
+  await assert.rejects(checkCredits([list[0], list[1], list[0]], service, 4), /the same credit twice/)
+  await assert.rejects(checkCredits([list[0], 7], service, 4), /not a credit/)
+  // One that does not hold refuses them all: another service's among them.
+  const h = await buy(host.info, 1)
+  const [theirs] = await finish(h.pending, await host.answer(h.buy))
+  await assert.rejects(checkCredits([...list.slice(0, 2), theirs!.credit], service, 4), /not this service's credit/)
 })
 
 test('a token Cloudflare’s own client made for the same challenge is a credit too', async () => {

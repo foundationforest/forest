@@ -69,11 +69,14 @@ more field:
 
 ### Spending
 
-- A credit is shown on the request whose action it pays for, one per request, in RFC 9577's
-  header: `Authorization: PrivateToken token="<credit>"`.
+- A credit is shown on the request whose action it pays for: one in RFC 9577's header,
+  `Authorization: PrivateToken token="<credit>"`, or several in the request's body, as a list of
+  credits in base64url, up to as many as the service takes in one request.
 - The service checks it: type 2, its own challenge, a key it still counts, and the signature
   [`credit`]. Then it holds the id: an id already spent [`spent`], or held by another request in
   flight [`held`], is refused.
+- Several shown together are checked, held and spent together: one that does not hold, a credit
+  twice, or one spent or held refuses them all, and none is taken.
 - A credit counts as spent only once its action lands; then its id joins the spent list. If the
   action fails, or can no longer land, the id is freed and the credit can be shown again, so a
   failed registration can retry.
@@ -99,7 +102,9 @@ collects and finishes.
 | `buy(service, count)` | The buy's bytes, its reference, its pay link, and `pending`: what to keep to finish |
 | `finish(pending, answer)` | The credits, each `{ service, credit }` and checked against the key; refuses any other answer |
 | `authorization(credit)`, `creditOf(header)` | The header that shows one credit, and the credit back from it |
+| `creditList(credits)` | Several credits as a request's body lists them |
 | `checkCredit(credit, { origin, keys })` | For a service: the credit's id, or a refusal |
+| `checkCredits(list, { origin, keys }, max)` | For a service: the ids of several credits shown together, at most `max`, or a refusal of them all |
 | `creditId(credit)`, `referenceOf(buy)`, `challengeOf(origin)`, `checkPending(value)` | A credit's id; a buy's reference; a service's challenge; a pending buy's shape |
 
 ```ts
@@ -123,12 +128,12 @@ A service's side, in `src/service.ts` (Node only, like records' host: its spent 
 | `countOf(buy)`, `amountOf(price, n)` | How many credits a buy asks for, and what they cost: what its pay link asks |
 | `paid(rpc, { reference, address, mint, amount })` | The signature of a finalized payment that names the reference and pays at least the amount, or null; through the RPC the service passes, two calls |
 | `answer(buy, key, origin)` | The blind signatures for a paid buy: one per request under the key, an empty slot for any other, the same every time |
-| `SpentList` | The spent list: `hold` (held, spent or busy), `land`, `free`, and `holds`, what is held now, with the service's note on each |
+| `SpentList` | The spent list: `hold` (held, spent or busy), `land`, `free`, each of one id or several together, all or none; and `holds`, what is held now, with the service's note on each |
 
 A service collects a buy this way: `countOf` it and refuse more than its policy allows; `paid` for
 `amountOf(price, n)` at the buy's `referenceOf`; then `answer` it. It spends a credit this way:
-`checkCredit`, then `hold` its id with a note of what to look for, and `land` or `free` it once
-it knows whether the action landed; on a restart it settles each of `holds()`. Nothing in it
+`checkCredit` (or, for several, `checkCredits`), then `hold` its id (or their ids, together) with a
+note of what to look for, and `land` or `free` it once it knows whether the action landed; on a restart it settles each of `holds()`. Nothing in it
 logs what it is sent.
 
 ### Run it
@@ -179,7 +184,7 @@ base58 and base64url.
   entry, the buy and its reference, the pay link, the header, and the rules: spent once, only when
   the action lands; never refunded.
 - **A service, by its own policy:** its unit, price, mint and address; which keys it counts and for
-  how long; how many credits one buy may hold; what its action is and when it lands; how long it
+  how long; how many credits one buy may hold, and how many one request may show; what its action is and when it lands; how long it
   keeps a payment for collecting.
 - **An app, with the person:** when to buy, how many, and whom to ask to pay.
 - **A buyer:** whom it pays for.

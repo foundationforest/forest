@@ -1,7 +1,7 @@
 // Credits, a service's side: its key from PKCS #8, its directory as the client reads it, a buy
 // counted, priced and answered (the client finishes the credits and the service's check takes them),
 // the answer the same twice, nothing logged; the payment check against a stand-in RPC; and the
-// spent list's hold, land and free, kept across a restart.
+// spent list's hold, land and free, of one id or several together, kept across a restart.
 
 import assert from 'node:assert/strict'
 import { generateKeyPairSync } from 'node:crypto'
@@ -98,7 +98,7 @@ test('the payment: a finalized transaction that names the reference and pays eno
   await assert.rejects(paid(enough, { ...owed, reference: 'not-one' }))
 })
 
-test('the spent list: hold, land and free, kept across a restart', () => {
+test('the spent list: hold, land and free, of one or several together, kept across a restart', () => {
   const dir = mkdtempSync(join(tmpdir(), 'forest-credits-spent-'))
   try {
     const path = join(dir, 'spent.sqlite')
@@ -116,6 +116,17 @@ test('the spent list: hold, land and free, kept across a restart', () => {
     list = new SpentList(path)
     assert.deepEqual(list.holds(), [{ id: 'b', note: 'sig-b2', at: 3 }], 'what is held, after a restart')
     assert.equal(list.hold('a'), 'spent')
+
+    // Several together: all held, or none.
+    assert.equal(list.hold(['c', 'd', 'a'], null, 4), 'spent', 'one of them spent')
+    assert.equal(list.hold(['c', 'd', 'b'], null, 4), 'busy', 'one of them held by another request')
+    assert.deepEqual(list.holds().map((h) => h.id), ['b'], 'and neither took c or d')
+    assert.throws(() => list.hold(['c', 'c']), /each once/)
+    assert.throws(() => list.hold([]), /one id or more/)
+    assert.equal(list.hold(['c', 'd', 'e'], 'n', 5), 'held')
+    list.land(['c', 'd'])
+    list.free(['e', 'c'])
+    assert.deepEqual([list.hold('c'), list.hold('d'), list.hold('e')], ['spent', 'spent', 'held'], 'landed together, freed together; a spent one stays spent')
     list.close()
   } finally {
     rmSync(dir, { recursive: true, force: true })
