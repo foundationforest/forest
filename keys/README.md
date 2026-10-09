@@ -120,8 +120,7 @@ Each has one scope:
 
 - **write:** signs records into the profile's folder, at the paths it is allowed;
 - **message:** sends the profile's messages and pulls its inbox;
-- **read:** opens the private records and messages encrypted to it;
-- **pay:** spends a token allowance the chain gives it, with no Forest format.
+- **read:** opens the private records and messages encrypted to it.
 
 The profile's permissions record lists which access keys may act, and a grant hands one to
 whoever it is for ([records](../records/README.md)).
@@ -135,7 +134,7 @@ whoever it is for ([records](../records/README.md)).
 4. Each app, server or AI the person lets act for them gets its own access key for each folder.
 5. Proofs are made in the app, never delegated.
 6. The app works with any host, and its host with any app.
-7. A server that acts for you holds access keys with write, message or read scope, never a pay key.
+7. A server that acts for you holds access keys with write, message or read scope.
 8. The app that holds the seed is open source.
 9. Keep a copy of every record signed; a host may drop one, and the copy puts it back.
 10. Keep each grant, an access key handed to the person, as a private record in their own folder.

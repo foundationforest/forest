@@ -104,11 +104,9 @@ describe('access keys and permissions', () => {
     assert.equal(liveContent(view([permissionsRecord(alice, [allow(accessKey, [])], T0), at('offer/x')])).size, 0, 'an empty list covers nothing')
   })
 
-  test('only a write key writes: a record by a key listed as message or pay counts for nothing', () => {
-    for (const scope of ['message', 'pay'] as const) {
-      const v = view([permissionsRecord(alice, [allow(accessKey, undefined, scope)], T0), written], T0 + 2 * MINUTE)
-      assert.equal(v.ignored.get(idOf(written)), 'not-allowed', scope)
-    }
+  test('only a write key writes: a record by a key listed as message counts for nothing', () => {
+    const v = view([permissionsRecord(alice, [allow(accessKey, undefined, 'message')], T0), written], T0 + 2 * MINUTE)
+    assert.equal(v.ignored.get(idOf(written)), 'not-allowed')
   })
 
   test('a key the permissions record does not list counts for nothing', () => {

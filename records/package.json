@@ -2,7 +2,7 @@
   "name": "@forest/records",
   "version": "0.0.0",
   "private": true,
-  "description": "Forest records: signed records on open hosts. The core library, a reference host, private records, the record schemas, tests and vectors. Nothing is shipped.",
+  "description": "Forest records: signed records on open hosts. The core library, a reference host, private records, a fetch that reaches only public addresses, the record schemas, tests and vectors. Nothing is shipped.",
   "license": "Apache-2.0",
   "type": "module",
   "engines": {
@@ -20,6 +20,10 @@
     "./private": {
       "types": "./dist/private.d.ts",
       "default": "./dist/private.js"
+    },
+    "./public": {
+      "types": "./dist/public.d.ts",
+      "default": "./dist/public.js"
     },
     "./schemas/*": "./schemas/*",
     "./package.json": "./package.json"
@@ -40,7 +44,8 @@
     "@noble/hashes": "2.4.0",
     "@scure/base": "2.4.0",
     "age-encryption": "0.3.1",
-    "canonicalize": "5.1.0"
+    "canonicalize": "5.1.0",
+    "undici": "7.30.0"
   },
   "devDependencies": {
     "@solana/transaction-messages": "8.4.0",

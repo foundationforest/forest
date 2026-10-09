@@ -75,9 +75,15 @@ describe('schemas', () => {
     assert.ok(!fits('offer', { ...located, location: { ...located.location, lat: 38.72 } }))
   })
 
-  test('blobs are SHA-256 references with their types and sizes; how large is each host’s policy, not the shape’s', () => {
-    assert.ok(fits('profile', edit('profile', ['photo', 'mimeType'], 'image/png')))
-    assert.ok(!fits('profile', edit('profile', ['photo', 'mimeType'], 'image/gif')))
+  test('blobs are SHA-256 references with their types and sizes; which types and how large is each host’s policy, not the shape’s', () => {
+    for (const type of ['image/png', 'image/gif', 'image/svg+xml', 'application/vnd.oasis.opendocument.text']) {
+      assert.ok(fits('profile', edit('profile', ['photo', 'mimeType'], type)), type)
+      assert.ok(fits('offer', edit('offer', ['media'], [{ sha256: 'b'.repeat(64), mimeType: type, size: 1 }])), type)
+      assert.ok(fits('review', edit('review', ['media'], [{ sha256: 'b'.repeat(64), mimeType: type, size: 1 }])), type)
+    }
+    for (const type of ['Image/PNG', 'image', 'image/', '/png', 'image/png; charset=x', 'image/p ng', '', 'a/' + 'b'.repeat(254)]) {
+      assert.ok(!fits('profile', edit('profile', ['photo', 'mimeType'], type)), type)
+    }
     assert.ok(fits('profile', edit('profile', ['photo', 'size'], 1_000_001)))
     assert.ok(!fits('profile', edit('profile', ['photo', 'size'], -1)))
     assert.ok(!fits('profile', edit('profile', ['photo', 'sha256'], 'A'.repeat(64))))
@@ -89,7 +95,6 @@ describe('schemas', () => {
     assert.ok(fits('offer', edit('offer', ['media'], [{ ...clip, size: 50_000_001 }])))
     assert.ok(fits('offer', edit('offer', ['media'], Array(10).fill(clip))), 'an offer carries the same media as a review')
     assert.ok(!fits('offer', edit('offer', ['media'], Array(11).fill(clip))))
-    assert.ok(!fits('offer', edit('offer', ['media'], [{ ...clip, mimeType: 'image/gif' }])))
   })
 
   test('an offer’s price, terms and timer keep their choices and bounds', () => {
@@ -135,16 +140,6 @@ describe('schemas', () => {
     for (const rating of ['0', '0.5', '10.5', '11', '9.55', '8.', '.5', '07', ' 8']) assert.ok(!fits('review', edit('review', ['ratings', 'overall'], rating)), rating)
     assert.ok(fits('review', edit('review', ['ratings', 'punctuality'], '7.5')), 'any name may be used')
     assert.ok(!fits('review', edit('review', ['ratings', 'punctuality'], '11')), 'and every rating is checked')
-  })
-
-  test('a profile’s addresses on other chains: camelCase chain names, never solana, values up to 128 characters', () => {
-    assert.ok(fits('profile', edit('profile', ['addresses'], { ethereum: '0x' + 'a'.repeat(40), arbitrumOne: '0x' + 'b'.repeat(40) })))
-    assert.ok(fits('profile', edit('profile', ['addresses'], { ['c' + 'x'.repeat(31)]: 'x'.repeat(128) })), '32 characters, 128 characters')
-    for (const chain of ['solana', 'arbitrum-one', 'Ethereum', '1chain', 'c' + 'x'.repeat(32), '']) assert.ok(!fits('profile', edit('profile', ['addresses', chain], 'x')), chain)
-    assert.ok(!fits('profile', edit('profile', ['addresses', 'ethereum'], 'x'.repeat(129))))
-    assert.ok(!fits('profile', edit('profile', ['addresses', 'ethereum'], 1)))
-    assert.ok(checkRecord(ownerRecord(alice, 'profile', edit('profile', ['addresses', 'arbitrumOne'], 'x'), T0)), 'a camelCase name is a key a record carries')
-    assert.throws(() => ownerRecord(alice, 'profile', edit('profile', ['addresses', 'arbitrum-one'], 'x'), T0), /key/, 'a hyphen is not')
   })
 
   test('a profile’s inboxKey is its inbox key, an age post-quantum hybrid recipient', async () => {

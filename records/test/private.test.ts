@@ -148,6 +148,7 @@ describe('grants', () => {
     assert.equal(keyFromPrivate(b64u.decode(write.key)).address, accessKey.address, 'the holder gets the key back')
     const bad: Array<[string, unknown]> = [
       ['past is not a grant’s scope', { ...sends, scope: 'past' }],
+      ['there is no pay scope', { ...sends, scope: 'pay' }],
       ['no dates beyond since', { ...write, until: T0 }],
       ['a read key is an age identity', { ...read, key: write.key }],
       ['any other key is 32 bytes in base64url', { ...write, key: readKeyForBob.identity }],
