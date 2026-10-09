@@ -52,7 +52,7 @@
     },
     "proofs": {
       "type": "array",
-      "description": "Optional. Proofs the profile shows, each one data anyone checks with its circuit's verifier (circuits/), for this profile's main key.",
+      "description": "Optional. Proofs the profile shows, each one data anyone checks with its circuit's verifier (reputation/), for this profile's main key.",
       "items": {
         "$ref": "#/$defs/proof"
       },
@@ -116,7 +116,7 @@
       "properties": {
         "circuit": {
           "type": "string",
-          "description": "The circuit that checks it. Today reputation (circuits/) and person (registry/).",
+          "description": "The circuit that checks it. Today reputation (reputation/) and person (registry/).",
           "pattern": "^[a-z][a-z0-9-]{0,31}$"
         }
       },
@@ -149,7 +149,7 @@
     },
     "reputation": {
       "type": "object",
-      "description": "A reputation proof (circuits/): the count-weighted score of profiles the person holds in an index's tree, for this profile's main key, which profiles hidden. Everything its verifier takes but the main key, which is the profile's own.",
+      "description": "A reputation proof (reputation/): the count-weighted score of profiles the person holds in an index's tree, for this profile's main key, which profiles hidden. Everything its verifier takes but the main key, which is the profile's own.",
       "required": ["circuit", "index", "root", "time", "signature", "score", "proof"],
       "additionalProperties": false,
       "properties": {
@@ -176,7 +176,7 @@
         },
         "signature": {
           "type": "string",
-          "description": "The index's ed25519 signature over the root and the time, as circuits/ defines its signed bytes; 64 bytes in base64url without padding.",
+          "description": "The index's ed25519 signature over the root and the time, as reputation/ defines its signed bytes; 64 bytes in base64url without padding.",
           "pattern": "^[A-Za-z0-9_-]{86}$"
         },
         "score": {

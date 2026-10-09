@@ -293,13 +293,13 @@ A proof counts for one main key: a reader checks it against the main key of the 
 carries it, so a proof copied to another profile fails. A reader ignores a proof whose circuit it
 does not know, so a newer kind never makes a profile invalid for an older app. An app puts a
 proof in the profile record only when the person chooses to show it there:
-[circuits/](../circuits/README.md#limits) says what one can reveal.
+[reputation/](../reputation/README.md#limits) says what one can reveal.
 
 - **`reputation`** shows the score of the profiles the person holds in an index's tree, without
   saying which. It carries the index's key, the root and time the index signed and its signature,
   the score, the label when the proof shows one market, and the proof's 256 bytes. Each reader
   decides which indexes it trusts and how old a time it accepts. How it is made is
-  [circuits/](../circuits/README.md)'s.
+  [reputation/](../reputation/README.md)'s.
 - **`person`** shows the profile's tier: that an issuer signed the person a note at that tier
   ([registry/](../registry/README.md)). It carries the issuer's key, the label and the stamp as
   the profile's registry row holds them, the tier in decimal (a tier can be a number far past

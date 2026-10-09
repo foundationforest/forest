@@ -24,7 +24,7 @@ Every piece is sorted by one question: what if there were two of it?
 | Keys: the seed, and the recipe that mixes every key from it | core | [`keys/`](keys/README.md) | on the person's device |
 | Registry: one row per stamp (one person, one label, one issuer), proven without saying who | core | [`registry/`](registry/README.md) | a Solana program, on devnet (Solana's test network) |
 | Records: signed records and the hosts that keep them, private records, the inbox, blobs (photos and other files), the three record shapes | standard | [`records/`](records/README.md) | a library, wherever an app, host or index runs |
-| The reputation proof, and the tree an index publishes for it | standard | [`circuits/`](circuits/README.md) | made on the person's device, checked by anyone; its setup is for devnet |
+| The reputation proof, and the tree an index publishes for it | standard | [`reputation/`](reputation/README.md) | made on the person's device, checked by anyone; its setup is for devnet |
 | Market names: recommended spellings of labels | standard | [foundationforest/markets](https://github.com/foundationforest/markets) | nowhere: a directory to read |
 | Escrow: money out when both sides agree, or by an arbiter or timer set at the start | service: a program the foundation offers; use any | [`escrow/`](escrow/README.md) | a Solana program, on devnet |
 | Hosts, issuers, indexes and fee payers | service | a reference host in [`records/`](records/README.md); the rest in [foundationforest/services](https://github.com/foundationforest/services) | anywhere; the foundation's on devnet |

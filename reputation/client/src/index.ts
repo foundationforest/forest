@@ -13,10 +13,10 @@ import { Group } from '@semaphore-protocol/group'
 import { poseidon4 } from 'poseidon-lite/poseidon4'
 import { groth16 } from 'snarkjs'
 
-import verificationKey from '../devnet/verification-key.json' with { type: 'json' }
 import { type SnarkjsProof, proofFromBytes } from '../../../registry/client/src/compress.ts'
 import { isFieldElement, messageOf, scopeOf, toBytes32 } from '../../../registry/client/src/field.ts'
 import { scalarOf, stampOf } from '../../../registry/client/src/stamp.ts'
+import { REPUTATION_KEY } from './reputation-key.ts'
 
 /** An issuer secret: the 32 bytes `keys/`'s `issuerSecret(seed, name)` returns. */
 type Secret = Uint8Array
@@ -233,7 +233,7 @@ export async function verifyReputation(input: {
     const scope = input.label === undefined ? 0n : scopeOf(input.label)
     const publicSignals = [input.score, input.root, messageOf(input.profile), scope].map(String)
     const proof = input.proof instanceof Uint8Array ? proofFromBytes(input.proof) : input.proof
-    return await groth16.verify(verificationKey, publicSignals, proof)
+    return await groth16.verify(REPUTATION_KEY, publicSignals, proof)
   } catch {
     return false
   }
