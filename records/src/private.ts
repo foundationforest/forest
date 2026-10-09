@@ -13,20 +13,24 @@
 //
 // A message's body is one of these envelopes, made for the recipient's inbox key and its inbox's
 // readers, or for the inbox key alone when it holds a grant. message() seals and signs one;
-// openMessage() checks one and opens it. The grants a person received are one private record at
-// `grants`, made for their own inbox key alone; the notes on the keys a person handed out ride in
-// their permissions record, made for their own inbox key alone too.
+// openMessage() checks one and opens it. The notes on the keys a person handed out ride in their
+// permissions record, made for their own inbox key alone. The vault, what a new device needs and
+// the seed cannot give back, the grants a person received among it, is one private record at
+// `vault` in a folder of its own, made for the vault's own inbox key alone (vault.ts).
 
 import { Decrypter, Encrypter } from 'age-encryption'
 import { b64u } from './bytes.ts'
 import { type Json, canonical, parseCanonical } from './canonical.ts'
-import { GRANTS_PATH, type Grant, type Note, checkGrant, checkNote } from './grant.ts'
+import { readProfile, type ReadHow } from './client.ts'
+import { type Note, checkGrant, checkNote } from './grant.ts'
 import type { Key } from './keys.ts'
 import { type Sender, type SignedMessage, decodeMessage, encodeMessage, sealedTo, signMessage } from './message.ts'
 import { type Body, RecordError, type SignedRecord, isPrivate } from './record.ts'
+import { VAULT_PATH, type Vault, checkVault } from './vault.ts'
 import { ownerRecord } from './write.ts'
 
 export { isPrivate }
+export * from './vault.ts'
 
 /** A private body: `body` in an envelope only these keys (age recipients) open. */
 export async function makePrivate(body: Body, readers: string[]): Promise<{ private: string }> {
@@ -78,18 +82,35 @@ export async function openMessage(message: SignedMessage | string, identity: str
   return { id, from: m.from, to: m.to, time: m.time, body: await openPrivate(m.body, identity), ...(m.key !== undefined && { key: m.key }) }
 }
 
-/** The grants record: the grants a profile received, at `grants`, sealed to its own inbox key alone. */
-export async function grantsRecord(owner: Key, inboxKey: string, grants: Grant[], time: number): Promise<SignedRecord> {
-  for (const grant of grants) checkGrant(grant)
-  return ownerRecord(owner, GRANTS_PATH, await makePrivate({ grants: grants as unknown as Json[] }, [inboxKey]), time)
+/**
+ * The vault record: the vault's contents, checked, sealed to the vault's own inbox key alone, at
+ * `vault` in the vault's folder, signed by the vault key (keys/'s vaultKey; inboxKey of it for the
+ * recipient). Write it after reading the current one, at a time past its time (readVault gives
+ * it), to every host the vault's hosts record names.
+ */
+export async function vaultRecord(vault: Key, inboxKey: string, contents: Vault, time: number): Promise<SignedRecord> {
+  checkVault(contents)
+  return ownerRecord(vault, VAULT_PATH, await makePrivate(contents as Body, [inboxKey]), time)
 }
 
-/** The grants in a grants record's body, opened with the profile's inbox key identity, each checked. */
-export async function openGrants(body: Body, identity: string): Promise<Grant[]> {
+/** The vault in a vault record's body, opened with the vault's inbox key identity, checked. */
+export async function openVault(body: Body, identity: string): Promise<Vault> {
   const inside = await openPrivate(body, identity)
-  if (Object.keys(inside).length !== 1 || !Array.isArray(inside.grants)) throw new RecordError('grant', 'a grants record holds { grants: [ … ] } and nothing else')
-  for (const grant of inside.grants) checkGrant(grant)
-  return inside.grants as unknown as Grant[]
+  checkVault(inside)
+  return inside
+}
+
+/**
+ * The vault, read from hosts: the folder at the vault key's `address`, on the hosts given and every
+ * host its hosts record names, by POST so the address is in no URL; its current `vault` record
+ * opened with the vault's inbox key `identity`. With it, the folder's hosts and the record's time,
+ * for the next write. Null when no host has it.
+ */
+export async function readVault(hosts: string[], vault: { address: string; identity: string }, now: number, how: ReadHow = {}): Promise<{ vault: Vault; hosts: string[]; time: number } | null> {
+  const view = await readProfile(hosts, vault.address, now, { ...how, post: true })
+  const current = view.current.get(VAULT_PATH)
+  if (!current?.record.body) return null
+  return { vault: await openVault(current.record.body, vault.identity), hosts: view.hosts, time: current.record.time }
 }
 
 /** The notes for a permissions record (permissionsRecord's `notes`): each checked, sealed to the owner's own inbox key alone. */

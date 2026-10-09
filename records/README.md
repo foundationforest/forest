@@ -33,7 +33,6 @@ Its folder is everything signed for it, one current record per path:
 | `profile` | the card: name, photo, inbox, proofs |
 | `offer/<id>` | an offer, or a request for one |
 | `review/<id>` | a review this profile wrote of another |
-| `grants` | the access keys others handed this profile, private |
 
 - `hosts` and `permissions` are the control paths: only the main key writes them. Every other path
   is content. Readers MAY ignore a first segment they do not know.
@@ -123,7 +122,7 @@ whoever it is for in a grant (Grants).
 - `paths`: at most 16 content-path prefixes, on a write or read key, never on a message key; a
   past key keeps the paths it had. With `paths`, the key works only under them: where a write key
   writes, and which private records the owner's devices encrypt to a read key. Without, it works at
-  every content path but those `profile` and `grants` cover.
+  every content path but those `profile` covers.
 - In the hosts and the permissions record, a field not named here, at any level, makes the record
   invalid, so a later limit is never ignored.
 
@@ -280,9 +279,42 @@ A grant is how an access key reaches whoever it is for: its private half, and wh
 - Handed over by message, a grant is the body `{ "grant": <grant> }`, encrypted to the recipient's
   inbox key alone, never to its inbox's readers: a reader acts on the inbox, and a grant is a key.
   The library's `message` encrypts it so.
-- A person keeps the grants they received as the private record at `grants`, body
-  `{ "grants": [<grant>, …] }`, encrypted to the profile's own inbox key. The app's local copy is
-  the working copy; the record on the hosts is why losing the phone loses nothing.
+- A person keeps the grants they received in their vault (The vault). The app's local copy is the
+  working copy; the vault on the hosts is why losing the phone loses nothing.
+
+### The vault
+
+The vault holds what a new device needs and the seed alone cannot give back: the labels of the
+person's profiles and where each lives, the grants they received, their issuers' notes, and apps'
+settings. It lives on hosts in a folder of its own, whose main key is the vault key, mixed from the
+seed ([keys](../keys/README.md#the-vault-key)), so a new device finds it with the seed alone.
+
+```
+{ "profiles": [{ "label": <label>, "hosts": [<origin>, …] }, …],
+  "grants": [<grant>, …],
+  "issuerNotes": [{ "issuer": <issuer name>, "note": <signed note> }, …],
+  "settings": { … } }
+```
+
+- The folder holds its hosts record and one private record at `vault`, its body the object above,
+  encrypted to the vault's own inbox key alone. It has no card, no inbox and no access keys.
+- Every field may be missing. An app keeps every field it does not know, at the top and inside
+  `settings`, so two apps share one vault.
+- `profiles`: each label once, with the hosts its folder lived on when written; the signed hosts
+  record there is the truth.
+- `grants`: grants as above. A grant still reaches the person in a profile's inbox: the app pulls
+  it, opens it, adds it here and writes the vault again.
+- `issuerNotes`: the issuer's name, exactly as keys/'s recipe takes it, and the note it signed, as
+  registry/'s JSON ([registry](../registry/README.md#the-note-and-the-person-proof)).
+- `settings`: apps' settings, such as the hosts, issuers and indexes the person chose. Each field
+  is an app's own.
+- To change it, an app reads the current vault, changes it, and writes it, at a time past the
+  current one's, to every host the vault's hosts record names.
+
+**Restoring.** A new device mixes the vault key from the seed, and its inbox key from that. It asks
+the hosts it knows for the vault key's folder, or a host the person names; the folder's hosts
+record names the rest. It opens `vault`, then mixes each profile's main key from its label and
+reads that folder from its hosts. Issuer secrets come from the seed and each note's issuer name.
 
 ### Proofs
 
@@ -433,15 +465,15 @@ its policy.
   text; signing, checking and encoding records; the view (`viewProfile`, `liveContent`, `allows`,
   `covers`); writing (`ownerRecord`, `accessRecord`, `hostsRecord`, `permissionsRecord`,
   `nextTime`); messages and pulls (`signMessage`, `decodeMessage`, `messageId`, `pullRequest`,
-  `checkPull`, `inboxOf`, `sealedTo`); grants and notes (`checkGrant`, `checkNote`,
-  `GRANTS_PATH`); talking to hosts (`publish`, `readPage`, `readAll`, `readProfile`, `deliver`,
-  `pull`, `putBlob`, `getBlob`). A read asks by POST with `post: true`. A read, a publish, a
+  `checkPull`, `inboxOf`, `sealedTo`); grants and notes (`checkGrant`, `checkNote`); talking to
+  hosts (`publish`, `readPage`, `readAll`, `readProfile`, `deliver`, `pull`, `putBlob`,
+  `getBlob`). A read asks by POST with `post: true`. A read, a publish, a
   delivery and a pull go through the caller's own `fetch` if given, and refuse a host that
   redirects with `redirect: 'error'`. No server, database or encryption library is in it.
 - `@forest/records/private`: `makePrivate`, `openPrivate`, `readerCount`; `message` (encrypt to a
   card's inbox key and readers, a grant to the inbox key alone, and sign) and `openMessage`;
-  `grantsRecord` and `openGrants`; `makeNotes` and `openNotes`. The inbox key itself is keys/'s
-  `inboxKey`.
+  `makeNotes` and `openNotes`; the vault (`vaultRecord`, `openVault`, `readVault`, `checkVault`,
+  `VAULT_PATH`). The inbox key itself is keys/'s `inboxKey`, and the vault's keys/'s `vaultKey`.
 - `@forest/records/host`: `Host`, the reference host (below).
 - `@forest/records/public`: `publicFetch`, a fetch that reaches only public addresses and follows
   no redirect, for a host or an app that goes to a host a stranger named: it refuses loopback,
@@ -625,21 +657,30 @@ with the pinned inbox key they were encrypted to. The profile is
   the same moment to the same host puts them side by side in its listing; one access key listed by
   both names itself in both; and a host that logs addresses links them; whether it logs is its
   policy. Write them apart, and give each folder its own access keys.
+- **A vault and a profile on one host can be linked by time.** The vault changes when a grant
+  arrives or a profile is added, so a host that keeps both sees the vault change right after the
+  profile's inbox does. Keep the vault on hosts of its own, and write it apart.
+- **Two devices writing the vault at once lose one change.** The newer record counts. An app that
+  reads before it writes, and writes again when the vault changed under it, loses nothing.
+- **The vault is one record.** A host's largest record bounds it: 64 KB on the reference host, a
+  few hundred grants.
+- **A vault has no registry row.** A host whose policy takes only registered folders will not keep
+  it.
 
 ## Who decides what
 
 - **The standard:** the record and the message, and what makes each valid (the ten-minute
   window); the six requests and their codes; the control records and the scopes of access keys;
-  envelopes; the three shapes; the inbox, its rules and the request body; the grant; the proofs
-  field.
+  envelopes; the three shapes; the inbox, its rules and the request body; the grant; the vault;
+  the proofs field.
 - **A host, by its own policy:** its keep days; the largest record, message and blob it takes;
   batch and page sizes; which blob types it takes; which inbox rules it supports; whether it reads
   senders' records to take a message key's message, and how long it keeps what it read; rate
   limits; logging; storage.
-- **An app, with the person:** the copies it keeps; which hosts; which private records it encrypts
-  to a read key; how a grant reaches its holder; whether to forward a message to email or a
-  notification; dropping a message that arrives twice; what it finds too big to read; and what
-  asks for the person's face.
+- **An app, with the person:** the copies it keeps; which hosts, the vault's among them; which
+  private records it encrypts to a read key; how a grant reaches its holder; whether to forward a
+  message to email or a notification; dropping a message that arrives twice; what it finds too
+  big to read; and what asks for the person's face.
 - **An index, by its own policy:** which hosts, issuers and markets count, which hosts it crawls,
   how much each review weighs, and which proofs it accepts.
 
@@ -689,6 +730,12 @@ its own label, so neither needs more.
 **Does a review need proof of a deal?**
 No. A review needs only its subject. Evidence weighs, it never rejects: what is missing weighs
 less, and nothing is refused. An index decides how much each review weighs.
+
+**Why is the vault a folder of its own?**
+A new device has only the seed. A record inside a profile's folder could be found only by first
+knowing that profile's label, and the labels are what the vault keeps. A folder named by a key from
+the seed is found with nothing else; it can live on hosts apart from the profiles; and no profile's
+key opens it.
 
 **Why is a proof's `proof` 256 bytes, and not snarkjs's JSON?**
 A record's keys cannot spell snarkjs's `pi_a`, `pi_b` and `pi_c`. The bytes are the three points

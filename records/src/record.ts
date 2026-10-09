@@ -201,7 +201,7 @@ export type AccessKey = {
   /**
    * Content path prefixes it works under, segment by segment: where a write key writes, and which
    * private records the owner's devices seal to a read key. Without it, every content path but
-   * those `profile` and `grants` cover. Never on a message key, past or not.
+   * those `profile` covers. Never on a message key, past or not.
    */
   paths?: string[]
 }

@@ -11,6 +11,8 @@ export const INFO = {
   read: 'forest/v1/read',
   /** The person's secret for one issuer, mixed from the seed. The name is used exactly as given. */
   issuer: (name: string) => `forest/v1/issuer/${name}`,
+  /** The vault key: the main key of the person's vault, a folder of its own, mixed from the seed. */
+  vault: 'forest/v1/vault',
 } as const
 
 /** The seed is 32 bytes. */

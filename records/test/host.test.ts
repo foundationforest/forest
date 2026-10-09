@@ -200,10 +200,10 @@ describe('access keys, checked as they arrive', () => {
       assert.deepEqual(await errors(h, [offer(accessKey, 'offer/mine', T0 + 5)]), ['permission'])
       assert.deepEqual(await errors(h, [ownerRecord(alice, 'offer/w', null, T0)]), ['ok'], 'older than the access key’s, and still wins')
 
-      // Listed with no paths: anywhere but profile and grants.
+      // Listed with no paths: anywhere but profile.
       clock.advance(MINUTE)
       await publish([h.url], [permissionsRecord(alice, [allow(accessKey)], clock.t)])
-      assert.deepEqual(await errors(h, [offer(accessKey, 'review/2'), offer(accessKey, 'profile'), offer(accessKey, 'grants')]), ['ok', 'permission', 'permission'])
+      assert.deepEqual(await errors(h, [offer(accessKey, 'review/2'), offer(accessKey, 'profile')]), ['ok', 'permission'])
 
       // Listed with another scope: it writes nothing.
       clock.advance(MINUTE)

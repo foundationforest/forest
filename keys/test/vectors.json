@@ -1,5 +1,5 @@
 {
-  "about": "Fixed test vectors for Forest keys, v1. The seed is the 32 bytes 00 01 ... 1f: public by construction, so every key here is public; for tests only. Two profiles (labels tutoring/seller and tutoring/buyer), each with its inbox key; two issuers, named issuer-a.example and issuer-b.example, each with the person's secret, its scalar and the note number. Generated once by this library and pinned; test/keys.test.ts recomputes every value without it. Bytes are hex; field elements are decimal. Changing any value here changes the standard.",
+  "about": "Fixed test vectors for Forest keys, v1. The seed is the 32 bytes 00 01 ... 1f: public by construction, so every key here is public; for tests only. Two profiles (labels tutoring/seller and tutoring/buyer), each with its inbox key; two issuers, named issuer-a.example and issuer-b.example, each with the person's secret, its scalar and the note number; and the vault key, with its inbox key. Generated once by this library and pinned; test/keys.test.ts recomputes every value without it. Bytes are hex; field elements are decimal. Changing any value here changes the standard.",
   "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
   "words": "abandon amount liar amount expire adjust cage candy arch gather drum bullet absurd math era live bid rhythm alien crouch range attend journey unaware",
   "mainKeys": [
@@ -41,5 +41,15 @@
       "scalar": "1519689346950852131878692477637090806728379909558971026767509071663270396380",
       "noteNumber": "12060818474188934874565393249181582662965363592091992641141699529541802290234"
     }
-  ]
+  ],
+  "vault": {
+    "info": "forest/v1/vault",
+    "privateKey": "11bf841699d735fcc03948347173768036184470b9ada37bc6f66c0cb953ff70",
+    "address": "77js3ecvAes7Zxu1bpZ4wrfDDRMGoEmc8HL2i8ZYYD7C",
+    "inbox": {
+      "privateKey": "1fdeaf5bba6e4497ba7c8e63677d596c67c69a5ca0d64ac2c76a0773d3aefe93",
+      "identity": "AGE-SECRET-KEY-PQ-1RL027KA6DEZF0WNU3E3KWL2ED3NUDXJU5RTY4SK8DGRH85AWL6FSNQ5EY7",
+      "recipient": "age1pq1fwgtx8x5g6n5g0t38zfru6znd2mes8wh8f4v00mdmp0u5czkmyuesq5mjr532g9x0w64p6stpjztp3pj52nys3vf5zr5wtqcyndzpjwkgkjyz7xsagmfx7tjr9eq74hjex03jgyvw2hudqpvy9tz06fx9ny80wwgzfl24ga4wxdqg6yf2ftcwjstk6s573qvypteyjghjp5vz6qax2yy84yhswpeste4qn76qtgknfq63gwtq6gtulhpgq4et0jmdfp0p6m88vq50js98p25qa9us534d6er5vep73szy2accf3hxjurhd5ak6ug0lsmgh4s5afu0pahtgzlsz6rt7cjrgyae98da3wukqqg2dmxhnjr43njxvtfxau9ge4xz9jzuafm3a33sfnj5kxcsene0k3fsrgqs9cd2g47vyjtel9zjcqcldnhdxmzj9aucfphkck8dspcvpmreylhq95mx39064jnvaexwns690a7t3rv4gf28v9nzwqcegeuc3f7npuc8y5lm6aars6mxc544at9krkkyqazrwytvfvk703mt6aeyu20shzm04r4929nhac938u8eqd5rsrtypch33dqsn6ntrld4tan5g6fz242vuqh9gxzjsrhd9k46qh7qcwth2f5lh6hypcqpv0z6cusx2fjp9jvdkrtks00fgf58qnnh69wnxme054mk6ksgngktddz0nyk0y4hrz94stqe2m33ksvnk7gdy4y9mx385jlaj5t57j25ccs7k96sljprts8kkeuwgcshv24g0p6yv2k3wfn0jye5gpdlc6608m5hu4234g6kh3kcvfd4ljp4smsz6pkq9h3k0dn26jg2sdp2w5pchkkmg36crfdsqnxvzyqe9f4tedv9wt5q9zl8suu5qxy34gdxspxtdzadhw2q3drqctr2j92my97j33ysf0ncf9cuuutljva5h8fsn6mm9w2e54jnx6kyhzujd332g8vygg0e7j8wk67rhp58vfcxngwwsr23myaky4v8gfsu76nx5engjymm62rn3fm6frrtsjgfpxymcargtfz3sugm8le4smx3z6w0pt8k4z3eedsh20dqdrmcsx0xqshnjzwrq3zn4kyu44ny374jvv62xamzdjazntfftmmkk2z08sy0hgmctu3r3f2pejy6xgdczcdg92av6ey5jxr9fydf9gfpgwf6jhrjgc925xnekmungv2vrga8ejgxkf474y5yjastqa27wvej6k64qe6p9xuzgc7tfz08ssq9avv2c3s92mdx7tthv8phdv2fl3dhzjudeupq6c3y9yy9n95g2xymxkfqgzpy3rke9q0hzzvdcem5f47d7cv4ccd4s34q0v9thx07u9uhpvcj9gvf434mvwuzf33gus5xhnf852ak8znvz648j5qeaqww9ttvl86pwem8gau9x3vc99tckvnekzcf8pszhnf8tdcj4dky4t5kvlpfk6cg9t2ucgawlas6cdc6nze4pgh3xfr9xzzscynl72j2muf3vr5vsm3tuvcaldjacpy8c3lnsyqxtzgwv0qvr9a8l96sf5ezep9jeyqq5kfzlj7qdwpc93yqdksx9g67k9wfydnqjnmn32zuzxnz5zx8mvvqnkqnveexf32nnfydr8qpmpktj9evanmfcv0c5xdqnwy4vyenakz3nuqgrczuducqp3mcw0pnvdyfrmnt64wkz4em4vz0u7cx97pfqmnu5tl5vm5lydj72uvyycea6ejtwam88ufsgdv2vh8n0w3ysh9vte9etm343j0v0228apkz3smfkydv0ld50vnhx4sg9qaz79natxcg0cxjuyv0u8gk7ntjydkly25l32cusy66pvmtsezmey4323fswqcdes995gvalwexes7xk8s4vm794wwfdhmpm009vvggnwmv"
+    }
+  }
 }

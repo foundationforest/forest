@@ -40,6 +40,7 @@ each key is explained below, in the order it is needed:
 | the seed | `forest/v1/profile/<label>` | a main key: one profile's name, Solana address and signature |
 | a main key's 32 private bytes | `forest/v1/read` | that profile's inbox key, which opens what is encrypted to it |
 | the seed | `forest/v1/issuer/<issuer name>` | the person's secret for one issuer, which their note number and stamps come from |
+| the seed | `forest/v1/vault` | the vault key: the main key of the person's vault, a folder of its own |
 
 The info strings are part of every key, so they never change: a new string would give everyone
 new keys.
@@ -112,6 +113,20 @@ label, where the scope is the label as a number, made the way the registry makes
   work it out.
 - Stamps for two labels, or for two issuers, cannot be matched to each other.
 
+### The vault key
+
+The vault is a folder of the person's own, on a host, that holds what a new device needs and the
+seed cannot give back: the labels of their profiles, the grants they received, their issuers'
+notes, and apps' settings ([records](../records/README.md#the-vault)). Its key is mixed from the
+seed, so a new device finds the vault with the seed alone.
+
+- It is a main key with no label: its address is the vault folder's name, and it signs the vault's
+  records. No label gives it: a profile's text always starts `forest/v1/profile/`.
+- Its inbox key, mixed from it by `forest/v1/read` as any main key's is, opens what the vault
+  holds.
+- Its address ties to no profile: one profile's keys say nothing about the vault's, and the vault's
+  say nothing about any profile's.
+
 ### Access keys
 
 A person hands out access keys, never a main key. An access key is one the owner's app makes at
@@ -137,8 +152,8 @@ whoever it is for ([records](../records/README.md)).
 7. A server that acts for you holds access keys with write, message or read scope.
 8. The app that holds the seed is open source.
 9. Keep a copy of every record signed; a host may drop one, and the copy puts it back.
-10. Keep each grant, an access key handed to the person, as a private record in their own folder.
-11. Keep the issuer's note as safely as a key.
+10. Keep each grant, an access key handed to the person, in the vault.
+11. Keep the issuer's note as safely as a key, in the vault.
 
 ### Use it
 
@@ -151,6 +166,7 @@ Everything is exported from `src/index.ts`. Everything that mixes is async.
 | `mainKey(seed, label)` | The main key: `label`, `privateKey`, `publicKey`, `address` |
 | `inboxKey(main.privateKey)` | The inbox key: age's `identity`, and the `recipient` others encrypt to |
 | `issuerSecret(seed, name)` | The issuer's `secret`, its `scalar`, and the `noteNumber` |
+| `vaultKey(seed)` | The vault key: `privateKey`, `publicKey`, `address`; `inboxKey` of its `privateKey` opens the vault |
 | `hkdf(ikm, info)`, `INFO` | The mixer and its info strings |
 
 ```
@@ -166,8 +182,9 @@ Node 22.18 or later runs the TypeScript directly.
 ### Test vectors
 
 `test/vectors.json` pins, for the seed `00 01 … 1f`: its 24 words; the main keys for
-`tutoring/seller` and `tutoring/buyer`, each with its inbox key; and the issuer secrets, scalars
-and note numbers for two issuers, `issuer-a.example` and `issuer-b.example`. `npm test` checks
+`tutoring/seller` and `tutoring/buyer`, each with its inbox key; the issuer secrets, scalars and
+note numbers for two issuers, `issuer-a.example` and `issuer-b.example`; and the vault key, with
+its inbox key. `npm test` checks
 each value and recomputes it without the library: HKDF from a second implementation, ed25519 from
 `@noble/curves`, the hybrid recipient from `@noble/post-quantum`, age's bech32 by hand, an
 encryption and an opening through age, and the scalar step by step without zk-kit.
@@ -225,7 +242,8 @@ Then that app has everything the seed opens, and nothing takes it back:
   money;
 - every inbox key, so it can open the person's private records and messages;
 - every issuer secret, so it can use their stamps. In a market where the person has no registry
-  row yet, it can take that row for a profile of its own, and this seed can never have one there.
+  row yet, it can take that row for a profile of its own, and this seed can never have one there;
+- the vault, with every grant the person received and their issuers' notes.
 
 There is no rotation, so the only way out is a new seed and new profiles, moving the money first if
 there is still time. Another app that asks for 24 words takes them as an ordinary recovery phrase

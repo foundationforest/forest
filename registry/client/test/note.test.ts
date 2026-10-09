@@ -20,9 +20,11 @@ import {
   issuerKeyOf,
   stampOf,
   messageOf,
+  noteFromJson,
   noteHash,
   noteNumberOf,
   noteSigned,
+  noteToJson,
   personInput,
   scopeOf,
   signNote,
@@ -96,6 +98,30 @@ test('a signed note checks; any change to it, its issuer or its signature does n
   const untagged = { ...signed, signature: signMessage(issuerKey, poseidon4(fields(note))) }
   assert.equal(noteSigned(untagged), false, 'no tag')
   assert.throws(() => signNote(new Uint8Array(31), note), /32 bytes/)
+})
+
+test('a note as JSON: every number in decimal text, the embedding base64url, keys a record can carry; and back', () => {
+  const json = noteToJson(signed)
+  assert.deepEqual(Object.keys(json).sort(), ['embedding', 'issuer', 'model', 'noteNumber', 'signature', 'tier'])
+  for (const key of [...Object.keys(json), ...Object.keys(json.signature)]) assert.match(key, /^[a-z][a-zA-Z0-9]{0,63}$/, key)
+  assert.equal(json.noteNumber, String(signed.noteNumber))
+  assert.equal(json.embedding, Buffer.from(signed.embedding).toString('base64url'))
+  assert.equal(json.issuer, Buffer.concat(signed.issuer.map((n) => Buffer.from(n.toString(16).padStart(64, '0'), 'hex'))).toString('hex'))
+  assert.deepEqual(json.signature, { r8: signed.signature.R8.map(String), s: String(signed.signature.S) })
+  const back = noteFromJson(JSON.parse(JSON.stringify(json)))
+  assert.deepEqual(back, signed)
+  assert.equal(noteSigned(back), true)
+  const bad: [string, unknown][] = [
+    ['a field nobody knows', { ...json, face: 'x' }],
+    ['a number as a number', { ...json, tier: 1 }],
+    ['a leading zero', { ...json, tier: '01' }],
+    ['past the field', { ...json, noteNumber: String(BN254_R) }],
+    ['the embedding in base64 with padding', { ...json, embedding: Buffer.from(signed.embedding).toString('base64') + '=' }],
+    ['an issuer in upper case', { ...json, issuer: json.issuer.toUpperCase() }],
+    ['the services form, R8 and S', { ...json, signature: { R8: json.signature.r8, S: json.signature.s } }],
+    ['a signature field more', { ...json, signature: { ...json.signature, extra: '1' } }],
+  ]
+  for (const [what, value] of bad) assert.throws(() => noteFromJson(value), Error, what)
 })
 
 test("the circuit's input: the stamp is the one a row sits at, and the public signals are in order", () => {

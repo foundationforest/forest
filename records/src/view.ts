@@ -9,17 +9,16 @@
 //   3. At a content path, if the owner ever wrote there, the owner's newest version is current and
 //      no access key's record counts. Otherwise the newest access key's record the current
 //      permissions record allows: its key is listed with scope write, or was write, and its paths
-//      cover the record's path (with no paths, every content path but those `profile` and
-//      `grants` cover). A past write key is still listed, so what it wrote still counts; a past
-//      message key never counts; a key whose entry is gone counts for nothing. No date is
-//      checked: when a record arrived is the host's check, and a host takes nothing from a past
-//      key.
+//      cover the record's path (with no paths, every content path but those `profile` covers).
+//      A past write key is still listed, so what it wrote still counts; a past message key never
+//      counts; a key whose entry is gone counts for nothing. No date is checked: when a record
+//      arrived is the host's check, and a host takes nothing from a past key.
 //   4. Newest: the later time, then the larger id. A null body is a delete.
 
 import { type AccessKey, type Checked, type HostsBody, MAX_FUTURE_MS, type PermissionsBody, type SignedRecord, isControlPath, pathCovers } from './record.ts'
 
-/** Content prefixes an access key with no `paths` does not cover: the card, and the grants a person keeps. */
-export const NOT_WITHOUT_PATHS = ['profile', 'grants']
+/** Content prefixes an access key with no `paths` does not cover: the card. */
+export const NOT_WITHOUT_PATHS = ['profile']
 
 export type View = {
   profile: string

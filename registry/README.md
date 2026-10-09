@@ -45,7 +45,10 @@ person's face once and signs them one note: *note number, face embedding, model 
   tier)` with its EdDSA key on Baby Jubjub, over Poseidon (circomlib's). The tag is
   `keccak256("forest/v1/note") >> 8`, always the same, so nothing an issuer signs for another
   purpose can pass as a note. The embedding and the model enter only as their hashes.
-- The person keeps the note.
+- The person keeps the note, in their vault ([records](../records/README.md#the-vault)), as JSON:
+  `{ noteNumber, embedding, model, tier, issuer, signature: { r8: [x, y], s } }`, numbers in
+  decimal text, the embedding in base64url, the issuer's key as 128 characters of lowercase hex
+  (`noteToJson`, `noteFromJson`).
 
 **The person proof.** To register, the device proves, showing neither the secret nor the note:
 *I know an issuer secret and a note this issuer signed for its note number; my stamp for this
@@ -166,6 +169,7 @@ blockhash and a connection to Solana.
 | `verifyTier(connection, { profile, issuer?, label?, stamp, tier, proof })` | The tier a profile shows, as a `person` proof in its profile record: its person proof, as snarkjs writes it or its 256 bytes, checked against its row, and so are the issuer and label it shows, when given. Gives the row, so the reader weighs its issuer and when it was made |
 | `signNote(privateKey, note)`, `issuerKeyOf(privateKey)` | For an issuer: the signed note, and its key |
 | `noteNumberOf(secret)`, `noteHash(note)`, `noteSigned(note)` | The note number, what an issuer signs, and whether its issuer signed it |
+| `noteToJson(note)`, `noteFromJson(json)` | The note as JSON, as a vault keeps it, and back; `noteFromJson` refuses any other shape, and leaves the signature to `noteSigned` |
 | `provePerson({ secret, note, label, profile, artifacts })` | The proof, on the device. Refuses a note for another secret, or one its issuer did not sign |
 | `verifyPerson({ proof, issuer, label, profile, stamp, tier })` | Whether the proof holds for that issuer, label, main key, stamp and tier |
 | `proofBytes(proof)`, `proofFromBytes(bytes)` | The proof as its 256 bytes, and back; both checks take either |

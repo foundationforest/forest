@@ -1,7 +1,6 @@
 // A grant: how an access key reaches the one it is for. Its private half and what it is for,
 // handed over as a message body `{ grant }`, sealed to the recipient's inbox key alone, and kept by
-// whoever received it in the private record at `grants`, sealed to their profile's own inbox key
-// (grantsRecord and openGrants in private.ts). It holds a private key, and may hold the names,
+// whoever received it in their vault (vault.ts). It holds a private key, and may hold the names,
 // dates and reasons the permissions record never carries, so it is never public.
 //
 // A note: the owner's own record of a key it handed out, in the grant shape, but naming the key by
@@ -14,8 +13,6 @@ import { b64u } from './bytes.ts'
 import { publicKeyFromAddress } from './keys.ts'
 import { RECIPIENT, RecordError, checkAccessPaths } from './record.ts'
 
-/** The fixed path of the private record where a person keeps the grants they received. */
-export const GRANTS_PATH = 'grants'
 /** A read key's private half: an age post-quantum hybrid identity, as age writes it. */
 export const IDENTITY = /^AGE-SECRET-KEY-PQ-1[02-9AC-HJ-NP-Z]{58}$/
 
