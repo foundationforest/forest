@@ -207,10 +207,8 @@ describe('access keys, checked as they arrive', () => {
 
       // Listed with another scope: it writes nothing.
       clock.advance(MINUTE)
-      for (const scope of ['message', 'pay'] as const) {
-        await publish([h.url], [permissionsRecord(alice, [allow(accessKey, undefined, scope)], clock.advance(1))])
-        assert.deepEqual(await errors(h, [offer(accessKey, `offer/${scope}`)]), ['permission'], scope)
-      }
+      await publish([h.url], [permissionsRecord(alice, [allow(accessKey, undefined, 'message')], clock.advance(1))])
+      assert.deepEqual(await errors(h, [offer(accessKey, 'offer/message')]), ['permission'])
     } finally {
       await h.close()
     }

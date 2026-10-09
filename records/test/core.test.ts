@@ -126,10 +126,9 @@ describe('records', () => {
     assert.throws(perms([{ key: `did:key:z${accessKey.address}`, scope: 'write', paths: ['offer'] }]), /usable/)
     assert.throws(perms([{ key: accessKey.address, paths: ['offer'] }]), /scope is one of/)
     assert.throws(perms([{ key: accessKey.address, scope: 'admin' }]), /scope is one of/)
-    for (const scope of ['message', 'pay']) {
-      assert.throws(perms([{ key: accessKey.address, scope, paths: ['offer'] }]), new RegExp(`a ${scope} key has no paths`))
-      assert.ok(checkRecord(permissionsRecord(alice, [{ key: accessKey.address, scope } as never], T0)), scope)
-    }
+    assert.throws(perms([{ key: accessKey.address, scope: 'message', paths: ['offer'] }]), /a message key has no paths/)
+    assert.ok(checkRecord(permissionsRecord(alice, [{ key: accessKey.address, scope: 'message' }], T0)), 'message')
+    assert.throws(perms([{ key: accessKey.address, scope: 'pay' }]), /scope is one of write, message, read;/, 'there is no pay scope')
     assert.throws(perms([{ key: accessKey.address, scope: 'read' }]), /read key is an age/, 'a read key is an age recipient')
     assert.throws(perms([{ key: readKey, scope: 'write' }]), /usable/, 'every other key is an address')
     assert.throws(perms([{ key: accessKey.address, scope: 'past' }]), /scope is one of/, 'a past key has was, not a scope')

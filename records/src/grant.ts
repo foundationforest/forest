@@ -24,7 +24,7 @@ export type Grant = {
   key: string
   /** The profile whose permissions record lists the key. */
   folder: string
-  scope: 'write' | 'message' | 'read' | 'pay'
+  scope: 'write' | 'message' | 'read'
   /** As in the permissions record: only for a write or read key. */
   paths?: string[]
   /** Who handed it over. */
@@ -74,11 +74,11 @@ function checkShape(value: unknown, what: string, checkKey: (g: { [key: string]:
   if (value === null || typeof value !== 'object' || Array.isArray(value)) fail(`a ${what} is an object`)
   const g = value as { [key: string]: unknown }
   for (const key of Object.keys(g)) if (!['key', 'folder', 'scope', 'paths', 'from', 'since', 'note'].includes(key)) fail(`unknown ${what} field ${key}`)
-  if (!['write', 'message', 'read', 'pay'].includes(g.scope as string)) fail('scope is one of write, message, read, pay')
+  if (!['write', 'message', 'read'].includes(g.scope as string)) fail('scope is one of write, message, read')
   checkKey(g)
   if (!publicKeyFromAddress(g.folder)) fail('folder is not a usable ed25519 address')
   if ('paths' in g) {
-    if (g.scope === 'message' || g.scope === 'pay') fail(`a ${g.scope} key has no paths`)
+    if (g.scope === 'message') fail('a message key has no paths')
     checkAccessPaths(g.paths, 'grant')
   }
   if (!publicKeyFromAddress(g.from)) fail('from is not a usable ed25519 address')

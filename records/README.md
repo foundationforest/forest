@@ -115,14 +115,13 @@ whoever it is for in a grant (Grants).
 | `write` | sign records into the folder, by the access rule below |
 | `message` | sign messages for the main key, and pull its inbox (Inbox) |
 | `read` | open the private records and messages encrypted to it (Private records) |
-| `pay` | spend the token allowance the chain gives it; Forest has no format for it |
 
 - `key` is the key's address, or, for a read key, its age recipient (`age1pq1…`). A key listed
   twice makes the record invalid.
 - `was`, in place of `scope`, marks a past key: a write or message key the owner removed, and the
   scope it had (Removing a key).
-- `paths`: at most 16 content-path prefixes, on a write or read key, never on a message or pay key;
-  a past key keeps the paths it had. With `paths`, the key works only under them: where a write key
+- `paths`: at most 16 content-path prefixes, on a write or read key, never on a message key; a
+  past key keeps the paths it had. With `paths`, the key works only under them: where a write key
   writes, and which private records the owner's devices encrypt to a read key. Without, it works at
   every content path but those `profile` and `grants` cover.
 - In the hosts and the permissions record, a field not named here, at any level, makes the record
@@ -144,7 +143,7 @@ write key's records, at its paths, only because the permissions record, signed b
 still lists it, so a host cannot slip in a key never allowed. A past message key never counts for
 writing. Deleting the entry instead disowns what the key wrote: none of it counts any more. To
 keep one of a past key's records as the owner's own, the owner publishes it again with the main
-key. A read or pay key is removed by deleting its entry: nothing it did needs to count.
+key. A read key is removed by deleting its entry: nothing it did needs to count.
 
 **Notes.** `notes` holds the owner's notes on its keys (who holds each, until when, why), as one
 envelope, a body only chosen keys open (Private records), encrypted to the owner's own inbox key
@@ -267,7 +266,7 @@ a message key can ask for anything and do nothing alone.
 A grant is how an access key reaches whoever it is for: its private half, and what it is for.
 
 ```
-{ "key": <private half>, "folder": <address>, "scope": "write" | "message" | "read" | "pay",
+{ "key": <private half>, "folder": <address>, "scope": "write" | "message" | "read",
   "paths"?: [prefix, …], "from": <address>, "since": <ms since 1970>, "note"?: <text> }
 ```
 

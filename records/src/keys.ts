@@ -2,7 +2,7 @@
 //
 // Records mixes no key. A profile's main key and its inbox key come from the person's seed by
 // keys/ (keys/README.md): the main key signs the folder's records, and its base58 address is the
-// profile's name and its Solana address. An access key that signs (write, message or pay) is any
+// profile's name and its Solana address. An access key that signs (write or message) is any
 // other ed25519 key, made by an app. Both go in as their 32 private bytes. A read key is age's, as
 // the inbox key is, and never a Key here.
 

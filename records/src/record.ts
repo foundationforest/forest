@@ -180,11 +180,10 @@ export type HostsBody = {
 
 /**
  * What an access key is for. write: signing records where its paths allow. message: signing
- * messages for the main key, and pulling its inbox. read: opening what is sealed to it. pay: the
- * chain's own allowance to it, which lives on chain.
+ * messages for the main key, and pulling its inbox. read: opening what is sealed to it.
  */
-export type Scope = 'write' | 'message' | 'read' | 'pay'
-export const SCOPES: readonly Scope[] = ['write', 'message', 'read', 'pay']
+export type Scope = 'write' | 'message' | 'read'
+export const SCOPES: readonly Scope[] = ['write', 'message', 'read']
 
 /**
  * A listed key: one that acts, with its `scope`; or a past key, a write or message key the owner
@@ -202,7 +201,7 @@ export type AccessKey = {
   /**
    * Content path prefixes it works under, segment by segment: where a write key writes, and which
    * private records the owner's devices seal to a read key. Without it, every content path but
-   * those `profile` and `grants` cover. Never on a message or pay key, past or not.
+   * those `profile` and `grants` cover. Never on a message key, past or not.
    */
   paths?: string[]
 }
@@ -253,7 +252,7 @@ export function checkControlBody(path: string, body: Body): void {
       if (typeof key !== 'string' || !RECIPIENT.test(key)) fail('permissions', 'a read key is an age post-quantum hybrid recipient, age1pq1…')
     } else if (!publicKeyFromAddress(key)) fail('permissions', 'an access key is a usable ed25519 address')
     if ('paths' in (k as object)) {
-      if (had === 'message' || had === 'pay') fail('permissions', `a ${had} key has no paths`)
+      if (had === 'message') fail('permissions', 'a message key has no paths')
       checkAccessPaths(paths, 'permissions')
     }
     if (listed.has(key)) fail('permissions', 'a key is listed twice')
