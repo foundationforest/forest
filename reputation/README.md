@@ -7,10 +7,11 @@ Up: [the repo](../README.md).
 
 ## What it is
 
-The reputation proof lets a person carry a score from their profiles to another one, such as a new
-profile, without naming any of them. A profile's reviews are its own, and nothing public ties a
-person's profiles together; the proof carries the score across without linking them. It has two
-uses:
+The reputation proof lets a person carry a score from their profiles to another one of theirs,
+such as a new profile, without naming any of them. A profile's reviews are its own, and nothing
+public ties a person's profiles together; the proof carries the score across without linking them,
+and only to the person's own registered profile, so nobody can lend their score to someone else.
+It has two uses:
 
 - **Global:** the count-weighted score of up to eight profiles the person picks, naming none of
   them: their average score, each weighted by its number of reviews.
@@ -61,12 +62,15 @@ the rest blank.
 
 | | Signals |
 |---|---|
-| Private | `secret`, the scalar `keys/`'s `issuerSecret` gives; for each slot, `used`, the leaf's stamp, scope, score and count, and its path's length, position and siblings |
-| Public, in this order | `score`, the output; `root`; `message`; `scope`, the label shown, or 0 |
+| Private | `secret`, the scalar `keys/`'s `issuerSecret` gives; for each slot, `used`, the leaf's stamp, scope, score and count, and its path's length, position and siblings; `profileScope`, the scope of the label of the profile the proof is shown on |
+| Public, in this order | `score`, the output; `root`; `stamp`, the stamp of the profile the proof is shown on; `scope`, the label shown, or 0 |
 
-`message` is the main key the proof is shown for, made a number as the registry makes it
-([registry](../registry/README.md#the-note-and-the-person-proof)), so a proof counts for that main
-key only.
+`stamp` is the stamp of the profile the proof is shown on: the number its registry row sits at
+([registry](../registry/README.md#the-row)). The registry wrote that row only for a main key whose
+person proof showed the stamp came from the person's secret, and the reputation proof shows it
+comes from the same secret as the profiles it counts. So a reader that finds the row at `stamp`
+naming the profile that shows the proof knows the proof is that person's, on their own profile: it
+cannot be lent to anyone else, nor copied to another profile.
 
 Inside the proof:
 
@@ -78,6 +82,8 @@ Inside the proof:
 5. A shown scope is the scope of every used slot, so a shown label means exactly one profile.
 6. The output is `floor(sum(score * count) / sum(count))`, over at least one review. With one
    profile, it is that profile's score.
+7. `stamp` is `Poseidon(profileScope, secret)`: the profile it is shown on is the person's own, at
+   the same issuer.
 
 Which leaves, and how many, stays hidden. A path's position is one number: the Merkle piece,
 zk-kit's `binary-merkle-root` 2.0.0, splits it into bits itself.
@@ -96,7 +102,7 @@ enough.
   [`setup.json`](circuit/devnet/setup.json), which records the toolchain, phase 1, the
   contribution's hash, and every file's size and SHA-256.
 - **What is not:** the proving key and the witness generator, used only to make a proof. They are
-  in the GitHub release `reputation-devnet-1`, and `npm run fetch` refuses anything whose hash does
+  in the GitHub release `reputation-devnet-2`, and `npm run fetch` refuses anything whose hash does
   not match `setup.json`.
 - **The circuit does not change after its setup.** circom gives the same bytes every time, and
   `npm run compile` checks the compiled circuit against `setup.json`. The witness generator carries
@@ -105,15 +111,16 @@ enough.
 
 ### Use it
 
-`client/src/` talks to no network of its own. The stamp, the scope and the message come from
-the registry client, unchanged.
+`client/src/` talks to no network of its own: the caller passes the index's leaves, root, time and
+signature, and a connection to Solana for the row. The stamp and the scope come from the registry
+client, unchanged.
 
 | Function | Gives |
 |---|---|
 | `buildTree(leaves)` | For an index: the root to sign. Refuses an empty tree, more than 2^20 leaves, a field out of range, or two leaves for one stamp |
 | `signedBytes(root, time)` | The bytes an index signs |
-| `proveReputation({ secret, labels, leaves, profile, show?, artifacts })` | The proof, on the device: one to eight labels of the person's profiles from one issuer, found in the leaves by their stamps; `show` shows the label, only with one |
-| `verifyReputation({ proof, root, score, profile, label?, index, time, signature })` | Whether the index signed the root with that time, and the proof holds for that score, main key and shown label |
+| `proveReputation({ secret, labels, leaves, profileLabel, show?, artifacts })` | The proof, on the device: one to eight labels of the person's profiles from one issuer, found in the leaves by their stamps, shown on the profile with `profileLabel`, registered with the same issuer; `show` shows the label, only with one |
+| `verifyReputation(connection, { proof, root, score, stamp, profile, label?, index, time, signature })` | The row the proof landed on: when the index signed the root with that time, the proof holds for that score, stamp and shown label, and the row at the stamp names `profile`, the main key that shows it. The row gives the issuer every counted profile shares. Null otherwise |
 | `proofBytes(proof)`, `proofFromBytes(bytes)` | The proof as the 256 bytes a profile record carries ([records](../records/README.md)), and back; `verifyReputation` takes either |
 | `circuitInput({...})` | The circuit's input, for a caller that drives snarkjs itself |
 
@@ -121,20 +128,22 @@ the registry client, unchanged.
 import { issuerSecret } from '@forest/keys'
 import { proveReputation, verifyReputation } from '@forest/reputation'
 
-// On the device: three profiles' score, shown on a new profile.
+// On the device: three profiles' score, shown on a new profile registered with the same issuer.
 const r = await proveReputation({
   secret: (await issuerSecret(seed, name)).secret,
   labels: ['tutoring/seller', 'tutoring/buyer', 'cleaning/seller'],
   leaves,                      // the index's published leaves, in its order
-  profile,                     // the main key the proof is shown for
+  profileLabel: 'tutoring/new', // the profile the proof is shown on
   artifacts: {
     wasm: 'reputation/circuit/devnet/reputation.wasm',
     zkey: 'reputation/circuit/devnet/reputation.zkey',
   },
 })
 
-// Any reader, with the index's key, and the time and signature it published with the root:
-await verifyReputation({ proof: r.proof, root: r.root, score: r.score, profile, index, time, signature })
+// Any reader, with the index's key, the time and signature it published with the root, and the
+// main key of the profile that shows the proof:
+const row = await verifyReputation(connection, { proof: r.proof, root: r.root, score: r.score,
+  stamp: r.stamp, profile, index, time, signature })
 ```
 
 ### Run it
@@ -145,7 +154,7 @@ SHA-256 `setup.json` records; and, from `package-lock.json`, snarkjs 0.7.5, circ
 
 ```
 cd keys && npm ci                       # registry/client and the tests read it
-cd registry/client && npm ci            # the stamp, the scope and the message
+cd registry/client && npm ci            # the stamp, the scope and the row
 cd reputation/client && npm ci
 npm run check && npm test               # the tree, what an index signs, what the client refuses
 cd reputation/circuit && npm ci         # after reputation/client
@@ -156,10 +165,12 @@ devnet/setup.sh                         # a new setup: new files, every hash new
 ```
 
 The client's tests check the tree, the bytes an index signs, and the inputs the client refuses.
-The circuit's tests build a tree of made-up leaves around `keys/`'s test person, and prove with
-one profile and with three. A wrong secret, a leaf not in the tree, a profile counted twice and a label shown
-with two profiles are refused; a changed output, a changed message, a root the index did not sign
-and a changed time fail to verify.
+The circuit's tests build a tree of made-up leaves around `keys/`'s test person, prove with one
+profile and with three, shown on the person's own registered profile, and read rows from a
+stand-in connection, so no chain is needed. A wrong secret, a leaf not in the tree, a profile
+counted twice, a label shown with two profiles and a stamp from another secret are refused; a
+changed output, stamp, root or time fails to verify, and so does a proof shown on someone else's
+profile or on a profile with no row.
 
 ### What one proof costs
 
@@ -167,20 +178,22 @@ Measured in Node 22 on a 4-core machine, with 8 slots at depth 20:
 
 | | |
 |---|---|
-| Constraints | 44,493 |
-| Building the tree | 2.9 s for 5,008 leaves, about 0.6 ms a leaf |
-| Making the proof | about 3.4 s more |
-| Checking it | about 40 ms |
-| The proof | 725 bytes as snarkjs writes it |
+| Constraints | 44,732 |
+| Building the tree | about 3.3 s for 5,008 leaves, about 0.7 ms a leaf |
+| Making the proof | about 4.5 s more |
+| Checking it | about 20 ms, and one read of a row |
+| The proof | about 725 bytes as snarkjs writes it |
 
 ## Promises
 
 - A proof counts only profiles whose stamps come from the prover's own issuer secret.
 - A profile counts at most once in a proof.
-- A proof counts for one main key: its message names it.
+- A proof lands only on the prover's own registered profile: its stamp is that profile's row,
+  from the same secret as the profiles it counts.
 - A shown label means exactly one profile, under that label.
 - The score is the count-weighted score of the profiles counted, rounded down, and nothing else.
-- Nothing else about those profiles is in the proof: not which leaves, nor how many.
+- Nothing else about those profiles is in the proof but their issuer, the one the row it lands on
+  names: not which leaves, nor how many.
 
 ## Limits
 
@@ -191,11 +204,16 @@ Measured in Node 22 on a 4-core machine, with 8 slots at depth 20:
   can tell which profiles are all of one person's.
 - **One issuer per proof.** Profiles registered through different issuers have different secrets,
   and cannot be counted together.
+- **It lands only on a profile registered with that issuer.** The profile it is shown on needs a
+  row from the same issuer as the profiles it counts; a profile with no row, or rows from other
+  issuers only, cannot show it.
+- **It shows the issuer.** The row it lands on names its issuer, and the profiles counted share it.
+  Rows are public, so a reader can narrow the leaves it could be to that issuer's.
 - **A label and an exact score can point to one leaf.** The tree is public. In a market with few
   profiles, the leaves with that label and that score may be just one, and that names the profile.
   A hidden label narrows it too, when few leaves have that score. The app should say so before a
   proof is shown.
-- **Building the tree takes time.** About ten minutes for a million leaves at the speed above. An
+- **Building the tree takes time.** About twelve minutes for a million leaves at the speed above. An
   app that asks the index for its path instead tells the index which profiles are its.
 - **A score is only as good as its index.** The proof shows what the index's tree says. A reader
   decides which indexes it trusts and how old a time it accepts.
@@ -209,8 +227,8 @@ Measured in Node 22 on a 4-core machine, with 8 slots at depth 20:
   signals.
 - **An index, by its own policy:** its scores, which reviews count and how much, and when and where
   it publishes its tree.
-- **A reader (an app, an index or a service), by its own policy:** which indexes it trusts, how old
-  a time it accepts, and what a score means to it.
+- **A reader (an app, an index or a service), by its own policy:** which indexes and issuers it
+  trusts, how old a time it accepts, and what a score means to it.
 - **An app, with the person:** whether to show a proof, which profiles count, and whether to show
   the label.
 

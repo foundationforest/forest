@@ -135,8 +135,8 @@
     },
     "reputation": {
       "type": "object",
-      "description": "A reputation proof (reputation/): the count-weighted score of profiles the person holds in an index's tree, for this profile's main key, which profiles hidden. Everything its verifier takes but the main key, which is the profile's own.",
-      "required": ["circuit", "index", "root", "time", "signature", "score", "proof"],
+      "description": "A reputation proof (reputation/): the count-weighted score of profiles the person holds in an index's tree, shown on this profile, which profiles hidden. It counts only on the profile whose registry row sits at its stamp, made from the same secret as the profiles it counts: the prover's own. Everything its verifier takes but the main key, which is the profile's own.",
+      "required": ["circuit", "index", "root", "time", "signature", "score", "stamp", "proof"],
       "additionalProperties": false,
       "properties": {
         "circuit": {
@@ -170,6 +170,11 @@
           "description": "The score the proof shows: the count-weighted score of the profiles counted, times ten, rounded down.",
           "minimum": 0,
           "maximum": 4294967295
+        },
+        "stamp": {
+          "type": "string",
+          "description": "The stamp of this profile's registry row, as the row holds it: 32 bytes big-endian, lowercase hex. The proof shows it came from the same secret as the profiles counted.",
+          "pattern": "^[0-9a-f]{64}$"
         },
         "label": {
           "type": "string",

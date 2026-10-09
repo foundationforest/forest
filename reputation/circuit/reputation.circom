@@ -1,12 +1,14 @@
 pragma circom 2.1.5;
 
-// The reputation proof: "these profiles are mine, and their count-weighted score is this", for one
-// main key, without saying which profiles (../README.md).
+// The reputation proof: "these profiles are mine, and their count-weighted score is this", shown on
+// a registered profile of mine, without saying which profiles (../README.md).
 //
 // A slot is one profile: a leaf of an index's tree (the profile's market stamp, its label's scope,
 // the index's score times ten, the number of reviews) and the Merkle path from it to the root. The
 // person fills up to K slots and leaves the rest blank. Every market stamp must come from the same
-// list secret, so only the person who holds it can count those profiles.
+// list secret, so only the person who holds it can count those profiles. The stamp the proof shows
+// comes from that secret too: it is the registry row of the profile the proof is shown on, so the
+// proof lands only on the prover's own registered profile.
 //
 // Poseidon is circomlib's, and the Merkle path is zk-kit's binary-merkle-root 2.0.0: the pieces
 // Semaphore 4.13 uses, unchanged. 2.0.0 takes the path's position as one number and splits it into
@@ -26,10 +28,11 @@ template Reputation(K, DEPTH) {
     signal input used[K];
     signal input stamps[K], scopes[K], scores[K], counts[K];
     signal input pathLengths[K], pathIndices[K], pathSiblings[K][DEPTH];
+    signal input profileScope;  // the scope of the label of the profile the proof is shown on
 
-    // Public, in the order score, root, message, scope.
+    // Public, in the order score, root, stamp, scope.
     signal input root;      // the tree's root, which the index signed with a time
-    signal input message;   // the main key the proof is shown for, as the registry derives it
+    signal input stamp;     // the stamp of the profile the proof is shown on: its registry row's
     signal input scope;     // the label shown, as the registry derives its scope; 0 for none
     signal output score;
 
@@ -100,9 +103,11 @@ template Reputation(K, DEPTH) {
     belowCount === 1;
     weightedSum === score * countSum + remainder;
 
-    // The message is not used inside. Squaring it gives it a constraint, as Semaphore does, so it
-    // cannot be changed in a proof.
-    signal messageSquare <== message * message;
+    // The profile the proof is shown on is the prover's own: its stamp comes from the same secret.
+    // The registry wrote a row at that stamp only for a main key whose person proof showed the same,
+    // so a reader that finds the row there naming the profile knows the proof is that profile's.
+    signal profileStamp <== Poseidon(2)([profileScope, secret]);
+    stamp === profileStamp;
 }
 
-component main {public [root, message, scope]} = Reputation(8, 20);
+component main {public [root, stamp, scope]} = Reputation(8, 20);
