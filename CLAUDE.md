@@ -20,8 +20,8 @@ checklist next to the program (`registry/security-checklist.md`, `escrow/securit
 - Work in plan mode. One task per session. Open a pull request; never push to main.
 - The promises in each README change only when Carlos says so in a chat; never change one as a side
   effect of a task.
-- The repo is `keys/`, `records/`, `registry/`, `reputation/`, `escrow/`, `README.md`, `CLAUDE.md`
-  and `LICENSE`, with `.github/` and `.claude/`. The README is the standard.
+- The repo is `keys/`, `records/`, `registry/`, `reputation/`, `credits/`, `escrow/`, `README.md`,
+  `CLAUDE.md` and `LICENSE`, with `.github/` and `.claude/`. The README is the standard.
 - Keep the docs true in the same pull request: a change that makes a README wrong fixes it. A README
   says only what the code does today. Say "on devnet" for what runs; never state anything as
   shipped.
@@ -45,7 +45,7 @@ checklist next to the program (`registry/security-checklist.md`, `escrow/securit
 # Each package: install, type-check, tests that need no chain.
 # keys first: records, registry/client and reputation/client read it; registry/client before
 # reputation/client, which reads it.
-for d in keys records registry/client escrow/client reputation/client; do
+for d in keys records registry/client escrow/client reputation/client credits; do
   (cd "$d" && npm ci && npm run check && npm test)
 done
 
