@@ -24,7 +24,8 @@ export type CreditKey = { privateKey: CryptoKey; publicKey: CryptoKey; published
 
 /**
  * The service's credit key from its private key, RSA-2048 in PKCS #8 (DER), as `openssl genpkey
- * -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -outform DER` writes one. Throws on any other size.
+ * -algorithm RSA -pkeyopt rsa_keygen_bits:2048 | openssl pkcs8 -topk8 -nocrypt -outform DER` writes
+ * one (genpkey's own DER is PKCS #1, which this refuses). Throws on any other size.
  */
 export async function keyFrom(pkcs8: Uint8Array): Promise<CreditKey> {
   const algorithm = { name: 'RSA-PSS', hash: 'SHA-384' }
