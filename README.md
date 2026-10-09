@@ -25,6 +25,7 @@ Every piece is sorted by one question: what if there were two of it?
 | Registry: one row per stamp (one person, one label, one issuer), proven without saying who | core | [`registry/`](registry/README.md) | a Solana program, on devnet (Solana's test network) |
 | Records: signed records and the hosts that keep them, private records, the inbox, blobs (photos and other files), the three record shapes | standard | [`records/`](records/README.md) | a library, wherever an app, host or index runs |
 | The reputation proof, and the tree an index publishes for it | standard | [`reputation/`](reputation/README.md) | made on the person's device, checked by anyone; its setup is for devnet |
+| Credits: prepaid units for one service, bought once and spent without the service telling who bought them | standard | [`credits/`](credits/README.md) | a library, wherever an app or a service runs |
 | Market names: recommended spellings of labels | standard | [foundationforest/markets](https://github.com/foundationforest/markets) | nowhere: a directory to read |
 | Escrow: money out when both sides agree, or by an arbiter or timer set at the start | service: a program the foundation offers; use any | [`escrow/`](escrow/README.md) | a Solana program, on devnet |
 | Hosts, issuers, indexes and fee payers | service | a reference host in [`records/`](records/README.md); the rest in [foundationforest/services](https://github.com/foundationforest/services) | anywhere; the foundation's on devnet |
@@ -84,6 +85,9 @@ What others can still see:
 - A host that keeps your vault, the folder a new device restores from, sees when it changes. Kept
   on the same host as your profiles, its times can link them
   ([records](records/README.md#the-vault)).
+- A service you buy credits from sees who paid for them, but not which spends they become; a spend
+  right after a buy, or from the same network address, can still be matched
+  ([credits](credits/README.md)).
 - The face check keeps your face: an issuer that checks faces, or the provider it checks them
   with, holds it so it can refuse the same face a second time.
 - At the start, with few people, a face check and the first profile registered right after it can

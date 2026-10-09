@@ -45,7 +45,7 @@ describe('the vault', () => {
   })
 
   test('every field may be missing, and an app keeps the fields it does not know, at the top and in settings', async () => {
-    const contents = { credits: [{ service: 'https://payer.example', credit: 'AAEC' }], settings: { theme: 'dark', anotherApp: { a: 1 } } }
+    const contents = { tickets: [{ for: 'later' }], settings: { theme: 'dark', anotherApp: { a: 1 } } }
     const record = await vaultRecord(vault, vaultInbox.recipient, contents as Vault, T0)
     assert.deepEqual(await openVault(record.body!, vaultInbox.identity), contents)
     checkVault({})
@@ -66,6 +66,10 @@ describe('the vault', () => {
       ['an issuer note with no issuer', { issuerNotes: [{ issuer: '', note }] }],
       ['a note that is no object', { issuerNotes: [{ issuer: 'issuer-a.example', note: 'x' }] }],
       ['settings is an object', { settings: [] }],
+      ['a credit with no service', { credits: [{ credit: 'AAEC' }] }],
+      ['a credit whose service is no origin', { credits: [{ service: 'payer.example', credit: 'AAEC' }] }],
+      ['a credit that is no base64url', { credits: [{ service: 'https://payer.example', credit: 'AA+C' }] }],
+      ['buying is a list of buys', { buying: ['x'] }],
     ]
     for (const [why, v] of bad) assert.throws(() => checkVault(v), (e: unknown) => code('vault')(e) || code('grant')(e), why)
     await assert.rejects(vaultRecord(vault, vaultInbox.recipient, { settings: [] } as never, T0), code('vault'))
@@ -97,6 +101,8 @@ describe('the vault', () => {
         profiles: [{ label: 'tutoring/seller', hosts: [a.url] }, { label: 'tutoring/buyer', hosts: [b.url] }],
         grants: [received],
         issuerNotes: [{ issuer: 'issuer-a.example', note }],
+        credits: [{ service: 'https://payer.example', credit: 'AAEC' }],
+        buying: [{ service: 'https://host.example', key: 'AA', buy: 'AA', blinds: [{ nonce: 'AA', inverse: 'AA' }] }],
         settings: { indexes: ['https://index.example'], theme: 'dark' },
       }
       await publish([c.url], [hostsRecord(vault, [c.url], T0), await vaultRecord(vault, vaultInbox.recipient, kept, T0)])
