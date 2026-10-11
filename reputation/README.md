@@ -1,9 +1,9 @@
 # reputation
 
+Part of Forest's standard: [the top README](../README.md).
+
 On devnet only: the reputation circuit's setup was made by one party; a public setup ceremony
 comes before mainnet. Nothing is on mainnet.
-
-Up: [the repo](../README.md).
 
 ## What it is
 
@@ -29,13 +29,14 @@ circom 2.2.3, Groth16 on BN254, and the Poseidon and Merkle pieces Semaphore use
 
 ### The tree an index publishes
 
-An index, a service that reads records from hosts and scores profiles by its own policy
+An index, a service that reads records from hosts and scores profiles as it chooses
 ([records](../records/README.md)), publishes its scores as a tree. The tree is a standard: any
 index may publish one, and a proof names the root it used.
 
 - **A leaf** is `Poseidon(stamp, scope, score, count)`, circomlib's Poseidon with four inputs:
   - `stamp`: the profile's stamp ([keys](../keys/README.md#stamps)), the number its registry row's
-    address comes from.
+    address comes from. A row is how the registry says a profile holds a note, an issuer's signed
+    word that it checked the person.
   - `scope`: the profile's label as a number, exactly as the registry makes it
     ([registry](../registry/README.md#the-note-and-the-person-proof)).
   - `score`: the index's score for the profile times ten, as a whole number from 0 to 2^32 - 1
@@ -225,10 +226,10 @@ Measured in Node 22 on a 4-core machine, with 8 slots at depth 20:
 
 - **The standard:** the leaf, the tree, what an index signs, and the circuit and its public
   signals.
-- **An index, by its own policy:** its scores, which reviews count and how much, and when and where
-  it publishes its tree.
-- **A reader (an app, an index or a service), by its own policy:** which indexes and issuers it
-  trusts, how old a time it accepts, and what a score means to it.
+- **An index:** chooses its scores, which reviews count and how much, and when and where it
+  publishes its tree.
+- **A reader (an app, an index or a service):** chooses which indexes and issuers it trusts, how
+  old a time it accepts, and what a score means to it.
 - **An app, with the person:** whether to show a proof, which profiles count, and whether to show
   the label.
 
