@@ -1,6 +1,6 @@
 # records
 
-Up: [the repo](../README.md). The record shapes: [schemas/](schemas/).
+Part of Forest's standard: [the top README](../README.md). The record shapes: [schemas/](schemas/).
 
 ## What it is
 
@@ -49,7 +49,9 @@ Its folder is everything signed for it, one current record per path:
 lower case, no path (`http` only on loopback, for tests). Each host it names holds the whole
 folder. An app posts every record to every host it names, the hosts and permissions records
 first. To move, it posts a hosts record naming the new hosts to old and new, then its copies; to
-leave a host, it sends that host a delete at each path.
+leave a host, post a hosts record that no longer names it, to every host, the one you are leaving
+included, so a reader that still asks that host is pointed on. The old host may keep its copies;
+readers follow the hosts record.
 
 ### Records
 
@@ -75,8 +77,9 @@ coordinates are decimal text (`"30"`, `"38.72"`); arrays have no holes; object k
 and refuse the record unless the result equals the bytes it received.
 
 **Keys by address.** An address has one spelling: decoding and encoding again MUST give the same
-text. A key named by its address anywhere, in a record, a message, a pull or a grant, MUST be a
-canonical point in the prime-order subgroup and not of small order; anything else is refused.
+text. A key named by its address anywhere, in a record, a message, a pull or a grant (the private
+body that hands an access key to whoever it is for), MUST be a canonical point in the prime-order
+subgroup and not of small order; anything else is refused.
 
 **One key, four kinds of signature.** A main key signs Solana transactions, records, messages and
 pulls. The signed bytes of the last three begin with `0xff`, which no Solana message begins with,
@@ -108,6 +111,9 @@ whoever it is for in a grant (Grants).
 { "access": [{ "key": <key>, "scope": <scope>, "paths"?: [prefix, …] }, …],
   "notes"?: <base64url of an age file> }
 ```
+
+The scope names the kind of key: a write key signs records, a message key signs messages and pulls
+the inbox, and a read key opens private records and messages.
 
 | Scope | What its holder can do |
 |---|---|
@@ -184,10 +190,10 @@ folder.
 
 - No `inbox` field means no inbox: hosts refuse deliveries. A profile with an inbox gives
   `inboxKey`, since senders encrypt to it.
-- `senders` is `"anyone"`, or `{ "issuer" }`: the sender's key must hold a registry row from that
-  issuer, under any label ([registry/](../registry/README.md)). The issuer is named by its key as
-  a row holds it: x then y of its point on Baby Jubjub, each 32 bytes big-endian, as 128
-  characters of lowercase hex.
+- `senders` is `"anyone"`, or `{ "issuer" }`: the sender's key must hold a registry row (the public
+  statement that a key holds a note an issuer signed) from that issuer, under any label
+  ([registry/](../registry/README.md)). The issuer is named by its key as a row holds it: x then y
+  of its point on Baby Jubjub, each 32 bytes big-endian, as 128 characters of lowercase hex.
 - `once`: one message from each sender, ever.
 - `maxBytes`: the largest message it takes, as canonical text in bytes.
 - `readers`: read keys' public halves. Senders encrypt every message to them too, so a reader that
@@ -246,11 +252,24 @@ and `once` apply to `from`, as for any message.
   anyone could list who wrote to whom. It is a POST and not a GET because hosting platforms log
   URLs, and a signed URL would be a log of pulls.
 
-**Requests.** A message body may be `{ "request": <action>, … }`: an action the sender was not
-allowed to do itself, for the recipient's app to do with its main key. `request` names one of
-the [CLI](https://github.com/foundationforest/services/tree/main/mcp)'s actions that need a key, or
-`pay`, and the other fields are that action's parameters:
+**Requests.** A message body may be `{ "request": <kind>, … }`: something the sender was not
+allowed to do itself, for the recipient's app to do with its main key. `request` names one of the
+kinds below, which are the actions the
+[mcp folder in services](https://github.com/foundationforest/services/tree/main/mcp) accepts as
+requests today, and the other fields are that kind's parameters:
 `{ "request": "post-offer", "offer": { … } }`, `{ "request": "send", "to": <address>, "text": … }`.
+
+| Kind | Parameters |
+|---|---|
+| `post-offer` | `offer`, an offer record's body; and `id`, the `<id>` in `offer/<id>`, if wanted |
+| `update-offer` | `id`, the `<id>` of the offer; `offer`, its new body |
+| `remove-offer` | `id`, the `<id>` of the offer |
+| `post-review` | `review`, a review record's body; and `id`, the `<id>` in `review/<id>`, if wanted |
+| `send` | `to`, the recipient's address; and `text`, or `body`, an object in its place, one of the two |
+| `private` | `path`, if wanted: only the private records under this path |
+| `inbox` | `after`, if wanted: the cursors a pull returned, by host, for newer messages only |
+| `pay` | `offer`, `units` and `note`, as below |
+
 For `pay` they are `offer`, the offer's [pay link](../escrow/README.md#the-pay-link), and if wanted
 `units`, a whole number of hours or days for an offer priced per hour or per day, and `note`, text
 for the person: `{ "request": "pay", "offer": <pay link>, "units": 2, "note": … }`.
@@ -258,7 +277,8 @@ for the person: `{ "request": "pay", "offer": <pay link>, "units": 2, "note": �
 An app acts on a request only when it was sent to the profile's own inbox by the profile's main
 key or by a message key its permissions record lists, and shows any other `request` body as a
 plain message. It shows the request, and does it only if the person agrees. So whoever holds only
-a message key can ask for anything and do nothing alone.
+a message key can send messages as the profile and ask for anything else; it can write no record
+and move no money.
 
 ### Grants
 
@@ -279,14 +299,15 @@ A grant is how an access key reaches whoever it is for: its private half, and wh
 - Handed over by message, a grant is the body `{ "grant": <grant> }`, encrypted to the recipient's
   inbox key alone, never to its inbox's readers: a reader acts on the inbox, and a grant is a key.
   The library's `message` encrypts it so.
-- A person keeps the grants they received in their vault (The vault). The app's local copy is the
-  working copy; the vault on the hosts is why losing the phone loses nothing.
+- A person keeps the grants they received in their vault, a private folder of their own that a new
+  device restores from (The vault). The app's local copy is the working copy; the vault on the
+  hosts is why losing the phone loses nothing.
 
 ### The vault
 
 The vault holds what a new device needs and the seed alone cannot give back: the labels of the
-person's profiles and where each lives, the grants they received, their issuers' notes, their
-credits, and apps' settings. It lives on hosts in a folder of its own, whose main key is the vault
+person's profiles and where each lives, the grants they received, their issuers' notes (the
+signed word each issuer gave them that it checked them), their credits, and apps' settings. It lives on hosts in a folder of its own, whose main key is the vault
 key, mixed from the seed ([keys](../keys/README.md#the-vault-key)), so a new device finds it with
 the seed alone.
 
@@ -334,7 +355,7 @@ proof in the profile record only when the person chooses to show it there:
 
 - **`reputation`** shows the score of the profiles the person holds in an index's tree, without
   saying which. It carries the index's key, the root and time the index signed and its signature,
-  the score, the stamp of this profile's registry row, the label when the proof shows one market,
+  the score, the stamp of this profile's registry row (the number the row is kept at), the label when the proof shows one market,
   and the proof's 256 bytes. A reader checks it with reputation/client's `verifyReputation`: it
   holds only when the row at that stamp names this main key, and the proof shows that stamp comes
   from the same secret as the profiles it counts, so nobody can lend their score to someone else.
@@ -359,7 +380,7 @@ blob from the record's hosts, and check its SHA-256 themselves.
 ### Hosts
 
 A host is an address that answers six requests, the host socket, however many machines stand
-behind it. It has no keys, no accounts and no login: a record's signature is its only credential,
+behind it. It has no keys, no accounts and no login: a record's signature is all it asks for,
 and a pull's is the recipient's main key's or message key's. It is open: it takes signed records
 for any profile and serves them to anyone; it takes messages for any profile whose profile record
 on it declares an inbox, and serves them only to that profile's main key and message keys; it
@@ -399,9 +420,9 @@ host.
 4. An access key's record: its key MUST be listed with scope `write`, its paths covering the
    record's path [`permission`]. A reader also counts a past write key's records; a host takes
    none.
-5. A host MAY refuse a content record by its own policy [`policy`]. It MUST NOT refuse a hosts or
-   permissions record by policy but for its size, so a person can always move and always remove
-   an access key: a record that only removes one is never larger than the one before.
+5. A host MAY refuse a content record by its own choice [`refused`]. It MUST NOT refuse a hosts or
+   permissions record by its own choice but for its size, so a person can always move and always
+   remove an access key: a record that only removes one is never larger than the one before.
 
 **Taking a message in**, in this order, error code in brackets:
 
@@ -424,7 +445,7 @@ host.
    it [`once`]. The host keeps each pair it takes while the inbox says `once`, for as long as it
    keeps the profile.
 8. `maxBytes`: the canonical text is at most that many bytes [`too_big`].
-9. A host MAY refuse a message by its own policy [`policy`].
+9. A host MAY refuse a message by its own choice [`refused`].
 
 A message whose `from` is its `to` skips steps 6 to 8: an inbox's rules are for others.
 
@@ -433,13 +454,13 @@ A message whose `from` is its `to` skips steps 6 to 8: an inbox's rules are for 
 1. The bytes' SHA-256 is the name in the path [`hash`].
 2. A current record on this host names that hash, with the `content-type` sent as its type
    [`unnamed`]. So the record comes first.
-3. The host's own policy allows them, by their size, their type or the folders whose current
-   records name them [`policy`].
+3. The host's own choice allows them, by their size, their type or the folders whose current
+   records name them [`refused`].
 
 A host SHOULD verify in native code with these same strict rules: OpenSSL's defaults accept a
 small-order signature this protocol refuses.
 
-### A host's policy
+### What a host chooses
 
 Nothing here is a rule: each host chooses, and says its numbers where it describes itself, as the
 reference host does (Run it).
@@ -455,13 +476,13 @@ reference host does (Run it).
 
 ### Indexes
 
-An index reads records from hosts and weighs them by its own policy. It MAY answer one request,
+An index reads records from hosts and weighs them as it chooses. It MAY answer one request,
 `POST /v1/hosts`: the body is a profile's hosts record as canonical text, and the answer is the
 HTTP status and nothing else. The index checks the signature, and that the profile holds a
 registry row from an issuer it trusts, then crawls the hosts the record names, reading each host
 itself, page by page (`GET /v1/records`). Sending the record again asks it to look now. An app
 sends the hosts record to the indexes the person chose. Which hosts an index crawls or refuses is
-its policy.
+its own choice.
 
 ### Run it
 
@@ -568,7 +589,7 @@ Node 22.18 or later. Built from existing pieces, unchanged: `@noble/curves`, `@n
 Node's built-in `node:sqlite` for the host; `undici` for the public fetch.
 
 **The reference host.** One process, listening on `127.0.0.1` unless told otherwise; TLS is the
-operator's. Its policy, unless told otherwise: records and messages of up to 65,536 bytes, and
+operator's. What it chooses, unless told otherwise: records and messages of up to 65,536 bytes, and
 100 a request; pages of at most 1,000 lines and 4,194,304 bytes; a replaced record, a message, and
 bytes no current record names any more, kept for 30 days; png, jpeg and mp4 blobs of up to
 50,000,000 bytes. Give it `rowLookup` to take messages for inboxes with an issuer's rule, and
@@ -623,7 +644,7 @@ with the pinned inbox key they were encrypted to. The profile is
 - **Nobody writes for a profile unless its permissions record says so.** Removing an access key
   ends what it can add at any host that follows the standard, never what it already wrote.
 - **A person can always move.** A profile's name is its key, not a host's address. A host never
-  refuses a newer hosts or permissions record by its own policy but for its size, and one that
+  refuses a newer hosts or permissions record by its own choice but for its size, and one that
   only removes an access key is never larger than the one before.
 - **A host holds nothing secret.** No keys, no accounts, no login, and it cannot open a private
   record.
@@ -659,18 +680,14 @@ with the pinned inbox key they were encrypted to. The profile is
   reference host takes records and messages of up to 64 KB; another host chooses its own. Each
   reader an inbox lists makes every message to it about 2 KB larger, and anyone sees how many
   readers it lists.
-- **Two profiles of one person can be linked by how they are written.** An app that writes both at
-  the same moment to the same host puts them side by side in its listing; one access key listed by
-  both names itself in both; and a host that logs addresses links them; whether it logs is its
-  policy. Write them apart, and give each folder its own access keys.
-- **A vault and a profile on one host can be linked by time.** The vault changes when a grant
-  arrives or a profile is added, so a host that keeps both sees the vault change right after the
-  profile's inbox does. Keep the vault on hosts of its own, and write it apart.
+- **Two profiles of one person can be linked by how they are written.** One access key listed by
+  both names itself in both, and a host that logs addresses links them; whether it logs is its own
+  choice. Give each folder its own access keys.
 - **Two devices writing the vault at once lose one change.** The newer record counts. An app that
   reads before it writes, and writes again when the vault changed under it, loses nothing.
 - **The vault is one record.** A host's largest record bounds it: 64 KB on the reference host, a
   few hundred grants, or about a hundred credits.
-- **A vault has no registry row.** A host whose policy takes only registered folders will not keep
+- **A vault has no registry row.** A host that chooses to take only registered folders will not keep
   it.
 
 ## Who decides what
@@ -679,7 +696,7 @@ with the pinned inbox key they were encrypted to. The profile is
   window); the six requests and their codes; the control records and the scopes of access keys;
   envelopes; the three shapes; the inbox, its rules and the request body; the grant; the vault;
   the proofs field.
-- **A host, by its own policy:** its keep days; the largest record, message and blob it takes;
+- **A host chooses:** its keep days; the largest record, message and blob it takes;
   batch and page sizes; which blob types it takes; which inbox rules it supports; whether it reads
   senders' records to take a message key's message, and how long it keeps what it read; rate
   limits; logging; storage.
@@ -687,7 +704,7 @@ with the pinned inbox key they were encrypted to. The profile is
   private records it encrypts to a read key; how a grant reaches its holder; whether to forward a
   message to email or a notification; dropping a message that arrives twice; what it finds too
   big to read; and what asks for the person's face.
-- **An index, by its own policy:** which hosts, issuers and markets count, which hosts it crawls,
+- **An index chooses:** which hosts, issuers and markets count, which hosts it crawls,
   how much each review weighs, and which proofs it accepts.
 
 ## FAQ

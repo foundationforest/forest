@@ -278,7 +278,7 @@ minimum after.
 - **One row per issuer, not per face.** A person with notes from two issuers holds two stamps per
   label. That is how a second profile in one market works; a reader that trusts both issuers
   counts both rows.
-- **A fee payer whose policy forbids transfers from its key cannot register a pre-funded address.**
+- **A fee payer that chooses to forbid transfers from its key cannot register a pre-funded address.**
   When a row's address holds lamports below the row's minimum, Anchor's `init` tops it up with a
   System transfer from the payer. Funding it first needs the stamp before its row exists, which
   only a sent proof shows. Any other payer still registers it, and what was sent counts toward the

@@ -4,7 +4,7 @@
 //
 // How many lines a request or a page holds is each host's choice, and this handles any: a request
 // a host finds too big is sent again in halves, and a page is read line by line, however long. How
-// large a record, a message or a blob to take is each host's policy, and each reader's: this
+// large a record, a message or a blob to take is each host's own choice, and each reader's: this
 // ignores what is larger than it is told to take, MAX_LINE_READ and MAX_BLOB_READ unless told
 // otherwise.
 

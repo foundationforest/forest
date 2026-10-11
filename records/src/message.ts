@@ -138,7 +138,7 @@ export function encodeMessage(message: SignedMessage): string {
 
 /**
  * Read one message off the wire without checking its signature: canonical text, shape, id. A host
- * runs its cheap checks before the signature, and how large a message to take is its policy.
+ * runs its cheap checks before the signature, and how large a message to take is its own choice.
  * Throws RecordError.
  */
 export function readMessage(text: string): CheckedMessage {

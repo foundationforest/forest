@@ -285,15 +285,24 @@ describe('a host that closes, or blocks a reader', () => {
     }
   })
 
-  test('to leave a host, send it deletes: after keep days it holds only those', async () => {
-    const h = await startHost({ now: () => T0 })
+  test('to leave a host, post a hosts record that no longer names it, to every host: a reader that still asks the old one is pointed on', async () => {
+    const old = await startHost({ now: () => T0 })
+    const kept = await startHost({ now: () => T0 })
     try {
-      await publish([h.url], [hostsRecord(alice, [h.url], T0), ownerRecord(alice, 'profile', profileBody('A'), T0), ownerRecord(alice, 'offer/a', offerBody('1'), T0)])
-      await publish([h.url], [hostsRecord(alice, null, T0 + 1), ownerRecord(alice, 'profile', null, T0 + 1), ownerRecord(alice, 'offer/a', null, T0 + 1)])
-      await h.prune(T0 + 31 * DAY)
-      assert.deepEqual((await readAll(h.url)).records.map((c) => [c.record.path, c.record.body]), [['hosts', null], ['profile', null], ['offer/a', null]])
+      const both = [old.url, kept.url]
+      await publish(both, [hostsRecord(alice, both, T0), ownerRecord(alice, 'profile', profileBody('A'), T0)])
+      await publish(both, [hostsRecord(alice, [kept.url], T0 + 1)])
+
+      // The old host may keep its copies; the reader follows the hosts record it finds there.
+      const viaOld = await readProfile([old.url], alice.address, T0 + MINUTE)
+      assert.deepEqual(viaOld.hosts, [kept.url])
+      assert.ok(viaOld.current.get('profile'))
+      const viaKept = await readProfile(viaOld.hosts, alice.address, T0 + MINUTE)
+      assert.deepEqual(viaKept.hosts, [kept.url])
+      assert.ok(viaKept.current.get('profile'))
     } finally {
-      await h.close()
+      await old.close()
+      await kept.close()
     }
   })
 })
@@ -404,7 +413,7 @@ describe('limits: each host’s own size, batch and page; each reader’s own si
     }
   })
 
-  test('size is a host’s policy: the reference host takes records of up to 65,536 bytes in UTF-8, unless its operator says otherwise', async () => {
+  test('size is a host’s own choice: the reference host takes records of up to 65,536 bytes in UTF-8, unless its operator says otherwise', async () => {
     const atCap = sizedRecord(alice, 'note/a', DEFAULT_MAX_LINE_BYTES)
     // One more byte, from one two-byte character: still 65,536 characters, now 65,537 bytes.
     const over = sizedRecord(alice, 'note/b', DEFAULT_MAX_LINE_BYTES + 1, 1)
@@ -414,7 +423,7 @@ describe('limits: each host’s own size, batch and page; each reader’s own si
     try {
       assert.deepEqual(await errors(h, [atCap, over]), ['ok', 'size'])
       assert.deepEqual(await errors(roomy, [over]), ['ok'])
-      // Size is the one policy a host refuses a permissions record by, and one that only removes a
+      // Size is the one reason a host refuses a permissions record by, and one that only removes a
       // key is never larger: a past key's entry is shorter than a write key's, a deleted one gone.
       const sized = (access: AccessKey[]) => Buffer.byteLength(encodeRecord(permissionsRecord(alice, access, T0)))
       const listed = sized([allow(accessKey, ['offer']), allow(stranger, undefined, 'message')])

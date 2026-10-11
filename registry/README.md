@@ -1,9 +1,10 @@
 # registry
 
+Part of Forest's standard: [the top README](../README.md). Down: the
+[security checklist](security-checklist.md).
+
 On devnet: the program runs at `J4ES52YohsZhknYbsgmZwHpyNw14EjrrGZxHpcmcBmq4`, still upgradable
 ([record](devnet/devnet.json)). Nothing is on mainnet.
-
-Up: [the repo](../README.md). Down: the [security checklist](security-checklist.md).
 
 ## What it is
 
@@ -11,7 +12,7 @@ A free public registry on Solana, and the client a device uses to add to it and 
 says: *this profile holds a note this issuer signed, under this label*. A zero-knowledge proof shows
 it without showing the note, so a row does not say who the person is. A stamp, the number a person
 has for one label at one issuer ([keys](../keys/README.md#stamps)), gets at most one row, and a row
-is written once and never changes. The program holds nothing else: no fee, no token, no treasury and
+is written once and never changes. The program holds nothing else: no fee, no coin, no treasury and
 no admin. The only costs are Solana's own, the network fee and the row's deposit, paid by whoever
 sends the transaction.
 
@@ -45,7 +46,8 @@ person's face once and signs them one note: *note number, face embedding, model 
   tier)` with its EdDSA key on Baby Jubjub, over Poseidon (circomlib's). The tag is
   `keccak256("forest/v1/note") >> 8`, always the same, so nothing an issuer signs for another
   purpose can pass as a note. The embedding and the model enter only as their hashes.
-- The person keeps the note, in their vault ([records](../records/README.md#the-vault)), as JSON:
+- The person keeps the note, in their vault (the folder a new device restores from,
+  [records](../records/README.md#the-vault)), as JSON:
   `{ noteNumber, embedding, model, tier, issuer, signature: { r8: [x, y], s } }`, numbers in
   decimal text, the embedding in base64url, the issuer's key as 128 characters of lowercase hex
   (`noteToJson`, `noteFromJson`).
@@ -313,10 +315,9 @@ solana program show <program id>          # Authority: none
 ## Who decides what
 
 - **The standard:** the row, the proof, and one row per stamp; to be sealed on mainnet.
-- **An issuer, by its own policy:** whom it signs notes for and how it checks them, and what its
-  tiers mean.
-- **Other services, by their own policy:** which rows a fee payer pays for; which issuers an index
-  counts, and from when.
+- **An issuer:** chooses whom it signs notes for and how it checks them, and what its tiers mean.
+- **Other services:** each chooses for itself which rows a fee payer pays for, and which issuers an
+  index counts, and from when.
 - **An app, with the person:** when to register, making the proof on the device, and showing the
   tier.
 

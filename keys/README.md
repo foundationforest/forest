@@ -1,6 +1,6 @@
 # keys
 
-Up: [the repo](../README.md).
+Part of Forest's standard: [the top README](../README.md).
 
 ## What it is
 
@@ -26,14 +26,17 @@ defaults an app adopts, or says it doesn't. The library in `src/` follows it, an
   secure keychain (Apple's Keychain or Android's Keystore), opened by the person's face or
   fingerprint and used only to mix keys, with the 24 words in the person's password manager as the
   backup.
-- The app holding the seed is the one thing a person trusts: it can do whatever the seed can. A web
-  app's code comes from its server on each visit; an installed app's does not.
+- Whoever controls the app that holds the seed controls the seed, since the app can do whatever the
+  seed can. A web app's code arrives from its server on each visit; an installed app's does not.
 
 ### The recipe
 
 Every key below is mixed with HKDF-SHA256 (RFC 5869), a standard one-way mix of a secret and a
 text: an empty salt, the text's UTF-8 bytes as its info, 32 bytes out. Only the text changes, and
-each key is explained below, in the order it is needed:
+each key is explained below, in the order it is needed. A note is the signed word an issuer gives a
+person after checking them, a stamp is the number that fixes where one registry row sits, and a
+row says in public that a profile holds a note; the vault is the person's folder of their own on a
+host, which a new device restores from.
 
 | From | Mixed with (info) | Gives |
 |---|---|---|
@@ -116,9 +119,10 @@ label, where the scope is the label as a number, made the way the registry makes
 ### The vault key
 
 The vault is a folder of the person's own, on a host, that holds what a new device needs and the
-seed cannot give back: the labels of their profiles, the grants they received, their issuers'
-notes, their credits, and apps' settings ([records](../records/README.md#the-vault)). Its key is
-mixed from the seed, so a new device finds the vault with the seed alone.
+seed cannot give back: the labels of their profiles, the grants they received (each a private
+message that hands them an access key), their issuers' notes, their credits, and apps' settings
+([records](../records/README.md#the-vault)). Its key is mixed from the seed, so a new device finds
+the vault with the seed alone.
 
 - It is a main key with no label: its address is the vault folder's name, and it signs the vault's
   records. No label gives it: a profile's text always starts `forest/v1/profile/`.
@@ -133,9 +137,9 @@ A person hands out access keys, never a main key. An access key is one the owner
 random, not from the seed, and hands to an app, a server or an AI so it can act for one profile.
 Each has one scope:
 
-- **write:** signs records into the profile's folder, at the paths it is allowed;
-- **message:** sends the profile's messages and pulls its inbox;
-- **read:** opens the private records and messages encrypted to it.
+- **write key:** signs records into the profile's folder, at the paths it is allowed;
+- **message key:** sends the profile's messages and pulls its inbox;
+- **read key:** opens the private records and messages encrypted to it.
 
 The profile's permissions record lists which access keys may act, and a grant hands one to
 whoever it is for ([records](../records/README.md)).
