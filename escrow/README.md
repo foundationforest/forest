@@ -1,11 +1,12 @@
 # escrow
 
-Up: [the repo](../README.md). Down: the [security checklist](security-checklist.md).
+Part of Forest's standard: [the top README](../README.md). Down: the
+[security checklist](security-checklist.md).
 
 ## What it is
 
 A program Forest offers on Solana, and its client; use any escrow. An escrow holds an amount of
-one token between two keys, a buyer and a seller, and lets it out only when both sides agree, or
+one mint, one kind of money such as a dollar, between two keys, a buyer and a seller, and lets it out only when both sides agree, or
 by an arbiter or a timer that were in its terms from the start. Every escrow that held the money
 leaves a receipt at its address, for good.
 
@@ -41,7 +42,7 @@ A buyer with nothing to wait for does steps 2 and 4 in one transaction: `payInOn
 
 ### The terms in the address
 
-An escrow's terms are the buyer, the seller, the token, the amount, the arbiter, the timer, and
+An escrow's terms are the buyer, the seller, the mint, the amount, the arbiter, the timer, and
 an id. Its address is `["escrow", sha256(terms)]`, the terms at fixed lengths in the receipt's
 order (`terms_hash` in `program/src/state.rs`). So:
 
@@ -51,20 +52,20 @@ order (`terms_hash` in `program/src/state.rs`). So:
 - the id tells apart two deals with the same terms: the app picks a fresh 64-bit number for each
   (`randomId()`).
 
-`create` names both keys, the token, the amount and any options. The party opening it signs, and
+`create` names both keys, the mint, the amount and any options. The party opening it signs, and
 so does whoever fronts the rent, recorded as the payer (Rent).
 
 ### Paying in
 
-- **The token** is a mint of the classic SPL Token program or of Token-2022, but not wrapped SOL
+- **The mint** is one made by the classic SPL Token program or by Token-2022, but not wrapped SOL
   of either (SOL sent to its deposit account by a plain transfer would not count), a Token-2022
   mint with a transfer fee (it would take part of every payment, while every way out pays the
   whole balance), or one that cannot be transferred (it could never leave). A dollar, here, is
-  such a token made to track the US dollar, such as Open USD; what its maker can still do is in
+  such a mint made to track the US dollar, such as Open USD; what its maker can still do is in
   the [security checklist](security-checklist.md).
 - **The deposit address** is the escrow's associated token account for the mint, so a payment
-  sent "to the escrow's address" from any wallet lands there. Money arrives by a plain transfer,
-  from anywhere; a payment in a Token-2022 token must be a `transfer_checked`. Confidential
+  sent "to the escrow's address" from anywhere lands there. Money arrives by a plain transfer,
+  from anywhere; a payment in a Token-2022 mint must be a `transfer_checked`. Confidential
   transfers never reach a deposit account: turning them on needs a signature the escrow never
   gives. Interest-bearing and scaled dollars work: the escrow holds and pays raw base units,
   fixed at creation, and only what they display drifts.
@@ -145,7 +146,7 @@ pays as in A deal, start to end, the buyer opening the escrow. The client builds
 ### The receipt
 
 When an escrow ends, its deposit account closes and the escrow account stays at its address as
-the receipt: the buyer, the seller, who opened it, the token, the amount, the arbiter and the
+the receipt: the buyer, the seller, who opened it, the mint, the amount, the arbiter and the
 timer, who fronted the rent, when the money was there (the mark's time, or the ending's if nobody
 marked it), whether a side objected and when, how it ended, when, and what each side got. A
 receipt never closes and never changes, and its address never holds a second deal, so the address
@@ -160,9 +161,10 @@ Solana holds a deposit, its rent, in every account, and gives it back when the a
 Whoever fronts an escrow's rent signs `create` as payer, is recorded, and gets every rent back:
 the deposit account's at every ending, both rents at `close_unfunded`, and, by `sweep_rent`,
 whatever a cut in Solana's rent later frees above the receipt's minimum. Refunds arrive in SOL, to
-that key. A fee payer may front it; what it charges for that is its own policy. The one other
-case: a deposit account a late payment made again was made by the buyer's wallet, so
-`recover_late` sends its rent to the buyer. Registry rows follow the same rule.
+that key. A fee payer may front it; what it charges for that is its own choice. The one other
+case: a deposit account a late payment made again was almost always made by the buyer's own
+payment, so `recover_late` sends its rent to the buyer. Registry rows (the registry's public
+statements that a profile holds an issuer's note) follow the same rule.
 
 At today's 5,080 lamports a byte, the escrow account is 305 bytes (2,199,640 lamports), and comes
 back whole only if it never held the amount; otherwise the receipt keeps its minimum. A classic
@@ -312,8 +314,9 @@ extensions, and one more invoice in it. There is no smoke test: read a receipt w
 
 ## Promises
 
-- **Money leaves a funded escrow only** by a release from the side giving it up, a split both sign,
-  the arbiter named at creation, or the timer set at creation once due and while nobody has
+- **Nothing in the escrow program lets anyone but the two sides, the arbiter or the timer move the
+  money.** Money leaves a funded escrow only by a release from the side giving it up, a split both
+  sign, the arbiter named at creation, or the timer set at creation once due and while nobody has
   objected.
 - **Every way out pays the whole balance,** to the parties' standard token accounts and nowhere
   else.
@@ -343,8 +346,8 @@ extensions, and one more invoice in it. There is no smoke test: read a receipt w
   only toward an escrow opened with exactly those terms. Either party can open one, and close it
   if it holds less than the amount, which sends the money back to the buyer.
 - **A party whose standard account requires a memo blocks its own payouts:** the escrow sends none.
-- **SOL sent to an escrow's address** goes to the payer by `sweep_rent`. **Tokens of another mint**
-  sent there are lost to everyone.
+- **SOL sent to an escrow's address** goes to the payer by `sweep_rent`. **Money of another mint**
+  sent there is lost to everyone.
 - **A one-sided receipt is cheap:** a buyer can release one base unit to a seller who signed
   nothing. The receipt records who created it.
 - **Hook accounts are the client's to find;** a missing one fails the transfer and nothing moves.
@@ -362,8 +365,7 @@ each.
 - **The standard:** the program's rules and the receipt, to be sealed on mainnet; the pay link.
 - **An app, with the person:** the terms, the arbiter, the timer's default, and which escrow to
   use.
-- **A fee payer, by its own policy:** which transactions it pays for, and what it charges for
-  fronting rent.
+- **A fee payer chooses** which transactions it pays for, and what it charges for fronting rent.
 
 ## FAQ
 
