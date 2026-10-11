@@ -192,7 +192,7 @@ describe('deliver and pull', () => {
     }
   })
 
-  test('size is the host’s policy, checked first: 65,536 bytes here unless its operator says otherwise', async () => {
+  test('size is the host’s own choice, checked first: 65,536 bytes here unless its operator says otherwise', async () => {
     const big = signMessage(bob, alice.address, { private: 'A'.repeat(DEFAULT_MAX_LINE_BYTES) }, T0)
     const h = await hostWith(ANYONE)
     const roomy = await hostWith(ANYONE, { maxLineBytes: 2 * DEFAULT_MAX_LINE_BYTES })
@@ -325,17 +325,17 @@ describe('deliver and pull', () => {
     }
   })
 
-  test('a host’s own policy comes last, and sees what it holds for that recipient', async () => {
+  test('a host’s own choice comes last, and sees what it holds for that recipient', async () => {
     const seen: number[] = []
     const h = await hostWith(ANYONE, {
-      messagePolicy: (_m, stored) => {
+      messageChoice: (_m, stored) => {
         seen.push(stored.messages)
         return stored.messages < 2 ? null : 'two messages a profile here'
       },
     })
     try {
       const forged = { ...(await note(stranger)), from: bob.address }
-      assert.deepEqual(await errors(h, [await note(bob), forged, await note(aliceBuyer), await note(stranger)]), ['ok', 'signature', 'ok', 'policy'])
+      assert.deepEqual(await errors(h, [await note(bob), forged, await note(aliceBuyer), await note(stranger)]), ['ok', 'signature', 'ok', 'refused'])
       assert.deepEqual(seen, [0, 1, 2], 'never asked about a forged one')
     } finally {
       await h.close()

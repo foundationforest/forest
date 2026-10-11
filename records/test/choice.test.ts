@@ -1,12 +1,12 @@
 // Keys are free, and the protocol sets no budget. A host may refuse content records by its own
-// policy, from the record and what it already stores. It is never asked about a hosts or
-// permissions record, so a person can always move and always remove an access key. The policy below
+// choice, from the record and what it already stores. It is never asked about a hosts or
+// permissions record, so a person can always move and always remove an access key. The choice below
 // is one host's example, not the protocol's.
 
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 import { publish } from '../src/client.ts'
-import type { Policy } from '../src/host.ts'
+import type { RecordChoice } from '../src/host.ts'
 import { keyFromPrivate } from '../src/keys.ts'
 import { accessRecord, hostsRecord, ownerRecord, permissionsRecord } from '../src/write.ts'
 import { DAY, T0, accessKey, alice, allow, offerBody, profileBody } from './fixtures.ts'
@@ -15,10 +15,10 @@ import { startHost } from './helpers.ts'
 const freshKey = (i: number) => keyFromPrivate(new Uint8Array(32).map((_, j) => (i * 31 + j * 7 + 1) & 255))
 
 /** One host's choice: at most three content records a profile. */
-const threeEach: Policy = (_record, stored) => (stored.records < 3 ? null : 'three records a profile here')
+const threeEach: RecordChoice = (_record, stored) => (stored.records < 3 ? null : 'three records a profile here')
 
-describe('host policy', () => {
-  test('the protocol sets no budget: a host with no policy of its own takes 200 fresh keys', async () => {
+describe('host choice', () => {
+  test('the protocol sets no budget: a host that chooses nothing of its own takes 200 fresh keys', async () => {
     const host = await startHost({ now: () => T0 })
     try {
       let taken = 0
@@ -33,15 +33,15 @@ describe('host policy', () => {
     }
   })
 
-  test('a host’s own policy refuses content; a newer hosts or permissions record always passes', async () => {
-    const host = await startHost({ now: () => T0, policy: threeEach })
+  test('a host’s own choice refuses content; a newer hosts or permissions record always passes', async () => {
+    const host = await startHost({ now: () => T0, recordChoice: threeEach })
     try {
       const results = async (records: Parameters<typeof publish>[1]) => (await publish([host.url], records))[0]!.results.map((r) => r.error ?? 'ok')
       assert.deepEqual(await results([ownerRecord(alice, 'profile', profileBody('A'), T0), ownerRecord(alice, 'offer/a', offerBody('1'), T0), ownerRecord(alice, 'offer/b', offerBody('1'), T0)]), ['ok', 'ok', 'ok'])
-      assert.deepEqual(await results([ownerRecord(alice, 'offer/c', offerBody('1'), T0)]), ['policy'])
+      assert.deepEqual(await results([ownerRecord(alice, 'offer/c', offerBody('1'), T0)]), ['refused'])
       // An access key went bad and floods: the person can always remove it, and always move.
       assert.deepEqual(await results([permissionsRecord(alice, [allow(accessKey, ['offer'])], T0)]), ['ok'])
-      assert.deepEqual(await results([accessRecord(accessKey, alice.address, 'offer/w', offerBody('1'), T0)]), ['policy'])
+      assert.deepEqual(await results([accessRecord(accessKey, alice.address, 'offer/w', offerBody('1'), T0)]), ['refused'])
       assert.deepEqual(await results([permissionsRecord(alice, [], T0 + 1), hostsRecord(alice, ['https://elsewhere.example'], T0)]), ['ok', 'ok'])
     } finally {
       await host.close()

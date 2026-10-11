@@ -149,7 +149,7 @@ describe('records', () => {
     assert.ok(checkRecord(permissionsRecord(alice, null, T0)), 'a delete removes every access key')
   })
 
-  test('no size is a rule: how large a record to take is each host’s policy (host.test.ts), and each reader’s', () => {
+  test('no size is a rule: how large a record to take is each host’s own choice (host.test.ts), and each reader’s', () => {
     const big = ownerRecord(alice, 'profile', { about: 'x'.repeat(200_000) }, T0)
     assert.ok(decodeRecord(encodeRecord(big)).id)
     assert.ok(checkRecord(sizedRecord(alice, 'note/a', 100_000, 1)).id)

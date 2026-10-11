@@ -75,7 +75,7 @@ describe('schemas', () => {
     assert.ok(!fits('offer', { ...located, location: { ...located.location, lat: 38.72 } }))
   })
 
-  test('blobs are SHA-256 references with their types and sizes; which types and how large is each host’s policy, not the shape’s', () => {
+  test('blobs are SHA-256 references with their types and sizes; which types and how large is each host’s own choice, not the shape’s', () => {
     for (const type of ['image/png', 'image/gif', 'image/svg+xml', 'application/vnd.oasis.opendocument.text']) {
       assert.ok(fits('profile', edit('profile', ['photo', 'mimeType'], type)), type)
       assert.ok(fits('offer', edit('offer', ['media'], [{ sha256: 'b'.repeat(64), mimeType: type, size: 1 }])), type)

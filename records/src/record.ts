@@ -143,7 +143,7 @@ export function verifySignature(sig: Uint8Array, message: Uint8Array, publicKey:
   }
 }
 
-/** Shape and signature. Returns the record with its id. Throws RecordError. How large a record to take is each host's policy, and each reader's. */
+/** Shape and signature. Returns the record with its id. Throws RecordError. How large a record to take is each host's own choice, and each reader's. */
 export function checkRecord(value: unknown): Checked {
   checkShape(value)
   const record = value

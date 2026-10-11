@@ -1,6 +1,6 @@
 // Blobs: bytes a record names by SHA-256, kept by the hosts that keep the record. Post the record,
 // then the bytes. A host refuses bytes that do not hash to their name, bytes no current record
-// names as that type, and what its own policy will not take; once no current record names them,
+// names as that type, and what its own choice will not take; once no current record names them,
 // it drops them after its keep days. A reader checks the hash, whatever host served them.
 
 import assert from 'node:assert/strict'
@@ -75,14 +75,14 @@ describe('blobs', () => {
   test('size and type are the host’s: the reference host takes png, jpeg and mp4 up to 50,000,000 bytes; an operator chooses its own', async () => {
     const gif = bytesOf(3)
     const reference = await startHost({ now: () => T0 })
-    const small = await startHost({ now: () => T0, maxBlobBytes: 1000, blobPolicy: (blob) => (blob.type === 'video/mp4' ? 'no video here' : null) })
+    const small = await startHost({ now: () => T0, maxBlobBytes: 1000, blobChoice: (blob) => (blob.type === 'video/mp4' ? 'no video here' : null) })
     try {
       for (const h of [reference, small]) await publish([h.url], [ownerRecord(alice, 'profile', withPhoto(gif, 'image/gif'), T0), ownerRecord(alice, 'offer/a', withMedia([photo, 'image/png'], [bytesOf(4, 900), 'video/mp4'], [bytesOf(5, 900), 'image/gif']), T0)])
-      assert.equal(await put(reference, gif, 'image/gif'), 'policy', 'a gif: not a type the shapes name')
+      assert.equal(await put(reference, gif, 'image/gif'), 'refused', 'a gif: not a type the shapes name')
       assert.equal(await put(reference, photo, 'image/png'), 'ok')
       const [over] = await putBlob([small.url], photo, 'image/png')
-      assert.deepEqual([over!.status, over!.error], [413, 'policy'])
-      assert.equal(await put(small, bytesOf(4, 900), 'video/mp4'), 'policy')
+      assert.deepEqual([over!.status, over!.error], [413, 'refused'])
+      assert.equal(await put(small, bytesOf(4, 900), 'video/mp4'), 'refused')
       assert.equal(await put(small, bytesOf(5, 900), 'image/gif'), 'ok', 'this operator takes gifs')
 
       // A declared size over the cap is answered at once, unread.
@@ -98,11 +98,11 @@ describe('blobs', () => {
     }
   })
 
-  test('a host’s policy sees the folders whose current records name the bytes, for rules by folder', async () => {
+  test('a host’s own choice sees the folders whose current records name the bytes, for rules by folder', async () => {
     const seen: string[][] = []
     const h = await startHost({
       now: () => T0,
-      blobPolicy: ({ folders }) => {
+      blobChoice: ({ folders }) => {
         seen.push(folders)
         return folders.includes(alice.address) ? null : 'only Alice’s folder here'
       },
@@ -112,7 +112,7 @@ describe('blobs', () => {
       const bobs = bytesOf(8)
       await publish([h.url], [ownerRecord(alice, 'profile', withPhoto(both), T0), ownerRecord(bob, 'profile', withPhoto(both), T0), ownerRecord(bob, 'offer/a', withMedia([bobs, 'image/png']), T0)])
       assert.equal(await put(h, both, 'image/jpeg'), 'ok')
-      assert.equal(await put(h, bobs, 'image/png'), 'policy')
+      assert.equal(await put(h, bobs, 'image/png'), 'refused')
       assert.deepEqual(seen, [[alice.address, bob.address].sort(), [bob.address]])
     } finally {
       await h.close()

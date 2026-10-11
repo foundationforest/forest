@@ -19,7 +19,7 @@
 //   GET  /v1/blobs/<sha256>               the bytes, with that type
 //
 // How large a record, a message or a blob it takes, and how many lines a request or a page holds,
-// is this host's policy (maxLineBytes, maxBlobBytes, maxBatch, maxPageRecords, maxPageBytes); a
+// is this host's own choice (maxLineBytes, maxBlobBytes, maxBatch, maxPageRecords, maxPageBytes); a
 // client handles any size. It logs nothing about who asks. Where it keeps things is storage.ts's
 // business, and only storage.ts's.
 
@@ -56,20 +56,20 @@ const MAX_ASK_BYTES = 1024
 const BLOB_PATH = /^\/v1\/blobs\/([0-9a-f]{64})$/
 
 /**
- * A host's own policy for content records: null takes the record, a reason refuses it. It is
+ * A host's own choice for content records: null takes the record, a reason refuses it. It is
  * never asked about a hosts or permissions record, so a person can always move and always remove
  * an access key.
  */
-export type Policy = (record: SignedRecord, stored: { records: number; bytes: number }) => string | null | Promise<string | null>
-/** A host's own policy for messages, from the message and what it holds for that recipient. */
-export type MessagePolicy = (message: SignedMessage, stored: { messages: number; bytes: number }) => string | null | Promise<string | null>
+export type RecordChoice = (record: SignedRecord, stored: { records: number; bytes: number }) => string | null | Promise<string | null>
+/** A host's own choice for messages, from the message and what it holds for that recipient. */
+export type MessageChoice = (message: SignedMessage, stored: { messages: number; bytes: number }) => string | null | Promise<string | null>
 /**
- * A host's own policy for blobs, past its size cap. `folders` are the folders whose current records
+ * A host's own choice for blobs, past its size cap. `folders` are the folders whose current records
  * here name the bytes as that type, so a rule may go by folder: a quota, say.
  */
-export type BlobPolicy = (blob: { sha256: string; type: string; size: number; folders: string[] }) => string | null | Promise<string | null>
+export type BlobChoice = (blob: { sha256: string; type: string; size: number; folders: string[] }) => string | null | Promise<string | null>
 
-export const defaultBlobPolicy: BlobPolicy = (blob) => (DEFAULT_BLOB_TYPES.includes(blob.type) ? null : `this host takes ${DEFAULT_BLOB_TYPES.join(', ')}`)
+export const defaultBlobChoice: BlobChoice = (blob) => (DEFAULT_BLOB_TYPES.includes(blob.type) ? null : `this host takes ${DEFAULT_BLOB_TYPES.join(', ')}`)
 
 export type HostOptions = {
   /**
@@ -84,7 +84,7 @@ export type HostOptions = {
   keepDays?: number
   /** The largest record or message it takes, as canonical text in bytes; DEFAULT_MAX_LINE_BYTES when omitted. */
   maxLineBytes?: number
-  policy?: Policy
+  recordChoice?: RecordChoice
   /** Milliseconds a request may take to arrive in full; past that it gets 408. READ_TIMEOUT_MS when omitted. */
   timeout?: number
   /** Records or messages a request may carry; DEFAULT_MAX_BATCH when omitted. */
@@ -106,11 +106,11 @@ export type HostOptions = {
    * is read again for each request; keeping it longer is the operator's choice, made here.
    */
   readSender?: (host: string, profile: string) => Promise<Iterable<Checked>>
-  messagePolicy?: MessagePolicy
+  messageChoice?: MessageChoice
   /** The largest blob it reads; DEFAULT_MAX_BLOB_BYTES when omitted. */
   maxBlobBytes?: number
-  /** defaultBlobPolicy when omitted. */
-  blobPolicy?: BlobPolicy
+  /** defaultBlobChoice when omitted. */
+  blobChoice?: BlobChoice
 }
 
 export type Result = { i: number; id?: string; ok: boolean; error?: string; message?: string }
@@ -128,9 +128,9 @@ export class Host {
   readonly maxBlobBytes: number
   private readonly storage: Storage
   private readonly now: () => number
-  private readonly policy?: Policy
-  private readonly messagePolicy?: MessagePolicy
-  private readonly blobPolicy: BlobPolicy
+  private readonly recordChoice?: RecordChoice
+  private readonly messageChoice?: MessageChoice
+  private readonly blobChoice: BlobChoice
   private readonly rowLookup?: HostOptions['rowLookup']
   private readonly readSender?: HostOptions['readSender']
   private readonly timeout: number
@@ -145,9 +145,9 @@ export class Host {
     this.maxPageRecords = options.maxPageRecords ?? DEFAULT_MAX_PAGE_RECORDS
     this.maxPageBytes = options.maxPageBytes ?? DEFAULT_MAX_PAGE_BYTES
     this.maxBlobBytes = options.maxBlobBytes ?? DEFAULT_MAX_BLOB_BYTES
-    this.policy = options.policy
-    this.messagePolicy = options.messagePolicy
-    this.blobPolicy = options.blobPolicy ?? defaultBlobPolicy
+    this.recordChoice = options.recordChoice
+    this.messageChoice = options.messageChoice
+    this.blobChoice = options.blobChoice ?? defaultBlobChoice
     this.rowLookup = options.rowLookup
     this.readSender = options.readSender
     this.timeout = options.timeout ?? READ_TIMEOUT_MS
@@ -194,11 +194,11 @@ export class Host {
     }
     // A reader counts a past write key's records, since it is still listed; a host takes none.
     if (record.by !== undefined && !allowsArrival(view.access, record)) return { ok: false, error: 'permission', message: 'this access key is past' }
-    if (this.policy && !isControlPath(record.path)) {
-      const refused = await this.policy(record, this.storage.recordTotals(record.profile))
-      if (refused) return { ok: false, error: 'policy', message: refused }
+    if (this.recordChoice && !isControlPath(record.path)) {
+      const refused = await this.recordChoice(record, this.storage.recordTotals(record.profile))
+      if (refused) return { ok: false, error: 'refused', message: refused }
     }
-    // From here on, no wait: the policy may have let other requests store records for this
+    // From here on, no wait: its own choice may have let other requests store records for this
     // profile, so what is current is worked out again. What is current is kept; what stopped being
     // current gets a date, and goes `keepDays` later. So do the bytes the profile's records name,
     // once no current record names them.
@@ -327,12 +327,12 @@ export class Host {
     }
     if (rules?.once && this.storage.hasOnce(m.to, m.from)) return refuse('once', 'this inbox takes one message from each sender')
     if (rules?.maxBytes !== undefined && Buffer.byteLength(line) > rules.maxBytes) return refuse('too_big', `this inbox takes messages of at most ${rules.maxBytes} bytes`)
-    if (this.messagePolicy) {
-      const refused = await this.messagePolicy(m, this.storage.messageTotals(m.to))
-      if (refused) return refuse('policy', refused)
+    if (this.messageChoice) {
+      const refused = await this.messageChoice(m, this.storage.messageTotals(m.to))
+      if (refused) return refuse('refused', refused)
     }
     // Checked again here, with no wait in between: another request may have taken the same id or
-    // pair during a lookup or the policy.
+    // pair during a lookup or its own choice.
     if (rules?.once && !this.storage.addOnce(m.to, m.from)) return refuse('once', 'this inbox takes one message from each sender')
     if (!this.storage.addMessage(m.to, id, line, now)) return refuse('duplicate', 'this message is already here')
     return { id, ok: true }
@@ -357,15 +357,15 @@ export class Host {
 
   /**
    * Take bytes: they must hash to `sha256` [hash], a current record here must name that hash as
-   * `type` [unnamed], and this host must take their size and type [policy].
+   * `type` [unnamed], and this host must take their size and type [refused].
    */
   async putBlob(name: string, type: string, bytes: Uint8Array): Promise<Answer> {
     if (hex.encode(sha256(bytes)) !== name) return { ok: false, error: 'hash', message: 'the bytes do not hash to their name' }
     const folders = this.storage.namedBy(name, type)
     if (!folders.length) return { ok: false, error: 'unnamed', message: 'no current record here names these bytes as this type' }
     if (this.storage.holdsBlob(name)) return { ok: true, message: 'already here' }
-    const refused = bytes.length > this.maxBlobBytes ? `at most ${this.maxBlobBytes} bytes` : await this.blobPolicy({ sha256: name, type, size: bytes.length, folders })
-    if (refused) return { ok: false, error: 'policy', message: refused }
+    const refused = bytes.length > this.maxBlobBytes ? `at most ${this.maxBlobBytes} bytes` : await this.blobChoice({ sha256: name, type, size: bytes.length, folders })
+    if (refused) return { ok: false, error: 'refused', message: refused }
     await this.storage.putBlob(name, type, bytes, this.now())
     return { ok: true }
   }
@@ -428,7 +428,7 @@ export class Host {
       return
     }
     if (blob) {
-      const tooBig = { ok: false, error: 'policy', message: `at most ${this.maxBlobBytes} bytes` }
+      const tooBig = { ok: false, error: 'refused', message: `at most ${this.maxBlobBytes} bytes` }
       if (Number(req.headers['content-length'] ?? 0) > this.maxBlobBytes) return sendJson(res, 413, tooBig)
       const bytes = await readBody(req, this.maxBlobBytes)
       if (bytes === null) return sendJson(res, 413, tooBig)
