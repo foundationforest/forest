@@ -3,9 +3,9 @@
 // signature the service made blind, over a nonce only the buyer's app knows, so when it comes back
 // to be spent the service sees a good signature and nothing that ties it to the buy. See README.md.
 //
-// This is the client side, and the one check every service makes: the buy, its pay link, finishing
-// the credits from the service's answer, showing one or several, and checking them. It talks to no network of
-// its own. The blinding and the signatures are Cloudflare's privacypass-ts, unchanged; its type 2
+// This is the client side, and the one check every service makes: the buy, its pay link, what a
+// sponsor signs for it, finishing the credits from the service's answer, showing one or several, and
+// checking them. It talks to no network of its own. The blinding and the signatures are Cloudflare's privacypass-ts, unchanged; its type 2
 // client keeps the blinding in memory only, so the buy here keeps it as bytes, to finish later, on
 // any device, from the vault.
 
@@ -25,6 +25,8 @@ const { BLIND_RSA, BlindRSAMode, TokenRequest, convertRSASSAPSSToEnc } = publicV
 export const CREDIT_TYPE = 0x0002
 /** Where a service publishes its credit key and its price: Privacy Pass's issuer directory. */
 export const DIRECTORY_PATH = '/.well-known/private-token-issuer-directory'
+/** The header a buy is collected with, naming what paid it: `solana <signature>` or `ticket <ticket>`. */
+export const PAYMENT_HEADER = 'forest-payment'
 
 const suite = () => BLIND_RSA.suite[BlindRSAMode.PSS]()
 const sha256 = async (bytes: Uint8Array) => new Uint8Array(await crypto.subtle.digest('SHA-256', bytes as Uint8Array<ArrayBuffer>))
@@ -170,6 +172,24 @@ export async function buy(service: Service, count: number): Promise<{ buy: Uint8
     (service.mint === 'SOL' ? '' : `&spl-token=${service.mint}`) +
     `&reference=${reference}&label=${encodeURIComponent(originOf(service.origin).host)}`
   return { buy: bytes, reference, payLink, pending: { service: service.origin, key: b64u.encode(service.key), buy: b64u.encode(bytes), blinds } }
+}
+
+/**
+ * What a sponsor signs, with Ed25519, to pay for a buy: the service, the buy's reference and how many
+ * credits it holds. So a ticket pays for that buy at that service, of that many credits, and no other.
+ */
+export function ticketMessage(origin: string, reference: string, credits: number): Uint8Array {
+  originOf(origin)
+  addressBytes(reference, 'reference')
+  if (!Number.isSafeInteger(credits) || credits < 1) throw new RangeError('a ticket is for one credit or more')
+  return new TextEncoder().encode(`forest credit ticket\n${origin}\n${reference}\n${credits}`)
+}
+
+/** A ticket as the payment header carries it: the sponsor's address, the credits, and its signature of `ticketMessage`, base64url. */
+export function ticket(sponsor: string, credits: number, signature: Uint8Array): string {
+  addressBytes(sponsor, 'sponsor')
+  if (signature.length !== 64) throw new Error('a signature is 64 bytes')
+  return `${sponsor}.${credits}.${b64u.encode(signature)}`
 }
 
 /** A pending buy's shape, as the vault keeps it. Throws on any other. */

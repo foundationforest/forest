@@ -6,9 +6,9 @@ Up: [the repo](../README.md).
 
 A credit is a prepaid unit for one service, bought once and spent without the service being able
 to tell who bought it. A service that sells them says what one buys: for the foundation's registry
-payer, one registration; for its host, a cent of storage. Anyone can buy credits for someone else,
-without learning which spends are theirs: that is how an issuer gives its people free
-registrations.
+payer, one registration; for its host, a cent of storage. Anyone can pay for someone else's
+credits, without learning which spends are theirs: that is how an issuer gives its people their
+first credits, as a sponsor.
 
 A credit is a Privacy Pass token (RFC 9576, RFC 9577, RFC 9578) of type 2, Blind RSA: the service
 signs it blind, over a number only the buyer's app knows, so when the credit comes back to be
@@ -50,22 +50,45 @@ more field:
 
 ### Buying
 
-1. The app makes a buy of `n` credits: `n` requests, each the blinded first 98 bytes of a credit
-   to be, in one batch, as `draft-ietf-privacypass-batched-tokens` writes it. It keeps each nonce,
-   and each blinding's inverse: what it needs to finish, kept in the vault
-   ([records](../records/README.md#the-vault)).
-2. The buy's reference is SHA-256 of its bytes, written as a Solana address. Its pay link is a
-   Solana Pay transfer request:
-   `solana:<address>?amount=<n × price>[&spl-token=<mint>]&reference=<reference>&label=<host>`.
-3. Anyone pays the link, from any wallet that reads Solana Pay. The payment carries the reference,
-   so it names this buy and no other.
-4. Anyone holding the buy collects it: a POST of its bytes to the `issuer-request-uri`, as
-   `application/private-token-generic-batch-request`. The service hashes them, finds a finalized
-   payment to its address carrying that reference, of at least `n × price`, and answers with the
-   `n` blind signatures. Signing is deterministic, so the same buy collected again gets the same
-   answer: a lost answer costs nothing, and gives no credit more.
-5. The app finishes: it unblinds each signature and checks it against the service's key. An answer
-   for another buy, or with an empty slot, finishes nothing, and the app collects again.
+The app makes a buy, then three steps: pay, get signed, open.
+
+1. **The buy.** `n` requests, each the blinded first 98 bytes of a credit to be, in one batch, as
+   `draft-ietf-privacypass-batched-tokens` writes it. The app keeps each nonce, and each blinding's
+   inverse: what it needs to finish, kept in the vault
+   ([records](../records/README.md#the-vault)). The buy's reference is SHA-256 of its bytes,
+   written as a Solana address.
+2. **Pay.** Someone pays for the buy, in one of the ways below, and the app gets the proof.
+3. **Get signed.** Anyone holding the buy collects it: a POST of its bytes to the
+   `issuer-request-uri`, as `application/private-token-generic-batch-request`, with the proof in
+   the `Forest-Payment` header. The service checks that the proof pays for this buy and answers with
+   the `n` blind signatures. Signing is deterministic, so the same buy collected again with the
+   same proof gets the same answer: a lost answer costs nothing, and gives no credit more.
+4. **Open.** The app finishes: it unblinds each signature and checks it against the service's key.
+   An answer for another buy, or with an empty slot, finishes nothing, and the app collects again.
+
+### The ways to pay
+
+A proof pays for one buy. The service keeps which proof paid which reference, and refuses a proof
+it took for another.
+
+| Way | The header | What the service checks |
+|---|---|---|
+| A Solana payment | `Forest-Payment: solana <transaction signature>` | That one transaction, at finalized: no error, the buy's reference among its accounts, and the service's `address` gained at least `n` × `price` in `mint` |
+| A sponsor's ticket | `Forest-Payment: ticket <ticket>` | A sponsor the service takes signed it, for this service, this buy and its `n` |
+| A card session | | Planned, not built |
+
+**A Solana payment.** The buy's pay link is a Solana Pay transfer request:
+`solana:<address>?amount=<n × price>[&spl-token=<mint>]&reference=<reference>&label=<host>`.
+Anyone pays it, from any wallet that reads Solana Pay; the payment names the buy by carrying its
+reference. The app hands the service the transaction's signature.
+
+**A sponsor's ticket.** A sponsor is a key whose tickets a service takes, by its own policy: an
+issuer giving its people their first credits, say. The app sends the sponsor the buy's reference.
+The sponsor signs, with Ed25519, `forest credit ticket\n<origin>\n<reference>\n<n>` in UTF-8
+(`ticketMessage`): the service's origin, the buy's reference and how many credits it holds, so the
+ticket pays for that buy at that service and no other. The ticket is
+`<sponsor's address>.<n>.<signature in base64url>` (`ticket`). The service keeps a bill: how many
+credits each sponsor's tickets paid for.
 
 ### Spending
 
@@ -81,18 +104,17 @@ more field:
   action fails, or can no longer land, the id is freed and the credit can be shown again, so a
   failed registration can retry.
 - What the action is, and when it lands, is each service's to say, with its unit. For the registry
-  payer, the action is the register transaction: it lands when confirmed, and can no longer land
-  once its blockhash expires.
+  payer, the action is a registry row, and its README says when it lands.
 - The spent list holds ids only.
 
 ### Buying for someone else
 
-The person's app hands the buyer the pay link, or the buy itself; the buyer pays; the person's app
-collects and finishes.
+The person's app hands the buyer the pay link, or a sponsor the buy's reference; the buyer pays, or
+the sponsor signs a ticket; the person's app collects and finishes.
 
-- The buyer sees the amount and the reference, never the credits.
-- The service sees who paid and the blinded buy, never which spends they become.
-- An issuer gives its people free registrations by paying one-credit links for the registry payer.
+- The buyer or the sponsor sees the reference, never the credits.
+- The service sees who paid, or which sponsor, and the blinded buy, never which spends they become.
+- An issuer gives its people their first credits as a sponsor: a ticket for each buy.
 
 ### Use it
 
@@ -101,6 +123,7 @@ collects and finishes.
 | `serviceOf(origin, directory, now?)` | The service, from its directory: the key that counts, where a buy goes, its unit, address, mint and price |
 | `buy(service, count)` | The buy's bytes, its reference, its pay link, and `pending`: what to keep to finish |
 | `finish(pending, answer)` | The credits, each `{ service, credit }` and checked against the key; refuses any other answer |
+| `ticketMessage(origin, reference, n)`, `ticket(sponsor, n, signature)` | What a sponsor signs for a buy, and the ticket it hands the app; `PAYMENT_HEADER` is the header a proof goes in |
 | `authorization(credit)`, `creditOf(header)` | The header that shows one credit, and the credit back from it |
 | `creditList(credits)` | Several credits as a request's body lists them |
 | `checkCredit(credit, { origin, keys })` | For a service: the credit's id, or a refusal |
@@ -108,32 +131,46 @@ collects and finishes.
 | `creditId(credit)`, `referenceOf(buy)`, `challengeOf(origin)`, `checkPending(value)` | A credit's id; a buy's reference; a service's challenge; a pending buy's shape |
 
 ```ts
-import { authorization, buy, finish, serviceOf } from '@forest/credits'
+import { PAYMENT_HEADER, authorization, buy, finish, serviceOf } from '@forest/credits'
 
 const service = serviceOf(origin, directory)          // its directory, read at DIRECTORY_PATH
 const b = await buy(service, 1)                       // keep b.pending in the vault
-// Anyone pays b.payLink. Then anyone posts b.buy to service.requestUri:
-const credits = await finish(b.pending, answer)       // the answer's bytes
+// Anyone pays b.payLink from a wallet, or a sponsor signs a ticket for b.reference. Then anyone collects:
+const res = await fetch(service.requestUri, { method: 'POST', body: b.buy, headers: {
+  'content-type': 'application/private-token-generic-batch-request', [PAYMENT_HEADER]: `solana ${signature}` } })
+const credits = await finish(b.pending, new Uint8Array(await res.arrayBuffer()))
 // Spend one: fetch(url, { headers: { authorization: authorization(credits[0]) }, … })
 ```
 
 ### Selling credits
 
-A service's side, in `src/service.ts` (Node only, like records' host: its spent list is SQLite):
+A service's side, in `src/service.ts` (Node only, like records' host: its seller's file is SQLite):
 
 | Function | Gives |
 |---|---|
 | `keyFrom(pkcs8)` | The service's credit key from its private key, RSA-2048 in PKCS #8: what it signs with, and the bytes its directory publishes |
-| `directoryOf({ requestUri, keys, credit })` | The directory to serve at `DIRECTORY_PATH`, with its `forest-credit` entry |
-| `countOf(buy)`, `amountOf(price, n)` | How many credits a buy asks for, and what they cost: what its pay link asks |
-| `paid(rpc, { reference, address, mint, amount })` | The signature of a finalized payment that names the reference and pays at least the amount, or null; through the RPC the service passes, two calls |
-| `answer(buy, key, origin)` | The blind signatures for a paid buy: one per request under the key, an empty slot for any other, the same every time |
-| `SpentList` | The spent list: `hold` (held, spent or busy), `land`, `free`, each of one id or several together, all or none; and `holds`, what is held now, with the service's note on each |
+| `seller({ origin, key, unit, requestUri, credit, maxBuy, sponsors, rpc, path })` | The service's seller, in one SQLite file: `directory()`, to serve at `DIRECTORY_PATH`; `collect(buy, header)`, the buy's blind signatures once the header's proof pays for it, or a refusal; `spent`, the spent list; `bill()`; and the file, `db`, with `together(work)` for one transaction, so the service keeps its own tables in it |
+| `answer(buy, key)` | The blind signatures for a buy: one per request under the key, an empty slot for any other, the same every time |
+| `SpentList` | The spent list: `hold` (held, spent or busy), `land`, `free`, each of one id or several together, all or none; and `holds`, what is held now, with the service's note on each. In its own file or the seller's; inside a transaction the service opened, it is part of that one |
 
-A service collects a buy this way: `countOf` it and refuse more than its policy allows; `paid` for
-`amountOf(price, n)` at the buy's `referenceOf`; then `answer` it. It spends a credit this way:
-`checkCredit` (or, for several, `checkCredits`), then `hold` its id (or their ids, together) with a
-note of what to look for, and `land` or `free` it once it knows whether the action landed; on a restart it settles each of `holds()`. Nothing in it
+`collect` refuses by name:
+
+| Refusal | When |
+|---|---|
+| `not_a_buy` (400) | The bytes are not a buy |
+| `too_many` (400) | It asks for more than `maxBuy` credits |
+| `not_paid` (402) | No proof, or one that does not pay for this buy; with what to pay, and where |
+| `bad_payment` (400) | A header it cannot read |
+| `proof_used` (409) | The proof paid for another buy |
+| `payment_check_unavailable` (503) | No RPC, or it did not answer |
+
+A Solana payment costs one call through the RPC the service passes, `getTransaction`. Each
+signature is Node's own RSA (OpenSSL), `m^d mod n` checked by `s^e mod n` as RFC 9474 signs; the
+privacypass-ts issuer signs with JavaScript big integers, hundreds of times slower.
+
+A service spends a credit this way: `checkCredit` (or, for several, `checkCredits`), then `hold`
+its id (or their ids, together) with a note of what to look for, and `land` or `free` it once it
+knows whether the action landed; it settles each of `holds()` as its policy says. Nothing in it
 logs what it is sent.
 
 ### Run it
@@ -146,8 +183,8 @@ npm test        # against a stand-in service made of Cloudflare's own issuer and
 ```
 
 Node 22.18 or later. Built from existing pieces, used unchanged: `@cloudflare/privacypass-ts` 0.9.0,
-and its `@cloudflare/blindrsa-ts`, for the tokens, the blinding and the batch; `@scure/base` for
-base58 and base64url.
+and its `@cloudflare/blindrsa-ts`, for the tokens, the blinding and the batch; Node's own crypto for
+a service's RSA signatures and a sponsor's Ed25519; `@scure/base` for base58 and base64url.
 
 ## Promises
 
@@ -174,6 +211,8 @@ base58 and base64url.
 - **Not post-quantum.** A large quantum computer could break RSA-2048 and make credits; the service
   would change its key. It could still not link a spend to its buy: blinding hides that from any
   computer.
+- **A sponsor's bill is counted, not capped.** A service counts how many credits each sponsor's
+  tickets paid for, and limits nothing: a sponsor it takes can sign for any number of buys.
 - **The batch is a draft.** `draft-ietf-privacypass-batched-tokens` is not an RFC yet; its encoding
   is the one `privacypass-ts` 0.9.0 writes.
 - **Not audited.**
@@ -181,13 +220,13 @@ base58 and base64url.
 ## Who decides what
 
 - **The standard:** the credit (type 2, its challenge, its id), the directory's `forest-credit`
-  entry, the buy and its reference, the pay link, the header, and the rules: spent once, only when
-  the action lands; never refunded.
+  entry, the buy and its reference, the ways to pay (the pay link, the ticket), the headers, and the
+  rules: a proof pays for one buy; spent once, only when the action lands; never refunded.
 - **A service, by its own policy:** its unit, price, mint and address; which keys it counts and for
-  how long; how many credits one buy may hold, and how many one request may show; what its action is and when it lands; how long it
-  keeps a payment for collecting.
+  how long; which sponsors it takes; how many credits one buy may hold, and how many one request
+  may show; what its action is and when it lands.
 - **An app, with the person:** when to buy, how many, and whom to ask to pay.
-- **A buyer:** whom it pays for.
+- **A buyer or a sponsor:** whom it pays for.
 
 ## FAQ
 
