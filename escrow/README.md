@@ -6,14 +6,15 @@ Part of Forest's standard: [the top README](../README.md). Down: the
 ## What it is
 
 A program Forest offers on Solana, and its client; use any escrow. An escrow holds an amount of
-one mint, one kind of money such as a dollar, between two keys, a buyer and a seller, and lets it out only when both sides agree, or
-by an arbiter or a timer that were in its terms from the start. Every escrow that held the money
+one mint, one kind of money such as a dollar, between two keys, a buyer and a seller, and lets it
+out only when both sides agree, or by an arbiter or a timer that were in its terms from the start. Every escrow that held the money
 leaves a receipt at its address, for good.
 
 It runs on devnet at `FA6ZodkyhMDj9yjzY27dk8JDCtcHnJx8mr45Mx9TfKg8`, still upgradable
 ([record](devnet/devnet.json)); nothing is on mainnet. On mainnet each version is to be sealed the
-day it deploys, because it holds money: a new version comes as a new program at a new address,
-never an upgrade, and the old ones keep working.
+day it deploys, because money sits inside it and nobody, the Open Forest Foundation included, may
+change the rules around money already there: a new version comes as a new program at a new
+address, never an upgrade, and the old ones keep working.
 
 - `program/`: the program (Anchor 1.2), its LiteSVM tests and its fuzzer.
 - `client/`: builds every instruction and reads every account and event. It talks to no network
@@ -269,7 +270,7 @@ to about 20,000 compute units with the keys.
 
 ### What is sealed
 
-None of this can change after deploy; a change is a new program at a new address.
+None of this can change after the mainnet deploy; on devnet the program is still upgradable.
 
 - **The account.** 297 bytes after the discriminator, laid out in `program/src/state.rs` (and
   written again in `program/tests-litesvm/src/lib.rs` and `client/src/program.ts`): version, id,

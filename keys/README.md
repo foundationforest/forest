@@ -33,14 +33,17 @@ defaults an app adopts, or says it doesn't. The library in `src/` follows it, an
 
 Every key below is mixed with HKDF-SHA256 (RFC 5869), a standard one-way mix of a secret and a
 text: an empty salt, the text's UTF-8 bytes as its info, 32 bytes out. Only the text changes, and
-each key is explained below, in the order it is needed:
+each key is explained below, in the order it is needed. A note is the signed word an issuer gives a
+person after checking them, a stamp is the number that fixes where one registry row sits, and a
+row says in public that a profile holds a note; the vault is the person's folder of their own on a
+host, which a new device restores from.
 
 | From | Mixed with (info) | Gives |
 |---|---|---|
 | the seed | `forest/v1/profile/<label>` | a main key: one profile's name, Solana address and signature |
 | a main key's 32 private bytes | `forest/v1/read` | that profile's inbox key, which opens what is encrypted to it |
-| the seed | `forest/v1/issuer/<issuer name>` | the person's secret for one issuer, the source of the number on their note (the issuer's signed word that it checked them) and of their stamps (each fixes where one registry row sits; a row says in public that a profile holds a note) |
-| the seed | `forest/v1/vault` | the vault key: the main key of the person's vault, a folder of its own that a new device restores from |
+| the seed | `forest/v1/issuer/<issuer name>` | the person's secret for one issuer, which their note number and stamps come from |
+| the seed | `forest/v1/vault` | the vault key: the main key of the person's vault, a folder of its own |
 
 The info strings are part of every key, so they never change: a new string would give everyone
 new keys.

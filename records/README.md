@@ -49,9 +49,9 @@ Its folder is everything signed for it, one current record per path:
 lower case, no path (`http` only on loopback, for tests). Each host it names holds the whole
 folder. An app posts every record to every host it names, the hosts and permissions records
 first. To move, it posts a hosts record naming the new hosts to old and new, then its copies; to
-leave a host, post a hosts record that no longer names it, to the hosts that remain. The old host
-may keep its copies; readers follow the hosts record. Leaving never sends deletes: a delete is a
-signed record that counts everywhere it reaches.
+leave a host, post a hosts record that no longer names it, to every host, the one you are leaving
+included, so a reader that still asks that host is pointed on. The old host may keep its copies;
+readers follow the hosts record.
 
 ### Records
 
@@ -112,11 +112,14 @@ whoever it is for in a grant (Grants).
   "notes"?: <base64url of an age file> }
 ```
 
+The scope names the kind of key: a write key signs records, a message key signs messages and pulls
+the inbox, and a read key opens private records and messages.
+
 | Scope | What its holder can do |
 |---|---|
-| `write` | a write key signs records into the folder, by the access rule below |
-| `message` | a message key signs messages for the main key, and pulls its inbox (Inbox) |
-| `read` | a read key opens the private records and messages encrypted to it (Private records) |
+| `write` | sign records into the folder, by the access rule below |
+| `message` | sign messages for the main key, and pull its inbox (Inbox) |
+| `read` | open the private records and messages encrypted to it (Private records) |
 
 - `key` is the key's address, or, for a read key, its age recipient (`age1pq1…`). A key listed
   twice makes the record invalid.
@@ -417,7 +420,7 @@ host.
 4. An access key's record: its key MUST be listed with scope `write`, its paths covering the
    record's path [`permission`]. A reader also counts a past write key's records; a host takes
    none.
-5. A host MAY refuse a content record by its own choice [`policy`]. It MUST NOT refuse a hosts or
+5. A host MAY refuse a content record by its own choice [`refused`]. It MUST NOT refuse a hosts or
    permissions record by its own choice but for its size, so a person can always move and always
    remove an access key: a record that only removes one is never larger than the one before.
 
@@ -442,7 +445,7 @@ host.
    it [`once`]. The host keeps each pair it takes while the inbox says `once`, for as long as it
    keeps the profile.
 8. `maxBytes`: the canonical text is at most that many bytes [`too_big`].
-9. A host MAY refuse a message by its own choice [`policy`].
+9. A host MAY refuse a message by its own choice [`refused`].
 
 A message whose `from` is its `to` skips steps 6 to 8: an inbox's rules are for others.
 
@@ -452,7 +455,7 @@ A message whose `from` is its `to` skips steps 6 to 8: an inbox's rules are for 
 2. A current record on this host names that hash, with the `content-type` sent as its type
    [`unnamed`]. So the record comes first.
 3. The host's own choice allows them, by their size, their type or the folders whose current
-   records name them [`policy`].
+   records name them [`refused`].
 
 A host SHOULD verify in native code with these same strict rules: OpenSSL's defaults accept a
 small-order signature this protocol refuses.
